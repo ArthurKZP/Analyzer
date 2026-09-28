@@ -110,7 +110,8 @@ SECTIONS: list[tuple[str, list[StatDef]]] = [
         "Postflop — face à l'agresseur préflop",
         [
             StatDef("vs_cbet_flop.fold", "Fold vs c-bet flop", (30, 45),
-                    R("Folde trop aux c-bets flop", "c-bet flop large avec un petit sizing", "défends plus contre les c-bets (call/check-raise)"),
+                    R("Folde trop aux c-bets flop", "c-bet flop large avec un petit sizing",
+                      "tu folds beaucoup aux c-bets : défends plus avec tes backdoors et overcards"),
                     R("Paye beaucoup les c-bets flop", "c-bet moins en bluff, plus en value mince",
                       "tu défends beaucoup contre les c-bets : ok si tu réalises ton équité")),
             StatDef("vs_cbet_flop.raise", "Raise vs c-bet flop", (8, 18),
@@ -118,10 +119,12 @@ SECTIONS: list[tuple[str, list[StatDef]]] = [
                       "tu raises beaucoup les c-bets : il peut payer ou relancer plus léger"),
                     R("Raise rarement les c-bets", "ses raises sont forts", "ajoute des check-raises")),
             StatDef("vs_cbet_turn.fold", "Fold vs barrel turn", (35, 50),
-                    R("Folde trop face au 2e barrel", "double-barrel plus souvent", "défends plus contre le 2e barrel"),
+                    R("Folde trop face au 2e barrel", "double-barrel plus souvent",
+                      "tu folds beaucoup face au 2e barrel : regarde avec quoi (section « Ses lignes ») avant de défendre plus"),
                     R("Paye beaucoup le 2e barrel", "barrel turn surtout en value/équité", "tu paies beaucoup au turn : attention au 3e barrel value")),
             StatDef("vs_cbet_river.fold", "Fold vs barrel river", (35, 55),
-                    R("Folde trop face au 3e barrel", "bluff river", "paye plus la river avec tes bluff-catchers"),
+                    R("Folde trop face au 3e barrel", "bluff river",
+                      "tu folds beaucoup face au 3e barrel : ne paie plus que si ses lignes river montrent des bluffs"),
                     R("Paye trop le 3e barrel", "value-bet fin, arrête les bluffs", "folde tes bluff-catchers faibles à la river")),
             StatDef("donk_flop", "Donk flop", (0, 10),
                     R("Donk souvent au flop", "ses donks sont souvent moyennes ou des tirages : raise-les",
@@ -146,11 +149,12 @@ SECTIONS: list[tuple[str, list[StatDef]]] = [
             StatDef("xr_turn", "Check-raise turn"),
             StatDef("vs_bet_flop.fold", "Fold vs bet flop"),
             StatDef("vs_bet_turn.fold", "Fold vs bet turn", (35, 50),
-                    R("Folde beaucoup face à une mise turn", "mise le turn plus souvent", "défends plus face aux mises turn"),
+                    R("Folde beaucoup face à une mise turn", "mise le turn plus souvent",
+                      "tu folds beaucoup face aux mises turn : regarde avec quoi (section « Ses lignes »)"),
                     R("Paye beaucoup les mises turn", "mise le turn surtout en value", "tu paies beaucoup au turn")),
             StatDef("vs_bet_river.fold", "Fold vs bet river", (35, 55),
                     R("Folde trop à la river", "bluffe plus la river",
-                      "tu folds trop à la river : il bluffe gratuitement, paye plus avec tes bluff-catchers"),
+                      "tu folds beaucoup à la river : ce n'est une erreur que si ses lignes river sont bluffées et que tu avais un bluff-catcher"),
                     R("Paye trop à la river", "value-bet plus fin, réduis les bluffs", "folde tes bluff-catchers faibles à la river")),
             StatDef("vs_raise_flop.fold", "Fold vs raise flop"),
         ],
@@ -233,17 +237,18 @@ class Duel:
     hero_key: str  # ta fréquence de fold en face
     villain_ref: tuple[float, float]
     hero_ref: tuple[float, float]
+    street: Optional[str] = None  # street de tes folds (pour savoir s'ils étaient forcés)
 
 
 DUELS = [
     Duel("Ses 3bets en BB → tes folds vs 3bet au bouton", "bb_vs_open.raise", "sb_vs_3bet.fold", (12, 20), (35, 50)),
     Duel("Tes 3bets en BB → ses folds vs 3bet au bouton", "sb_vs_3bet.fold", "bb_vs_open.raise", (35, 50), (12, 20)),
-    Duel("Ses c-bets flop → tes folds vs c-bet", "cbet_flop", "vs_cbet_flop.fold", (50, 75), (30, 45)),
-    Duel("Ses barrels turn → tes folds vs barrel turn", "cbet_turn", "vs_cbet_turn.fold", (45, 65), (35, 50)),
-    Duel("Ses probes turn → tes folds vs probe", "probe_turn", "vs_probe_turn.fold", (30, 55), (35, 55)),
-    Duel("Ses c-bets retardés turn → tes folds", "delayed_cbet_turn", "vs_delayed_cbet_turn.fold", (35, 60), (35, 55)),
-    Duel("Ses mises turn → tes folds au turn", "stab_turn+lead_turn", "vs_bet_turn.fold", (35, 55), (35, 50)),
-    Duel("Ses mises river → tes folds à la river", "stab_river+lead_river", "vs_bet_river.fold", (35, 55), (35, 55)),
+    Duel("Ses c-bets flop → tes folds vs c-bet", "cbet_flop", "vs_cbet_flop.fold", (50, 75), (30, 45), "flop"),
+    Duel("Ses barrels turn → tes folds vs barrel turn", "cbet_turn", "vs_cbet_turn.fold", (45, 65), (35, 50), "turn"),
+    Duel("Ses probes turn → tes folds vs probe", "probe_turn", "vs_probe_turn.fold", (30, 55), (35, 55), "turn"),
+    Duel("Ses c-bets retardés turn → tes folds", "delayed_cbet_turn", "vs_delayed_cbet_turn.fold", (35, 60), (35, 55), "turn"),
+    Duel("Ses mises turn → tes folds au turn", "stab_turn+lead_turn", "vs_bet_turn.fold", (35, 55), (35, 50), "turn"),
+    Duel("Ses mises river → tes folds à la river", "stab_river+lead_river", "vs_bet_river.fold", (35, 55), (35, 55), "river"),
 ]
 
 
@@ -256,10 +261,22 @@ def combined(ps: PlayerStats, keys: str) -> Ratio:
     return total
 
 
-def duel_verdict(duel: Duel, villain: Ratio, hero: Ratio) -> tuple[str, str]:
-    """(niveau, texte). Niveau : 'alerte', 'ok', 'info'."""
+def duel_verdict(duel: Duel, villain: Ratio, hero: Ratio, folds: Optional[Counter] = None) -> tuple[str, str]:
+    """(niveau, texte). Niveau : 'alerte', 'ok', 'info'.
+
+    folds : ta main quand tu as foldé sur la street du duel (rien / tirage / paire / fort).
+    """
     if villain.opps < MIN_SAMPLE or hero.opps < 8:
         return "info", "Échantillon trop faible pour conclure."
+    total = sum(folds.values()) if folds else 0
+    if total and hero.pct > duel.hero_ref[1]:
+        made = folds["paire"] + folds["fort"]
+        if folds["rien"] >= 0.6 * total:
+            return "info", (f"Tu folds plus que la norme, mais {folds['rien']}/{total} de tes folds {duel.street} "
+                            "étaient sans paire ni tirage : des folds forcés. La fuite est en amont (bluffs abandonnés, "
+                            "checks avec des mains trop faibles).")
+        return "alerte", (f"Tu folds plus que la norme, dont {made}/{total} fois avec une paire ou mieux : "
+                          "ce sont ces folds-là à vérifier dans « Ses lignes ».")
     v_hi = villain.pct > duel.villain_ref[1]
     v_lo = villain.pct < duel.villain_ref[0]
     h_hi = hero.pct > duel.hero_ref[1]
@@ -350,6 +367,13 @@ def responses_by_size(hands, bettor: str, responder: str) -> dict:
                 cell["counts"][reply.kind] += 1
                 cell["sizes"].append(pct)
     return table
+
+
+FOLD_STAT_STREET = {
+    "vs_cbet_flop.fold": "flop", "vs_bet_flop.fold": "flop",
+    "vs_cbet_turn.fold": "turn", "vs_bet_turn.fold": "turn",
+    "vs_cbet_river.fold": "river", "vs_bet_river.fold": "river",
+}
 
 
 def bluff_break_even(pct: float) -> float:

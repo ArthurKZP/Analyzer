@@ -10,6 +10,7 @@ from typing import Optional
 from .cards import describe_holding, equity
 from .insights import (
     DUELS,
+    FOLD_STAT_STREET,
     SECTIONS,
     SIZE_BUCKETS,
     STRENGTH_ORDER,
@@ -22,6 +23,21 @@ from .insights import (
     responses_by_size,
     sizing_profile,
     strength_class,
+)
+from .lines import (
+    HOLDING_LABELS,
+    HOLDINGS,
+    INTENT_LABELS,
+    INTENTS,
+    Line,
+    check_ranges,
+    fold_holdings_by_street,
+    nonshowdown_losses,
+    passive_showdowns,
+    pooled_by_size,
+    think_by_intent,
+    verdict,
+    villain_lines,
 )
 from .models import CALL, FOLD, POSTFLOP, RAISE, STREETS, VOLUNTARY, Hand
 from .stats import PlayerStats, Ratio, allin_ev, think_times
@@ -184,7 +200,7 @@ def legend(curve) -> str:
     ) + "</div>"
 
 
-def findings_html(ps: PlayerStats, hero_mode: bool = False) -> str:
+def findings_html(ps: PlayerStats, hero_mode: bool = False, folds: Optional[dict] = None) -> str:
     items = findings(ps)
     if not items:
         return '<p class="muted">Aucun écart marqué par rapport aux repères (ou échantillon trop faible).</p>'
@@ -195,6 +211,11 @@ def findings_html(ps: PlayerStats, hero_mode: bool = False) -> str:
         arrow = "▲" if f.direction == "haut" else "▼"
         if hero_mode:
             text = f"{f.reading.fix[0].upper()}{f.reading.fix[1:]}."
+            street = FOLD_STAT_STREET.get(f.stat.key)
+            if street and folds and sum(folds[street].values()):
+                c = folds[street]
+                text += (f" Tes folds {street} face à ses mises : {c['rien']} sans rien, {c['tirage']} avec un tirage, "
+                         f"{c['paire'] + c['fort']} avec une paire ou mieux.")
         else:
             text = f"{f.reading.fact} → {f.reading.exploit}."
         rows.append(
@@ -205,11 +226,11 @@ def findings_html(ps: PlayerStats, hero_mode: bool = False) -> str:
     return '<ul class="findings">' + "".join(rows) + "</ul>"
 
 
-def duels_html(villain: PlayerStats, hero: PlayerStats) -> str:
+def duels_html(villain: PlayerStats, hero: PlayerStats, folds: Optional[dict] = None) -> str:
     rows = []
     for d in DUELS:
         v, h = combined(villain, d.villain_key), combined(hero, d.hero_key)
-        level, text = duel_verdict(d, v, h)
+        level, text = duel_verdict(d, v, h, folds[d.street] if folds and d.street else None)
         icon = {"alerte": "⚠", "ok": "✓", "info": "·"}[level]
         rows.append(
             f'<tr class="{level}"><td>{escape(d.title)}</td>'
@@ -332,11 +353,12 @@ def sizing_html(hands: list[Hand], villain: str) -> str:
     return '<div class="grid2">' + "".join(blocks) + "</div>"
 
 
-BLUFF_MARGIN = 8  # points de % au-dessus du seuil avant de signaler
+BLUFF_MARGIN = 8  # points de % autour du seuil avant de signaler
 
 
-def responses_html(hands: list[Hand], bettor: str, responder: str, you_respond: bool) -> str:
-    table = responses_by_size(hands, bettor, responder)
+def bluffs_html(hands: list[Hand], hero: str, villain: str) -> str:
+    """Ses réponses à tes mises : un bluff pur ne dépend que de sa fréquence de fold."""
+    table = responses_by_size(hands, hero, villain)
     rows = []
     for street in ("flop", "turn", "river"):
         for _, bucket in SIZE_BUCKETS:
@@ -347,22 +369,192 @@ def responses_html(hands: list[Hand], bettor: str, responder: str, you_respond: 
             n = sum(c.values())
             fold = 100.0 * c[FOLD] / n
             threshold = bluff_break_even(median(cell["sizes"]))
-            over = n >= 8 and fold > threshold + BLUFF_MARGIN
-            verdict = ("ses bluffs sont rentables" if you_respond else "tes bluffs sont rentables") if over else ""
-            cls = ' class="alerte"' if over and you_respond else ""
+            verdict_text, cls = "", ""
+            if n >= 8 and fold > threshold + BLUFF_MARGIN:
+                verdict_text, cls = "tes bluffs purs gagnent", "dev-bas strong"
+            elif n >= 8 and fold < threshold - BLUFF_MARGIN:
+                verdict_text, cls = "tes bluffs purs perdent : mise pour la value", "dev-haut strong"
             rows.append(
-                f"<tr{cls}><td>{street.capitalize()}</td><td class=\"nowrap\">{bucket}</td><td class=\"num\">{n}</td>"
-                f'<td class="num{" dev-haut strong" if over else ""}"><span class="v">{num(fold, 0)}&nbsp;%</span></td>'
+                f'<tr><td>{street.capitalize()}</td><td class="nowrap">{bucket}</td><td class="num">{n}</td>'
+                f'<td class="num {cls}"><span class="v">{num(fold, 0)}&nbsp;%</span></td>'
                 f'<td class="num">{num(100.0 * c[CALL] / n, 0)}&nbsp;%</td><td class="num">{num(100.0 * c[RAISE] / n, 0)}&nbsp;%</td>'
-                f'<td class="num muted">{num(threshold, 0)}&nbsp;%</td><td>{verdict}</td></tr>'
+                f'<td class="num muted">{num(threshold, 0)}&nbsp;%</td><td>{verdict_text}</td></tr>'
             )
     if not rows:
         return '<p class="muted">Pas de mise postflop.</p>'
     return (
-        '<table class="stats duel"><thead><tr><th>Street</th><th>Taille</th><th class="num">Nb</th><th class="num">Fold</th>'
-        '<th class="num">Call</th><th class="num">Raise</th><th class="num">Seuil bluff</th><th></th></tr></thead>'
+        '<table class="stats"><thead><tr><th>Street</th><th>Ta mise</th><th class="num">Nb</th><th class="num">Il folde</th>'
+        '<th class="num">Il paie</th><th class="num">Il relance</th><th class="num">Seuil</th><th></th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table>'
     )
+
+
+# --- Lignes value / bluff ------------------------------------------------------------
+
+KIND_LABELS = {
+    "value": "Ligne de value",
+    "bluff": "Ligne de bluff",
+    "semi-bluff": "Semi-bluffs (tirages)",
+    "mixte": "Mixte",
+    "peu vue": "Trop peu vue",
+    "inconnue": "Jamais vue",
+}
+
+
+PASSIVE_LABELS = {"bluff": "Rien", "semi": "Tirage", "thin": "Value fine", "value": "Value"}
+
+
+def composition_html(counts: Counter, total: int, labels: dict = INTENT_LABELS) -> str:
+    if not total:
+        return '<span class="muted">—</span>'
+    segments = "".join(
+        f'<span class="seg i-{k}" style="flex:{counts[k]}" title="{labels[k]} : {counts[k]}"></span>'
+        for k in INTENTS if counts.get(k)
+    )
+    text = " · ".join(f"{counts[k]}&nbsp;{labels[k].lower()}" for k in INTENTS if counts.get(k))
+    return f'<div class="comp">{segments}</div><div class="comp-t">{text}</div>'
+
+
+def holdings_html(counts: Counter) -> str:
+    if not sum(counts.values()):
+        return '<span class="muted">—</span>'
+    return " ".join(
+        f'<span class="chip h-{k}">{HOLDING_LABELS[k]}&nbsp;{counts[k]}</span>' for k in HOLDINGS if counts.get(k)
+    )
+
+
+def line_rows(ln: Line, css: str = "") -> str:
+    v = verdict(ln)
+    faced = sum(ln.replies.values())
+    replies = (
+        f'<span class="v">{num(100 * ln.fold_rate, 0)}&nbsp;% fold</span>'
+        f'<span class="n">{ln.replies[FOLD]} fold · {ln.replies[CALL]} call · {ln.replies[RAISE]} raise</span>'
+        if faced else '<span class="muted">—</span>'
+    )
+    conf = f' <span class="muted">({v.confidence})</span>' if v.confidence else ""
+    size = f'<span class="n">{escape(ln.size)}</span>' if ln.size else ""
+    return (
+        f'<tr class="main {css}"><td class="ln"><b>{escape(ln.label)}</b>{size}</td><td class="num" data-l="Fois">{ln.count}</td>'
+        f'<td data-l="Ta réponse">{replies}</td><td data-l="Tes folds, avec…">{holdings_html(ln.fold_holdings)}</td>'
+        f'<td class="num" data-l="Vues">{len(ln.seen)}</td>'
+        f'<td class="compcell" data-l="Ce qu\'il montre">{composition_html(ln.intents, len(ln.seen))}</td>'
+        f'<td data-l="Lecture"><span class="kind k-{v.kind.replace(" ", "-")}">{KIND_LABELS[v.kind]}</span>{conf}</td></tr>'
+        f'<tr class="sub {css}"><td colspan="7">{escape(v.reading)}. {escape(v.decision)}</td></tr>'
+    )
+
+
+def lines_html(lines: list[Line], hero: str, villain: str, min_count: int = 3) -> str:
+    blocks = []
+    pooled = pooled_by_size(lines)
+    for street in POSTFLOP:
+        rows, seen_rows = [], []
+        street_lines = [ln for ln in lines if ln.street == street]
+        rare = [ln for ln in street_lines if ln.count < min_count]
+        for ln in street_lines:
+            if ln.count < min_count:
+                continue
+            rows.append(line_rows(ln))
+            for s_ in ln.seen:
+                h = s_.hand
+                seen_rows.append(
+                    f'<tr><td class="nowrap">{h.date:%H:%M}</td><td>{escape(ln.name)}</td>'
+                    f"<td>{cards_html(h.board[: {'flop': 3, 'turn': 4, 'river': 5}[street]])}</td>"
+                    f'<td>{cards_html(h.hole_cards[villain])}<span class="n">{escape(s_.description)}</span></td>'
+                    f'<td class="nowrap"><i class="dot i-{s_.intent}"></i>{INTENT_LABELS[s_.intent]}</td>'
+                    f'<td class="num">{num(100 * s_.equity, 0)}&nbsp;%</td>'
+                    f'<td>{cards_html(h.hole_cards[hero])}<span class="n">{escape(s_.hero_description)}</span></td>'
+                    f'<td>{s_.hero_reply or "—"}</td></tr>'
+                )
+        if not rows:
+            continue
+        pooled_rows = "".join(line_rows(ln, "pooled") for ln in pooled if ln.street == street)
+        rows.append(f'<tr class="group"><td colspan="7">Toutes lignes confondues, par taille</td></tr>{pooled_rows}')
+        rare_note = (f'<p class="note">{len(rare)} autre(s) ligne(s) vue(s) moins de {min_count} fois '
+                     f'({sum(ln.count for ln in rare)} mises).</p>') if rare else ""
+        seen_block = (
+            f'<details class="inner"><summary>Voir ses {len(seen_rows)} mise(s) {street} montrée(s) à l\'abattage</summary>'
+            '<div class="scroll"><table class="stats"><thead><tr><th>Heure</th><th>Ligne</th><th>Board</th><th>Lui</th>'
+            '<th>Intention</th><th class="num">Son équité vs toi</th><th>Toi</th><th>Ta réponse</th></tr></thead>'
+            f'<tbody>{"".join(seen_rows)}</tbody></table></div></details>'
+        ) if seen_rows else ""
+        blocks.append(
+            f'<div class="card lines-card"><h3>{street.capitalize()}</h3><div class="scroll"><table class="stats lines"><thead><tr>'
+            '<th>Sa ligne</th><th class="num">Fois</th><th>Ta réponse</th><th>Tes folds, avec…</th>'
+            '<th class="num">Vues</th><th>Ce qu\'il montre</th><th>Lecture</th></tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table></div>{rare_note}{seen_block}</div>'
+        )
+    return "".join(blocks) or '<p class="muted">Aucune mise postflop.</p>'
+
+
+def passive_html(hands: list[Hand], hero: str, villain: str) -> str:
+    data = passive_showdowns(hands, villain, hero)
+    rows = []
+    for street in POSTFLOP:
+        c = data.get(street)
+        if c:
+            rows.append(f"<tr><td>{street.capitalize()}</td><td class=\"num\">{sum(c.values())}</td>"
+                        f'<td class="compcell">{composition_html(c, sum(c.values()), PASSIVE_LABELS)}</td></tr>')
+    if not rows:
+        return ""
+    return (
+        '<div class="card"><h3>Ce qu\'il montre quand il checke</h3><table class="stats"><thead><tr><th>Street</th>'
+        '<th class="num">Mains</th><th>Sa main au moment du check</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table><p class="note">Plus il checke de value, moins ses mises en contiennent. '
+        "Beaucoup de « rien » checkés à la river = il n'y bluffe pas tout son air.</p></div>"
+    )
+
+
+def intent_timing_html(lines: list[Line]) -> str:
+    times = think_by_intent(lines)
+    if not times:
+        return ""
+    cells = "".join(
+        f'<tr><td class="nowrap"><i class="dot i-{k}"></i>{INTENT_LABELS[k]}</td>'
+        f'<td class="num">{num(median(times[k]), 1)}&nbsp;s<span class="n">{len(times[k])}</span></td></tr>'
+        for k in INTENTS if times.get(k)
+    )
+    return (
+        '<table class="stats"><thead><tr><th>Ses mises montrées</th><th class="num">Temps médian</th></tr></thead>'
+        f"<tbody>{cells}</tbody></table>"
+    )
+
+
+def nonshowdown_html(hands: list[Hand], hero: str, villain: str) -> str:
+    data = nonshowdown_losses(hands, hero)
+    street_names = {"preflop": "Préflop", "flop": "Flop", "turn": "Turn", "river": "River"}
+    rows = []
+    for street, cell in data["by_street"].items():
+        (hf, hbb), (vf, vbb) = cell["hero_folds"], cell["villain_folds"]
+        rows.append(
+            f'<tr><td>{street_names[street]}</td><td class="num">{hf}</td><td class="num">{num(hbb, 0, sign=True)}</td>'
+            f'<td class="num">{vf}</td><td class="num">{num(vbb, 0, sign=True)}</td>'
+            f'<td class="num"><b>{num(hbb + vbb, 0, sign=True)}</b></td></tr>'
+        )
+    story_rows = "".join(
+        f'<tr><td>{escape(story)}</td><td class="num">{n}</td><td class="num">{num(total, 0, sign=True)}</td>'
+        f"<td>{holdings_html(held)}</td></tr>"
+        for story, (n, total, held) in data["stories"][:8]
+    )
+    checks = check_ranges(hands, hero, villain)
+    check_rows = "".join(
+        f'<tr><td>{street.capitalize()}</td><td class="num">{sum(c["holdings"].values())}</td>'
+        f'<td>{holdings_html(c["holdings"])}</td>'
+        f'<td class="num">{num(100 * c["bets"] / c["faced"], 0) + "&nbsp;%" if c["faced"] else "–"}'
+        f'<span class="n">{c["bets"]}/{c["faced"]}</span></td></tr>'
+        for street, c in checks.items() if sum(c["holdings"].values())
+    )
+    return f"""
+<div class="grid2">
+  <div class="card"><h3>Mains finies sans abattage</h3><div class="scroll"><table class="stats"><thead><tr><th>Fin</th>
+    <th class="num">Tu folds</th><th class="num">bb</th><th class="num">Il folde</th><th class="num">bb</th><th class="num">Net</th></tr></thead>
+    <tbody>{''.join(rows)}</tbody></table></div></div>
+  <div class="card"><h3>Ce que tu as quand tu checkes en premier</h3><div class="scroll"><table class="stats"><thead><tr><th>Street</th>
+    <th class="num">Checks</th><th>Ta main</th><th class="num">Il mise derrière</th></tr></thead><tbody>{check_rows}</tbody></table></div>
+    <p class="note">« Il mise derrière » ne compte que les coups où il parle après ton check.</p></div>
+</div>
+<div class="card scroll" style="margin-top:16px"><h3>Tes folds turn et river les plus coûteux, par déroulé</h3>
+  <table class="stats"><thead><tr><th>Déroulé</th><th class="num">Fois</th><th class="num">bb</th><th>Ta main au fold</th></tr></thead>
+  <tbody>{story_rows}</tbody></table></div>"""
 
 
 def timing_html(villain: PlayerStats, hero: PlayerStats) -> str:
@@ -442,6 +634,8 @@ def showdowns_html(villain_stats: PlayerStats, hero: str, villain: str) -> str:
 
 def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, villain: str) -> str:
     v, h = stats[villain], stats[hero]
+    lines = villain_lines(hands, villain, hero)
+    folds = fold_holdings_by_street(lines)
     games = Counter(hd.game_name for hd in hands)
     tables = len({hd.table_id for hd in hands})
     period = f"{hands[0].date:%d/%m/%Y %H:%M} → {hands[-1].date:%d/%m/%Y %H:%M} (UTC)"
@@ -466,14 +660,17 @@ def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, vi
         checkpoints=checkpoints,
         series_head="".join(f'<th class="num">{name}</th>' for name, _ in SERIES),
         villain_findings=findings_html(v),
-        hero_findings=findings_html(h, hero_mode=True),
-        duels=duels_html(v, h),
+        hero_findings=findings_html(h, hero_mode=True, folds=folds),
+        duels=duels_html(v, h, folds),
+        lines=lines_html(lines, hero, villain),
+        passive=passive_html(hands, hero, villain),
+        intent_timing=intent_timing_html(lines),
+        nonshowdown=nonshowdown_html(hands, hero, villain),
         stat_tables=stat_tables(v, h),
         preflop_sizes=preflop_sizes(v, h),
         sizing=sizing_html(hands, villain),
         timing=timing_html(v, h),
-        responses_you=responses_html(hands, villain, hero, you_respond=True),
-        responses_him=responses_html(hands, hero, villain, you_respond=False),
+        bluffs=bluffs_html(hands, hero, villain),
         allins=allin_html(hands, hero, villain),
         showdowns=showdowns_html(v, hero, villain),
         n_showdowns=len(v.showdowns),
@@ -496,6 +693,7 @@ TEMPLATE = """<!doctype html>
   --alert: #d03b3b; --alert-bg: rgba(208,59,59,0.08); --good: #006300;
   --hi-bg: rgba(235,104,52,0.14); --lo-bg: rgba(42,120,214,0.12);
   --sc: #0b0b0b; --sh: #d03b3b; --sd: #2a78d6; --sclub: #008300;
+  --int-bluff: #c8302f; --int-semi: #eb8a89; --int-thin: #86b6ef; --int-value: #2a78d6;
 }}
 @media (prefers-color-scheme: dark) {{
   :root:not([data-theme="light"]) {{
@@ -506,6 +704,7 @@ TEMPLATE = """<!doctype html>
     --alert: #e66767; --alert-bg: rgba(230,103,103,0.12); --good: #0ca30c;
     --hi-bg: rgba(217,89,38,0.22); --lo-bg: rgba(57,135,229,0.22);
     --sc: #ffffff; --sh: #e66767; --sd: #6da7ec; --sclub: #0ca30c;
+    --int-bluff: #e66767; --int-semi: #9c3434; --int-thin: #1c5cab; --int-value: #5598e7;
   }}
 }}
 :root[data-theme="dark"] {{
@@ -516,6 +715,7 @@ TEMPLATE = """<!doctype html>
   --alert: #e66767; --alert-bg: rgba(230,103,103,0.12); --good: #0ca30c;
   --hi-bg: rgba(217,89,38,0.22); --lo-bg: rgba(57,135,229,0.22);
   --sc: #ffffff; --sh: #e66767; --sd: #6da7ec; --sclub: #0ca30c;
+  --int-bluff: #e66767; --int-semi: #9c3434; --int-thin: #1c5cab; --int-value: #5598e7;
 }}
 * {{ box-sizing: border-box; }}
 body {{ margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }}
@@ -591,6 +791,29 @@ em {{ font-style: normal; font-weight: 600; color: var(--alert); }}
 .scroll {{ overflow-x: auto; }}
 .sd td {{ white-space: normal; }}
 .act, .cards {{ white-space: nowrap; }}
+.i-bluff {{ background: var(--int-bluff); }} .i-semi {{ background: var(--int-semi); }}
+.i-thin {{ background: var(--int-thin); }} .i-value {{ background: var(--int-value); }}
+.dot {{ display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }}
+.comp {{ display: flex; gap: 2px; height: 10px; min-width: 110px; }}
+.comp .seg {{ display: block; height: 100%; }}
+.comp .seg:first-child {{ border-radius: 4px 0 0 4px; }} .comp .seg:last-child {{ border-radius: 0 4px 4px 0; }}
+.comp .seg:only-child {{ border-radius: 4px; }}
+.comp-t {{ font-size: 11px; color: var(--ink-2); margin-top: 3px; }}
+.compcell {{ min-width: 150px; }}
+.legend-int {{ display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin: 8px 0; }}
+.legend-int i {{ display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }}
+.intro p {{ margin: 0; }}
+.lines-card {{ margin-top: 16px; }}
+table.lines tr.main td {{ border-bottom: 0; padding-bottom: 2px; }}
+table.lines tr.sub td {{ font-size: 12px; color: var(--ink-2); padding-top: 0; }}
+table.lines tr.group td {{ font-size: 12px; font-weight: 600; color: var(--muted); padding-top: 14px; border-bottom: 1px solid var(--axis); }}
+table.lines tr.pooled td {{ background: var(--page); }}
+.kind {{ display: inline-block; font-size: 12px; font-weight: 600; border-radius: 4px; padding: 1px 6px; white-space: nowrap; border: 1px solid var(--border); }}
+.kind.k-value {{ background: var(--lo-bg); }} .kind.k-bluff, .kind.k-semi-bluff {{ background: var(--hi-bg); }}
+.kind.k-inconnue, .kind.k-peu-vue {{ color: var(--muted); font-weight: 500; }}
+.chip.h-rien {{ color: var(--muted); }} .chip.h-paire {{ background: var(--lo-bg); }} .chip.h-fort {{ background: var(--lo-bg); font-weight: 600; }}
+details.inner {{ margin: 12px 0 0; border-radius: 8px; }}
+details.inner summary {{ padding: 8px 12px; font-size: 13px; }}
 .chart-wrap {{ overflow-x: auto; }}
 .chart {{ min-width: 600px; }}
 table.sizing td:first-child {{ white-space: nowrap; }}
@@ -602,6 +825,18 @@ table.sizing td:first-child {{ white-space: nowrap; }}
   table.sd td {{ border: 0; padding: 2px 12px; }}
   table.sd td.line {{ grid-column: 1 / -1; grid-row: 2; }}
   .act {{ white-space: normal; }}
+  table.lines thead {{ display: none; }}
+  table.lines tr.main {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px 12px; padding-top: 10px; }}
+  table.lines tr.main td {{ display: block; padding: 0; text-align: left !important; }}
+  table.lines tr.main td.ln, table.lines tr.main td.compcell {{ grid-column: 1 / -1; }}
+  table.lines tr.main td[data-l="Tes folds, avec…"], table.lines tr.main td[data-l="Lecture"] {{ grid-column: span 2; }}
+  table.lines td[data-l]::before {{ content: attr(data-l); display: block; font-size: 11px; color: var(--muted); }}
+  table.lines tr.sub {{ display: block; }}
+  table.lines tr.sub td {{ display: block; padding: 4px 0 10px; }}
+  table.lines tr.group td {{ display: block; }}
+  .compcell {{ min-width: 0; }}
+  table.lines tr.pooled {{ background: var(--page); }}
+  table.lines tr.pooled td {{ background: transparent; }}
 }}
 </style>
 </head>
@@ -631,10 +866,26 @@ table.sizing td:first-child {{ white-space: nowrap; }}
 <h2>Le duel : ses attaques, tes réponses</h2>
 <div class="card scroll">{duels}</div>
 
-<h2>Tes réponses à ses mises, selon leur taille</h2>
-<div class="card scroll">{responses_you}
-<p class="note">« Seuil bluff » = mise / (pot + mise) : fréquence de fold au-delà de laquelle un bluff de cette taille (médiane de la tranche) gagne avec n'importe quelles cartes. Une ligne est signalée quand le fold dépasse ce seuil de plus de 8 points. Repère strict à la river ; au flop et au turn un bluff garde de l'équité, c'est donc indicatif.</p></div>
-<details style="margin-top:12px"><summary>Et ses réponses à tes mises</summary><div class="scroll" style="padding:0 16px 16px">{responses_him}</div></details>
+<h2>Ses lignes : value ou bluff ?</h2>
+<div class="card intro">
+  <p>Chaque mise ou relance postflop est rangée par ligne. Quand le coup va à l'abattage, sa main est classée <b>au moment de la mise</b> :</p>
+  <div class="legend-int">
+    <span><i class="i-bluff"></i>Bluff : rien de fait, moins de 25&nbsp;% d'équité contre ta main</span>
+    <span><i class="i-semi"></i>Semi-bluff : rien de fait mais au moins 25&nbsp;% d'équité (flop, turn)</span>
+    <span><i class="i-thin"></i>Value fine : paire faible ou moyenne</span>
+    <span><i class="i-value"></i>Value : top paire ou mieux</span>
+  </div>
+  <p class="note">À la river, ta décision de payer ne dépend pas de ses cartes : les mains vues quand tu paies sont un échantillon honnête de sa ligne. Au flop et au turn, on ne voit pas les coups où tu as payé puis foldé plus tard. « Tes folds, avec… » indique ta main quand tu as lâché : un fold sans paire à la river n'est jamais une erreur.</p>
+</div>
+{lines}
+<div class="grid2" style="margin-top:16px">{passive}<div class="card"><h3>Timing selon sa main</h3>{intent_timing}<p class="note">Un écart net de temps entre value et bluff serait un tell exploitable.</p></div></div>
+
+<h2>Où partent tes bb sans abattage</h2>
+{nonshowdown}
+
+<h2>Tes bluffs : est-ce qu'il folde assez ?</h2>
+<div class="card scroll">{bluffs}
+<p class="note">Un bluff pur (sans équité) gagne dès qu'il folde plus souvent que le seuil = mise / (pot + mise), quelle que soit sa main. Signalé quand l'écart dépasse 8 points (au moins 8 occurrences).</p></div>
 
 <h2>Statistiques</h2>
 <div class="legend-dev"><span><i style="background:var(--hi-bg)"></i>au-dessus du repère</span><span><i style="background:var(--lo-bg)"></i>en dessous du repère</span><span><b>gras</b> = écart net (intervalle de confiance à 90&nbsp;% hors repère)</span><span>chiffres en italique = moins de 15 occasions</span></div>

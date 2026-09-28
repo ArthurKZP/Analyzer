@@ -9,6 +9,7 @@ from collections import Counter
 from pathlib import Path
 
 from .insights import DUELS, combined, duel_verdict, findings
+from .lines import fold_holdings_by_street, verdict, villain_lines
 from .models import Hand
 from .parsers import load_hands
 from .report import build_report, num
@@ -47,7 +48,7 @@ def find_player(query: str, names: list[str]) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def summary(villain: PlayerStats, hero: PlayerStats) -> str:
+def summary(villain: PlayerStats, hero: PlayerStats, hands: list[Hand]) -> str:
     lines = [
         f"== {villain.name} — {villain.hands} mains ==",
         f"Ton résultat : {num(hero.net_bb, 1, sign=True)} bb ({num(hero.net, 2, sign=True)} €), "
@@ -68,14 +69,23 @@ def summary(villain: PlayerStats, hero: PlayerStats) -> str:
                 f"  - [{tag}] {f.stat.label} {num(f.ratio.pct, 0)} % ({f.ratio.hits}/{f.ratio.opps}) : "
                 f"{f.reading.fact} → {f.reading.exploit}"
             )
+    lines_ = villain_lines(hands, villain.name, hero.name)
+    folds = fold_holdings_by_street(lines_)
     alerts = []
     for d in DUELS:
-        level, text = duel_verdict(d, combined(villain, d.villain_key), combined(hero, d.hero_key))
+        level, text = duel_verdict(d, combined(villain, d.villain_key), combined(hero, d.hero_key),
+                                   folds[d.street] if d.street else None)
         if level == "alerte":
             alerts.append(f"  - {d.title} : {text}")
     if alerts:
         lines.append("Points d'attention dans le duel :")
         lines.extend(alerts)
+    frequent = sorted((ln for ln in lines_ if len(ln.seen) >= 3), key=lambda ln: -ln.count)[:8]
+    if frequent:
+        lines.append("Ses lignes les plus vues à l'abattage :")
+        for ln in frequent:
+            v = verdict(ln)
+            lines.append(f"  - {ln.street} · {ln.name} ({ln.count} fois, {len(ln.seen)} vues) : {v.kind} — {v.reading}")
     return "\n".join(lines)
 
 
@@ -129,6 +139,6 @@ def main(argv: list[str] | None = None) -> int:
         stats = analyze(match)
         path = out_dir / f"{slugify(villain)}.html"
         path.write_text(build_report(match, stats, hero, villain), encoding="utf-8")
-        print(summary(stats[villain], stats[hero]))
+        print(summary(stats[villain], stats[hero], match))
         print(f"\nRapport : {path}\n")
     return 0
