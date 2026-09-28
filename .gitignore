@@ -1,0 +1,10 @@
+# Historiques de mains et rapports : données personnelles, gardées en local
+hands/*
+!hands/.gitkeep
+reports/*
+!reports/.gitkeep
+
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
