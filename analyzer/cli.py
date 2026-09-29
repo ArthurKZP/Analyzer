@@ -11,6 +11,7 @@ from pathlib import Path
 from .insights import DUELS, combined, duel_verdict, findings
 from .lines import fold_holdings_by_street, verdict, villain_lines
 from .models import Hand
+from .plan import build_plan, plan_text
 from .parsers import load_hands
 from .report import build_report, num
 from .stats import PlayerStats, analyze
@@ -48,14 +49,16 @@ def find_player(query: str, names: list[str]) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def summary(villain: PlayerStats, hero: PlayerStats, hands: list[Hand]) -> str:
+def summary(villain: PlayerStats, hero: PlayerStats, hands: list[Hand], plan: str = "") -> str:
     lines = [
         f"== {villain.name} — {villain.hands} mains ==",
         f"Ton résultat : {num(hero.net_bb, 1, sign=True)} bb ({num(hero.net, 2, sign=True)} €), "
         f"{num(hero.bb_per_100, 1, sign=True)} bb/100 · EV all-in : {num(hero.net_bb + hero.ev_adjust_bb, 1, sign=True)} bb",
         "",
-        f"{'':38s}{'Lui':>14s}{'Toi':>14s}",
     ]
+    if plan:
+        lines += [plan, ""]
+    lines.append(f"{'':38s}{'Lui':>14s}{'Toi':>14s}")
     for label, a, b in KEY_STATS:
         pairs = [f"{num(ps.pct(a), 0)} / {num(ps.pct(b), 0)}" for ps in (villain, hero)]
         lines.append(f"{label:38s}{pairs[0]:>14s}{pairs[1]:>14s}")
@@ -100,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-o", "--sortie", default="reports", help="dossier des rapports HTML (défaut : reports/)")
     parser.add_argument("-l", "--liste", action="store_true", help="liste les adversaires trouvés et quitte")
     parser.add_argument("--min-mains", type=int, default=30, help="nb de mains minimum pour générer un rapport")
+    parser.add_argument("-p", "--plan", action="store_true", help="affiche seulement le plan de jeu")
     args = parser.parse_args(argv)
 
     try:
@@ -137,8 +141,12 @@ def main(argv: list[str] | None = None) -> int:
     for villain in targets:
         match = [h for h in hands if villain in h.seats]
         stats = analyze(match)
+        plan = plan_text(build_plan(match, stats, hero, villain))
+        if args.plan:
+            print(f"== {villain} — {len(match)} mains ==\n{plan}\n")
+            continue
         path = out_dir / f"{slugify(villain)}.html"
         path.write_text(build_report(match, stats, hero, villain), encoding="utf-8")
-        print(summary(stats[villain], stats[hero], match))
+        print(summary(stats[villain], stats[hero], match, plan))
         print(f"\nRapport : {path}\n")
     return 0

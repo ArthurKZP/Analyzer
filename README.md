@@ -17,6 +17,7 @@ match), détecte ses tendances exploitables et génère un **rapport HTML** auto
 python -m analyzer                       # un rapport par adversaire (30 mains minimum)
 python -m analyzer --liste               # liste les adversaires trouvés
 python -m analyzer -a berserk            # un seul adversaire (nom partiel, accents ignorés)
+python -m analyzer -a berserk --plan     # seulement le plan de jeu, dans le terminal
 python -m analyzer ~/Downloads/Hand.txt -a "peste noire" -o rapports/
 ```
 
@@ -27,6 +28,7 @@ Le terminal affiche un résumé et le rapport complet est écrit dans `reports/<
 
 | Section | Ce qu'on y trouve |
 |---|---|
+| Plan de jeu | Son profil en une phrase et au plus 4 consignes par moment du coup (préflop, quand tu mises, face à ses mises, à tester), chacune avec sa preuve chiffrée et un niveau de confiance |
 | Résultat | Ton gain en bb et en €, bb/100, résultat **EV all-in** (la part de chance), gains avec/sans abattage, courbe main par main |
 | Lecture de l'adversaire | Ses écarts aux repères d'un régulier HU, classés par importance, avec l'exploit correspondant ; tes propres écarts dans ce match |
 | Le duel | Ses attaques face à tes réponses (ses 3bets / tes folds vs 3bet, ses barrels / tes folds...), avec alerte quand il t'exploite — en tenant compte de ta main quand tu as foldé |
@@ -63,6 +65,7 @@ analyzer/
   cards.py             notation des mains, évaluateur 7 cartes, équité
   insights.py          repères, exploits, duel, tells de sizing
   lines.py             lignes value / bluff, folds forcés, pertes sans abattage
+  plan.py              plan de jeu généré à partir de l'analyse
   report.py            rapport HTML
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)
@@ -82,3 +85,17 @@ Les montants d'une `Action` sont des incréments (`amount`) et le total engagé 
 ```bash
 python -m unittest discover -s tests
 ```
+
+## Plan de jeu
+
+Le plan est produit par des règles génériques : chacune ne se déclenche que si les données la justifient
+(par exemple « face à ses 3bets, défends plus » exige qu'il 3bet plus de 20 % et que tu foldes plus de 50 %).
+Chaque consigne affiche sa preuve et un niveau de confiance :
+
+- **solide** : l'écart reste vrai même en tenant compte du hasard (intervalle de confiance à 90 %) ;
+- **indicatif** : tendance nette sur un échantillon modeste ;
+- **à confirmer** : peu de mains, à vérifier sur les prochaines sessions.
+
+La rubrique « À tester » liste ses lignes turn et river qu'on n'a presque jamais vues à l'abattage alors que
+tu as souvent foldé une paire ou mieux : c'est là qu'un call de temps en temps apporte l'information qui manque.
+Plus tu accumules de sessions contre un joueur dans `hands/`, plus le plan s'affine.

@@ -40,6 +40,7 @@ from .lines import (
     villain_lines,
 )
 from .models import CALL, FOLD, POSTFLOP, RAISE, STREETS, VOLUNTARY, Hand
+from .plan import Plan, build_plan
 from .stats import PlayerStats, Ratio, allin_ev, think_times
 
 SUIT_SYMBOL = {"s": "♠", "h": "♥", "d": "♦", "c": "♣"}
@@ -632,10 +633,38 @@ def showdowns_html(villain_stats: PlayerStats, hero: str, villain: str) -> str:
     return "".join(out) or '<p class="muted">Aucune main montrée.</p>'
 
 
+CONFIDENCE_HINT = {
+    "solide": "l'écart reste vrai même en tenant compte du hasard",
+    "indicatif": "tendance nette, échantillon modeste",
+    "à confirmer": "peu de mains, à vérifier sur les prochaines sessions",
+}
+
+
+def plan_html(plan: Plan) -> str:
+    cards = []
+    for phase, items in plan.by_phase().items():
+        if not items:
+            continue
+        lis = "".join(
+            f'<li><div class="pa">{escape(it.action)}</div>'
+            f'<div class="pw">{escape(it.why)} <span class="conf c-{it.confidence.replace(" ", "-")}" '
+            f'title="{CONFIDENCE_HINT[it.confidence]}">{it.confidence}</span></div></li>'
+            for it in items
+        )
+        cards.append(f'<div class="card phase"><h3>{phase}</h3><ol>{lis}</ol></div>')
+    if not cards:
+        return '<p class="muted">Pas encore assez de mains pour proposer un plan.</p>'
+    return (
+        f'<div class="card profile"><b>Profil :</b> {escape(plan.profile)}</div>'
+        f'<div class="grid2 plan">{"".join(cards)}</div>'
+    )
+
+
 def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, villain: str) -> str:
     v, h = stats[villain], stats[hero]
     lines = villain_lines(hands, villain, hero)
     folds = fold_holdings_by_street(lines)
+    plan = build_plan(hands, stats, hero, villain, lines)
     games = Counter(hd.game_name for hd in hands)
     tables = len({hd.table_id for hd in hands})
     period = f"{hands[0].date:%d/%m/%Y %H:%M} → {hands[-1].date:%d/%m/%Y %H:%M} (UTC)"
@@ -655,6 +684,7 @@ def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, vi
         hero=escape(hero),
         meta=meta,
         tiles=tiles(h),
+        plan=plan_html(plan),
         legend=legend(h.curve),
         chart=chart_svg(h.curve),
         checkpoints=checkpoints,
@@ -791,6 +821,15 @@ em {{ font-style: normal; font-weight: 600; color: var(--alert); }}
 .scroll {{ overflow-x: auto; }}
 .sd td {{ white-space: normal; }}
 .act, .cards {{ white-space: nowrap; }}
+.profile {{ margin-bottom: 16px; }}
+.plan .phase ol {{ margin: 0; padding-left: 20px; display: grid; gap: 12px; }}
+.plan .phase li::marker {{ color: var(--muted); font-weight: 600; }}
+.pa {{ font-weight: 600; }}
+.pw {{ font-size: 12px; color: var(--ink-2); margin-top: 2px; }}
+.conf {{ display: inline-block; font-size: 11px; border-radius: 999px; padding: 0 7px; margin-left: 4px; white-space: nowrap; border: 1px solid var(--border); }}
+.conf.c-solide {{ background: var(--series-1); border-color: var(--series-1); color: #fff; font-weight: 600; }}
+.conf.c-indicatif {{ color: var(--ink); border-color: var(--axis); }}
+.conf.c-à-confirmer {{ color: var(--muted); border-style: dashed; }}
 .i-bluff {{ background: var(--int-bluff); }} .i-semi {{ background: var(--int-semi); }}
 .i-thin {{ background: var(--int-thin); }} .i-value {{ background: var(--int-value); }}
 .dot {{ display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }}
@@ -846,6 +885,10 @@ table.sizing td:first-child {{ white-space: nowrap; }}
 <div class="meta">Profil Heads-Up · toi : <b>{hero}</b> · {meta}</div>
 
 {tiles}
+
+<h2>Plan de jeu</h2>
+{plan}
+<p class="note">Consignes générées à partir des sections ci-dessous. Confiance : <b>solide</b> = l'écart reste vrai même en tenant compte du hasard (intervalle à 90&nbsp;%), <b>indicatif</b> = tendance nette sur un échantillon modeste, <b>à confirmer</b> = peu de mains.</p>
 
 <h2>Résultat cumulé (bb)</h2>
 <div class="card">
