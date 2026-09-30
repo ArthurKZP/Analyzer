@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
 
+[project.optional-dependencies]
+captures = ["pillow"]  # lecture de captures de ranges (analyzer.theory.extract)
+
 [project.scripts]
 hu-analyzer = "analyzer.cli:main"
 analyzer-app = "analyzer.app.server:main"
@@ -19,3 +22,4 @@ include = ["analyzer*"]
 
 [tool.setuptools.package-data]
 "analyzer.app" = ["static/*"]
+"analyzer.theory" = ["data/*.json"]

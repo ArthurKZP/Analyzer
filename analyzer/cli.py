@@ -16,6 +16,7 @@ from .parsers import load_hands
 from .report import build_report, num
 from .viewer import build_viewer
 from .stats import PlayerStats, analyze
+from .theory.page import build_preflop_page
 
 KEY_STATS = [
     ("VPIP / PFR bouton", "vpip_sb", "pfr_sb"),
@@ -149,12 +150,17 @@ def main(argv: list[str] | None = None) -> int:
             continue
         path = out_dir / f"{slugify(villain)}.html"
         spots_path = out_dir / f"{slugify(villain)}-spots.html"
+        preflop_path = out_dir / f"{slugify(villain)}-preflop.html"
         spots_href = "" if args.sans_spots else spots_path.name
-        path.write_text(build_report(match, stats, hero, villain, spots_href), encoding="utf-8")
+        path.write_text(build_report(match, stats, hero, villain, spots_href, preflop_href=preflop_path.name),
+                        encoding="utf-8")
+        preflop_path.write_text(build_preflop_page(match, hero, villain, stats, spots_href=spots_href,
+                                                        report_href=path.name), encoding="utf-8")
         if not args.sans_spots:
             spots_path.write_text(build_viewer(match, hero, villain, path.name), encoding="utf-8")
         print(summary(stats[villain], stats[hero], match, plan))
         print(f"\nRapport : {path}")
+        print(f"Préflop : {preflop_path}")
         if not args.sans_spots:
             print(f"Spots   : {spots_path}")
         print()

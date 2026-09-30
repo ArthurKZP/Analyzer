@@ -39,6 +39,10 @@ class LibraryTest(unittest.TestCase):
         self.assertIs(plan, lib.player_page("Villain", "plan"))
         self.assertIn("Ses lignes", lib.player_page("Villain", "rapport"))
         self.assertIn('id="data"', lib.player_page("Villain", "spots"))
+        preflop = lib.player_page("Villain", "preflop")
+        self.assertIn("Lui face au solveur", preflop)
+        self.assertIn('href="spots#hand=HAND03"', preflop)
+        self.assertIn("Bouton face au 3bet", lib.self_page("preflop"))
         self.assertIn("Résultats par adversaire", lib.self_page("bilan"))
         self.assertIn('id="data"', lib.self_page("spots"))
         with self.assertRaises(UnknownPlayer):
@@ -98,6 +102,8 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(json.loads(body)["hero"], "Hero")
         self.assertEqual(self.request("GET", "/p/Villain/plan")[0], 200)
         self.assertEqual(self.request("GET", "/moi/bilan")[0], 200)
+        self.assertEqual(self.request("GET", "/p/Villain/preflop")[0], 200)
+        self.assertEqual(self.request("GET", "/moi/preflop")[0], 200)
 
     def test_not_found(self):
         for path in ("/p/Personne/plan", "/p/Villain/autre", "/static/server.py",

@@ -13,10 +13,11 @@ from ..parsers import load_hands, parse_text
 from ..report import build_plan_page, build_report
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
+from ..theory.page import build_preflop_page
 from ..viewer import build_viewer
 
-PLAYER_PAGES = ("plan", "rapport", "spots")
-SELF_PAGES = ("bilan", "spots")
+PLAYER_PAGES = ("plan", "preflop", "rapport", "spots")
+SELF_PAGES = ("bilan", "preflop", "spots")
 MAX_IMPORT_FILES = 200
 
 
@@ -106,6 +107,8 @@ class Library:
             hands, stats, lines = self._analysis(player)
             if page == "plan":
                 return build_plan_page(hands, stats, self.hero, player, embed=True, lines=lines)
+            if page == "preflop":
+                return build_preflop_page(hands, self.hero, player, stats, embed=True, spots_href="spots")
             if page == "rapport":
                 return build_report(hands, stats, self.hero, player, spots_href="spots", embed=True, lines=lines)
             return build_viewer(hands, self.hero, player, embed=True)
@@ -120,6 +123,8 @@ class Library:
         def build():
             if page == "bilan":
                 return build_self_report(self.hands, analyze(self.hands), self.hero, embed=True, spots_href="")
+            if page == "preflop":
+                return build_preflop_page(self.hands, self.hero, embed=True, spots_href="spots")
             return build_viewer(self.hands, self.hero, None, embed=True)
         return self._cached(("self", page), build)
 

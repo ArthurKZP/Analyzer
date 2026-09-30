@@ -671,7 +671,8 @@ def plan_html(plan: Plan) -> str:
 
 
 def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, villain: str,
-                 spots_href: str = "", embed: bool = False, lines: Optional[list[Line]] = None) -> str:
+                 spots_href: str = "", embed: bool = False, lines: Optional[list[Line]] = None,
+                 preflop_href: str = "") -> str:
     """Rapport complet. embed=True : version intégrée à l'application (sans titre)."""
     v, h = stats[villain], stats[hero]
     lines = lines if lines is not None else villain_lines(hands, villain, hero)
@@ -716,7 +717,8 @@ def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, vi
         bluffs=bluffs_html(hands, hero, villain),
         allins=allin_html(hands, hero, villain),
         showdowns=showdowns_html(v, hero, villain, spots_href),
-        spots=(f' · <a href="{escape(spots_href)}">Visualiseur de spots</a>' if spots_href and not embed else ""),
+        spots=(f' · <a href="{escape(spots_href)}">Visualiseur de spots</a>' if spots_href and not embed else "")
+        + (f' · <a href="{escape(preflop_href)}">Préflop vs solveur</a>' if preflop_href and not embed else ""),
         n_showdowns=len(v.showdowns),
         script=SCRIPT + (EMBED_SCRIPT if embed else ""),
     )

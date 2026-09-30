@@ -2,10 +2,11 @@
 
 Outil d'analyse de tes adversaires en **Heads-Up NLHE** à partir de tes historiques de mains.
 Il lit les historiques, calcule le profil complet de l'adversaire (et le tien dans le même
-match), détecte ses tendances exploitables et génère un **rapport HTML** autonome, ainsi qu'un
-**visualiseur de spots** pour filtrer et rejouer les coups toi-même.
+match), détecte ses tendances exploitables et génère un **rapport HTML** autonome, un
+**visualiseur de spots** pour filtrer et rejouer les coups toi-même, et une comparaison de tes
+décisions préflop à une **solution de solveur** HU.
 
-- Python 3.10+, **aucune dépendance** à installer.
+- Python 3.10+, **aucune dépendance** à installer (Pillow seulement pour lire de nouvelles captures de ranges).
 - Sites supportés : **Betclic.fr** (cash game HU). D'autres formats peuvent être ajoutés (voir plus bas).
 
 ## Application
@@ -19,10 +20,12 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
 
 - **Menu latéral** : « Mon jeu », « Importer des mains » et la liste de tes adversaires (recherche,
   nombre de mains, ton résultat contre chacun).
-- **Adversaire** : onglets *Plan de jeu*, *Rapport* et *Spots*. Les liens « voir les mains » du rapport
-  ouvrent directement l'onglet Spots sur la bonne ligne.
+- **Adversaire** : onglets *Plan de jeu*, *Préflop* (tes décisions et ses fréquences face au solveur),
+  *Rapport* et *Spots*. Les liens « voir les mains » et « rejouer » ouvrent directement l'onglet Spots
+  sur la bonne ligne ou la bonne main.
 - **Mon jeu** : ton bilan contre tous tes adversaires (résultats, courbe, écarts aux repères, stats,
-  pertes sans abattage, résultats par adversaire) et *Mes spots* sur toutes tes mains.
+  pertes sans abattage, résultats par adversaire), *Mon préflop* face au solveur sur toutes tes mains,
+  et *Mes spots*.
 - **Importer des mains** : glisse tes historiques ou choisis-les ; ils sont copiés dans le dossier des
   mains (`hands/` par défaut), les doublons et les formats non reconnus sont signalés.
 
@@ -45,8 +48,9 @@ python -m analyzer -a berserk --sans-spots   # rapport seul, plus rapide
 ```
 
 Ton pseudo est détecté automatiquement (tag `Hero` de Betclic) ; sinon passe `--hero TonPseudo`.
-Le terminal affiche un résumé ; le rapport complet est écrit dans `reports/<adversaire>.html` et le
-visualiseur dans `reports/<adversaire>-spots.html` (ouvre-les dans ton navigateur, ils fonctionnent hors ligne).
+Le terminal affiche un résumé ; le rapport complet est écrit dans `reports/<adversaire>.html`, la page
+préflop dans `reports/<adversaire>-preflop.html` et le visualiseur dans `reports/<adversaire>-spots.html`
+(ouvre-les dans ton navigateur, ils fonctionnent hors ligne).
 
 ## Comment ça marche
 
@@ -56,16 +60,19 @@ visualiseur dans `reports/<adversaire>-spots.html` (ouvre-les dans ton navigateu
 2. **Lecture des situations** (`stats.py`) : pour chaque main, chaque décision est rangée dans sa situation
    (« BB face à un open », « agresseur qui peut c-bet le flop », « face à un check-raise »…). Une stat vaut
    toujours « fois où il l'a fait / fois où il pouvait le faire ». Les deux joueurs sont analysés de la même façon.
-3. **Lecture de l'adversaire** (`insights.py`) : ses stats sont comparées à des repères de régulier HU ; un écart
-   est « net » si l'intervalle de confiance à 90 % reste hors du repère, sinon « tendance ».
+3. **Lecture de l'adversaire** (`insights.py`) : ses stats sont comparées à des repères (ceux du préflop
+   viennent de la solution du solveur, voir plus bas) ; un écart est « net » si l'intervalle de confiance
+   à 90 % reste hors du repère, sinon « tendance ».
 4. **Ses lignes** (`lines.py`) : chaque mise postflop est rangée par ligne (contexte et taille). À l'abattage,
    sa main est classée au moment de la mise (value, value fine, semi-bluff, bluff) grâce à un évaluateur
    de mains et à un calcul d'équité exact contre ta main. Ta main quand tu foldes est aussi notée.
-5. **Plan de jeu** (`plan.py`) : des règles génériques transforment ces constats en consignes, chacune
+5. **Préflop vs solveur** (`theory/`) : chaque décision préflop dont on connaît les cartes est rangée
+   dans l'arbre de la solution et comparée à ce que le solveur fait avec cette main.
+6. **Plan de jeu** (`plan.py`) : des règles génériques transforment ces constats en consignes, chacune
    avec sa preuve et un niveau de confiance.
-6. **Sorties** (`report.py`, `viewer.py`, `selfreport.py`) : le rapport HTML, le visualiseur de spots,
+7. **Sorties** (`report.py`, `viewer.py`, `selfreport.py`) : le rapport HTML, le visualiseur de spots,
    le bilan « Mon jeu » et le résumé du terminal.
-7. **Application** (`app/`) : un serveur local sert ces pages dans une interface avec menu et onglets,
+8. **Application** (`app/`) : un serveur local sert ces pages dans une interface avec menu et onglets,
    calcule chaque analyse à la demande et la garde en cache jusqu'au prochain import.
 
 ## Visualiseur de spots
@@ -90,6 +97,37 @@ mises, board, temps de réflexion, ta main à chaque street et, si sa main a ét
 Depuis le rapport, chaque ligne de « Ses lignes » a un lien « voir les mains » et chaque main de la
 section abattage un lien « rejouer ». Les filtres sont gardés dans l'adresse de la page : tu peux garder
 un spot en favori.
+
+## Préflop vs solveur
+
+La solution de référence est dans `analyzer/theory/data/hu_100bb.json` : quatre nœuds (bouton premier à
+parler, BB face à l'open, bouton face au 3bet, BB face au 4bet), avec pour chacune des 169 mains la
+fréquence de chaque action. Elle a été lue sur les captures de ranges HU à 100bb (open 2,5bb, 3bet 11,5bb,
+4bet 26bb, puis tapis).
+
+Pour chaque décision (tes cartes sont toujours connues ; les siennes seulement à l'abattage) :
+
+- **principale** : l'action que le solveur prend au moins 50 % du temps avec cette main ;
+- **secondaire** : il la prend parfois (10 à 50 %) ;
+- **écart** : il la prend moins de 10 % du temps ;
+- **hors range** : le solveur n'amène jamais cette main à ce nœud (ex. un 4bet face à un 3bet avec une main
+  qu'il n'ouvre pas) ; ces décisions sont exclues des fréquences.
+
+La page montre, par nœud, la grille du solveur (couleurs = actions, hauteur = part de la main qui arrive
+ici) avec tes décisions par main (✕ = écart), tes fréquences face à celles du solveur **avec exactement les
+mêmes mains**, et la liste des écarts avec un lien « rejouer ». Pour l'adversaire : ses fréquences globales
+face au solveur et les mains montrées qu'il joue autrement.
+
+Limites : la lecture des captures est précise à environ 2 % ; la solution est à 100bb et avec ces tailles,
+alors que ta profondeur et vos tailles réelles peuvent différer (la page les affiche). Les pots limpés et
+les relances après un limp sont hors de l'arbre.
+
+Pour remplacer ou ajouter un nœud à partir d'une capture de grille 13 × 13 (nécessite `pip install pillow`) :
+
+```bash
+python -m analyzer.theory.extract capture.png                     # affiche les fréquences lues
+python -m analyzer.theory.extract capture.png --solution analyzer/theory/data/hu_100bb.json --noeud bb_vs_open
+```
 
 ## Contenu du rapport
 
@@ -117,7 +155,8 @@ un spot en favori.
 - **Probe turn** : la BB mise le turn après que l'agresseur a checké derrière au flop.
 - **Bet si l'agresseur checke** : le défenseur en position mise quand l'agresseur checke le flop.
 - **WTSD** : va à l'abattage quand il voit le flop. **W$SD** : gagne à l'abattage. **AF** = (bets + raises) / calls, **AFq** = (bets + raises) / (bets + raises + calls + folds).
-- **Repères** : ordres de grandeur pour un régulier HU solide à 100bb+. Ils servent à repérer les écarts, pas à définir une stratégie optimale. Un écart est marqué **net** quand l'intervalle de confiance à 90 % est entièrement hors du repère, sinon **tendance**. Il faut au moins 15 occasions pour qu'une stat soit interprétée.
+- **Repères** : au préflop, la fréquence globale du solveur (± 5 points, ± 3 sous 15 %) ; au postflop, des
+  ordres de grandeur pour un régulier HU solide à 100bb+. Ils servent à repérer les écarts, pas à définir une stratégie optimale. Un écart est marqué **net** quand l'intervalle de confiance à 90 % est entièrement hors du repère, sinon **tendance**. Il faut au moins 15 occasions pour qu'une stat soit interprétée.
 - **Mains montrées** : seuls les coups allés à l'abattage sont visibles ; ses bluffs qui t'ont fait folder n'apparaissent jamais.
 - **Intention d'une mise** (section « Ses lignes ») : sa main au moment de la mise. *Value* = top paire ou mieux, *value fine* = paire faible ou moyenne, *semi-bluff* = rien de fait mais au moins 25 % d'équité contre ta main (flop, turn), *bluff* = le reste. À la river, ta décision de payer ne dépend pas de ses cartes : les mains vues quand tu paies sont un échantillon honnête de la ligne. Le verdict « payer / folder tes bluff-catchers » compare sa part de bluffs (intervalle de confiance à 90 %) aux cotes du pot, et reste « pas encore tranché » tant que l'échantillon ne permet pas de conclure.
 - **Folds forcés** : un fold sans paire ni tirage n'est pas une erreur. Le rapport indique toujours avec quoi tu as foldé avant de parler de sur-fold.
@@ -137,6 +176,8 @@ analyzer/
   report.py            rapport HTML
   viewer.py            visualiseur de spots (HTML + JavaScript, sans dépendance)
   selfreport.py        « Mon jeu » : ton bilan contre tous tes adversaires
+  theory/              préflop vs solveur : solution (data/), comparaison (preflop.py), page (page.py),
+                       lecture de captures de ranges (extract.py)
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
                        (library.py), interface (static/)
   cli.py               ligne de commande
@@ -161,7 +202,10 @@ python -m unittest discover -s tests
 ## Plan de jeu
 
 Le plan est produit par des règles génériques : chacune ne se déclenche que si les données la justifient
-(par exemple « face à ses 3bets, défends plus » exige qu'il 3bet plus de 20 % et que tu foldes plus de 50 %).
+(par exemple « face à ses 3bets, défends plus » exige que tu foldes au moins 5 points de plus que le solveur
+avec les mêmes mains). Au préflop, les écarts au solveur répétés au moins 4 fois deviennent des consignes
+(« jette ces mains », « 3bet ces mains au lieu de payer »…), sauf quand l'écart exploite une de ses fuites
+(ouvrir large contre un joueur qui abandonne trop sa BB, par exemple).
 Chaque consigne affiche sa preuve et un niveau de confiance :
 
 - **solide** : l'écart reste vrai même en tenant compte du hasard (intervalle de confiance à 90 %) ;
