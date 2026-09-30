@@ -8,7 +8,28 @@ match), détecte ses tendances exploitables et génère un **rapport HTML** auto
 - Python 3.10+, **aucune dépendance** à installer.
 - Sites supportés : **Betclic.fr** (cash game HU). D'autres formats peuvent être ajoutés (voir plus bas).
 
-## Utilisation
+## Application
+
+```bash
+python -m analyzer app
+```
+
+L'application s'ouvre dans ton navigateur (http://127.0.0.1:8765). Tout reste sur ton ordinateur :
+le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
+
+- **Menu latéral** : « Mon jeu », « Importer des mains » et la liste de tes adversaires (recherche,
+  nombre de mains, ton résultat contre chacun).
+- **Adversaire** : onglets *Plan de jeu*, *Rapport* et *Spots*. Les liens « voir les mains » du rapport
+  ouvrent directement l'onglet Spots sur la bonne ligne.
+- **Mon jeu** : ton bilan contre tous tes adversaires (résultats, courbe, écarts aux repères, stats,
+  pertes sans abattage, résultats par adversaire) et *Mes spots* sur toutes tes mains.
+- **Importer des mains** : glisse tes historiques ou choisis-les ; ils sont copiés dans le dossier des
+  mains (`hands/` par défaut), les doublons et les formats non reconnus sont signalés.
+
+Options : `--dossier` (dossier des historiques), `--port`, `--hero`, `--sans-navigateur`.
+Les analyses sont calculées à la première ouverture d'une page puis gardées en mémoire ; un import les recalcule.
+
+## Ligne de commande
 
 1. Dépose tes fichiers d'historique dans `hands/` (un ou plusieurs fichiers `.txt`, sous-dossiers acceptés).
    Les mains en double sont ignorées : tu peux accumuler les sessions contre un même joueur.
@@ -42,7 +63,10 @@ visualiseur dans `reports/<adversaire>-spots.html` (ouvre-les dans ton navigateu
    de mains et à un calcul d'équité exact contre ta main. Ta main quand tu foldes est aussi notée.
 5. **Plan de jeu** (`plan.py`) : des règles génériques transforment ces constats en consignes, chacune
    avec sa preuve et un niveau de confiance.
-6. **Sorties** (`report.py`, `viewer.py`) : le rapport HTML, le visualiseur de spots et le résumé du terminal.
+6. **Sorties** (`report.py`, `viewer.py`, `selfreport.py`) : le rapport HTML, le visualiseur de spots,
+   le bilan « Mon jeu » et le résumé du terminal.
+7. **Application** (`app/`) : un serveur local sert ces pages dans une interface avec menu et onglets,
+   calcule chaque analyse à la demande et la garde en cache jusqu'au prochain import.
 
 ## Visualiseur de spots
 
@@ -112,6 +136,9 @@ analyzer/
   spots.py             fiches des mains pour le visualiseur (tags de spot, lignes, équités)
   report.py            rapport HTML
   viewer.py            visualiseur de spots (HTML + JavaScript, sans dépendance)
+  selfreport.py        « Mon jeu » : ton bilan contre tous tes adversaires
+  app/                 application : serveur local (server.py), bibliothèque de mains et cache
+                       (library.py), interface (static/)
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)
 hands/                 tes historiques (ignorés par git)

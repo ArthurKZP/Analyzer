@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analyzer HU</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="sidebar" id="sidebar" aria-label="Navigation">
+    <div class="brand">Analyzer <span>HU</span></div>
+    <div class="me" id="hero-name"></div>
+    <nav class="nav">
+      <a href="#/moi" data-view="moi">Mon jeu</a>
+      <a href="#/importer" data-view="importer">Importer des mains</a>
+    </nav>
+    <div class="opp-head">Adversaires <span id="opp-count"></span></div>
+    <input class="search" id="opp-search" type="search" placeholder="Rechercher un joueur" aria-label="Rechercher un adversaire">
+    <ul class="opps" id="opps"></ul>
+  </aside>
+  <div class="backdrop" id="backdrop"></div>
+  <div class="main">
+    <header class="topbar">
+      <button class="menu" id="menu" type="button" aria-label="Ouvrir le menu">☰</button>
+      <div class="titles">
+        <h1 id="title">Analyzer HU</h1>
+        <div class="subtitle" id="subtitle"></div>
+      </div>
+    </header>
+    <nav class="tabs" id="tabs" aria-label="Sections"></nav>
+    <section class="content">
+      <iframe id="frame" title="Analyse"></iframe>
+      <div class="loading" id="loading" hidden><span class="spinner"></span>Analyse en cours…</div>
+      <div class="panel" id="panel" hidden></div>
+    </section>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

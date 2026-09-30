@@ -1,0 +1,123 @@
+import http.client
+import json
+import shutil
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+
+from analyzer.app.library import Library, UnknownPlayer
+from analyzer.app.server import start
+
+FIXTURE = Path(__file__).parent / "fixtures" / "betclic_sample.txt"
+
+
+class LibraryTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.folder = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_empty_folder(self):
+        lib = Library(self.folder / "hands")
+        self.assertEqual(lib.summary()["hands"], 0)
+        self.assertIsNone(lib.hero)
+        with self.assertRaises(UnknownPlayer):
+            lib.self_page("bilan")
+
+    def test_pages_are_built_once(self):
+        shutil.copy(FIXTURE, self.folder / "sample.txt")
+        lib = Library(self.folder)
+        summary = lib.summary()
+        self.assertEqual((summary["hero"], summary["hands"]), ("Hero", 4))
+        self.assertEqual([o["name"] for o in summary["opponents"]], ["Villain"])
+        plan = lib.player_page("Villain", "plan")
+        self.assertIn("Plan de jeu", plan)
+        self.assertNotIn("<h1>", plan)  # intégré : le titre est dans l'application
+        self.assertIs(plan, lib.player_page("Villain", "plan"))
+        self.assertIn("Ses lignes", lib.player_page("Villain", "rapport"))
+        self.assertIn('id="data"', lib.player_page("Villain", "spots"))
+        self.assertIn("Résultats par adversaire", lib.self_page("bilan"))
+        self.assertIn('id="data"', lib.self_page("spots"))
+        with self.assertRaises(UnknownPlayer):
+            lib.player_page("Personne", "plan")
+        with self.assertRaises(KeyError):
+            lib.player_page("Villain", "inconnue")
+
+    def test_import(self):
+        lib = Library(self.folder)
+        content = FIXTURE.read_text(encoding="utf-8")
+        result = lib.import_files([
+            {"name": "../../piege.txt", "content": content},
+            {"name": "copie.txt", "content": content},
+            {"name": "autre.txt", "content": "PokerStars Hand #1"},
+            {"name": "vide.txt", "content": "  "},
+        ])
+        self.assertEqual(result["added"], 4)
+        self.assertEqual([f["status"] for f in result["files"]],
+                         ["importé", "déjà importé", "format non reconnu", "vide"])
+        saved = list(self.folder.iterdir())
+        self.assertEqual(len(saved), 1)
+        self.assertTrue(saved[0].name.startswith("import-") and saved[0].name.endswith("-piege.txt"))
+        self.assertEqual(result["state"]["hands"], 4)
+        self.assertEqual(lib.import_files([{"name": "x.txt", "content": content}])["added"], 0)
+
+
+class ServerTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        shutil.copy(FIXTURE, Path(cls.tmp.name) / "sample.txt")
+        cls.server = start(Library(cls.tmp.name), port=0)
+        cls.port = cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.tmp.cleanup()
+
+    def request(self, method, path, body=None, headers=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+        conn.request(method, path, body=body, headers=headers or {})
+        resp = conn.getresponse()
+        data = resp.read()
+        conn.close()
+        return resp.status, resp.getheader("Content-Type", ""), data
+
+    def test_pages(self):
+        status, ctype, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", ctype)
+        self.assertIn(b"Analyzer", body)
+        self.assertEqual(self.request("GET", "/static/app.js")[0], 200)
+        status, _, body = self.request("GET", "/api/state")
+        self.assertEqual(json.loads(body)["hero"], "Hero")
+        self.assertEqual(self.request("GET", "/p/Villain/plan")[0], 200)
+        self.assertEqual(self.request("GET", "/moi/bilan")[0], 200)
+
+    def test_not_found(self):
+        for path in ("/p/Personne/plan", "/p/Villain/autre", "/static/server.py",
+                     "/static/..%2Fserver.py", "/rien"):
+            self.assertEqual(self.request("GET", path)[0], 404, path)
+
+    def test_foreign_host_and_origin_are_refused(self):
+        self.assertEqual(self.request("GET", "/api/state", headers={"Host": "evil.example"})[0], 403)
+        body = json.dumps({"files": []})
+        status = self.request("POST", "/api/import", body, {"Origin": "http://evil.example",
+                                                             "Content-Type": "application/json"})[0]
+        self.assertEqual(status, 403)
+
+    def test_import_endpoint(self):
+        body = json.dumps({"files": [{"name": "doublon.txt", "content": FIXTURE.read_text(encoding="utf-8")}]})
+        status, _, data = self.request("POST", "/api/import", body, {"Content-Type": "application/json"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(data)["files"][0]["status"], "déjà importé")
+        self.assertEqual(self.request("POST", "/api/import", "pas du json")[0], 400)
+
+
+if __name__ == "__main__":
+    unittest.main()

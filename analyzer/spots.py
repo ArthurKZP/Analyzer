@@ -105,6 +105,7 @@ def hand_record(hand: Hand, hero: str, villain: str) -> dict:
 
     record = {
         "id": hand.hand_id,
+        "opp": villain,
         "d": hand.date.strftime("%d/%m %H:%M"),
         "ts": hand.date.strftime("%Y-%m-%d %H:%M:%S"),
         "g": hand.game_name,
@@ -141,9 +142,16 @@ def hand_record(hand: Hand, hero: str, villain: str) -> dict:
     return record
 
 
-def spot_records(hands: list[Hand], hero: str, villain: str) -> list[dict]:
-    return [hand_record(h, hero, villain) for h in hands
-            if hero in h.seats and villain in h.seats and h.button and h.bb]
+def spot_records(hands: list[Hand], hero: str, villain: Optional[str] = None) -> list[dict]:
+    """Fiches des mains contre `villain`, ou contre tous tes adversaires si villain=None."""
+    records = []
+    for h in hands:
+        if hero not in h.seats or len(h.seats) != 2 or not h.button or not h.bb:
+            continue
+        opponent = h.opponent_of(hero)
+        if villain is None or opponent == villain:
+            records.append(hand_record(h, hero, opponent))
+    return records
 
 
 def line_options(records: list[dict]) -> list[tuple[str, int]]:

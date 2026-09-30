@@ -529,7 +529,7 @@ def intent_timing_html(lines: list[Line]) -> str:
     )
 
 
-def nonshowdown_html(hands: list[Hand], hero: str, villain: str) -> str:
+def nonshowdown_html(hands: list[Hand], hero: str, villain: Optional[str] = None) -> str:
     data = nonshowdown_losses(hands, hero)
     street_names = {"preflop": "Préflop", "flop": "Flop", "turn": "Turn", "river": "River"}
     rows = []
@@ -671,9 +671,10 @@ def plan_html(plan: Plan) -> str:
 
 
 def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, villain: str,
-                 spots_href: str = "") -> str:
+                 spots_href: str = "", embed: bool = False, lines: Optional[list[Line]] = None) -> str:
+    """Rapport complet. embed=True : version intégrée à l'application (sans titre)."""
     v, h = stats[villain], stats[hero]
-    lines = villain_lines(hands, villain, hero)
+    lines = lines if lines is not None else villain_lines(hands, villain, hero)
     folds = fold_holdings_by_street(lines)
     plan = build_plan(hands, stats, hero, villain, lines)
     games = Counter(hd.game_name for hd in hands)
@@ -691,7 +692,8 @@ def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, vi
     )
     return TEMPLATE.format(
         title=escape(f"Profil HU — {villain}"),
-        villain=escape(villain),
+        style=STYLE,
+        heading="" if embed else f"<h1>{escape(villain)}</h1>",
         hero=escape(hero),
         meta=meta,
         tiles=tiles(h),
@@ -714,10 +716,234 @@ def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, vi
         bluffs=bluffs_html(hands, hero, villain),
         allins=allin_html(hands, hero, villain),
         showdowns=showdowns_html(v, hero, villain, spots_href),
-        spots=(f' · <a href="{escape(spots_href)}">Visualiseur de spots</a>' if spots_href else ""),
+        spots=(f' · <a href="{escape(spots_href)}">Visualiseur de spots</a>' if spots_href and not embed else ""),
         n_showdowns=len(v.showdowns),
-        script=SCRIPT,
+        script=SCRIPT + (EMBED_SCRIPT if embed else ""),
     )
+
+
+# Signale à l'application la page affichée (utile quand on suit un lien interne).
+EMBED_SCRIPT = """
+(function () {
+  if (window.parent === window) return;
+  var post = function () {
+    window.parent.postMessage({ type: 'analyzer-page', path: location.pathname, hash: location.hash }, location.origin);
+  };
+  post();
+  window.addEventListener('hashchange', post);
+})();
+"""
+
+PAGE = """<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+{style}</style>
+</head>
+<body>
+<main>
+{body}
+</main>
+<script>{script}</script>
+</body>
+</html>
+"""
+
+
+def html_page(title: str, body: str, embed: bool = False, script: str = "") -> str:
+    """Page autonome avec le style du rapport (utilisée par l'application)."""
+    return PAGE.format(title=escape(title), style=STYLE, body=body,
+                       script=script + (EMBED_SCRIPT if embed else ""))
+
+
+def build_plan_page(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, villain: str,
+                    embed: bool = False, lines: Optional[list[Line]] = None,
+                    report_href: str = "rapport", spots_href: str = "spots") -> str:
+    """Page d'accueil d'un adversaire : chiffres clés et plan de jeu."""
+    h = stats[hero]
+    lines = lines if lines is not None else villain_lines(hands, villain, hero)
+    plan = build_plan(hands, stats, hero, villain, lines)
+    period = f"{hands[0].date:%d/%m/%Y} → {hands[-1].date:%d/%m/%Y}"
+    links = "" if embed else f' · <a href="{escape(report_href)}">Rapport complet</a> · <a href="{escape(spots_href)}">Spots</a>'
+    heading = "" if embed else f"<h1>{escape(villain)}</h1>"
+    body = (
+        f'{heading}<div class="meta">{len(hands)} mains · {period} · toi : <b>{escape(hero)}</b>{links}</div>'
+        f"{tiles(h)}<h2>Plan de jeu</h2>{plan_html(plan)}"
+        '<p class="note">Consignes générées à partir de l\'analyse. Confiance : <b>solide</b> = l\'écart reste vrai même '
+        'en tenant compte du hasard, <b>indicatif</b> = tendance nette sur un échantillon modeste, '
+        '<b>à confirmer</b> = peu de mains. Le détail de chaque chiffre est dans le rapport complet.</p>'
+    )
+    return html_page(f"Plan — {villain}", body, embed)
+
+
+STYLE = """:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+  --alert: #d03b3b; --alert-bg: rgba(208,59,59,0.08); --good: #006300;
+  --hi-bg: rgba(235,104,52,0.14); --lo-bg: rgba(42,120,214,0.12);
+  --sc: #0b0b0b; --sh: #d03b3b; --sd: #2a78d6; --sclub: #008300;
+  --int-bluff: #c8302f; --int-semi: #eb8a89; --int-thin: #86b6ef; --int-value: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+    --alert: #e66767; --alert-bg: rgba(230,103,103,0.12); --good: #0ca30c;
+    --hi-bg: rgba(217,89,38,0.22); --lo-bg: rgba(57,135,229,0.22);
+    --sc: #ffffff; --sh: #e66767; --sd: #6da7ec; --sclub: #0ca30c;
+    --int-bluff: #e66767; --int-semi: #9c3434; --int-thin: #1c5cab; --int-value: #5598e7;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+  --alert: #e66767; --alert-bg: rgba(230,103,103,0.12); --good: #0ca30c;
+  --hi-bg: rgba(217,89,38,0.22); --lo-bg: rgba(57,135,229,0.22);
+  --sc: #ffffff; --sh: #e66767; --sd: #6da7ec; --sclub: #0ca30c;
+  --int-bluff: #e66767; --int-semi: #9c3434; --int-thin: #1c5cab; --int-value: #5598e7;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 26px; margin: 0 0 4px; }
+h2 { font-size: 18px; margin: 36px 0 12px; }
+h3 { font-size: 14px; margin: 0 0 10px; color: var(--ink-2); }
+.meta, .muted, .note { color: var(--muted); }
+.note { font-size: 12px; margin: 8px 0 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 20px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.tile .label { color: var(--ink-2); font-size: 13px; }
+.tile .value { font-size: 26px; font-weight: 600; margin: 2px 0; }
+.tile .sub { color: var(--muted); font-size: 12px; }
+table.stats { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+table.stats th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--grid); padding: 4px 6px; }
+table.stats td { border-bottom: 1px solid var(--grid); padding: 5px 6px; vertical-align: top; }
+.num { text-align: right !important; white-space: nowrap; }
+.nowrap { white-space: nowrap; }
+td .n { display: block; font-size: 11px; color: var(--muted); }
+td .n.small { font-style: italic; }
+td.dev-haut { background: var(--hi-bg); }
+td.dev-bas { background: var(--lo-bg); }
+td.strong .v { font-weight: 700; }
+.legend-dev { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); margin: 0 0 12px; }
+.legend-dev i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
+.findings { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+.findings li { display: flex; gap: 10px; align-items: flex-start; }
+.pill { flex: none; font-size: 11px; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--border); color: var(--ink-2); margin-top: 2px; }
+.pill.strong { color: var(--alert); border-color: var(--alert); font-weight: 600; }
+table.duel tr.alerte td:first-child { box-shadow: inset 3px 0 0 var(--alert); }
+table.duel tr.alerte .lvl { color: var(--alert); font-weight: 700; }
+table.duel tr.ok .lvl { color: var(--good); font-weight: 700; }
+.chart { position: relative; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .grid { stroke: var(--grid); stroke-width: 1; }
+.chart .axis { stroke: var(--axis); stroke-width: 1; }
+.chart .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .cross { stroke: var(--axis); stroke-width: 1; }
+.chart .hit { fill: transparent; cursor: crosshair; }
+.tooltip { position: absolute; top: 8px; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 170px; }
+.tooltip .row { display: flex; align-items: center; gap: 8px; }
+.tooltip .row i { width: 14px; height: 2px; display: inline-block; }
+.tooltip .row b { margin-left: auto; font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin-bottom: 8px; }
+.legend i { display: inline-block; width: 16px; height: 2px; vertical-align: middle; margin-right: 6px; }
+.legend b { color: var(--ink); font-weight: 600; }
+.barcell { width: 34%; position: relative; }
+.bar { display: inline-block; height: 8px; background: var(--series-1); border-radius: 0 4px 4px 0; vertical-align: middle; max-width: calc(100% - 44px); }
+.barv { margin-left: 6px; color: var(--ink-2); font-size: 12px; }
+.chip { display: inline-block; font-size: 11px; border-radius: 4px; padding: 0 6px; margin: 1px 2px 1px 0; border: 1px solid var(--border); white-space: nowrap; }
+.chip.k0 { background: var(--hi-bg); }
+.chip.k1 { background: var(--hi-bg); }
+.chip.k2 { background: transparent; }
+.chip.k3, .chip.k4 { background: var(--lo-bg); }
+span.pc { display: inline-block; font-weight: 600; font-family: ui-monospace, monospace; padding: 0 2px; margin-right: 1px; border-radius: 3px; background: var(--page); border: 1px solid var(--border); font-size: 12px; }
+span.pc.ss { color: var(--sc); } span.pc.sh { color: var(--sh); } span.pc.sd { color: var(--sd); } span.pc.sc { color: var(--sclub); }
+details { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; }
+summary { cursor: pointer; padding: 12px 16px; }
+details[open] summary { border-bottom: 1px solid var(--grid); }
+details table { margin: 0; }
+details .stats td, details .stats th { padding-left: 12px; }
+.combos { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.sd .line { font-size: 12px; }
+.st { margin-bottom: 2px; }
+.sn { display: inline-block; width: 22px; color: var(--muted); font-weight: 600; }
+.tag { font-weight: 700; } .tag.tv { color: var(--series-2); } .tag.th { color: var(--series-1); }
+.t { color: var(--muted); font-size: 11px; }
+em { font-style: normal; font-weight: 600; color: var(--alert); }
+.scroll { overflow-x: auto; }
+.sd td { white-space: normal; }
+.act, .cards { white-space: nowrap; }
+.spots-link { white-space: nowrap; font-size: 12px; }
+a { color: var(--series-1); }
+.profile { margin-bottom: 16px; }
+.plan .phase ol { margin: 0; padding-left: 20px; display: grid; gap: 12px; }
+.plan .phase li::marker { color: var(--muted); font-weight: 600; }
+.pa { font-weight: 600; }
+.pw { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.conf { display: inline-block; font-size: 11px; border-radius: 999px; padding: 0 7px; margin-left: 4px; white-space: nowrap; border: 1px solid var(--border); }
+.conf.c-solide { background: var(--series-1); border-color: var(--series-1); color: #fff; font-weight: 600; }
+.conf.c-indicatif { color: var(--ink); border-color: var(--axis); }
+.conf.c-à-confirmer { color: var(--muted); border-style: dashed; }
+.i-bluff { background: var(--int-bluff); } .i-semi { background: var(--int-semi); }
+.i-thin { background: var(--int-thin); } .i-value { background: var(--int-value); }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.comp { display: flex; gap: 2px; height: 10px; min-width: 110px; }
+.comp .seg { display: block; height: 100%; }
+.comp .seg:first-child { border-radius: 4px 0 0 4px; } .comp .seg:last-child { border-radius: 0 4px 4px 0; }
+.comp .seg:only-child { border-radius: 4px; }
+.comp-t { font-size: 11px; color: var(--ink-2); margin-top: 3px; }
+.compcell { min-width: 150px; }
+.legend-int { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin: 8px 0; }
+.legend-int i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
+.intro p { margin: 0; }
+.lines-card { margin-top: 16px; }
+table.lines tr.main td { border-bottom: 0; padding-bottom: 2px; }
+table.lines tr.sub td { font-size: 12px; color: var(--ink-2); padding-top: 0; }
+table.lines tr.group td { font-size: 12px; font-weight: 600; color: var(--muted); padding-top: 14px; border-bottom: 1px solid var(--axis); }
+table.lines tr.pooled td { background: var(--page); }
+.kind { display: inline-block; font-size: 12px; font-weight: 600; border-radius: 4px; padding: 1px 6px; white-space: nowrap; border: 1px solid var(--border); }
+.kind.k-value { background: var(--lo-bg); } .kind.k-bluff, .kind.k-semi-bluff { background: var(--hi-bg); }
+.kind.k-inconnue, .kind.k-peu-vue { color: var(--muted); font-weight: 500; }
+.chip.h-rien { color: var(--muted); } .chip.h-paire { background: var(--lo-bg); } .chip.h-fort { background: var(--lo-bg); font-weight: 600; }
+details.inner { margin: 12px 0 0; border-radius: 8px; }
+details.inner summary { padding: 8px 12px; font-size: 13px; }
+.chart-wrap { overflow-x: auto; }
+.chart { min-width: 600px; }
+table.sizing td:first-child { white-space: nowrap; }
+@media (max-width: 640px) {
+  .tile .value { font-size: 22px; }
+  .barcell { width: auto; }
+  table.sd thead { display: none; }
+  table.sd tr { display: grid; grid-template-columns: auto auto 1fr auto; gap: 0 12px; border-bottom: 1px solid var(--grid); padding: 8px 0; }
+  table.sd td { border: 0; padding: 2px 12px; }
+  table.sd td.line { grid-column: 1 / -1; grid-row: 2; }
+  .act { white-space: normal; }
+  table.lines thead { display: none; }
+  table.lines tr.main { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px 12px; padding-top: 10px; }
+  table.lines tr.main td { display: block; padding: 0; text-align: left !important; }
+  table.lines tr.main td.ln, table.lines tr.main td.compcell { grid-column: 1 / -1; }
+  table.lines tr.main td[data-l="Tes folds, avec…"], table.lines tr.main td[data-l="Lecture"] { grid-column: span 2; }
+  table.lines td[data-l]::before { content: attr(data-l); display: block; font-size: 11px; color: var(--muted); }
+  table.lines tr.sub { display: block; }
+  table.lines tr.sub td { display: block; padding: 4px 0 10px; }
+  table.lines tr.group td { display: block; }
+  .compcell { min-width: 0; }
+  table.lines tr.pooled { background: var(--page); }
+  table.lines tr.pooled td { background: transparent; }
+}
+"""
 
 
 TEMPLATE = """<!doctype html>
@@ -727,175 +953,11 @@ TEMPLATE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <style>
-:root {{
-  color-scheme: light;
-  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
-  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
-  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
-  --alert: #d03b3b; --alert-bg: rgba(208,59,59,0.08); --good: #006300;
-  --hi-bg: rgba(235,104,52,0.14); --lo-bg: rgba(42,120,214,0.12);
-  --sc: #0b0b0b; --sh: #d03b3b; --sd: #2a78d6; --sclub: #008300;
-  --int-bluff: #c8302f; --int-semi: #eb8a89; --int-thin: #86b6ef; --int-value: #2a78d6;
-}}
-@media (prefers-color-scheme: dark) {{
-  :root:not([data-theme="light"]) {{
-    color-scheme: dark;
-    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
-    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
-    --alert: #e66767; --alert-bg: rgba(230,103,103,0.12); --good: #0ca30c;
-    --hi-bg: rgba(217,89,38,0.22); --lo-bg: rgba(57,135,229,0.22);
-    --sc: #ffffff; --sh: #e66767; --sd: #6da7ec; --sclub: #0ca30c;
-    --int-bluff: #e66767; --int-semi: #9c3434; --int-thin: #1c5cab; --int-value: #5598e7;
-  }}
-}}
-:root[data-theme="dark"] {{
-  color-scheme: dark;
-  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
-  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
-  --alert: #e66767; --alert-bg: rgba(230,103,103,0.12); --good: #0ca30c;
-  --hi-bg: rgba(217,89,38,0.22); --lo-bg: rgba(57,135,229,0.22);
-  --sc: #ffffff; --sh: #e66767; --sd: #6da7ec; --sclub: #0ca30c;
-  --int-bluff: #e66767; --int-semi: #9c3434; --int-thin: #1c5cab; --int-value: #5598e7;
-}}
-* {{ box-sizing: border-box; }}
-body {{ margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }}
-main {{ max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }}
-h1 {{ font-size: 26px; margin: 0 0 4px; }}
-h2 {{ font-size: 18px; margin: 36px 0 12px; }}
-h3 {{ font-size: 14px; margin: 0 0 10px; color: var(--ink-2); }}
-.meta, .muted, .note {{ color: var(--muted); }}
-.note {{ font-size: 12px; margin: 8px 0 0; }}
-.card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }}
-.grid2 {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 16px; }}
-.tiles {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 20px; }}
-.tile {{ background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }}
-.tile .label {{ color: var(--ink-2); font-size: 13px; }}
-.tile .value {{ font-size: 26px; font-weight: 600; margin: 2px 0; }}
-.tile .sub {{ color: var(--muted); font-size: 12px; }}
-table.stats {{ width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }}
-table.stats th {{ text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--grid); padding: 4px 6px; }}
-table.stats td {{ border-bottom: 1px solid var(--grid); padding: 5px 6px; vertical-align: top; }}
-.num {{ text-align: right !important; white-space: nowrap; }}
-.nowrap {{ white-space: nowrap; }}
-td .n {{ display: block; font-size: 11px; color: var(--muted); }}
-td .n.small {{ font-style: italic; }}
-td.dev-haut {{ background: var(--hi-bg); }}
-td.dev-bas {{ background: var(--lo-bg); }}
-td.strong .v {{ font-weight: 700; }}
-.legend-dev {{ display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); margin: 0 0 12px; }}
-.legend-dev i {{ display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }}
-.findings {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }}
-.findings li {{ display: flex; gap: 10px; align-items: flex-start; }}
-.pill {{ flex: none; font-size: 11px; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--border); color: var(--ink-2); margin-top: 2px; }}
-.pill.strong {{ color: var(--alert); border-color: var(--alert); font-weight: 600; }}
-table.duel tr.alerte td:first-child {{ box-shadow: inset 3px 0 0 var(--alert); }}
-table.duel tr.alerte .lvl {{ color: var(--alert); font-weight: 700; }}
-table.duel tr.ok .lvl {{ color: var(--good); font-weight: 700; }}
-.chart {{ position: relative; }}
-.chart svg {{ width: 100%; height: auto; display: block; }}
-.chart .grid {{ stroke: var(--grid); stroke-width: 1; }}
-.chart .axis {{ stroke: var(--axis); stroke-width: 1; }}
-.chart .tick {{ fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }}
-.chart .line {{ fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }}
-.chart .cross {{ stroke: var(--axis); stroke-width: 1; }}
-.chart .hit {{ fill: transparent; cursor: crosshair; }}
-.tooltip {{ position: absolute; top: 8px; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 170px; }}
-.tooltip .row {{ display: flex; align-items: center; gap: 8px; }}
-.tooltip .row i {{ width: 14px; height: 2px; display: inline-block; }}
-.tooltip .row b {{ margin-left: auto; font-variant-numeric: tabular-nums; }}
-.legend {{ display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin-bottom: 8px; }}
-.legend i {{ display: inline-block; width: 16px; height: 2px; vertical-align: middle; margin-right: 6px; }}
-.legend b {{ color: var(--ink); font-weight: 600; }}
-.barcell {{ width: 34%; position: relative; }}
-.bar {{ display: inline-block; height: 8px; background: var(--series-1); border-radius: 0 4px 4px 0; vertical-align: middle; max-width: calc(100% - 44px); }}
-.barv {{ margin-left: 6px; color: var(--ink-2); font-size: 12px; }}
-.chip {{ display: inline-block; font-size: 11px; border-radius: 4px; padding: 0 6px; margin: 1px 2px 1px 0; border: 1px solid var(--border); white-space: nowrap; }}
-.chip.k0 {{ background: var(--hi-bg); }}
-.chip.k1 {{ background: var(--hi-bg); }}
-.chip.k2 {{ background: transparent; }}
-.chip.k3, .chip.k4 {{ background: var(--lo-bg); }}
-span.pc {{ display: inline-block; font-weight: 600; font-family: ui-monospace, monospace; padding: 0 2px; margin-right: 1px; border-radius: 3px; background: var(--page); border: 1px solid var(--border); font-size: 12px; }}
-span.pc.ss {{ color: var(--sc); }} span.pc.sh {{ color: var(--sh); }} span.pc.sd {{ color: var(--sd); }} span.pc.sc {{ color: var(--sclub); }}
-details {{ background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; }}
-summary {{ cursor: pointer; padding: 12px 16px; }}
-details[open] summary {{ border-bottom: 1px solid var(--grid); }}
-details table {{ margin: 0; }}
-details .stats td, details .stats th {{ padding-left: 12px; }}
-.combos {{ font-size: 12px; color: var(--ink-2); margin-top: 2px; }}
-.sd .line {{ font-size: 12px; }}
-.st {{ margin-bottom: 2px; }}
-.sn {{ display: inline-block; width: 22px; color: var(--muted); font-weight: 600; }}
-.tag {{ font-weight: 700; }} .tag.tv {{ color: var(--series-2); }} .tag.th {{ color: var(--series-1); }}
-.t {{ color: var(--muted); font-size: 11px; }}
-em {{ font-style: normal; font-weight: 600; color: var(--alert); }}
-.scroll {{ overflow-x: auto; }}
-.sd td {{ white-space: normal; }}
-.act, .cards {{ white-space: nowrap; }}
-.spots-link {{ white-space: nowrap; font-size: 12px; }}
-a {{ color: var(--series-1); }}
-.profile {{ margin-bottom: 16px; }}
-.plan .phase ol {{ margin: 0; padding-left: 20px; display: grid; gap: 12px; }}
-.plan .phase li::marker {{ color: var(--muted); font-weight: 600; }}
-.pa {{ font-weight: 600; }}
-.pw {{ font-size: 12px; color: var(--ink-2); margin-top: 2px; }}
-.conf {{ display: inline-block; font-size: 11px; border-radius: 999px; padding: 0 7px; margin-left: 4px; white-space: nowrap; border: 1px solid var(--border); }}
-.conf.c-solide {{ background: var(--series-1); border-color: var(--series-1); color: #fff; font-weight: 600; }}
-.conf.c-indicatif {{ color: var(--ink); border-color: var(--axis); }}
-.conf.c-à-confirmer {{ color: var(--muted); border-style: dashed; }}
-.i-bluff {{ background: var(--int-bluff); }} .i-semi {{ background: var(--int-semi); }}
-.i-thin {{ background: var(--int-thin); }} .i-value {{ background: var(--int-value); }}
-.dot {{ display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }}
-.comp {{ display: flex; gap: 2px; height: 10px; min-width: 110px; }}
-.comp .seg {{ display: block; height: 100%; }}
-.comp .seg:first-child {{ border-radius: 4px 0 0 4px; }} .comp .seg:last-child {{ border-radius: 0 4px 4px 0; }}
-.comp .seg:only-child {{ border-radius: 4px; }}
-.comp-t {{ font-size: 11px; color: var(--ink-2); margin-top: 3px; }}
-.compcell {{ min-width: 150px; }}
-.legend-int {{ display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin: 8px 0; }}
-.legend-int i {{ display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }}
-.intro p {{ margin: 0; }}
-.lines-card {{ margin-top: 16px; }}
-table.lines tr.main td {{ border-bottom: 0; padding-bottom: 2px; }}
-table.lines tr.sub td {{ font-size: 12px; color: var(--ink-2); padding-top: 0; }}
-table.lines tr.group td {{ font-size: 12px; font-weight: 600; color: var(--muted); padding-top: 14px; border-bottom: 1px solid var(--axis); }}
-table.lines tr.pooled td {{ background: var(--page); }}
-.kind {{ display: inline-block; font-size: 12px; font-weight: 600; border-radius: 4px; padding: 1px 6px; white-space: nowrap; border: 1px solid var(--border); }}
-.kind.k-value {{ background: var(--lo-bg); }} .kind.k-bluff, .kind.k-semi-bluff {{ background: var(--hi-bg); }}
-.kind.k-inconnue, .kind.k-peu-vue {{ color: var(--muted); font-weight: 500; }}
-.chip.h-rien {{ color: var(--muted); }} .chip.h-paire {{ background: var(--lo-bg); }} .chip.h-fort {{ background: var(--lo-bg); font-weight: 600; }}
-details.inner {{ margin: 12px 0 0; border-radius: 8px; }}
-details.inner summary {{ padding: 8px 12px; font-size: 13px; }}
-.chart-wrap {{ overflow-x: auto; }}
-.chart {{ min-width: 600px; }}
-table.sizing td:first-child {{ white-space: nowrap; }}
-@media (max-width: 640px) {{
-  .tile .value {{ font-size: 22px; }}
-  .barcell {{ width: auto; }}
-  table.sd thead {{ display: none; }}
-  table.sd tr {{ display: grid; grid-template-columns: auto auto 1fr auto; gap: 0 12px; border-bottom: 1px solid var(--grid); padding: 8px 0; }}
-  table.sd td {{ border: 0; padding: 2px 12px; }}
-  table.sd td.line {{ grid-column: 1 / -1; grid-row: 2; }}
-  .act {{ white-space: normal; }}
-  table.lines thead {{ display: none; }}
-  table.lines tr.main {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px 12px; padding-top: 10px; }}
-  table.lines tr.main td {{ display: block; padding: 0; text-align: left !important; }}
-  table.lines tr.main td.ln, table.lines tr.main td.compcell {{ grid-column: 1 / -1; }}
-  table.lines tr.main td[data-l="Tes folds, avec…"], table.lines tr.main td[data-l="Lecture"] {{ grid-column: span 2; }}
-  table.lines td[data-l]::before {{ content: attr(data-l); display: block; font-size: 11px; color: var(--muted); }}
-  table.lines tr.sub {{ display: block; }}
-  table.lines tr.sub td {{ display: block; padding: 4px 0 10px; }}
-  table.lines tr.group td {{ display: block; }}
-  .compcell {{ min-width: 0; }}
-  table.lines tr.pooled {{ background: var(--page); }}
-  table.lines tr.pooled td {{ background: transparent; }}
-}}
-</style>
+{style}</style>
 </head>
 <body>
 <main>
-<h1>{villain}</h1>
+{heading}
 <div class="meta">Profil Heads-Up · toi : <b>{hero}</b> · {meta}{spots}</div>
 
 {tiles}

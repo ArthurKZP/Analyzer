@@ -303,8 +303,11 @@ def fold_holdings_by_street(lines: list[Line]) -> dict[str, Counter]:
     return out
 
 
-def check_ranges(hands: list[Hand], player: str, opponent: str) -> dict[str, dict]:
-    """Ta main quand tu checkes en premier sur une street, et ce que fait l'adversaire derrière."""
+def check_ranges(hands: list[Hand], player: str, opponent: Optional[str] = None) -> dict[str, dict]:
+    """Ta main quand tu checkes en premier sur une street, et ce que fait l'adversaire derrière.
+
+    opponent=None : l'adversaire de chaque main, quel qu'il soit.
+    """
     out: dict[str, dict] = {s: {"holdings": Counter(), "bets": 0, "faced": 0} for s in POSTFLOP}
     for h in hands:
         cards = h.hole_cards.get(player, [])
@@ -320,7 +323,8 @@ def check_ranges(hands: list[Hand], player: str, opponent: str) -> dict[str, dic
                     if a.kind == CHECK:
                         cell = out[street]
                         cell["holdings"][holding_class(cards, h.board[: BOARD_SIZE[street]])] += 1
-                        reply = next((b for b in acts[i + 1:] if b.player == opponent), None)
+                        reply = next((b for b in acts[i + 1:]
+                                      if b.player != player and (opponent is None or b.player == opponent)), None)
                         if reply is not None:
                             cell["faced"] += 1
                             cell["bets"] += reply.kind == BET
@@ -378,3 +382,14 @@ def nonshowdown_losses(hands: list[Hand], hero: str) -> dict:
                 story[2][holding_class(h.hole_cards[hero], h.board[: BOARD_SIZE[fold.street]])] += 1
     ranked = sorted(stories.items(), key=lambda kv: kv[1][1])
     return {"by_street": by_street, "stories": ranked}
+
+
+def hero_fold_holdings(hands: list[Hand], hero: str) -> dict[str, Counter]:
+    """Ta main quand tu foldes face à une mise postflop, par street, tous adversaires confondus."""
+    out: dict[str, Counter] = defaultdict(Counter)
+    for h in hands:
+        cards = h.hole_cards.get(hero, [])
+        fold = next((a for a in h.actions if a.kind == FOLD and a.player == hero and a.street != "preflop"), None)
+        if fold is not None and len(cards) == 2:
+            out[fold.street][holding_class(cards, h.board[: BOARD_SIZE[fold.street]])] += 1
+    return out

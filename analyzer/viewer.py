@@ -4,8 +4,10 @@ from __future__ import annotations
 import json
 import re
 from html import escape
+from typing import Optional
 
 from .models import Hand
+from .report import EMBED_SCRIPT
 from .spots import line_options, spot_records
 
 
@@ -15,22 +17,26 @@ def _json_for_script(data) -> str:
             .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026"))
 
 
-def build_viewer(hands: list[Hand], hero: str, villain: str, report_href: str = "") -> str:
+def build_viewer(hands: list[Hand], hero: str, villain: Optional[str] = None, report_href: str = "",
+                 embed: bool = False) -> str:
+    """villain=None : toutes tes mains, contre tous tes adversaires."""
     records = spot_records(hands, hero, villain)
+    title = f"Spots — {villain}" if villain else "Mes spots — tous adversaires"
     data = {
         "hero": hero,
-        "villain": villain,
+        "villain": villain or "",
         "records": records,
         "lines": line_options(records),
     }
     values = {
-        "TITLE": escape(f"Spots — {villain}"),
+        "TITLE": escape(title),
         "BACK": f'<a href="{escape(report_href)}">Rapport complet</a>' if report_href else "",
         "DATA": _json_for_script(data),
-        "SCRIPT": SCRIPT,
+        "SCRIPT": SCRIPT + (EMBED_SCRIPT if embed else ""),
+        "HEADING": "" if embed else f"<h1>{escape(title)}</h1>",
     }
     # Substitution en une seule passe : le contenu inséré n'est jamais relu.
-    return re.sub(r"__(TITLE|BACK|DATA|SCRIPT)__", lambda m: values[m.group(1)], TEMPLATE)
+    return re.sub(r"__(TITLE|BACK|DATA|SCRIPT|HEADING)__", lambda m: values[m.group(1)], TEMPLATE)
 
 
 TEMPLATE = r"""<!doctype html>
@@ -151,7 +157,7 @@ button, select, input { font: inherit; color: inherit; }
 </head>
 <body>
 <main>
-  <h1>__TITLE__</h1>
+  __HEADING__
   <div class="meta"><span id="meta"></span> __BACK__</div>
   <nav class="presets" id="presets" aria-label="Spots prédéfinis"></nav>
   <section class="filters" id="filters" aria-label="Filtres"></section>
@@ -219,6 +225,10 @@ SCRIPT = r"""
     { id: 'sort', label: 'Tri', options: [['date', 'Plus récentes'], ['old', 'Plus anciennes'], ['pot', 'Plus gros pots'], ['loss', 'Plus grosses pertes'], ['win', 'Plus gros gains']] },
     { id: 'q', label: 'Recherche (AKo, 99, Ah, n° de main)', input: true },
   ];
+  const OPPONENTS = [...new Set(R.map((r) => r.opp))].sort((a, b) => a.localeCompare(b));
+  if (OPPONENTS.length > 1) {
+    FILTERS.unshift({ id: 'opp', label: 'Adversaire', options: [['', 'Tous (' + OPPONENTS.length + ')']].concat(OPPONENTS.map((o) => [o, o])) });
+  }
   const DEFAULTS = { st: 'f', sort: 'date' };
   const PRESETS = [
     ['C-bet flop en SRP — toi', { pot: 'srp', pfa: 'H', cb: 'any' }],
@@ -301,6 +311,7 @@ SCRIPT = r"""
     F = Object.assign({}, DEFAULTS, values);
     for (const f of FILTERS) {
       const control = document.getElementById('f-' + f.id);
+      if (!control) continue;
       control.value = F[f.id] || (f.input ? '' : (DEFAULTS[f.id] || ''));
     }
     apply();
@@ -308,6 +319,7 @@ SCRIPT = r"""
 
   function matches(r) {
     const st = F.st || 'f';
+    if (F.opp && r.opp !== F.opp) return false;
     if (F.pot && r.pt !== F.pot) return false;
     if (F.pfa && r.pfa !== F.pfa) return false;
     if (F.pos && r.hp !== F.pos) return false;
@@ -409,7 +421,8 @@ SCRIPT = r"""
     const vpos = r.hp === 'BTN' ? 'BB' : 'BTN';
     const board = r.b.length ? cards(r.b) : el('span', { class: 'muted' }, 'pas de flop');
     const net = el('span', { class: 'net ' + (r.net > 0 ? 'pos' : r.net < 0 ? 'neg' : '') }, signed(r.net) + ' bb');
-    const sub = 'Toi (' + r.hp + ') : ' + r.hl + ' · Lui (' + vpos + ') : ' + r.vl + ' · ' + (END_LABEL[r.end] || '');
+    const who = OPPONENTS.length > 1 ? r.opp : 'Lui';
+    const sub = 'Toi (' + r.hp + ') : ' + r.hl + ' · ' + who + ' (' + vpos + ') : ' + r.vl + ' · ' + (END_LABEL[r.end] || '');
     return el('button', { class: 'row', type: 'button', 'data-id': r.id, onclick: () => open(r) },
       el('span', { class: 'when' }, r.d),
       el('span', { class: 'cards-line' }, cards(r.hc), el('span', { class: 'muted' }, 'vs'), cards(r.vc, true), board,
@@ -492,7 +505,7 @@ SCRIPT = r"""
   function seat(who, s, revealed) {
     const r = current;
     const pos = who === 'H' ? r.hp : (r.hp === 'BTN' ? 'BB' : 'BTN');
-    const name = who === 'H' ? DATA.hero : DATA.villain;
+    const name = who === 'H' ? DATA.hero : (r.opp || DATA.villain);
     const hole = who === 'H' ? cards(r.hc) : (revealed && r.vc.length ? cards(r.vc) : cards([], true));
     const box = document.getElementById('seat-' + who);
     box.textContent = '';

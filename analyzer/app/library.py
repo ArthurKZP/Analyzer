@@ -1,0 +1,165 @@
+"""Bibliothèque de mains de l'application : chargement du dossier, import, analyses en cache."""
+from __future__ import annotations
+
+import threading
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+from ..cli import detect_hero, slugify
+from ..lines import villain_lines
+from ..models import Hand
+from ..parsers import load_hands, parse_text
+from ..report import build_plan_page, build_report
+from ..selfreport import build_self_report, opponent_results
+from ..stats import analyze
+from ..viewer import build_viewer
+
+PLAYER_PAGES = ("plan", "rapport", "spots")
+SELF_PAGES = ("bilan", "spots")
+MAX_IMPORT_FILES = 200
+
+
+class UnknownPlayer(KeyError):
+    pass
+
+
+class Library:
+    """Les mains d'un dossier et les pages d'analyse, calculées à la demande puis gardées en cache."""
+
+    def __init__(self, folder: Path | str, hero: Optional[str] = None):
+        self.folder = Path(folder)
+        self.folder.mkdir(parents=True, exist_ok=True)
+        self.hero_override = hero
+        self.version = 0
+        self._lock = threading.Lock()
+        self._key_locks: dict[tuple, threading.Lock] = {}
+        self._cache: dict[tuple, object] = {}
+        self.hands: list[Hand] = []
+        self.hero: Optional[str] = None
+        self.known_ids: set[str] = set()
+        self.reload()
+
+    # --- chargement -------------------------------------------------------------
+    def reload(self) -> None:
+        hands = load_hands([self.folder])
+        hero = self.hero_override or detect_hero(hands)
+        heads_up = [h for h in hands if hero and hero in h.seats and len(h.seats) == 2 and h.button and h.bb]
+        with self._lock:
+            self.known_ids = {f"{h.site}:{h.hand_id}" for h in hands}
+            self.hands = heads_up
+            self.hero = hero
+            self.version += 1
+            self._cache.clear()
+            self._key_locks.clear()
+
+    def opponents(self) -> list[dict]:
+        return self._cached(("opponents",), lambda: opponent_results(self.hands, self.hero) if self.hero else [])
+
+    def hands_against(self, name: str) -> list[Hand]:
+        match = [h for h in self.hands if name in h.seats]
+        if not match:
+            raise UnknownPlayer(name)
+        return match
+
+    def summary(self) -> dict:
+        opponents = self.opponents()
+        return {
+            "hero": self.hero,
+            "folder": str(self.folder),
+            "hands": len(self.hands),
+            "first": self.hands[0].date.strftime("%d/%m/%Y") if self.hands else None,
+            "last": self.hands[-1].date.strftime("%d/%m/%Y") if self.hands else None,
+            "net_bb": round(sum(o["net_bb"] for o in opponents), 1),
+            "opponents": [
+                {"name": o["name"], "hands": o["hands"], "net_bb": round(o["net_bb"], 1),
+                 "bb100": round(o["bb100"], 1), "last": o["last"].strftime("%d/%m/%Y")}
+                for o in opponents
+            ],
+        }
+
+    # --- pages ------------------------------------------------------------------
+    def _cached(self, key: tuple, build):
+        """Calcule une seule fois par version, même si deux requêtes arrivent en même temps."""
+        full_key = (self.version,) + key
+        if full_key in self._cache:
+            return self._cache[full_key]
+        with self._lock:
+            lock = self._key_locks.setdefault(full_key, threading.Lock())
+        with lock:
+            if full_key not in self._cache:
+                self._cache[full_key] = build()
+            return self._cache[full_key]
+
+    def _analysis(self, player: str):
+        def build():
+            hands = self.hands_against(player)
+            return hands, analyze(hands), villain_lines(hands, player, self.hero)
+        return self._cached(("analysis", player), build)
+
+    def player_page(self, player: str, page: str) -> str:
+        if page not in PLAYER_PAGES:
+            raise KeyError(page)
+        self.hands_against(player)  # 404 si le joueur est inconnu
+
+        def build():
+            hands, stats, lines = self._analysis(player)
+            if page == "plan":
+                return build_plan_page(hands, stats, self.hero, player, embed=True, lines=lines)
+            if page == "rapport":
+                return build_report(hands, stats, self.hero, player, spots_href="spots", embed=True, lines=lines)
+            return build_viewer(hands, self.hero, player, embed=True)
+        return self._cached(("player", player, page), build)
+
+    def self_page(self, page: str) -> str:
+        if page not in SELF_PAGES:
+            raise KeyError(page)
+        if not self.hands:
+            raise UnknownPlayer("moi")
+
+        def build():
+            if page == "bilan":
+                return build_self_report(self.hands, analyze(self.hands), self.hero, embed=True, spots_href="")
+            return build_viewer(self.hands, self.hero, None, embed=True)
+        return self._cached(("self", page), build)
+
+    # --- import -----------------------------------------------------------------
+    def import_files(self, files: list[dict]) -> dict:
+        """Enregistre dans le dossier les fichiers reconnus qui apportent de nouvelles mains."""
+        results = []
+        added = 0
+        known = set(self.known_ids)
+        for item in files[:MAX_IMPORT_FILES]:
+            name = str(item.get("name") or "fichier")[:200]
+            content = item.get("content")
+            if not isinstance(content, str) or not content.strip():
+                results.append({"name": name, "status": "vide", "hands": 0, "new": 0})
+                continue
+            try:
+                hands = parse_text(content)
+            except ValueError:
+                results.append({"name": name, "status": "format non reconnu", "hands": 0, "new": 0})
+                continue
+            new = [h for h in hands if f"{h.site}:{h.hand_id}" not in known]
+            if not new:
+                results.append({"name": name, "status": "déjà importé", "hands": len(hands), "new": 0})
+                continue
+            self._save(name, content)
+            known |= {f"{h.site}:{h.hand_id}" for h in new}
+            added += len(new)
+            results.append({"name": name, "status": "importé", "hands": len(hands), "new": len(new)})
+        if added:
+            self.reload()
+        return {"files": results, "added": added, "state": self.summary()}
+
+    def _save(self, original_name: str, content: str) -> Path:
+        # Le nom d'origine ne sert qu'à lire le fichier plus tard : jamais utilisé comme chemin.
+        stem = slugify(Path(original_name).stem)[:40]
+        base = f"import-{datetime.now():%Y%m%d-%H%M%S}-{stem}"
+        path = self.folder / f"{base}.txt"
+        n = 2
+        while path.exists():
+            path = self.folder / f"{base}-{n}.txt"
+            n += 1
+        path.write_text(content, encoding="utf-8")
+        return path
