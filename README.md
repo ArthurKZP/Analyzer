@@ -2,7 +2,8 @@
 
 Outil d'analyse de tes adversaires en **Heads-Up NLHE** à partir de tes historiques de mains.
 Il lit les historiques, calcule le profil complet de l'adversaire (et le tien dans le même
-match), détecte ses tendances exploitables et génère un **rapport HTML** autonome.
+match), détecte ses tendances exploitables et génère un **rapport HTML** autonome, ainsi qu'un
+**visualiseur de spots** pour filtrer et rejouer les coups toi-même.
 
 - Python 3.10+, **aucune dépendance** à installer.
 - Sites supportés : **Betclic.fr** (cash game HU). D'autres formats peuvent être ajoutés (voir plus bas).
@@ -19,10 +20,52 @@ python -m analyzer --liste               # liste les adversaires trouvés
 python -m analyzer -a berserk            # un seul adversaire (nom partiel, accents ignorés)
 python -m analyzer -a berserk --plan     # seulement le plan de jeu, dans le terminal
 python -m analyzer ~/Downloads/Hand.txt -a "peste noire" -o rapports/
+python -m analyzer -a berserk --sans-spots   # rapport seul, plus rapide
 ```
 
 Ton pseudo est détecté automatiquement (tag `Hero` de Betclic) ; sinon passe `--hero TonPseudo`.
-Le terminal affiche un résumé et le rapport complet est écrit dans `reports/<adversaire>.html`.
+Le terminal affiche un résumé ; le rapport complet est écrit dans `reports/<adversaire>.html` et le
+visualiseur dans `reports/<adversaire>-spots.html` (ouvre-les dans ton navigateur, ils fonctionnent hors ligne).
+
+## Comment ça marche
+
+1. **Lecture** (`parsers/`) : chaque historique est découpé en mains, converties dans un format commun
+   (positions, tapis, actions avec montants, board, cartes montrées, gains, rake). Chaque pot est vérifié :
+   mises − montants non payés = pot total, et gains + rake = pot total.
+2. **Lecture des situations** (`stats.py`) : pour chaque main, chaque décision est rangée dans sa situation
+   (« BB face à un open », « agresseur qui peut c-bet le flop », « face à un check-raise »…). Une stat vaut
+   toujours « fois où il l'a fait / fois où il pouvait le faire ». Les deux joueurs sont analysés de la même façon.
+3. **Lecture de l'adversaire** (`insights.py`) : ses stats sont comparées à des repères de régulier HU ; un écart
+   est « net » si l'intervalle de confiance à 90 % reste hors du repère, sinon « tendance ».
+4. **Ses lignes** (`lines.py`) : chaque mise postflop est rangée par ligne (contexte et taille). À l'abattage,
+   sa main est classée au moment de la mise (value, value fine, semi-bluff, bluff) grâce à un évaluateur
+   de mains et à un calcul d'équité exact contre ta main. Ta main quand tu foldes est aussi notée.
+5. **Plan de jeu** (`plan.py`) : des règles génériques transforment ces constats en consignes, chacune
+   avec sa preuve et un niveau de confiance.
+6. **Sorties** (`report.py`, `viewer.py`) : le rapport HTML, le visualiseur de spots et le résumé du terminal.
+
+## Visualiseur de spots
+
+`reports/<adversaire>-spots.html` liste toutes les mains du match et permet de les filtrer :
+
+- **spot** : type de pot (SRP, 3bet, 4bet+, limpé), agresseur préflop, ta position, street atteinte ;
+- **actions** sur une street : les tiennes et les siennes (mise, relance, call, fold, check-call, check-raise…),
+  c-bet de l'agresseur (occasion, fait, checké) ;
+- **ligne** : les mêmes lignes que dans la section « Ses lignes » du rapport (et les tiennes) ;
+- **fin du coup** (abattage, tu folds à telle street, il folde, all-in), sa main connue ou non, résultat,
+  recherche par main (`AKo`, `99`, `Ah`) ou par numéro de main.
+
+Des spots prédéfinis sont proposés (c-bets flop en SRP, pots 3bet au flop en BB ou au bouton, ses
+check-raises, ses barrels turn, tes folds river, all-in, grosses pertes). Pour chaque sélection, le
+visualiseur affiche ton résultat et la fréquence de chaque action sur la street choisie.
+
+Clique sur une main pour la **rejouer** action par action (flèches ← → du clavier, Début/Fin) : tapis, pot,
+mises, board, temps de réflexion, ta main à chaque street et, si sa main a été montrée, la sienne et ton
+équité. Sa main reste cachée jusqu'à l'abattage (case « Montrer sa main » pour la voir avant).
+
+Depuis le rapport, chaque ligne de « Ses lignes » a un lien « voir les mains » et chaque main de la
+section abattage un lien « rejouer ». Les filtres sont gardés dans l'adresse de la page : tu peux garder
+un spot en favori.
 
 ## Contenu du rapport
 
@@ -66,7 +109,9 @@ analyzer/
   insights.py          repères, exploits, duel, tells de sizing
   lines.py             lignes value / bluff, folds forcés, pertes sans abattage
   plan.py              plan de jeu généré à partir de l'analyse
+  spots.py             fiches des mains pour le visualiseur (tags de spot, lignes, équités)
   report.py            rapport HTML
+  viewer.py            visualiseur de spots (HTML + JavaScript, sans dépendance)
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)
 hands/                 tes historiques (ignorés par git)

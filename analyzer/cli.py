@@ -14,6 +14,7 @@ from .models import Hand
 from .plan import build_plan, plan_text
 from .parsers import load_hands
 from .report import build_report, num
+from .viewer import build_viewer
 from .stats import PlayerStats, analyze
 
 KEY_STATS = [
@@ -104,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-l", "--liste", action="store_true", help="liste les adversaires trouvés et quitte")
     parser.add_argument("--min-mains", type=int, default=30, help="nb de mains minimum pour générer un rapport")
     parser.add_argument("-p", "--plan", action="store_true", help="affiche seulement le plan de jeu")
+    parser.add_argument("--sans-spots", action="store_true", help="ne génère pas le visualiseur de spots")
     args = parser.parse_args(argv)
 
     try:
@@ -146,7 +148,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"== {villain} — {len(match)} mains ==\n{plan}\n")
             continue
         path = out_dir / f"{slugify(villain)}.html"
-        path.write_text(build_report(match, stats, hero, villain), encoding="utf-8")
+        spots_path = out_dir / f"{slugify(villain)}-spots.html"
+        spots_href = "" if args.sans_spots else spots_path.name
+        path.write_text(build_report(match, stats, hero, villain, spots_href), encoding="utf-8")
+        if not args.sans_spots:
+            spots_path.write_text(build_viewer(match, hero, villain, path.name), encoding="utf-8")
         print(summary(stats[villain], stats[hero], match, plan))
-        print(f"\nRapport : {path}\n")
+        print(f"\nRapport : {path}")
+        if not args.sans_spots:
+            print(f"Spots   : {spots_path}")
+        print()
     return 0

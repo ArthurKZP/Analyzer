@@ -26,6 +26,8 @@ class CliTest(unittest.TestCase):
             report = Path(tmp) / "villain.html"
             self.assertEqual(code, 0)
             html = report.read_text(encoding="utf-8")
+            self.assertTrue((Path(tmp) / "villain-spots.html").exists())
+            self.assertIn('href="villain-spots.html"', html)
         self.assertIn("<title>Profil HU — Villain</title>", html)
         self.assertIn("Ses mains à l'abattage (2)", html)
         self.assertIn("== Villain — 4 mains ==", out.getvalue())

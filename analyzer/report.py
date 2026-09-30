@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from html import escape
 from statistics import median
 from typing import Optional
+from urllib.parse import quote
 
 from .cards import describe_holding, equity
 from .insights import (
@@ -41,6 +42,7 @@ from .lines import (
 )
 from .models import CALL, FOLD, POSTFLOP, RAISE, STREETS, VOLUNTARY, Hand
 from .plan import Plan, build_plan
+from .spots import line_tag
 from .stats import PlayerStats, Ratio, allin_ev, think_times
 
 SUIT_SYMBOL = {"s": "♠", "h": "♥", "d": "♦", "c": "♣"}
@@ -424,7 +426,13 @@ def holdings_html(counts: Counter) -> str:
     )
 
 
-def line_rows(ln: Line, css: str = "") -> str:
+def spots_link(spots_href: str, fragment: str, text: str = "voir les mains →") -> str:
+    if not spots_href:
+        return ""
+    return f'<a class="spots-link" href="{escape(spots_href)}#{escape(fragment)}">{text}</a>'
+
+
+def line_rows(ln: Line, css: str = "", spots_href: str = "") -> str:
     v = verdict(ln)
     faced = sum(ln.replies.values())
     replies = (
@@ -440,11 +448,12 @@ def line_rows(ln: Line, css: str = "") -> str:
         f'<td class="num" data-l="Vues">{len(ln.seen)}</td>'
         f'<td class="compcell" data-l="Ce qu\'il montre">{composition_html(ln.intents, len(ln.seen))}</td>'
         f'<td data-l="Lecture"><span class="kind k-{v.kind.replace(" ", "-")}">{KIND_LABELS[v.kind]}</span>{conf}</td></tr>'
-        f'<tr class="sub {css}"><td colspan="7">{escape(v.reading)}. {escape(v.decision)}</td></tr>'
+        f'<tr class="sub {css}"><td colspan="7">{escape(v.reading)}. {escape(v.decision)} '
+        f'{spots_link(spots_href, "l=" + quote(line_tag("V", ln.street, ln.label, ln.size), safe=""))}</td></tr>'
     )
 
 
-def lines_html(lines: list[Line], hero: str, villain: str, min_count: int = 3) -> str:
+def lines_html(lines: list[Line], hero: str, villain: str, min_count: int = 3, spots_href: str = "") -> str:
     blocks = []
     pooled = pooled_by_size(lines)
     for street in POSTFLOP:
@@ -454,7 +463,7 @@ def lines_html(lines: list[Line], hero: str, villain: str, min_count: int = 3) -
         for ln in street_lines:
             if ln.count < min_count:
                 continue
-            rows.append(line_rows(ln))
+            rows.append(line_rows(ln, spots_href=spots_href))
             for s_ in ln.seen:
                 h = s_.hand
                 seen_rows.append(
@@ -468,7 +477,7 @@ def lines_html(lines: list[Line], hero: str, villain: str, min_count: int = 3) -
                 )
         if not rows:
             continue
-        pooled_rows = "".join(line_rows(ln, "pooled") for ln in pooled if ln.street == street)
+        pooled_rows = "".join(line_rows(ln, "pooled", spots_href) for ln in pooled if ln.street == street)
         rows.append(f'<tr class="group"><td colspan="7">Toutes lignes confondues, par taille</td></tr>{pooled_rows}')
         rare_note = (f'<p class="note">{len(rare)} autre(s) ligne(s) vue(s) moins de {min_count} fois '
                      f'({sum(ln.count for ln in rare)} mises).</p>') if rare else ""
@@ -602,7 +611,7 @@ def allin_html(hands: list[Hand], hero: str, villain: str) -> str:
     )
 
 
-def showdowns_html(villain_stats: PlayerStats, hero: str, villain: str) -> str:
+def showdowns_html(villain_stats: PlayerStats, hero: str, villain: str, spots_href: str = "") -> str:
     groups: dict[str, list] = defaultdict(list)
     for entry in villain_stats.showdowns:
         groups[f"{entry.position} · {entry.preflop_line}"].append(entry)
@@ -619,7 +628,8 @@ def showdowns_html(villain_stats: PlayerStats, hero: str, villain: str) -> str:
                 for street, html in hand_line(h, tags, villain)
             )
             rows.append(
-                f'<tr><td class="nowrap">{h.date:%H:%M}<br><span class="muted">{e.position}</span></td>'
+                f'<tr><td class="nowrap">{h.date:%H:%M}<br><span class="muted">{e.position}</span>'
+                f'<br>{spots_link(spots_href, "hand=" + quote(h.hand_id, safe=""), "rejouer")}</td>'
                 f"<td>{cards_html(e.cards)}<br><span class=\"muted\">{escape(describe_holding(e.cards, h.board))}</span></td>"
                 f"<td>{cards_html(h.hole_cards.get(hero, []))}</td>"
                 f'<td class="line">{line}</td><td class="num">{num(e.net_bb, 1, sign=True)}</td></tr>'
@@ -660,7 +670,8 @@ def plan_html(plan: Plan) -> str:
     )
 
 
-def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, villain: str) -> str:
+def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, villain: str,
+                 spots_href: str = "") -> str:
     v, h = stats[villain], stats[hero]
     lines = villain_lines(hands, villain, hero)
     folds = fold_holdings_by_street(lines)
@@ -692,7 +703,7 @@ def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, vi
         villain_findings=findings_html(v),
         hero_findings=findings_html(h, hero_mode=True, folds=folds),
         duels=duels_html(v, h, folds),
-        lines=lines_html(lines, hero, villain),
+        lines=lines_html(lines, hero, villain, spots_href=spots_href),
         passive=passive_html(hands, hero, villain),
         intent_timing=intent_timing_html(lines),
         nonshowdown=nonshowdown_html(hands, hero, villain),
@@ -702,7 +713,8 @@ def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, vi
         timing=timing_html(v, h),
         bluffs=bluffs_html(hands, hero, villain),
         allins=allin_html(hands, hero, villain),
-        showdowns=showdowns_html(v, hero, villain),
+        showdowns=showdowns_html(v, hero, villain, spots_href),
+        spots=(f' · <a href="{escape(spots_href)}">Visualiseur de spots</a>' if spots_href else ""),
         n_showdowns=len(v.showdowns),
         script=SCRIPT,
     )
@@ -821,6 +833,8 @@ em {{ font-style: normal; font-weight: 600; color: var(--alert); }}
 .scroll {{ overflow-x: auto; }}
 .sd td {{ white-space: normal; }}
 .act, .cards {{ white-space: nowrap; }}
+.spots-link {{ white-space: nowrap; font-size: 12px; }}
+a {{ color: var(--series-1); }}
 .profile {{ margin-bottom: 16px; }}
 .plan .phase ol {{ margin: 0; padding-left: 20px; display: grid; gap: 12px; }}
 .plan .phase li::marker {{ color: var(--muted); font-weight: 600; }}
@@ -882,7 +896,7 @@ table.sizing td:first-child {{ white-space: nowrap; }}
 <body>
 <main>
 <h1>{villain}</h1>
-<div class="meta">Profil Heads-Up · toi : <b>{hero}</b> · {meta}</div>
+<div class="meta">Profil Heads-Up · toi : <b>{hero}</b> · {meta}{spots}</div>
 
 {tiles}
 
