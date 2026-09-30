@@ -1,0 +1,133 @@
+*** HEADER ***
+Site: Betclic.fr
+Game Mode: Cash Game
+Game Type: NL Texas Hold'em
+Game Name: NLHE 2.5/5 HU Deep
+Game ID: GAME1
+Hand ID: HAND04
+Date & Time: 2026-01-10 20:03:00 (UTC)
+Table ID: TABLE1
+Blinds: €2.50/€5.00
+Total Pot: €25.00
+Rake: €0.00
+*** PLAYERS ***
+Seat 1: Hero (€500.00) [BB Hero]
+Seat 2: Villain (€800.00) [BTN SB]
+*** HOLE CARDS ***
+Hero: [7c 2d]
+*** PRE-FLOP ***
+20:03:00 - Villain: Posts SB €2.50
+20:03:00 - Hero: Posts BB €5.00
+20:03:02 - Villain: Calls €2.50
+20:03:04 - Hero: Raises to €20.00
+20:03:07 - Villain: Folds
+*** SUMMARY ***
+Hero wins main pot of €25.00
+
+
+*** HEADER ***
+Site: Betclic.fr
+Game Mode: Cash Game
+Game Type: NL Texas Hold'em
+Game Name: NLHE 2.5/5 HU Deep
+Game ID: GAME1
+Hand ID: HAND03
+Date & Time: 2026-01-10 20:02:00 (UTC)
+Table ID: TABLE1
+Blinds: €2.50/€5.00
+Total Pot: €1000.00
+Rake: €2.50
+*** PLAYERS ***
+Seat 1: Hero (€500.00) [BTN SB Hero]
+Seat 2: Villain (€800.00) [BB]
+*** HOLE CARDS ***
+Hero: [As Ad]
+Villain: [Kh Kc]
+*** PRE-FLOP ***
+20:02:00 - Hero: Posts SB €2.50
+20:02:00 - Villain: Posts BB €5.00
+20:02:02 - Hero: Raises to €12.50
+20:02:05 - Villain: Raises to €50.00
+20:02:07 - Hero: Raises to €500.00 and is all-in
+20:02:15 - Villain: Raises to €800.00 and is all-in
+*** FLOP *** [2c 7d 9s]
+*** TURN *** [2c 7d 9s Jh]
+*** RIVER *** [2c 7d 9s Jh Ks]
+*** SHOWDOWN ***
+Hero shows [As Ad] (Pair) [As Ad Ks Jh 9s]
+Villain shows [Kh Kc] (Three of a Kind) [Kh Kc Ks Jh 9s]
+*** SUMMARY ***
+Villain wins main pot of €997.50
+
+
+*** HEADER ***
+Site: Betclic.fr
+Game Mode: Cash Game
+Game Type: NL Texas Hold'em
+Game Name: NLHE 2.5/5 HU Deep
+Game ID: GAME1
+Hand ID: HAND02
+Date & Time: 2026-01-10 20:01:00 (UTC)
+Table ID: TABLE1
+Blinds: €2.50/€5.00
+Total Pot: €160.00
+Rake: €3.00
+*** PLAYERS ***
+Seat 1: Hero (€520.00) [BB Hero]
+Seat 2: Villain (€780.00) [BTN SB]
+*** HOLE CARDS ***
+Hero: [Qh Jh]
+Villain: [Ts 9s]
+*** PRE-FLOP ***
+20:01:00 - Villain: Posts SB €2.50
+20:01:00 - Hero: Posts BB €5.00
+20:01:02 - Villain: Raises to €10.00
+20:01:05 - Hero: Raises to €40.00
+20:01:08 - Villain: Calls €30.00
+*** FLOP *** [Qc 8s 2s]
+20:01:12 - Hero: Bets €20.00
+20:01:20 - Villain: Calls €20.00
+*** TURN *** [Qc 8s 2s 3d]
+20:01:23 - Hero: Checks
+20:01:25 - Villain: Checks
+*** RIVER *** [Qc 8s 2s 3d 4h]
+20:01:30 - Hero: Checks
+20:01:34 - Villain: Bets €20.00
+20:01:40 - Hero: Calls €20.00
+*** SHOWDOWN ***
+Villain shows [Ts 9s] (High Card) [Qc Ts 9s 8s 4h]
+Hero shows [Qh Jh] (Pair) [Qh Qc Jh 8s 4h]
+*** SUMMARY ***
+Hero wins main pot of €157.00
+
+
+*** HEADER ***
+Site: Betclic.fr
+Game Mode: Cash Game
+Game Type: NL Texas Hold'em
+Game Name: NLHE 2.5/5 HU Deep
+Game ID: GAME1
+Hand ID: HAND01
+Date & Time: 2026-01-10 20:00:00 (UTC)
+Table ID: TABLE1
+Blinds: €2.50/€5.00
+Total Pot: €63.00
+Rake: €1.50
+*** PLAYERS ***
+Seat 1: Hero (€500.00) [BTN SB Hero]
+Seat 2: Villain (€800.00) [BB]
+*** HOLE CARDS ***
+Hero: [Kd 9d]
+*** PRE-FLOP ***
+20:00:00 - Hero: Posts SB €2.50
+20:00:00 - Villain: Posts BB €5.00
+20:00:02 - Hero: Raises to €12.50
+20:00:04 - Villain: Calls €7.50
+*** FLOP *** [Kc 7h 2s]
+20:00:07 - Villain: Checks
+20:00:09 - Hero: Bets €8.00
+20:00:13 - Villain: Raises to €30.00
+20:00:15 - Villain: Disconnected
+20:00:20 - Hero: Folds
+*** SUMMARY ***
+Villain wins main pot of €61.50

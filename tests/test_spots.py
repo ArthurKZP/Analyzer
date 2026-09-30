@@ -1,0 +1,74 @@
+import json
+import re
+import unittest
+from pathlib import Path
+
+from analyzer.parsers import load_hands
+from analyzer.spots import line_options, line_tag, spot_records
+from analyzer.viewer import _json_for_script, build_viewer
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+class SpotRecordsTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.records = {r["id"]: r for r in spot_records(load_hands([FIXTURES]), "Hero", "Villain")}
+
+    def test_three_bet_pot_played_to_showdown(self):
+        r = self.records["HAND02"]
+        self.assertEqual((r["pt"], r["pfa"], r["hp"]), ("3bp", "H", "BB"))
+        self.assertEqual(r["sa"]["f"], {"H": ["bet"], "V": ["call"]})
+        self.assertEqual(r["sa"]["t"], {"H": ["xx"], "V": ["xx"]})
+        self.assertEqual(r["cb"], {"f": 1, "t": 0})
+        self.assertIn(line_tag("H", "flop", "C-bet", "petite (≤ 55 %)"), r["tags"])
+        self.assertIn(line_tag("V", "river", "Mise après check au turn", "petite (≤ 55 %)"), r["tags"])
+        self.assertIn(line_tag("V", "river", "Toutes ses mises", "petite (≤ 55 %)"), r["tags"])
+        self.assertEqual(r["end"], "sd")
+        self.assertAlmostEqual(r["net"], 77 / 5)
+        self.assertEqual(r["vc"], ["Ts", "9s"])
+        self.assertEqual(r["eq"]["r"], 1.0)  # dame servie contre hauteur
+        self.assertEqual(r["hd"]["f"], "Top paire")
+
+    def test_check_raise_and_fold(self):
+        r = self.records["HAND01"]
+        self.assertEqual(r["end"], "hff")
+        self.assertIn("xr", r["sa"]["f"]["V"])
+        self.assertIn(line_tag("V", "flop", "Check-raise", ""), r["tags"])
+        self.assertEqual(r["vc"], [])  # pas d'abattage : sa main reste cachée
+        self.assertEqual(r["eq"], {})
+
+    def test_walk_limp_and_allin(self):
+        self.assertEqual(self.records["HAND04"]["pt"], "srp")  # limp puis iso-raise
+        self.assertEqual(self.records["HAND04"]["end"], "vfp")
+        allin = self.records["HAND03"]
+        self.assertTrue(allin["ai"])
+        self.assertEqual(allin["pt"], "4bp")
+        self.assertEqual(allin["ret"], {"V": 60.0})  # 300 € non payés, soit 60 bb
+        self.assertEqual(allin["reach"], 3)
+
+    def test_line_options_count_hands(self):
+        options = dict(line_options(list(self.records.values())))
+        self.assertEqual(options[line_tag("V", "flop", "Check-raise", "")], 1)
+        self.assertEqual(options[line_tag("H", "flop", "Toutes tes mises", "petite (≤ 55 %)")], 2)
+
+
+class ViewerTest(unittest.TestCase):
+    def test_json_cannot_close_script(self):
+        text = _json_for_script({"name": "</script><img src=x>&"})
+        self.assertNotIn("<", text)
+        self.assertEqual(json.loads(text)["name"], "</script><img src=x>&")
+
+    def test_page_embeds_data(self):
+        html = build_viewer(load_hands([FIXTURES]), "Hero", "Villain", "villain.html")
+        self.assertIn("<title>Spots — Villain</title>", html)
+        self.assertIn('href="villain.html"', html)
+        self.assertNotRegex(html, r"__(TITLE|BACK|DATA|SCRIPT)__")
+        payload = re.search(r'<script type="application/json" id="data">(.*?)</script>', html, re.S).group(1)
+        data = json.loads(payload)
+        self.assertEqual(len(data["records"]), 4)
+        self.assertEqual(data["hero"], "Hero")
+
+
+if __name__ == "__main__":
+    unittest.main()
