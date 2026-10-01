@@ -80,6 +80,27 @@ class SpotTest(unittest.TestCase):
         self.assertEqual(postflop._merge_sizes([], []), [])
 
 
+class InstallTest(unittest.TestCase):
+    def test_files_read_at_compile_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "crates" / "solver" / "src" / "preflop"
+            src.mkdir(parents=True)
+            (root / "crates" / "solver" / "Cargo.toml").write_text("[package]\n")
+            (src / "a.rs").write_text('include_str!("../../../../research/x/meta.json");\n'
+                                      'include_str!(\n    "../../../../cache/contextual/m.json"\n);\n'
+                                      'include_str!("kernels.cu");\n')
+            self.assertEqual(postflop.external_files(root), ["cache/contextual/m.json", "research/x/meta.json"])
+            self.assertEqual(postflop.missing_files(root), ["cache/contextual/m.json", "research/x/meta.json"])
+            with self.assertRaisesRegex(postflop.SolverError, "research/x/meta.json"):
+                postflop.prepare(root, log=lambda m: None)  # copie sans git : on ne peut que signaler
+            for f in ("cache/contextual/m.json", "research/x/meta.json"):
+                (root / f).parent.mkdir(parents=True, exist_ok=True)
+                (root / f).write_text("{}")
+            self.assertEqual(postflop.missing_files(root), [])
+            postflop.prepare(root, log=lambda m: None)
+
+
 @unittest.skipUnless(POSIX, "faux solveur : script exécutable POSIX")
 class SolveTest(unittest.TestCase):
     def setUp(self):

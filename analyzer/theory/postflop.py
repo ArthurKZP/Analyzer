@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -29,7 +30,9 @@ from .extract import hand_at
 from .preflop import MAIN_THRESHOLD, MIXED_THRESHOLD, Solution, load_solution
 
 GTOPEN_URL = "https://github.com/MatthewPDingle/GTOpen"
-GTOPEN_PATHS = ("crates/solver", "cache/contextual")  # ce que la compilation utilise
+GTOPEN_COMMIT = "b69ea07c79884fc598757dc45c712e73976db810"  # version de GTOpen testée avec analyzer-solve
+GTOPEN_PATHS = ("/crates/solver/", "/cache/contextual/")  # le moteur ; les fichiers qu'il lit sont ajoutés
+INCLUDE_RE = re.compile(r'include_(?:str|bytes)!\(\s*"([^"]+)"\s*\)')
 NATIVE_SOURCE = Path(__file__).parent / "native" / "main.rs"
 EXE = "analyzer-solve" + (".exe" if os.name == "nt" else "")
 INSTALL_COMMAND = "python -m analyzer gtopen --installer"
@@ -150,15 +153,63 @@ def _run(cmd: list[str], log: Callable[[str], None], **kwargs) -> None:
         raise SolverError(f"Échec de : {' '.join(cmd)} (code {exc.returncode})") from exc
 
 
+def external_files(src: Path) -> list[str]:
+    """Fichiers hors du moteur que sa compilation lit (include_str!), relatifs à la racine de GTOpen."""
+    root = src.resolve()
+    crate = root / "crates" / "solver"
+    found = set()
+    for rs in (crate / "src").rglob("*.rs"):
+        for rel in INCLUDE_RE.findall(rs.read_text(encoding="utf-8", errors="replace")):
+            target = Path(os.path.normpath(rs.parent / rel))
+            if target.is_relative_to(root) and not target.is_relative_to(crate):
+                found.add(target.relative_to(root).as_posix())
+    return sorted(found)
+
+
+def missing_files(src: Path) -> list[str]:
+    return [f for f in external_files(src) if not (src / f).is_file()]
+
+
+def _git(src: Path, *args: str) -> str:
+    try:
+        out = subprocess.run(["git", "-C", str(src), *args], capture_output=True, text=True)
+    except FileNotFoundError:  # git absent : la copie est utilisée telle quelle
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def _managed(src: Path) -> bool:
+    """Copie partielle faite par Analyzer (ou toute copie partielle git) : on peut la compléter."""
+    return (src / ".git").exists() and _git(src, "config", "--get", "core.sparseCheckout") == "true"
+
+
+def prepare(src: Path, log: Callable[[str], None] = print) -> None:
+    """Met une copie partielle sur la version testée et y ajoute les fichiers que la compilation lit."""
+    if _managed(src):
+        if _git(src, "rev-parse", "HEAD") != GTOPEN_COMMIT:
+            _run(["git", "-C", str(src), "fetch", "--depth", "1", "origin", GTOPEN_COMMIT], log)
+            _run(["git", "-C", str(src), "checkout", "--quiet", GTOPEN_COMMIT], log)
+        for _ in range(3):  # un fichier ajouté peut en inclure d'autres
+            if not missing_files(src):
+                break
+            patterns = [*GTOPEN_PATHS, *("/" + f for f in external_files(src))]
+            _run(["git", "-C", str(src), "sparse-checkout", "set", "--no-cone", *patterns], log)
+    missing = missing_files(src)
+    if missing:
+        raise SolverError(f"Il manque dans {src} des fichiers de GTOpen nécessaires à la compilation : "
+                          + ", ".join(missing) + ". Copie-les depuis le dépôt de GTOpen en gardant le même chemin.")
+
+
 def clone(dest: Path, log: Callable[[str], None] = print) -> Path:
-    """Copie partielle du dépôt GTOpen : seulement le moteur, sans les données de recherche."""
+    """Copie partielle du dépôt GTOpen : le moteur et les quelques fichiers qu'il lit, sans la recherche."""
     if shutil.which("git") is None:
         raise SolverError("git est introuvable : installe-le, ou passe --source vers une copie de GTOpen.")
     if dest.exists() and any(dest.iterdir()):
         raise SolverError(f"{dest} existe déjà mais ne contient pas GTOpen : vide-le ou passe --source.")
     dest.parent.mkdir(parents=True, exist_ok=True)
     _run(["git", "clone", "--depth", "1", "--filter=blob:none", "--sparse", GTOPEN_URL, str(dest)], log)
-    _run(["git", "-C", str(dest), "sparse-checkout", "set", *GTOPEN_PATHS], log)
+    _run(["git", "-C", str(dest), "sparse-checkout", "set", "--no-cone", *GTOPEN_PATHS], log)
+    prepare(dest, log)
     return dest
 
 
@@ -180,6 +231,8 @@ def install(source: Optional[str] = None, log: Callable[[str], None] = print, gp
             raise SolverError(f"{source} ne contient pas GTOpen (crates/solver/Cargo.toml introuvable).")
         log(f"Récupération de GTOpen ({GTOPEN_URL}) dans {home() / 'GTOpen'}…")
         src = clone(home() / "GTOpen", log)
+    else:
+        prepare(src, log)
     root = build_dir()
     root.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(NATIVE_SOURCE, root / "main.rs")
@@ -187,7 +240,9 @@ def install(source: Optional[str] = None, log: Callable[[str], None] = print, gp
                                      encoding="utf-8")
     (root / "source.txt").write_text(str(src), encoding="utf-8")
     log(f"Compilation de analyzer-solve contre {src} (quelques minutes la première fois)…")
-    _run(["cargo", "build", "--release"] + (["--features", "gpu"] if gpu else []), log, cwd=root)
+    # Dossier de compilation explicite : un CARGO_TARGET_DIR global placerait le programme ailleurs.
+    _run(["cargo", "build", "--release", "--target-dir", str(root / "target")] + (["--features", "gpu"] if gpu else []),
+         log, cwd=root)
     (root / "native.sha").write_text(_native_hash(), encoding="utf-8")
     (root / "gpu.txt").write_text("1" if gpu else "0", encoding="utf-8")
     return build_dir() / "target" / "release" / EXE
