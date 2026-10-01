@@ -1,7 +1,8 @@
 //! Pont entre Analyzer et le moteur de GTOpen : résout un spot postflop, suit la ligne jouée et,
 //! en mode session, répond ensuite aux demandes de navigation dans l'arbre résolu.
 //!
-//! Usage : analyzer-solve requete.json [--serve] > resultat.json
+//! Usage : analyzer-solve requete.json [--save etude.gz] [--serve] > resultat.json
+//!         analyzer-solve --load etude.gz [--serve] > resultat.json
 //!
 //! Requête :
 //!   {"spot": <SpotConfig GTOpen>, "line": [étapes], "max_iterations": 300,
@@ -18,14 +19,22 @@
 //! ligne, {"path": [{"type": "action", "index": 0}, {"type": "card", "card": "Ah"}, ...]}, à laquelle
 //! il répond par une ligne {"node": ...} ou {"error": "..."}. Il s'arrête à la fin de stdin.
 //!
+//! Une étude (--save) garde l'arbre résolu sur disque sous une forme compacte : la requête, puis la
+//! stratégie moyenne de chaque nœud sur 8 bits (sans la dernière action, qui s'en déduit), le tout
+//! compressé. --load la recharge en quelques secondes, sans recalculer, pour naviguer à nouveau.
+//!
 //! Compilé avec la fonctionnalité `gpu` (cargo build --features gpu), "gpu": true résout sur une
 //! carte NVIDIA via le moteur CUDA de GTOpen, et revient au processeur si la carte n'est pas utilisable.
 
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use solver::query::{ActionView, NodeView};
+use solver::tree::KIND_ACTION;
 use solver::{PathStep, RunOptions, Solver, Spot, SpotConfig, Storage};
-use std::io::{BufRead, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -90,6 +99,8 @@ struct HistOut {
     player: Option<u8>,
     stack: f64,
     pot: f64,
+    /// Jetons engagés par chaque joueur depuis le début du coup (pour les relances en % du pot).
+    put: Option<[f64; 2]>,
     street: u8,
     actions: Vec<ActionOut>,
     chosen: Option<usize>,
@@ -106,6 +117,7 @@ struct NodeOut {
     street: u8,
     board: Vec<String>,
     pot: f64,
+    put: [f64; 2],
     stacks: [f64; 2],
     player: Option<u8>,
     actions: Vec<ActionOut>,
@@ -179,6 +191,7 @@ fn node_out(solver: &Solver, view: &NodeView) -> NodeOut {
         street: view.street,
         board: view.board.clone(),
         pot: round(view.pot, 3),
+        put: [round(view.put[0], 3), round(view.put[1], 3)],
         stacks: [behind(0), behind(1)],
         player: view.player,
         actions: actions_out(&view.actions),
@@ -192,6 +205,12 @@ fn node_out(solver: &Solver, view: &NodeView) -> NodeOut {
                 player: h.player,
                 stack: round(h.stack, 3),
                 pot: round(h.pot, 3),
+                put: h.player.map(|p| {
+                    let mine = config.effective_stack + config.starting_pot / 2.0 - h.stack;
+                    let mut put = [round(h.pot - mine, 3); 2];
+                    put[p as usize] = round(mine, 3);
+                    put
+                }),
                 street: h.street,
                 actions: actions_out(&h.actions),
                 chosen: h.chosen,
@@ -293,6 +312,76 @@ fn follow_line(solver: &Solver, line: &[Step]) -> (Vec<Decision>, Option<String>
     (decisions, None)
 }
 
+const STUDY_MAGIC: &[u8] = b"ANALYZER-ETUDE1\n";
+
+/// Enregistre l'étude : en-tête JSON (requête, résumé), puis les stratégies moyennes sur 8 bits.
+fn save_study(solver: &Solver, request: &Value, summary: &Value, path: &str) -> Result<(), String> {
+    let err = |e: std::io::Error| e.to_string();
+    let tmp = format!("{path}.tmp");
+    let mut w = BufWriter::new(std::fs::File::create(&tmp).map_err(err)?);
+    w.write_all(STUDY_MAGIC).map_err(err)?;
+    writeln!(w, "{}", json!({ "request": request, "summary": summary })).map_err(err)?;
+    let mut z = GzEncoder::new(w, Compression::fast());
+    let tree = &solver.spot.tree;
+    for (idx, node) in tree.nodes.iter().enumerate() {
+        if node.kind != KIND_ACTION {
+            continue;
+        }
+        let nh = solver.spot.hands[node.player as usize].len();
+        let na = node.num_children as usize;
+        let sigma = solver.average_strategy(idx as u32, node);
+        let block: Vec<u8> = sigma[..(na - 1) * nh].iter().map(|&x| (x.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+        z.write_all(&block).map_err(err)?;
+    }
+    let mut w = z.finish().map_err(err)?;
+    w.flush().map_err(err)?;
+    drop(w);
+    std::fs::rename(&tmp, path).map_err(err)
+}
+
+/// Recharge une étude : la requête d'origine, le résumé de la résolution et le solveur rempli.
+fn load_study(path: &str) -> Result<(Request, Value, Solver), String> {
+    let err = |e: std::io::Error| format!("lecture de l'étude {path} : {e}");
+    let mut r = BufReader::new(std::fs::File::open(path).map_err(err)?);
+    let mut magic = vec![0u8; STUDY_MAGIC.len()];
+    r.read_exact(&mut magic).map_err(err)?;
+    if magic != STUDY_MAGIC {
+        return Err(format!("{path} n'est pas une étude d'Analyzer"));
+    }
+    let mut line = String::new();
+    r.read_line(&mut line).map_err(err)?;
+    let header: Value = serde_json::from_str(&line).map_err(|e| format!("en-tête d'étude invalide : {e}"))?;
+    let request: Request = serde_json::from_value(header["request"].clone()).map_err(|e| format!("requête invalide : {e}"))?;
+    let spot = Spot::new_with_limit(request.spot.clone(), Some(request.max_nodes))?;
+    let solver = Solver::with_storage(Arc::new(spot), Storage::Compressed);
+    let mut z = GzDecoder::new(r);
+    let tree = &solver.spot.tree;
+    for (idx, node) in tree.nodes.iter().enumerate() {
+        if node.kind != KIND_ACTION {
+            continue;
+        }
+        let p = node.player as usize;
+        let nh = solver.spot.hands[p].len();
+        let na = node.num_children as usize;
+        let mut block = vec![0u8; (na - 1) * nh];
+        z.read_exact(&mut block).map_err(err)?;
+        let mut sums = vec![0f32; na * nh];
+        for i in 0..nh {
+            let mut rest = 255.0f32;
+            for a in 0..na - 1 {
+                let v = block[a * nh + i] as f32;
+                sums[a * nh + i] = v;
+                rest -= v;
+            }
+            sums[(na - 1) * nh + i] = rest.max(0.0);
+        }
+        // Les sommes de stratégie suffisent pour lire la stratégie moyenne (les regrets ne servent
+        // qu'à poursuivre le calcul).
+        unsafe { solver.strat[p].write_f32(idx as u32, node.data_offset, na * nh, &sums) };
+    }
+    Ok((request, header["summary"].clone(), solver))
+}
+
 fn serve(solver: &Solver) {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
@@ -314,12 +403,38 @@ fn serve(solver: &Solver) {
     }
 }
 
+fn option(args: &[String], name: &str) -> Option<String> {
+    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let path = args.get(1).cloned().unwrap_or_else(|| fail("usage : analyzer-solve requete.json [--serve]".into()));
     let session = args.iter().any(|a| a == "--serve");
+    if let Some(study) = option(&args, "--load") {
+        let start = std::time::Instant::now();
+        let (request, summary, solver) = load_study(&study).unwrap_or_else(|e| fail(e));
+        let _ = writeln!(std::io::stderr(), "{}", json!({ "loaded": round(start.elapsed().as_secs_f64(), 1) }));
+        let (decisions, stopped) = follow_line(&solver, &request.line);
+        let out = Output {
+            engine: "etude",
+            iterations: summary["iterations"].as_u64().unwrap_or(0) as u32,
+            exploit_pct: summary["exploit_pct"].as_f64().unwrap_or(f64::NAN),
+            seconds: summary["seconds"].as_f64().unwrap_or(0.0),
+            tree_nodes: solver.spot.tree.nodes.len(),
+            decisions,
+            stopped,
+        };
+        println!("{}", serde_json::to_string(&out).expect("sérialisation du résultat"));
+        let _ = std::io::stdout().flush();
+        if session {
+            serve(&solver);
+        }
+        return;
+    }
+    let path = args.get(1).cloned().unwrap_or_else(|| fail("usage : analyzer-solve requete.json [--save etude.gz] [--serve]".into()));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| fail(format!("lecture de {path} : {e}")));
     let request: Request = serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("requête invalide : {e}")));
+    let request_value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
     if request.threads > 0 {
         rayon::ThreadPoolBuilder::new().num_threads(request.threads).build_global().ok();
     }
@@ -359,6 +474,19 @@ fn main() {
         (p.iteration, p.exploit_pct_pot, p.elapsed_secs)
     });
     solver.ensure_symmetric();
+
+    if let Some(study) = option(&args, "--save") {
+        let start = std::time::Instant::now();
+        let summary = json!({"iterations": iterations, "exploit_pct": round(exploit_pct, 3), "seconds": round(seconds, 1)});
+        match save_study(&solver, &request_value, &summary, &study) {
+            Ok(()) => {
+                let _ = writeln!(std::io::stderr(), "{}", json!({ "saved": round(start.elapsed().as_secs_f64(), 1) }));
+            }
+            Err(e) => {
+                let _ = writeln!(std::io::stderr(), "{}", json!({ "warning": format!("étude non enregistrée : {e}") }));
+            }
+        }
+    }
 
     let (decisions, stopped) = follow_line(&solver, &request.line);
     let out = Output {

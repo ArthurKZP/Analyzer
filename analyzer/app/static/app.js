@@ -40,6 +40,7 @@
     const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
     const tabOf = (view, name, fallback) => (TABS[view].some(([id]) => id === name) ? name : fallback);
     if (parts[0] === 'importer') return { view: 'importer' };
+    if (parts[0] === 'etudes') return { view: 'etudes' };
     if (parts[0] === 'adversaire' && parts[1]) return { view: 'adv', player: parts[1], tab: tabOf('adv', parts[2], 'plan') };
     if (parts[0] === 'moi') return { view: 'moi', tab: tabOf('moi', parts[1], 'bilan') };
     return state && state.hands ? { view: 'moi', tab: 'bilan' } : { view: 'importer' };
@@ -48,11 +49,13 @@
   function hashFor(r) {
     if (r.view === 'adv') return '#/adversaire/' + encodeURIComponent(r.player) + '/' + r.tab;
     if (r.view === 'moi') return '#/moi/' + r.tab;
+    if (r.view === 'etudes') return '#/etudes';
     return '#/importer';
   }
 
   function srcFor(r) {
     if (r.view === 'adv') return '/p/' + encodeURIComponent(r.player) + '/' + r.tab;
+    if (r.view === 'etudes') return '/etudes';
     return '/moi/' + r.tab;
   }
 
@@ -84,6 +87,9 @@
       subtitle.textContent = state.hands
         ? state.hands + ' mains contre ' + state.opponents.length + ' adversaire(s) · ' + state.first + ' → ' + state.last
         : '';
+    } else if (route.view === 'etudes') {
+      title.textContent = 'Études du solveur';
+      subtitle.textContent = 'Coups résolus avec GTOpen, gardés sur ton ordinateur pour être réexplorés';
     } else {
       title.textContent = 'Importer des mains';
       subtitle.textContent = 'Historiques Betclic (.txt) — les mains déjà présentes sont ignorées';
@@ -236,6 +242,7 @@
     let r = null;
     if (parts[0] === 'p' && parts.length === 3) r = { view: 'adv', player: parts[1], tab: parts[2] };
     else if (parts[0] === 'moi' && parts.length === 2) r = { view: 'moi', tab: parts[1] };
+    else if (parts[0] === 'etudes' && parts.length === 1) r = { view: 'etudes' };
     if (!r) return;
     frame.dataset.src = srcFor(r);
     if (route && route.view === r.view && route.player === r.player && route.tab === r.tab) return;

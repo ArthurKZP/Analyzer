@@ -6,7 +6,15 @@ import sys
 import time
 
 RANKS = "AKQJT98765432"
-request = json.load(open(sys.argv[1], encoding="utf-8"))
+args = sys.argv[1:]
+option = lambda name: args[args.index(name) + 1] if name in args else None  # noqa: E731
+if option("--load"):  # étude : ici, simplement la requête d'origine
+    request = json.load(open(option("--load"), encoding="utf-8"))
+    print(json.dumps({"loaded": 0.1}), file=sys.stderr, flush=True)
+else:
+    request = json.load(open(args[0], encoding="utf-8"))
+    if option("--save"):
+        json.dump(request, open(option("--save"), "w", encoding="utf-8"))
 spot = request["spot"]
 board = [spot["board"][i:i + 2] for i in range(0, len(spot["board"]), 2)]
 
@@ -51,7 +59,7 @@ def node(player, kinds, chosen, pot, history):
             hands[p].append(row)
     current = {"kind": "action", "player": player, "stack": 90.0, "pot": pot, "street": 0,
                "actions": actions, "chosen": None, "card": None}
-    return {"type": "action", "street": 0, "board": board[:3], "pot": pot, "stacks": [90.0, 90.0],
+    return {"type": "action", "street": 0, "board": board[:3], "pot": pot, "put": [pot / 2, pot / 2], "stacks": [90.0, 90.0],
             "player": player, "actions": actions, "cards": None, "hands": hands, "history": history + [current]}
 
 
@@ -70,8 +78,8 @@ for k, step in enumerate(request["line"]):
     history = n["history"][:-1] + [dict(n["history"][-1], chosen=chosen)]
     path.append({"type": "action", "index": chosen})
     player = 1 - player
-print(json.dumps({"engine": "cpu", "iterations": 10, "exploit_pct": 4.2, "seconds": 0.1, "tree_nodes": 12,
-                  "decisions": decisions, "stopped": None}), flush=True)
+print(json.dumps({"engine": "etude" if option("--load") else "cpu", "iterations": 10, "exploit_pct": 4.2,
+                  "seconds": 0.1, "tree_nodes": 12, "decisions": decisions, "stopped": None}), flush=True)
 
 if "--serve" in sys.argv:
     for line in sys.stdin:

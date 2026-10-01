@@ -166,8 +166,9 @@ s'affiche tout de suite.
   (3bet de la BB / call du bouton), pot 4bet (4bet du bouton / call de la BB) ;
 - board, pot et tapis effectif au flop, en bb, sans rake ;
 - tailles : mise 33 % au flop, 75 % à la turn et à la river, relance 60 % du pot au flop et à la turn,
-  deux relances au plus par street. Les tailles réellement jouées dans la main sont ajoutées (ou remplacent
-  la taille par défaut la plus proche) pour que chaque décision tombe sur une branche de l'arbre.
+  deux relances au plus par street, pas de donk (mise d'ouverture hors de position après avoir payé).
+  Les tailles réellement jouées dans la main sont ajoutées (ou remplacent la taille par défaut la plus
+  proche) pour que chaque décision tombe sur une branche de l'arbre, y compris un donk joué.
 
 **La lecture**, pour chaque décision : la stratégie du solveur avec ta main exacte, avec toute ta range,
 l'EV de chaque action et la perte d'EV de ton choix ; le même verdict qu'au préflop (action principale,
@@ -186,9 +187,21 @@ s'ouvre dans une nouvelle fenêtre, comme un solveur :
 - au survol d'une case, le détail de chacun de ses combos : fréquence et/ou EV de chaque action selon
   l'affichage choisi, équité, présence ; un clic garde la case affichée.
 
-La dernière résolution reste en mémoire (environ 2 Go) pour naviguer dans tout l'arbre ; elle est fermée
-après 30 minutes sans activité ou quand une autre résolution commence. Sans elle, l'explorateur montre la
-ligne jouée (enregistrée) et propose de recalculer pour explorer le reste.
+Les mises sont en % du pot ; les relances aussi, selon la convention des solveurs : le montant ajouté
+rapporté au pot après le call (relancer à 4,5 sur une mise de 1,7 dans un pot de 5 = 2,8 / 8,4 = 33 %).
+
+**L'EV** est en bb, à partir du moment du coup affiché : un fold vaut 0, le pot déjà au milieu est à gagner
+et les mises à venir sont dépensées. Pour une action (au survol), c'est ce que rapporte cette action puis la
+suite jouée par le solveur ; pour une main (dans la grille), c'est l'EV de sa stratégie, la moyenne de ses
+actions pondérée par leurs fréquences. Une main qui folde 100 % vaut donc 0 même si payer coûterait 14 bb.
+
+**Études du solveur** : chaque coup résolu est gardé sur disque (`~/.analyzer/etudes`, environ 170 Mo pour
+un pot simplement relancé) sous une forme compacte : la stratégie de chaque nœud sur 8 bits, compressée.
+L'explorateur rouvre une étude en une quinzaine de secondes au lieu de la recalculer (les fréquences
+restent à 1 point près, les EV à quelques centièmes de bb). La page *Études du solveur* de l'application
+liste les études, avec leur précision et leur taille, et permet de les rouvrir ou de les supprimer.
+Une étude ouverte occupe environ 2 Go de mémoire : une seule reste ouverte, fermée après 30 minutes sans
+activité ou quand une autre s'ouvre.
 
 **Durée** : un arbre de flop compte environ 700 000 nœuds et 2 Go de mémoire avec les ranges HU complètes.
 Sur un processeur à 4 cœurs, l'objectif par défaut (1,5 % du pot d'exploitabilité, 120 itérations au plus)

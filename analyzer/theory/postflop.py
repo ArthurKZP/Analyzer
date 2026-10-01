@@ -73,6 +73,7 @@ solver = {{ path = "{solver}" }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 rayon = "1.10"
+flate2 = "1"
 
 [features]
 gpu = ["solver/gpu"]
@@ -470,8 +471,11 @@ PIPE_TEXT = {"text": True, "encoding": "utf-8", "errors": "replace"}
 
 
 def solve(request: dict, on_progress: Optional[Callable[[dict], None]] = None,
-          on_start: Optional[Callable[[subprocess.Popen], None]] = None, use_cache: bool = True) -> dict:
-    """Lance analyzer-solve ; on_progress reçoit chaque mesure (itération, exploitabilité)."""
+          on_start: Optional[Callable[[subprocess.Popen], None]] = None, use_cache: bool = True,
+          save_study: bool = False) -> dict:
+    """Lance analyzer-solve ; on_progress reçoit chaque mesure (itération, exploitabilité).
+
+    save_study=True garde aussi l'arbre résolu comme étude (voir study_path)."""
     if use_cache:
         hit = cached(request)
         if hit is not None:
@@ -485,7 +489,11 @@ def solve(request: dict, on_progress: Optional[Callable[[dict], None]] = None,
         errors: list = []
         with out_path.open("w", encoding="utf-8") as out:
             # stdout vers un fichier : le résultat peut dépasser la taille d'un tube.
-            proc = subprocess.Popen([str(exe), str(req_path)], stdout=out, stderr=subprocess.PIPE, **PIPE_TEXT)
+            cmd = [str(exe), str(req_path)]
+            if save_study:
+                study_path(request).parent.mkdir(parents=True, exist_ok=True)
+                cmd += ["--save", str(study_path(request))]
+            proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.PIPE, **PIPE_TEXT)
             if on_start:
                 on_start(proc)
             _progress_reader(proc.stderr, on_progress, errors)
@@ -497,11 +505,73 @@ def solve(request: dict, on_progress: Optional[Callable[[dict], None]] = None,
     return result
 
 
+# --- Études : arbres résolus gardés sur disque ------------------------------------------------
+
+def studies_dir() -> Path:
+    return home() / "etudes"
+
+
+def study_path(request: dict) -> Path:
+    return studies_dir() / f"{cache_key(request)}.etude"
+
+
+def write_study_meta(spot: PostflopSpot, request: dict, raw: dict) -> None:
+    """Fiche de l'étude (pour la bibliothèque), à côté du fichier de l'arbre."""
+    hand = spot.hand
+    meta = {
+        "key": cache_key(request), "hand": hand.hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"),
+        "hero": spot.hero, "villain": spot.villain, "hero_cards": hand.hole_cards.get(spot.hero, []),
+        "board": hand.board, "pot_type": spot.pot_type, "hero_position": "BB" if spot.oop == spot.hero else "BTN",
+        "pot": spot.pot_bb, "stack": spot.stack_bb, "net": round(hand.net(spot.hero) / hand.bb, 2),
+        "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"), "seconds": raw.get("seconds"),
+        "menu": spot.menu_text(), "created": time.strftime("%d/%m/%Y %H:%M"),
+    }
+    path = study_path(request).with_suffix(".json")
+    path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+
+def list_studies() -> list[dict]:
+    """Études enregistrées, de la plus récente à la plus ancienne, avec la taille de leur fichier."""
+    out = []
+    folder = studies_dir()
+    if not folder.is_dir():
+        return out
+    for meta_path in folder.glob("*.json"):
+        tree = meta_path.with_suffix(".etude")
+        if not tree.is_file():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        meta["size"] = tree.stat().st_size
+        meta["mtime"] = tree.stat().st_mtime
+        out.append(meta)
+    return sorted(out, key=lambda m: -m["mtime"])
+
+
+def delete_study(key: str) -> bool:
+    if not re.fullmatch(r"[0-9a-f]{20}", key):
+        return False
+    removed = False
+    for suffix in (".etude", ".json"):
+        path = studies_dir() / f"{key}{suffix}"
+        if path.is_file():
+            path.unlink()
+            removed = True
+    return removed
+
+
 class Session:
-    """Résolution gardée en mémoire (analyzer-solve --serve) pour naviguer dans tout l'arbre."""
+    """Résolution gardée en mémoire (analyzer-solve --serve) pour naviguer dans tout l'arbre.
+
+    Sans étude enregistrée, résout puis enregistre l'étude ; sinon la recharge (quelques secondes).
+    """
 
     def __init__(self, request: dict):
         self.request = request
+        self.study = study_path(request)
+        self.loading = self.study.is_file()
         self.result: Optional[dict] = None
         self.proc: Optional[subprocess.Popen] = None
         self.last_used = time.time()
@@ -511,14 +581,19 @@ class Session:
 
     def start(self, on_progress: Optional[Callable[[dict], None]] = None,
               on_start: Optional[Callable[[subprocess.Popen], None]] = None) -> dict:
-        """Résout (bloquant) ; renvoie le résultat de la ligne jouée et le met en cache."""
+        """Résout ou recharge l'étude (bloquant) ; renvoie le résultat de la ligne jouée, mis en cache."""
         exe = binary_path()
         if not exe.is_file():
             raise SolverError(status()["message"])
-        req_path = Path(self._tmp.name) / "requete.json"
-        req_path.write_text(json.dumps(self.request), encoding="utf-8")
-        self.proc = subprocess.Popen([str(exe), str(req_path), "--serve"], stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, **PIPE_TEXT)
+        if self.loading:
+            cmd = [str(exe), "--load", str(self.study), "--serve"]
+        else:
+            req_path = Path(self._tmp.name) / "requete.json"
+            req_path.write_text(json.dumps(self.request), encoding="utf-8")
+            self.study.parent.mkdir(parents=True, exist_ok=True)
+            cmd = [str(exe), str(req_path), "--save", str(self.study), "--serve"]
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     **PIPE_TEXT)
         if on_start:
             on_start(self.proc)
         reader = threading.Thread(target=_progress_reader, args=(self.proc.stderr, on_progress, self._errors),
@@ -584,15 +659,25 @@ def _num(x: float, digits: int = 1) -> str:
     return text.replace(".", ",")
 
 
-def action_label(action: dict, pot: float) -> str:
+def action_label(action: dict, pot: float, raise_base: float = 0.0, call_to: float = 0.0) -> str:
+    """Libellé d'une action de l'arbre. Une relance est exprimée en % du pot après le call
+    (raise_base) : relancer à 4,5 sur une mise de 1,7 dans un pot de 5 = 2,8 / 8,4 = 33 %."""
     kind, amount = action["kind"], action["amount"]
     if kind in (BET, RAISE) and action.get("allin"):
         return f"tapis ({_num(amount)} bb)"
     if kind == BET:
         return f"mise {round(100 * amount / pot)} % ({_num(amount)} bb)"
     if kind == RAISE:
-        return f"relance à {_num(amount)} bb"
+        share = f" ({round(100 * (amount - call_to) / raise_base)} %)" if raise_base else ""
+        return f"relance à {_num(amount)} bb{share}"
     return {CHECK: "check", CALL: "call", FOLD: "fold"}.get(kind, kind)
+
+
+def action_labels(node: dict) -> list[str]:
+    actions, player, put = node["actions"], node.get("player"), node.get("put")
+    call = next((a for a in actions if a["kind"] == CALL), None)
+    base = 2 * put[1 - player] if call and put and player is not None else 0.0
+    return [action_label(a, node["pot"], base, call["amount"] if call else 0.0) for a in actions]
 
 
 def played_label(hand: Hand, i: int) -> str:
@@ -696,8 +781,8 @@ def interpret(spot: PostflopSpot, raw: dict) -> dict:
         decisions.append({
             "i": i, "street": STREET_CODE[hand.actions[i].street], "who": who[player],
             "pot": node["pot"], "board": node["board"], "path": d["path"],
-            "actions": [{"label": action_label(a, node["pot"]), "kind": a["kind"], "allin": a["allin"]}
-                        for a in node["actions"]],
+            "actions": [{"label": label, "kind": a["kind"], "allin": a["allin"]}
+                        for a, label in zip(node["actions"], action_labels(node))],
             "chosen": chosen, "played": played_label(hand, i),
             "approx": bool(chosen is not None and hand.actions[i].kind in (BET, RAISE)
                            and abs(tree_amount - real) > max(0.1 * real, 0.05)),

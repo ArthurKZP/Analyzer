@@ -20,6 +20,7 @@ from urllib.parse import unquote, urlsplit
 from ..theory import postflop
 from .library import Library, UnknownPlayer
 from .solves import NeedSession
+from .studies import build_studies_page
 
 STATIC = Path(__file__).parent / "static"
 STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8",
@@ -112,6 +113,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.self_page(parts[1]))
             if len(parts) == 3 and parts[0] == "p":
                 return self._html(library.player_page(parts[1], parts[2]))
+            if parts == ["etudes"]:
+                return self._html(build_studies_page(embed=True))
             if len(parts) == 2 and parts[0] == "explorateur" and parts[1] in library.by_id:
                 page = (STATIC / "explorer.html").read_text(encoding="utf-8")
                 return self._html(page.replace("__HAND__", html.escape(parts[1], quote=True)))
@@ -140,6 +143,11 @@ class Handler(BaseHTTPRequestHandler):
                                                 bool(payload.get("force"))))
             except UnknownPlayer:
                 return self._error(404, "Main introuvable.")
+        if parts == ["api", "etudes", "supprimer"]:
+            payload = self._small_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("key"), str):
+                return self._error(400, "Requête invalide.")
+            return self._json({"ok": postflop.delete_study(payload["key"])})
         if parts == ["api", "explorateur", "etat"]:
             payload = self._small_json()
             if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):

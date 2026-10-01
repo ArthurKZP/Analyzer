@@ -170,6 +170,13 @@ class SolveTest(unittest.TestCase):
         with self.assertRaises(postflop.SolverError):
             session.node([])
 
+    def test_raise_labels_in_pot_percent(self):
+        node = {"pot": 6.7, "put": [2.5, 4.2], "player": 0,
+                "actions": [{"kind": "fold", "amount": 0.0}, {"kind": "call", "amount": 1.7},
+                            {"kind": "raise", "amount": 4.5}, {"kind": "raise", "amount": 97.5, "allin": True}]}
+        # 4,5 sur une mise de 1,7 dans un pot de 5 : 2,8 ajoutés / 8,4 après le call = 33 %
+        self.assertEqual(postflop.action_labels(node), ["fold", "call", "relance à 4,5 bb (33 %)", "tapis (97,5 bb)"])
+
     def test_node_summary_and_classes(self):
         self.assertEqual(postflop.class_of("AhKd"), "AKo")
         self.assertEqual(postflop.class_of("7c9c"), "97s")
@@ -201,12 +208,20 @@ class SolveTest(unittest.TestCase):
         self.assertEqual(queue.node(self.spot, line_path)["live"], False)
         with self.assertRaises(NeedSession):
             queue.node(self.spot, [{"type": "action", "index": 0}])
-        reopened = queue.start(self.spot, force=True)  # relance pour rouvrir une session
+        studies = postflop.list_studies()  # la résolution est gardée comme étude
+        self.assertEqual([(s["hand"], s["pot_type"], s["hero_position"]) for s in studies],
+                         [("HAND02", "pot 3bet", "BB")])
+        self.assertTrue(queue.lookup(self.spot)["study"])
+        reopened = queue.start(self.spot, force=True)  # rouvre la session depuis l'étude, sans recalculer
         self.assertIn(reopened["state"], ("waiting", "running"))
+        self.assertEqual(reopened["mode"], "load")
         deadline = time.time() + 20
         while queue.get(reopened["job"])["state"] in ("waiting", "running") and time.time() < deadline:
             time.sleep(0.05)
         self.assertTrue(queue.lookup(self.spot)["live"])
+        self.assertFalse(postflop.delete_study("../../etc"))
+        self.assertTrue(postflop.delete_study(studies[0]["key"]))
+        self.assertEqual(postflop.list_studies(), [])
         queue.shutdown()
 
     def test_cancel(self):

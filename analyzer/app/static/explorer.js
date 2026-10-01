@@ -51,12 +51,19 @@
   }
   const playerOf = (role) => (roleOf(0) === role ? 0 : 1);
 
-  function actLabel(a, pot) {
-    if ((a.kind === 'bet' || a.kind === 'raise') && a.allin) return 'Tapis ' + num(a.amount);
-    if (a.kind === 'bet') return 'Mise ' + num(a.amount) + ' (' + Math.round(100 * a.amount / pot) + ' %)';
-    if (a.kind === 'raise') return 'Relance ' + num(a.amount);
-    return { check: 'Check', call: 'Call', fold: 'Fold' }[a.kind] || a.kind;
+  // Libellés des actions d'un nœud. Mise : % du pot ; relance : montant ajouté en % du pot après le
+  // call (convention des solveurs : relancer à 4,5 sur une mise de 1,7 dans un pot de 5 = 33 %).
+  function actLabels(actions, pot, put, player) {
+    const call = actions.find((x) => x.kind === 'call');
+    const base = call && put && player !== null && player !== undefined ? 2 * put[1 - player] : 0;
+    return actions.map((a) => {
+      if ((a.kind === 'bet' || a.kind === 'raise') && a.allin) return 'Tapis ' + num(a.amount);
+      if (a.kind === 'bet') return 'Mise ' + num(a.amount) + ' (' + Math.round(100 * a.amount / pot) + ' %)';
+      if (a.kind === 'raise') return 'Relance ' + num(a.amount) + (base ? ' (' + Math.round(100 * (a.amount - call.amount) / base) + ' %)' : '');
+      return { check: 'Check', call: 'Call', fold: 'Fold' }[a.kind] || a.kind;
+    });
   }
+  const nodeLabels = () => actLabels(node.actions, node.pot, node.put, node.player);
 
   function colors(actions) {
     const sized = actions.map((a, k) => k).filter((k) => (actions[k].kind === 'bet' || actions[k].kind === 'raise') && !actions[k].allin);
@@ -220,6 +227,7 @@
       const frac = p.iteration ? Math.min(1, p.iteration / state.max_iterations) : 0;
       const elapsed = state.elapsed ? ' · ' + (state.elapsed >= 60 ? Math.floor(state.elapsed / 60) + ' min ' : '') + Math.round(state.elapsed % 60) + ' s' : '';
       box.append(el('span', {}, s === 'waiting' ? 'En attente d\'une autre résolution…'
+        : state.mode === 'load' ? 'Ouverture de l\'étude enregistrée…' + elapsed
         : (p.iteration ? 'Résolution : itération ' + p.iteration + ' / ' + state.max_iterations + ' · exploitabilité ' + num(p.exploit_pct) + ' % du pot (objectif ' + num(state.target) + ' %)'
           : p.tree_nodes ? 'Résolution lancée : arbre de ' + p.tree_nodes.toLocaleString('fr-FR') + ' nœuds, première mesure après 10 itérations'
             : 'Construction de l\'arbre…') + elapsed),
@@ -229,6 +237,9 @@
       const r = state.result;
       box.append(el('span', {}, 'Session active : toutes les branches et toutes les cartes sont explorables (fermée après 30 min sans activité). '
         + r.iterations + ' itérations, exploitabilité ' + num(r.exploit_pct, 2) + ' % du pot.'));
+    } else if (s === 'done' && state.study) {
+      box.append(el('span', {}, 'Étude enregistrée : ligne jouée affichée.'),
+        el('button', { type: 'button', class: 'go', onclick: solve }, 'Ouvrir l\'étude complète (quelques secondes)'));
     } else if (s === 'done') {
       box.append(el('span', {}, 'Ligne jouée seulement (résultat enregistré). Pour explorer les autres branches et changer les cartes :'),
         el('button', { type: 'button', class: 'go', onclick: solve }, 'Recalculer (quelques minutes)'));
@@ -246,6 +257,7 @@
       el('div', { class: 'head' }, el('span', { class: role }, POS[h.player] + ' · ' + NAME[role]), el('span', {}, num(h.stack))));
     const prefix = path.slice(0, k);
     const onLine = prefixOf(prefix, played) && played[k] && played[k].type === 'action';
+    const labels = actLabels(h.actions, h.pot, h.put, h.player);
     h.actions.forEach((a, j) => {
       const isPlayed = onLine && played[k].index === j;
       const allowed = live || isPlayed;
@@ -253,7 +265,7 @@
         type: 'button', class: 'act' + (h.chosen === j ? ' on' : ''), disabled: !allowed,
         title: allowed ? null : 'Hors de la ligne jouée : recalcule pour explorer cette branche',
         onclick: () => goTo(prefix.concat([{ type: 'action', index: j }])),
-      }, el('span', {}, actLabel(a, h.pot)), isPlayed ? el('span', { class: 'dot', title: 'Joué dans la main' }, '●') : ''));
+      }, el('span', {}, labels[j]), isPlayed ? el('span', { class: 'dot', title: 'Joué dans la main' }, '●') : ''));
     });
     return step;
   }
@@ -387,13 +399,15 @@
     const legend = $('legend');
     legend.textContent = '';
     if (strat && (mode === 'strategy' || mode === 'strategy_ev')) {
-      node.actions.forEach((a, k) => legend.append(el('span', {}, el('i', { style: 'background:' + cols[k] }), actLabel(a, node.pot))));
+      nodeLabels().forEach((label, k) => legend.append(el('span', {}, el('i', { style: 'background:' + cols[k] }), label)));
     }
     legend.append(el('span', {}, mode === 'equity' ? 'Couleur : équité de la main (plus foncé = plus forte).'
       : mode === 'ev' ? 'Couleur : EV de la main (plus foncé = plus élevée).'
-        : 'Hauteur : part de la main encore présente.' + (mode === 'strategy_ev' ? ' Nombre : EV moyenne.' : '')));
+        : 'Hauteur : part de la main encore présente.' + (mode === 'strategy_ev' ? ' Nombre : EV de la main.' : '')));
     if (mode !== 'strategy' && mode !== 'equity') {
-      legend.append(el('span', {}, 'EV en bb : la part du pot que la main récupère en moyenne, mises à venir comprises (un fold vaut 0).'));
+      legend.append(el('span', {}, 'EV en bb à partir de ce moment du coup : un fold vaut 0, le pot déjà au milieu est à gagner, '
+        + 'les mises à venir sont dépensées. Dans la grille, l\'EV d\'une main est celle de sa stratégie (moyenne de ses actions '
+        + 'selon leurs fréquences) ; le détail par action est au survol.'));
     }
   }
 
@@ -416,7 +430,7 @@
         el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb · tapis ' + num(node.stacks[p]) + ' bb')));
       const tiles = el('div', { class: 'tiles' });
       node.actions.forEach((a, k) => tiles.append(el('div', { class: 'tile', style: 'background:' + cols[k] },
-        el('div', { class: 'l' }, actLabel(a, node.pot)), el('div', { class: 'p' }, total ? pct(freqs[k] / total) : '—'),
+        el('div', { class: 'l' }, nodeLabels()[k]), el('div', { class: 'p' }, total ? pct(freqs[k] / total) : '—'),
         el('div', { class: 'c' }, num(freqs[k], 1) + ' combos'))));
       panel.append(tiles);
       const stack = el('div', { class: 'stack' });
@@ -440,6 +454,7 @@
     const strat = p === node.player;
     const na = node.actions.length;
     const cols = colors(node.actions);
+    const labels = nodeLabels();
     const head = el('div', { class: 'ch' }, el('span', {}, title ? title + ' ' : '', cards([row[0].slice(0, 2), row[0].slice(2)])),
       el('span', { class: 'muted' }, (row[1] < 0.995 ? 'présence ' + pct(row[1]) + ' · ' : '') + (row[2] === null ? '' : 'éq. ' + pct(row[2]))));
     const box = el('div', { class: 'combo' }, head);
@@ -452,12 +467,15 @@
       const best = evs.reduce((b, e, k) => (e !== null && (b < 0 || e > evs[b]) ? k : b), -1);
       const body = el('tbody', {});
       node.actions.forEach((a, k) => {
-        const tds = [el('td', {}, el('span', { class: 'sw', style: 'background:' + cols[k] }), actLabel(a, node.pot))];
+        const tds = [el('td', {}, el('span', { class: 'sw', style: 'background:' + cols[k] }), labels[k])];
         if (mode !== 'ev' && mode !== 'equity') tds.push(el('td', { class: 'n' }, pct(s[k])));
         if (mode !== 'strategy') tds.push(el('td', { class: 'n' }, evs[k] === null ? '—' : num(evs[k], 2)));
         body.append(el('tr', { class: k === best && mode !== 'strategy' ? 'best' : '' }, tds));
       });
       box.append(el('table', {}, body));
+      if (mode !== 'strategy' && row[3] !== null) {
+        box.append(el('div', { class: 'muted evs' }, 'EV de la main avec cette stratégie : ' + num(row[3], 2) + ' bb'));
+      }
     } else {
       box.append(el('div', { class: 'muted' }, 'EV ' + (row[3] === null ? '—' : num(row[3], 2) + ' bb')));
     }
@@ -534,6 +552,7 @@
     renderStatus();
     if (state.result) await goTo(initialPath());
     else $('grid').append(el('div', { class: 'empty', style: 'grid-column: 1 / -1' }, 'Résous ce coup pour voir la stratégie du solveur.'));
-    poll();
+    if (state.state === 'done' && !live && state.study) solve();  // l'étude se rouvre seule, en quelques secondes
+    else poll();
   })();
 })();

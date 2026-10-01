@@ -180,6 +180,14 @@ class ServerTest(unittest.TestCase):
         body = json.dumps({"hand": "HAND03", "path": []})
         self.assertEqual(self.request("POST", "/api/explorateur/noeud", body, headers)[0], 404)
 
+    def test_studies_page(self):
+        status, _, body = self.request("GET", "/etudes")
+        self.assertEqual(status, 200)
+        self.assertIn("Aucune étude".encode(), body)
+        headers = {"Content-Type": "application/json"}
+        status, _, body = self.request("POST", "/api/etudes/supprimer", json.dumps({"key": "../x"}), headers)
+        self.assertEqual((status, json.loads(body)), (200, {"ok": False}))
+
     def test_not_found(self):
         for path in ("/p/Personne/plan", "/p/Villain/autre", "/static/server.py",
                      "/static/..%2Fserver.py", "/rien"):
