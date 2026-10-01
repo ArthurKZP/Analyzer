@@ -68,7 +68,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"  arbre : {p['tree_nodes']:,} nœuds, {p['arena_mb']:.0f} Mo".replace(",", " "), file=sys.stderr)
 
     try:
-        raw = postflop.solve(request, on_progress=progress, use_cache=not args.sans_cache)
+        raw = postflop.solve(request, on_progress=progress, use_cache=not args.sans_cache, save_study=True)
+        if postflop.study_path(request).is_file():
+            postflop.write_study_meta(spot, request, raw)  # visible dans « Études du solveur »
     except postflop.SolverError as exc:
         print(f"\n{exc}", file=sys.stderr)
         return 1

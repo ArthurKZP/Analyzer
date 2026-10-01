@@ -1,28 +1,40 @@
-//! Pont entre Analyzer et le moteur de GTOpen : résout un spot postflop puis suit la ligne jouée.
+//! Pont entre Analyzer et le moteur de GTOpen : résout un spot postflop, suit la ligne jouée et,
+//! en mode session, répond ensuite aux demandes de navigation dans l'arbre résolu.
 //!
-//! Usage : analyzer-solve requete.json > resultat.json
+//! Usage : analyzer-solve requete.json [--save etude.gz] [--serve] > resultat.json
+//!         analyzer-solve --load etude.gz [--serve] > resultat.json
 //!
 //! Requête :
-//!   {"spot": <SpotConfig GTOpen>, "line": [étapes], "combos": {"AhKd": 1, ...} (main -> joueur, 0 = OOP),
-//!    "max_iterations": 300, "target_exploit_pct": 0.5, "threads": 0, "max_nodes": 4000000,
-//!    "gpu": false}
+//!   {"spot": <SpotConfig GTOpen>, "line": [étapes], "max_iterations": 300,
+//!    "target_exploit_pct": 0.5, "threads": 0, "max_nodes": 4000000, "gpu": false}
 //!   étape = {"action": "check" | "bet" | "call" | "raise" | "fold", "to": 3.5, "allin": false}
 //!         | {"card": "Ah"}
 //! Les montants sont des totaux de la street, dans l'unité du spot (Analyzer utilise la bb).
 //!
-//! Sortie : à chaque décision de la ligne, les actions de l'arbre, la fréquence de chacune pour
-//! toute la range du joueur, la stratégie par classe de main (AKs, 72o…) et, pour les combos
-//! demandés, la stratégie, l'EV de chaque action et l'équité. La progression du solveur est écrite
-//! sur stderr, une ligne JSON par mesure.
+//! Sortie (une ligne JSON) : à chaque décision de la ligne, son chemin dans l'arbre, l'action de
+//! l'arbre la plus proche de l'action jouée et le nœud complet (voir `NodeOut`). La progression du
+//! solveur est écrite sur stderr, une ligne JSON par mesure.
+//!
+//! Avec --serve, le programme garde ensuite l'arbre en mémoire et lit sur stdin une requête par
+//! ligne, {"path": [{"type": "action", "index": 0}, {"type": "card", "card": "Ah"}, ...]}, à laquelle
+//! il répond par une ligne {"node": ...} ou {"error": "..."}. Il s'arrête à la fin de stdin.
+//!
+//! Une étude (--save) garde l'arbre résolu sur disque sous une forme compacte : la requête, puis la
+//! stratégie moyenne de chaque nœud sur 8 bits (sans la dernière action, qui s'en déduit), le tout
+//! compressé. --load la recharge en quelques secondes, sans recalculer, pour naviguer à nouveau.
 //!
 //! Compilé avec la fonctionnalité `gpu` (cargo build --features gpu), "gpu": true résout sur une
 //! carte NVIDIA via le moteur CUDA de GTOpen, et revient au processeur si la carte n'est pas utilisable.
 
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use serde::{Deserialize, Serialize};
-use solver::cards::{card_from_str, combo_index, rank, suit, Card, RANK_CHARS};
+use serde_json::{json, Value};
+use solver::query::{ActionView, NodeView};
+use solver::tree::KIND_ACTION;
 use solver::{PathStep, RunOptions, Solver, Spot, SpotConfig, Storage};
-use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -31,8 +43,6 @@ struct Request {
     spot: SpotConfig,
     #[serde(default)]
     line: Vec<Step>,
-    #[serde(default)]
-    combos: BTreeMap<String, u8>,
     #[serde(default = "default_iterations")]
     max_iterations: u32,
     #[serde(default = "default_target")]
@@ -70,6 +80,11 @@ enum Step {
     },
 }
 
+#[derive(Deserialize)]
+struct Query {
+    path: Vec<PathStep>,
+}
+
 #[derive(Serialize)]
 struct ActionOut {
     label: String,
@@ -79,39 +94,44 @@ struct ActionOut {
 }
 
 #[derive(Serialize)]
-struct ClassOut {
-    /// Somme des probabilités d'atteindre ce nœud sur les combos de la classe.
-    w: f64,
-    /// Nombre de combos de la classe compatibles avec le board.
-    n: u32,
-    /// Stratégie moyenne de la classe (pondérée par la probabilité d'atteindre le nœud).
-    s: Vec<f64>,
+struct HistOut {
+    kind: String,
+    player: Option<u8>,
+    stack: f64,
+    pot: f64,
+    /// Jetons engagés par chaque joueur depuis le début du coup (pour les relances en % du pot).
+    put: Option<[f64; 2]>,
+    street: u8,
+    actions: Vec<ActionOut>,
+    chosen: Option<usize>,
+    card: Option<String>,
 }
 
+/// Un nœud de l'arbre. `hands[p]` : une liste par joueur (0 = hors de position), une entrée par
+/// main encore présente, [main, présence, équité, EV, stratégie…, EV de chaque action…] ; la
+/// stratégie et l'EV par action ne concernent que le joueur qui agit. Montants en unités du spot.
 #[derive(Serialize)]
-struct ComboOut {
-    player: u8,
-    reach: f64,
-    eq: Option<f64>,
-    ev: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    s: Option<Vec<f64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    evs: Option<Vec<Option<f64>>>,
+struct NodeOut {
+    #[serde(rename = "type")]
+    kind: String,
+    street: u8,
+    board: Vec<String>,
+    pot: f64,
+    put: [f64; 2],
+    stacks: [f64; 2],
+    player: Option<u8>,
+    actions: Vec<ActionOut>,
+    cards: Option<Vec<String>>,
+    hands: [Vec<Value>; 2],
+    history: Vec<HistOut>,
 }
 
 #[derive(Serialize)]
 struct Decision {
     step: usize,
-    street: u8,
-    board: Vec<String>,
-    pot: f64,
-    player: u8,
-    actions: Vec<ActionOut>,
+    path: Vec<PathStep>,
     chosen: Option<usize>,
-    range: Vec<f64>,
-    classes: BTreeMap<String, ClassOut>,
-    combos: BTreeMap<String, ComboOut>,
+    node: NodeOut,
 }
 
 #[derive(Serialize)]
@@ -130,33 +150,81 @@ fn round(x: f64, digits: i32) -> f64 {
     (x * f).round() / f
 }
 
-fn class_of(c1: Card, c2: Card) -> String {
-    let (hi, lo) = if rank(c1) >= rank(c2) { (c1, c2) } else { (c2, c1) };
-    let (h, l) = (RANK_CHARS[rank(hi) as usize], RANK_CHARS[rank(lo) as usize]);
-    if rank(hi) == rank(lo) {
-        format!("{h}{l}")
-    } else if suit(hi) == suit(lo) {
-        format!("{h}{l}s")
-    } else {
-        format!("{h}{l}o")
-    }
+fn opt(x: Option<f32>, digits: i32) -> Value {
+    x.map_or(Value::Null, |v| json!(round(v as f64, digits)))
 }
 
-fn parse_combo(s: &str) -> Option<usize> {
-    let s = s.trim();
-    if s.len() != 4 {
-        return None;
+fn actions_out(actions: &[ActionView]) -> Vec<ActionOut> {
+    actions
+        .iter()
+        .map(|a| ActionOut {
+            label: a.label.clone(),
+            kind: a.kind.clone(),
+            amount: round(a.amount, 3),
+            allin: a.label.starts_with("All-in"),
+        })
+        .collect()
+}
+
+fn node_out(solver: &Solver, view: &NodeView) -> NodeOut {
+    let config = &solver.spot.tree.config;
+    let behind = |p: usize| round(config.effective_stack - (view.put[p] - config.starting_pot / 2.0), 3);
+    let hands = [0usize, 1].map(|p| {
+        view.players[p]
+            .hands
+            .iter()
+            .filter(|h| h.reach > 1e-6)
+            .map(|h| {
+                let mut row = vec![json!(h.combo), json!(round(h.reach as f64, 4)), opt(h.eq, 3), opt(h.ev, 3)];
+                if let Some(s) = &h.strategy {
+                    row.extend(s.iter().map(|&x| json!(round(x as f64, 3))));
+                }
+                if let Some(e) = &h.evs {
+                    row.extend(e.iter().map(|&x| opt(x, 3)));
+                }
+                Value::Array(row)
+            })
+            .collect()
+    });
+    NodeOut {
+        kind: view.node_type.clone(),
+        street: view.street,
+        board: view.board.clone(),
+        pot: round(view.pot, 3),
+        put: [round(view.put[0], 3), round(view.put[1], 3)],
+        stacks: [behind(0), behind(1)],
+        player: view.player,
+        actions: actions_out(&view.actions),
+        cards: view.available_cards.clone(),
+        hands,
+        history: view
+            .history
+            .iter()
+            .map(|h| HistOut {
+                kind: h.kind.clone(),
+                player: h.player,
+                stack: round(h.stack, 3),
+                pot: round(h.pot, 3),
+                put: h.player.map(|p| {
+                    let mine = config.effective_stack + config.starting_pot / 2.0 - h.stack;
+                    let mut put = [round(h.pot - mine, 3); 2];
+                    put[p as usize] = round(mine, 3);
+                    put
+                }),
+                street: h.street,
+                actions: actions_out(&h.actions),
+                chosen: h.chosen,
+                card: h.card.clone(),
+            })
+            .collect(),
     }
-    let a = card_from_str(&s[0..2]).ok()?;
-    let b = card_from_str(&s[2..4]).ok()?;
-    (a != b).then(|| combo_index(a, b))
 }
 
 fn report(iteration: u32, exploit_pct: f64, elapsed: f64) {
     let _ = writeln!(
         std::io::stderr(),
         "{}",
-        serde_json::json!({"iteration": iteration, "exploit_pct": round(exploit_pct, 3), "elapsed": round(elapsed, 1)})
+        json!({"iteration": iteration, "exploit_pct": round(exploit_pct, 3), "elapsed": round(elapsed, 1)})
     );
 }
 
@@ -186,12 +254,12 @@ fn solve_gpu(_solver: &mut Solver, _opts: &RunOptions) -> Result<(u32, f64, f64)
 }
 
 fn fail(message: String) -> ! {
-    let _ = writeln!(std::io::stderr(), "{}", serde_json::json!({ "error": message }));
+    let _ = writeln!(std::io::stderr(), "{}", json!({ "error": message }));
     std::process::exit(2);
 }
 
 /// Indice de l'action de l'arbre la plus proche de l'action réellement jouée.
-fn match_action(actions: &[ActionOut], kind: &str, to: f64, allin: bool) -> Option<usize> {
+fn match_action(actions: &[ActionView], kind: &str, to: f64, allin: bool) -> Option<usize> {
     let wanted: &[&str] = match kind {
         "bet" | "raise" => &["bet", "raise"],
         "call" => &["call"],
@@ -201,7 +269,7 @@ fn match_action(actions: &[ActionOut], kind: &str, to: f64, allin: bool) -> Opti
     };
     let candidates: Vec<usize> = (0..actions.len()).filter(|&i| wanted.contains(&actions[i].kind.as_str())).collect();
     if allin {
-        if let Some(&i) = candidates.iter().find(|&&i| actions[i].allin) {
+        if let Some(&i) = candidates.iter().find(|&&i| actions[i].label.starts_with("All-in")) {
             return Some(i);
         }
     }
@@ -212,10 +280,161 @@ fn match_action(actions: &[ActionOut], kind: &str, to: f64, allin: bool) -> Opti
     })
 }
 
+/// Suit la ligne jouée et exporte chaque décision.
+fn follow_line(solver: &Solver, line: &[Step]) -> (Vec<Decision>, Option<String>) {
+    let mut decisions = Vec::new();
+    let mut path: Vec<PathStep> = Vec::new();
+    for (index, step) in line.iter().enumerate() {
+        let view = match solver.node_view(&path) {
+            Ok(v) => v,
+            Err(e) => return (decisions, Some(e)),
+        };
+        match step {
+            Step::Card { card } => {
+                if view.node_type != "chance" {
+                    return (decisions, Some(format!("carte {card} attendue mais le nœud est {}", view.node_type)));
+                }
+                path.push(PathStep::Card { card: card.clone() });
+            }
+            Step::Action { action, to, allin } => {
+                if view.node_type != "action" {
+                    return (decisions, Some(format!("action {action} attendue mais le nœud est {}", view.node_type)));
+                }
+                let chosen = match_action(&view.actions, action, *to, *allin);
+                decisions.push(Decision { step: index, path: path.clone(), chosen, node: node_out(solver, &view) });
+                match chosen {
+                    Some(i) => path.push(PathStep::Action { index: i }),
+                    None => return (decisions, Some(format!("action {action} absente de l'arbre à ce nœud"))),
+                }
+            }
+        }
+    }
+    (decisions, None)
+}
+
+const STUDY_MAGIC: &[u8] = b"ANALYZER-ETUDE1\n";
+
+/// Enregistre l'étude : en-tête JSON (requête, résumé), puis les stratégies moyennes sur 8 bits.
+fn save_study(solver: &Solver, request: &Value, summary: &Value, path: &str) -> Result<(), String> {
+    let err = |e: std::io::Error| e.to_string();
+    let tmp = format!("{path}.tmp");
+    let mut w = BufWriter::new(std::fs::File::create(&tmp).map_err(err)?);
+    w.write_all(STUDY_MAGIC).map_err(err)?;
+    writeln!(w, "{}", json!({ "request": request, "summary": summary })).map_err(err)?;
+    let mut z = GzEncoder::new(w, Compression::fast());
+    let tree = &solver.spot.tree;
+    for (idx, node) in tree.nodes.iter().enumerate() {
+        if node.kind != KIND_ACTION {
+            continue;
+        }
+        let nh = solver.spot.hands[node.player as usize].len();
+        let na = node.num_children as usize;
+        let sigma = solver.average_strategy(idx as u32, node);
+        let block: Vec<u8> = sigma[..(na - 1) * nh].iter().map(|&x| (x.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+        z.write_all(&block).map_err(err)?;
+    }
+    let mut w = z.finish().map_err(err)?;
+    w.flush().map_err(err)?;
+    drop(w);
+    std::fs::rename(&tmp, path).map_err(err)
+}
+
+/// Recharge une étude : la requête d'origine, le résumé de la résolution et le solveur rempli.
+fn load_study(path: &str) -> Result<(Request, Value, Solver), String> {
+    let err = |e: std::io::Error| format!("lecture de l'étude {path} : {e}");
+    let mut r = BufReader::new(std::fs::File::open(path).map_err(err)?);
+    let mut magic = vec![0u8; STUDY_MAGIC.len()];
+    r.read_exact(&mut magic).map_err(err)?;
+    if magic != STUDY_MAGIC {
+        return Err(format!("{path} n'est pas une étude d'Analyzer"));
+    }
+    let mut line = String::new();
+    r.read_line(&mut line).map_err(err)?;
+    let header: Value = serde_json::from_str(&line).map_err(|e| format!("en-tête d'étude invalide : {e}"))?;
+    let request: Request = serde_json::from_value(header["request"].clone()).map_err(|e| format!("requête invalide : {e}"))?;
+    let spot = Spot::new_with_limit(request.spot.clone(), Some(request.max_nodes))?;
+    let solver = Solver::with_storage(Arc::new(spot), Storage::Compressed);
+    let mut z = GzDecoder::new(r);
+    let tree = &solver.spot.tree;
+    for (idx, node) in tree.nodes.iter().enumerate() {
+        if node.kind != KIND_ACTION {
+            continue;
+        }
+        let p = node.player as usize;
+        let nh = solver.spot.hands[p].len();
+        let na = node.num_children as usize;
+        let mut block = vec![0u8; (na - 1) * nh];
+        z.read_exact(&mut block).map_err(err)?;
+        let mut sums = vec![0f32; na * nh];
+        for i in 0..nh {
+            let mut rest = 255.0f32;
+            for a in 0..na - 1 {
+                let v = block[a * nh + i] as f32;
+                sums[a * nh + i] = v;
+                rest -= v;
+            }
+            sums[(na - 1) * nh + i] = rest.max(0.0);
+        }
+        // Les sommes de stratégie suffisent pour lire la stratégie moyenne (les regrets ne servent
+        // qu'à poursuivre le calcul).
+        unsafe { solver.strat[p].write_f32(idx as u32, node.data_offset, na * nh, &sums) };
+    }
+    Ok((request, header["summary"].clone(), solver))
+}
+
+fn serve(solver: &Solver) {
+    let stdin = std::io::stdin();
+    let mut out = std::io::stdout();
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else { break };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let reply = match serde_json::from_str::<Query>(&line) {
+            Ok(q) => match solver.node_view(&q.path) {
+                Ok(view) => json!({ "node": node_out(solver, &view) }),
+                Err(e) => json!({ "error": e }),
+            },
+            Err(e) => json!({ "error": format!("requête invalide : {e}") }),
+        };
+        if writeln!(out, "{reply}").and_then(|_| out.flush()).is_err() {
+            break;
+        }
+    }
+}
+
+fn option(args: &[String], name: &str) -> Option<String> {
+    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+}
+
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| fail("usage : analyzer-solve requete.json".into()));
+    let args: Vec<String> = std::env::args().collect();
+    let session = args.iter().any(|a| a == "--serve");
+    if let Some(study) = option(&args, "--load") {
+        let start = std::time::Instant::now();
+        let (request, summary, solver) = load_study(&study).unwrap_or_else(|e| fail(e));
+        let _ = writeln!(std::io::stderr(), "{}", json!({ "loaded": round(start.elapsed().as_secs_f64(), 1) }));
+        let (decisions, stopped) = follow_line(&solver, &request.line);
+        let out = Output {
+            engine: "etude",
+            iterations: summary["iterations"].as_u64().unwrap_or(0) as u32,
+            exploit_pct: summary["exploit_pct"].as_f64().unwrap_or(f64::NAN),
+            seconds: summary["seconds"].as_f64().unwrap_or(0.0),
+            tree_nodes: solver.spot.tree.nodes.len(),
+            decisions,
+            stopped,
+        };
+        println!("{}", serde_json::to_string(&out).expect("sérialisation du résultat"));
+        let _ = std::io::stdout().flush();
+        if session {
+            serve(&solver);
+        }
+        return;
+    }
+    let path = args.get(1).cloned().unwrap_or_else(|| fail("usage : analyzer-solve requete.json [--save etude.gz] [--serve]".into()));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| fail(format!("lecture de {path} : {e}")));
     let request: Request = serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("requête invalide : {e}")));
+    let request_value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
     if request.threads > 0 {
         rayon::ThreadPoolBuilder::new().num_threads(request.threads).build_global().ok();
     }
@@ -228,7 +447,7 @@ fn main() {
     let _ = writeln!(
         std::io::stderr(),
         "{}",
-        serde_json::json!({"tree_nodes": tree_nodes, "arena_mb": round(solver.arena_bytes() as f64 / 1e6, 1)})
+        json!({"tree_nodes": tree_nodes, "arena_mb": round(solver.arena_bytes() as f64 / 1e6, 1)})
     );
 
     let opts = RunOptions {
@@ -245,7 +464,7 @@ fn main() {
                 done = Some(result);
             }
             Err(e) => {
-                let _ = writeln!(std::io::stderr(), "{}", serde_json::json!({ "warning": format!("GPU indisponible ({e}) : résolution sur le processeur") }));
+                let _ = writeln!(std::io::stderr(), "{}", json!({ "warning": format!("GPU indisponible ({e}) : résolution sur le processeur") }));
             }
         }
     }
@@ -256,122 +475,20 @@ fn main() {
     });
     solver.ensure_symmetric();
 
-    let wanted: Vec<(String, usize, u8)> = request
-        .combos
-        .iter()
-        .filter_map(|(c, &p)| parse_combo(c).map(|i| (c.clone(), i, p.min(1))))
-        .collect();
-    let mut decisions = Vec::new();
-    let mut path: Vec<PathStep> = Vec::new();
-    let mut stopped = None;
-    for (index, step) in request.line.iter().enumerate() {
-        let view = match solver.node_view(&path) {
-            Ok(v) => v,
+    if let Some(study) = option(&args, "--save") {
+        let start = std::time::Instant::now();
+        let summary = json!({"iterations": iterations, "exploit_pct": round(exploit_pct, 3), "seconds": round(seconds, 1)});
+        match save_study(&solver, &request_value, &summary, &study) {
+            Ok(()) => {
+                let _ = writeln!(std::io::stderr(), "{}", json!({ "saved": round(start.elapsed().as_secs_f64(), 1) }));
+            }
             Err(e) => {
-                stopped = Some(e);
-                break;
-            }
-        };
-        match step {
-            Step::Card { card } => {
-                if view.node_type != "chance" {
-                    stopped = Some(format!("carte {card} attendue mais le nœud est {}", view.node_type));
-                    break;
-                }
-                path.push(PathStep::Card { card: card.clone() });
-            }
-            Step::Action { action, to, allin } => {
-                if view.node_type != "action" {
-                    stopped = Some(format!("action {action} attendue mais le nœud est {}", view.node_type));
-                    break;
-                }
-                let player = view.player.unwrap_or(0);
-                let actions: Vec<ActionOut> = view
-                    .actions
-                    .iter()
-                    .map(|a| ActionOut {
-                        label: a.label.clone(),
-                        kind: a.kind.clone(),
-                        amount: round(a.amount, 3),
-                        allin: a.label.starts_with("All-in"),
-                    })
-                    .collect();
-                let na = actions.len();
-                let chosen = match_action(&actions, action, *to, *allin);
-
-                let mut range = vec![0f64; na];
-                let mut total = 0f64;
-                let mut classes: BTreeMap<String, ClassOut> = BTreeMap::new();
-                for h in &view.players[player as usize].hands {
-                    let entry = classes.entry(class_of(h.c1, h.c2)).or_insert(ClassOut { w: 0.0, n: 0, s: vec![0.0; na] });
-                    entry.n += 1;
-                    let reach = h.reach as f64;
-                    if reach <= 0.0 {
-                        continue;
-                    }
-                    if let Some(strategy) = &h.strategy {
-                        entry.w += reach;
-                        total += reach;
-                        for a in 0..na {
-                            entry.s[a] += reach * strategy[a] as f64;
-                            range[a] += reach * strategy[a] as f64;
-                        }
-                    }
-                }
-                for c in classes.values_mut() {
-                    if c.w > 0.0 {
-                        c.s = c.s.iter().map(|x| round(x / c.w, 3)).collect();
-                    }
-                    c.w = round(c.w, 4);
-                }
-                if total > 0.0 {
-                    range = range.iter().map(|x| round(x / total, 4)).collect();
-                }
-
-                let mut combos = BTreeMap::new();
-                for (name, idx, p) in &wanted {
-                    let found = view.players[*p as usize].hands.iter().find(|h| combo_index(h.c1, h.c2) == *idx);
-                    if let Some(h) = found {
-                        combos.insert(
-                            name.clone(),
-                            ComboOut {
-                                player: *p,
-                                reach: round(h.reach as f64, 5),
-                                eq: h.eq.map(|x| round(x as f64, 4)),
-                                ev: h.ev.map(|x| round(x as f64, 3)),
-                                s: h.strategy.as_ref().map(|s| s.iter().map(|&x| round(x as f64, 4)).collect()),
-                                evs: h
-                                    .evs
-                                    .as_ref()
-                                    .map(|e| e.iter().map(|x| x.map(|v| round(v as f64, 3))).collect()),
-                            },
-                        );
-                    }
-                }
-
-                decisions.push(Decision {
-                    step: index,
-                    street: view.street,
-                    board: view.board.clone(),
-                    pot: round(view.pot, 3),
-                    player,
-                    actions,
-                    chosen,
-                    range,
-                    classes,
-                    combos,
-                });
-                match chosen {
-                    Some(i) => path.push(PathStep::Action { index: i }),
-                    None => {
-                        stopped = Some(format!("action {action} absente de l'arbre à ce nœud"));
-                        break;
-                    }
-                }
+                let _ = writeln!(std::io::stderr(), "{}", json!({ "warning": format!("étude non enregistrée : {e}") }));
             }
         }
     }
 
+    let (decisions, stopped) = follow_line(&solver, &request.line);
     let out = Output {
         engine,
         iterations,
@@ -382,4 +499,8 @@ fn main() {
         stopped,
     };
     println!("{}", serde_json::to_string(&out).expect("sérialisation du résultat"));
+    let _ = std::io::stdout().flush();
+    if session {
+        serve(&solver);
+    }
 }

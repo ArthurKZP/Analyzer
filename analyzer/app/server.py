@@ -6,7 +6,9 @@ ne correspond pas : une page web tierce ne peut ni lire tes mains ni en importer
 from __future__ import annotations
 
 import argparse
+import html
 import json
+import re
 import sys
 import traceback
 import webbrowser
@@ -17,9 +19,13 @@ from urllib.parse import unquote, urlsplit
 
 from ..theory import postflop
 from .library import Library, UnknownPlayer
+from .solves import NeedSession
+from .studies import build_studies_page
 
 STATIC = Path(__file__).parent / "static"
-STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8"}
+STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8",
+                "explorer.js": "text/javascript; charset=utf-8", "explorer.css": "text/css; charset=utf-8"}
+MAX_PATH = 40  # étapes d'un chemin dans l'arbre (bien plus qu'un coup réel)
 MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
 MAX_SMALL_BODY = 64 * 1024
 
@@ -107,6 +113,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.self_page(parts[1]))
             if len(parts) == 3 and parts[0] == "p":
                 return self._html(library.player_page(parts[1], parts[2]))
+            if parts == ["etudes"]:
+                return self._html(build_studies_page(embed=True))
+            if len(parts) == 2 and parts[0] == "explorateur" and parts[1] in library.by_id:
+                page = (STATIC / "explorer.html").read_text(encoding="utf-8")
+                return self._html(page.replace("__HAND__", html.escape(parts[1], quote=True)))
         except (UnknownPlayer, KeyError):
             return self._error(404, "Page introuvable.")
         except Exception:  # noqa: BLE001 — une erreur d'analyse ne doit pas tuer le serveur
@@ -128,9 +139,39 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
                 return self._error(400, "Requête invalide.")
             try:
-                return self._json(library.solve(payload["hand"], bool(payload.get("start"))))
+                return self._json(library.solve(payload["hand"], bool(payload.get("start")),
+                                                bool(payload.get("force"))))
             except UnknownPlayer:
                 return self._error(404, "Main introuvable.")
+        if parts == ["api", "etudes", "supprimer"]:
+            payload = self._small_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("key"), str):
+                return self._error(400, "Requête invalide.")
+            return self._json({"ok": postflop.delete_study(payload["key"])})
+        if parts == ["api", "explorateur", "etat"]:
+            payload = self._small_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.explorer_state(payload["hand"]))
+            except (UnknownPlayer, KeyError):
+                return self._error(404, "Main introuvable.")
+        if parts == ["api", "explorateur", "noeud"]:
+            payload = self._small_json()
+            path = payload.get("path") if isinstance(payload, dict) else None
+            if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str) or not valid_path(path):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.explorer_node(payload["hand"], path))
+            except UnknownPlayer:
+                return self._error(404, "Main introuvable.")
+            except postflop.Unsupported as exc:
+                return self._error(404, str(exc))
+            except NeedSession:
+                return self._json({"error": "Branche hors de la ligne jouée : relance la résolution pour l'explorer.",
+                                   "state": "session"}, 409)
+            except postflop.SolverError as exc:
+                return self._json({"error": str(exc), "state": "session"}, 409)
         if len(parts) == 4 and parts[:2] == ["api", "resoudre"] and parts[3] == "arreter":
             job = library.solves.cancel(parts[2])
             return self._json(job) if job else self._error(404, "Résolution inconnue.")
@@ -147,6 +188,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, "Requête d'import invalide.")
             return self._json(library.import_files([f for f in files if isinstance(f, dict)]))
         return self._error(404, "Page introuvable.")
+
+
+def valid_path(path) -> bool:
+    """Chemin dans l'arbre : [{"type": "action", "index": 0}, {"type": "card", "card": "Ah"}, ...]."""
+    if not isinstance(path, list) or len(path) > MAX_PATH:
+        return False
+    for step in path:
+        if not isinstance(step, dict):
+            return False
+        if step.get("type") == "action":
+            if set(step) != {"type", "index"} or type(step["index"]) is not int or not 0 <= step["index"] < 20:
+                return False
+        elif step.get("type") == "card":
+            if set(step) != {"type", "card"} or not isinstance(step["card"], str) \
+                    or not re.fullmatch(r"[2-9TJQKA][cdhs]", step["card"]):
+                return False
+        else:
+            return False
+    return True
 
 
 def start(library: Library, port: int = 8765, tries: int = 10) -> AppServer:
