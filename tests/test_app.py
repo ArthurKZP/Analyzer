@@ -75,6 +75,11 @@ class LibraryTest(unittest.TestCase):
             while lib.solves.get(job["job"])["state"] in ("waiting", "running") and time.time() < deadline:
                 time.sleep(0.05)
             self.assertEqual(lib.solve("HAND02")["state"], "done")
+            state = lib.explorer_state("HAND02")
+            self.assertTrue(state["live"])
+            self.assertEqual((state["meta"]["hero_cards"], state["meta"]["hero_position"]), (["Qh", "Jh"], "BB"))
+            reply = lib.explorer_node("HAND02", [{"type": "action", "index": 1}])
+            self.assertEqual((reply["live"], reply["node"]["type"]), (True, "action"))
         lib.solves.shutdown()
 
     def test_import(self):
@@ -151,6 +156,29 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/resoudre/inconnu/arreter", "{}", headers)[0], 404)
         foreign = {"Origin": "http://evil.example", **headers}
         self.assertEqual(self.request("POST", "/api/resoudre", json.dumps({"hand": "HAND02"}), foreign)[0], 403)
+
+    def test_explorer(self):
+        status, ctype, body = self.request("GET", "/explorateur/HAND02")
+        self.assertEqual(status, 200)
+        self.assertIn(b'data-hand="HAND02"', body)
+        self.assertEqual(self.request("GET", "/explorateur/PERSONNE")[0], 404)
+        self.assertEqual(self.request("GET", "/static/explorer.js")[0], 200)
+        headers = {"Content-Type": "application/json"}
+        status, _, body = self.request("POST", "/api/explorateur/etat", json.dumps({"hand": "HAND02"}), headers)
+        state = json.loads(body)
+        self.assertEqual((status, state["state"], state["meta"]["villain"]), (200, "absent", "Villain"))
+        state = json.loads(self.request("POST", "/api/explorateur/etat", json.dumps({"hand": "HAND03"}), headers)[2])
+        self.assertEqual(state["state"], "unsupported")
+        bad_paths = [[{"type": "action", "index": "0"}], [{"type": "card", "card": "Zz"}], [{"type": "x"}],
+                     [{"type": "action", "index": 0, "extra": 1}], "chemin", [{"type": "action", "index": 0}] * 41]
+        for path in bad_paths:
+            body = json.dumps({"hand": "HAND02", "path": path})
+            self.assertEqual(self.request("POST", "/api/explorateur/noeud", body, headers)[0], 400, path)
+        body = json.dumps({"hand": "HAND02", "path": [{"type": "action", "index": 1}, {"type": "card", "card": "Ah"}]})
+        status, _, reply = self.request("POST", "/api/explorateur/noeud", body, headers)
+        self.assertEqual((status, json.loads(reply)["state"]), (409, "session"))  # ni session ni cache
+        body = json.dumps({"hand": "HAND03", "path": []})
+        self.assertEqual(self.request("POST", "/api/explorateur/noeud", body, headers)[0], 404)
 
     def test_not_found(self):
         for path in ("/p/Personne/plan", "/p/Villain/autre", "/static/server.py",

@@ -134,26 +134,51 @@ class Library:
         return self._cached(("self", page), build)
 
     # --- résolution postflop ----------------------------------------------------
-    def solve(self, hand_id: str, start: bool = False) -> dict:
-        """État de la résolution GTOpen d'une main ; start=True la lance si besoin."""
+    def _spot(self, hand_id: str) -> postflop.PostflopSpot:
         hand = self.by_id.get(hand_id)
         if hand is None or not self.hero:
             raise UnknownPlayer(hand_id)
+        return postflop.build_spot(hand, self.hero)
+
+    def solve(self, hand_id: str, start: bool = False, force: bool = False) -> dict:
+        """État de la résolution GTOpen d'une main ; start=True la lance si besoin.
+
+        force=True relance une main déjà résolue pour rouvrir une session navigable.
+        """
         try:
-            spot = postflop.build_spot(hand, self.hero)
+            spot = self._spot(hand_id)
         except postflop.Unsupported as exc:
             return {"hand": hand_id, "state": "unsupported", "message": str(exc)}
         view = self.solves.lookup(spot)
-        if view["state"] in ("absent", "error", "cancelled") and start:
+        reopen = force and view["state"] == "done" and not view["live"]
+        if start and (view["state"] in ("absent", "error", "cancelled") or reopen):
             solver = postflop.status()
             if not solver["ready"]:
                 return {"hand": hand_id, "state": "unavailable", "message": solver["message"],
                         "install": solver["install"]}
-            view = self.solves.start(spot)
+            view = self.solves.start(spot, force=reopen)
         if view["state"] == "absent":
             solver = postflop.status()
             view["solver"] = {k: solver[k] for k in ("ready", "message", "install")}
         return view
+
+    def explorer_state(self, hand_id: str) -> dict:
+        """Ce que l'explorateur affiche d'une main : le coup, et l'état de sa résolution."""
+        view = self.solve(hand_id)
+        hand = self.by_id[hand_id]
+        villain = hand.opponent_of(self.hero)
+        bb = hand.bb
+        view["meta"] = {
+            "hand": hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"), "hero": self.hero, "villain": villain,
+            "board": hand.board, "hero_cards": hand.hole_cards.get(self.hero, []),
+            "villain_cards": hand.hole_cards.get(villain, []),
+            "hero_position": "BTN" if hand.button == self.hero else "BB",
+            "net": round(hand.net(self.hero) / bb, 2),
+        }
+        return view
+
+    def explorer_node(self, hand_id: str, path: list) -> dict:
+        return self.solves.node(self._spot(hand_id), path)
 
     # --- import -----------------------------------------------------------------
     def import_files(self, files: list[dict]) -> dict:

@@ -174,6 +174,22 @@ l'EV de chaque action et la perte d'EV de ton choix ; le même verdict qu'au pr�
 secondaire ou écart) ; une grille 13 × 13 de la range de celui qui agit. Sa main n'apparaît que si le
 replayer la dévoile.
 
+**L'explorateur** (*Ouvrir l'explorateur ↗* dans le panneau du solveur, ou `/explorateur/<numéro de main>`)
+s'ouvre dans une nouvelle fenêtre, comme un solveur :
+
+- en haut, le déroulé du coup : chaque nœud avec ses actions (● = action jouée dans la main) ; clique sur
+  une action pour suivre une autre branche, sur la turn ou la river pour changer de carte, ← pour revenir ;
+- la grille 13 × 13 de la range choisie (celle du joueur qui agit, ou l'autre), en *Stratégie*,
+  *Stratégie + EV*, *EV* ou *Équité* ; la hauteur d'une case est la part de la main encore présente ;
+- à droite, la fréquence de chaque action pour toute la range (et le nombre de combos), ta main et,
+  quand le coup est dévoilé, la sienne ;
+- au survol d'une case, le détail de chacun de ses combos : fréquence et/ou EV de chaque action selon
+  l'affichage choisi, équité, présence ; un clic garde la case affichée.
+
+La dernière résolution reste en mémoire (environ 2 Go) pour naviguer dans tout l'arbre ; elle est fermée
+après 30 minutes sans activité ou quand une autre résolution commence. Sans elle, l'explorateur montre la
+ligne jouée (enregistrée) et propose de recalculer pour explorer le reste.
+
 **Durée** : un arbre de flop compte environ 700 000 nœuds et 2 Go de mémoire avec les ranges HU complètes.
 Sur un processeur à 4 cœurs, l'objectif par défaut (1,5 % du pot d'exploitabilité, 120 itérations au plus)
 demande environ 5 minutes ; c'est plus rapide avec plus de cœurs.
@@ -237,7 +253,8 @@ analyzer/
                        installation et lecture des résultats (postflop.py), pont Rust (native/main.rs),
                        commande `gtopen` (solve_cli.py)
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
-                       (library.py), résolutions en arrière-plan (solves.py), interface (static/)
+                       (library.py), résolutions et sessions du solveur (solves.py), interface
+                       (static/, dont l'explorateur explorer.*)
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)
 hands/                 tes historiques (ignorés par git)

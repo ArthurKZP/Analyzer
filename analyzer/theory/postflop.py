@@ -20,6 +20,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -327,7 +329,7 @@ class PostflopSpot:
         return {
             "spot": {"board": "".join(self.board), "range_oop": range_text(self.ranges[self.oop]),
                      "range_ip": range_text(self.ranges[self.ip]), "tree": self.tree()},
-            "line": self.line, "combos": self.combos(),
+            "line": self.line,
             "max_iterations": iterations, "target_exploit_pct": target, "threads": threads,
             "gpu": gpu_enabled(),
         }
@@ -443,6 +445,30 @@ def cached(request: dict) -> Optional[dict]:
     return None
 
 
+def _save_cache(request: dict, result: dict) -> None:
+    path = cache_path(request)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result), encoding="utf-8")
+
+
+def _progress_reader(stream, on_progress: Optional[Callable[[dict], None]], errors: list) -> None:
+    """Lit la progression (stderr) d'analyzer-solve ; les erreurs sont gardées dans `errors`."""
+    with stream:
+        for raw in stream:
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                continue
+            if "error" in data:
+                errors.append(data["error"])
+            elif on_progress:
+                on_progress(data)
+
+
+# Sortie du solveur en UTF-8, quel que soit l'encodage par défaut du système (Windows).
+PIPE_TEXT = {"text": True, "encoding": "utf-8", "errors": "replace"}
+
+
 def solve(request: dict, on_progress: Optional[Callable[[dict], None]] = None,
           on_start: Optional[Callable[[subprocess.Popen], None]] = None, use_cache: bool = True) -> dict:
     """Lance analyzer-solve ; on_progress reçoit chaque mesure (itération, exploitabilité)."""
@@ -456,30 +482,99 @@ def solve(request: dict, on_progress: Optional[Callable[[dict], None]] = None,
     with tempfile.TemporaryDirectory(prefix="analyzer-solve-") as tmp:
         req_path, out_path = Path(tmp) / "requete.json", Path(tmp) / "resultat.json"
         req_path.write_text(json.dumps(request), encoding="utf-8")
-        error = None
+        errors: list = []
         with out_path.open("w", encoding="utf-8") as out:
             # stdout vers un fichier : le résultat peut dépasser la taille d'un tube.
-            proc = subprocess.Popen([str(exe), str(req_path)], stdout=out, stderr=subprocess.PIPE, text=True)
+            proc = subprocess.Popen([str(exe), str(req_path)], stdout=out, stderr=subprocess.PIPE, **PIPE_TEXT)
             if on_start:
                 on_start(proc)
-            with proc.stderr:
-                for raw in proc.stderr:
-                    try:
-                        data = json.loads(raw)
-                    except ValueError:
-                        continue
-                    if "error" in data:
-                        error = data["error"]
-                    elif on_progress:
-                        on_progress(data)
+            _progress_reader(proc.stderr, on_progress, errors)
             proc.wait()
         if proc.returncode != 0:
-            raise SolverError(error or f"analyzer-solve s'est arrêté (code {proc.returncode}).")
+            raise SolverError(errors[-1] if errors else f"analyzer-solve s'est arrêté (code {proc.returncode}).")
         result = json.loads(out_path.read_text(encoding="utf-8"))
-    path = cache_path(request)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result), encoding="utf-8")
+    _save_cache(request, result)
     return result
+
+
+class Session:
+    """Résolution gardée en mémoire (analyzer-solve --serve) pour naviguer dans tout l'arbre."""
+
+    def __init__(self, request: dict):
+        self.request = request
+        self.result: Optional[dict] = None
+        self.proc: Optional[subprocess.Popen] = None
+        self.last_used = time.time()
+        self._lock = threading.Lock()
+        self._errors: list = []
+        self._tmp = tempfile.TemporaryDirectory(prefix="analyzer-session-")
+
+    def start(self, on_progress: Optional[Callable[[dict], None]] = None,
+              on_start: Optional[Callable[[subprocess.Popen], None]] = None) -> dict:
+        """Résout (bloquant) ; renvoie le résultat de la ligne jouée et le met en cache."""
+        exe = binary_path()
+        if not exe.is_file():
+            raise SolverError(status()["message"])
+        req_path = Path(self._tmp.name) / "requete.json"
+        req_path.write_text(json.dumps(self.request), encoding="utf-8")
+        self.proc = subprocess.Popen([str(exe), str(req_path), "--serve"], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, **PIPE_TEXT)
+        if on_start:
+            on_start(self.proc)
+        reader = threading.Thread(target=_progress_reader, args=(self.proc.stderr, on_progress, self._errors),
+                                  daemon=True)
+        reader.start()
+        line = self.proc.stdout.readline()
+        if not line:
+            self.proc.wait()
+            reader.join(timeout=2)
+            self.close()
+            raise SolverError(self._errors[-1] if self._errors
+                              else f"analyzer-solve s'est arrêté (code {self.proc.returncode}).")
+        self.result = json.loads(line)
+        _save_cache(self.request, self.result)
+        self.last_used = time.time()
+        return self.result
+
+    @property
+    def alive(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None and self.result is not None
+
+    def node(self, path: list) -> dict:
+        """Nœud de l'arbre au bout du chemin (étapes {"type": "action", "index": i} / {"type": "card", "card": c})."""
+        with self._lock:
+            if not self.alive:
+                raise SolverError("La session du solveur est fermée : relance la résolution.")
+            self.last_used = time.time()
+            try:
+                self.proc.stdin.write(json.dumps({"path": path}) + "\n")
+                self.proc.stdin.flush()
+                line = self.proc.stdout.readline()
+            except OSError as exc:
+                raise SolverError("La session du solveur s'est arrêtée.") from exc
+        if not line:
+            raise SolverError("La session du solveur s'est arrêtée.")
+        reply = json.loads(line)
+        if "error" in reply:
+            raise SolverError(reply["error"])
+        return reply["node"]
+
+    def close(self) -> None:
+        proc = self.proc
+        if proc is not None:
+            if proc.poll() is None:
+                try:
+                    proc.stdin.close()
+                    proc.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    proc.kill()
+                    proc.wait()
+            for stream in (proc.stdin, proc.stdout):
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+        self._tmp.cleanup()
 
 
 # --- Lecture du résultat -------------------------------------------------------------------
@@ -520,6 +615,61 @@ def verdict(frequency: Optional[float]) -> Optional[str]:
     return "secondaire" if frequency >= MIXED_THRESHOLD else "écart"
 
 
+GRID_RANKS = "AKQJT98765432"
+
+
+def class_of(combo: str) -> str:
+    """'AhKd' -> 'AKo' ; 'QdQs' -> 'QQ'."""
+    r1, s1, r2, s2 = combo[0], combo[1], combo[2], combo[3]
+    if r1 == r2:
+        return r1 + r2
+    hi, lo = (r1, r2) if GRID_RANKS.index(r1) < GRID_RANKS.index(r2) else (r2, r1)
+    return hi + lo + ("s" if s1 == s2 else "o")
+
+
+def live_combos(board: list[str]) -> dict[str, int]:
+    """Nombre de combos de chaque classe compatibles avec le board."""
+    deck = [r + s for r in GRID_RANKS for s in "cdhs" if r + s not in board]
+    counts: dict[str, int] = {}
+    for i, a in enumerate(deck):
+        for b in deck[i + 1:]:
+            cls = class_of(a + b)
+            counts[cls] = counts.get(cls, 0) + 1
+    return counts
+
+
+def node_summary(node: dict) -> tuple[list[float], dict[str, list[float]]]:
+    """Stratégie de toute la range du joueur qui agit, et par classe : [présence, fréquences…]."""
+    actor = node.get("player")
+    if actor is None:
+        return [], {}
+    na = len(node["actions"])
+    counts = live_combos(node["board"])
+    total, range_ = 0.0, [0.0] * na
+    classes: dict[str, list[float]] = {}
+    for row in node["hands"][actor]:
+        combo, reach, strategy = row[0], row[1], row[4:4 + na]
+        acc = classes.setdefault(class_of(combo), [0.0] * (na + 1))
+        acc[0] += reach
+        total += reach
+        for a in range(na):
+            acc[a + 1] += reach * strategy[a]
+            range_[a] += reach * strategy[a]
+    out = {}
+    for cls, acc in classes.items():
+        if acc[0] > 0:
+            out[cls] = [round(acc[0] / counts.get(cls, 1), 3), *(round(x / acc[0], 3) for x in acc[1:])]
+    return [round(x / total, 4) if total else 0.0 for x in range_], out
+
+
+def combo_row(node: dict, player: int, cards: list[str]) -> Optional[list]:
+    wanted = set(cards)
+    for row in node["hands"][player]:
+        if {row[0][:2], row[0][2:]} == wanted:
+            return row
+    return None
+
+
 def interpret(spot: PostflopSpot, raw: dict) -> dict:
     """Résultat lisible : chaque décision de la main face au solveur (données pour l'application)."""
     hand = spot.hand
@@ -527,34 +677,33 @@ def interpret(spot: PostflopSpot, raw: dict) -> dict:
     roles = {0: spot.oop, 1: spot.ip}
     decisions = []
     for d in raw["decisions"]:
+        node = d["node"]
         i = spot.action_index[d["step"]]
-        player = roles[d["player"]]
+        player = roles[node["player"]]
+        na = len(node["actions"])
         cards = hand.hole_cards.get(player, [])
-        combo = "".join(cards) if len(cards) == 2 else None
-        mine = d["combos"].get(combo) if combo else None
-        strategy = mine.get("s") if mine and mine.get("player") == d["player"] else None
-        evs = mine.get("evs") if strategy else None
+        row = combo_row(node, node["player"], cards) if len(cards) == 2 else None
+        strategy = row[4:4 + na] if row else None
+        evs = row[4 + na:4 + 2 * na] if row else None
         chosen = d.get("chosen")
         freq = strategy[chosen] if strategy is not None and chosen is not None else None
         ev_loss = None
         if evs and chosen is not None and evs[chosen] is not None:
             ev_loss = round(max(e for e in evs if e is not None) - evs[chosen], 2)
-        tree_amount = d["actions"][chosen]["amount"] if chosen is not None else 0.0
+        tree_amount = node["actions"][chosen]["amount"] if chosen is not None else 0.0
         real = hand.actions[i].to / hand.bb
+        range_, classes = node_summary(node)
         decisions.append({
             "i": i, "street": STREET_CODE[hand.actions[i].street], "who": who[player],
-            "pot": d["pot"], "board": d["board"],
-            "actions": [{"label": action_label(a, d["pot"]), "kind": a["kind"], "allin": a["allin"]}
-                        for a in d["actions"]],
+            "pot": node["pot"], "board": node["board"], "path": d["path"],
+            "actions": [{"label": action_label(a, node["pot"]), "kind": a["kind"], "allin": a["allin"]}
+                        for a in node["actions"]],
             "chosen": chosen, "played": played_label(hand, i),
             "approx": bool(chosen is not None and hand.actions[i].kind in (BET, RAISE)
                            and abs(tree_amount - real) > max(0.1 * real, 0.05)),
-            "range": d["range"], "combo": combo if strategy is not None else None,
-            "strategy": strategy, "evs": evs, "eq": mine.get("eq") if mine else None,
-            "reach": mine.get("reach") if mine else None,
-            "frequency": freq, "verdict": verdict(freq), "ev_loss": ev_loss,
-            "classes": {c: [round(v["w"] / v["n"], 3) if v["n"] else 0.0, *v["s"]]
-                        for c, v in d["classes"].items() if v["w"] > 0},
+            "range": range_, "combo": "".join(cards) if row else None,
+            "strategy": strategy, "evs": evs, "eq": row[2] if row else None, "reach": row[1] if row else None,
+            "frequency": freq, "verdict": verdict(freq), "ev_loss": ev_loss, "classes": classes,
         })
     return {
         "hand": hand.hand_id, "pot_type": spot.pot_type, "pot": spot.pot_bb, "stack": spot.stack_bb,
@@ -563,6 +712,14 @@ def interpret(spot: PostflopSpot, raw: dict) -> dict:
         "iterations": raw["iterations"], "exploit_pct": raw["exploit_pct"], "seconds": raw["seconds"],
         "tree_nodes": raw["tree_nodes"], "stopped": raw.get("stopped"), "decisions": decisions,
     }
+
+
+def cached_node(raw: dict, path: list) -> Optional[dict]:
+    """Nœud enregistré pour ce chemin (les décisions de la ligne jouée), sinon None."""
+    for d in raw.get("decisions", []):
+        if d["path"] == path:
+            return d["node"]
+    return None
 
 
 def _strategy_text(actions: list[dict], freqs: list[float]) -> str:

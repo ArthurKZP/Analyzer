@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from analyzer.app.solves import SolveQueue
+from analyzer.app.solves import NeedSession, SolveQueue
 from analyzer.parsers import load_hands
 from analyzer.theory import postflop
 from analyzer.theory.preflop import load_solution
@@ -35,7 +35,7 @@ class SpotTest(unittest.TestCase):
         self.assertEqual(spot.sizes["Hero"][2]["raise"], [])  # pas de relance river par défaut
         request = spot.request(50, 2.0)
         tree = request["spot"]["tree"]
-        self.assertEqual(request["combos"], {"Kd9d": 1})
+        self.assertNotIn("combos", request)
         self.assertEqual(request["spot"]["board"], "Kc7h2s")
         self.assertEqual((tree["starting_pot"], tree["effective_stack"], tree["max_raises"]), (5.0, 97.5, 2))
         self.assertEqual(tree["ip"][0]["bet"], [{"PotPct": 32.0}])
@@ -126,7 +126,10 @@ class SolveTest(unittest.TestCase):
         self.assertEqual((first["who"], first["street"], first["played"]), ("H", "f", "mise 4 bb (25 %)"))
         self.assertEqual((first["combo"], first["verdict"], first["ev_loss"]), ("QhJh", "principale", 0.0))
         self.assertEqual((second["who"], second["combo"]), ("V", "Ts9s"))  # sa main, connue à l'abattage
-        self.assertEqual(first["classes"], {"AKs": [0.5, 0.05, 0.95]})
+        self.assertEqual(first["classes"]["AA"], [1.0, 0.05, 0.95])  # présence, check, mise
+        self.assertEqual(first["range"], [0.05, 0.95])
+        self.assertEqual(first["path"], [])
+        self.assertEqual(result["decisions"][1]["path"], [{"type": "action", "index": 1}])
         self.assertEqual([d["i"] for d in result["decisions"]], [5, 6, 7, 8, 9, 10, 11])
         text = postflop.result_text(result, "Hero")
         self.assertIn("Flop · Toi (QhJh) — mise 4 bb (25 %)", text)
@@ -151,6 +154,33 @@ class SolveTest(unittest.TestCase):
         self.assertFalse(state["ready"])
         self.assertIn(postflop.INSTALL_COMMAND, state["message"])
 
+    def test_session(self):
+        session = postflop.Session(self.spot.request())
+        raw = session.start()
+        self.assertTrue(session.alive)
+        self.assertTrue(postflop.cache_path(self.spot.request()).is_file())  # ligne jouée mise en cache
+        node = session.node([{"type": "action", "index": 0}])
+        self.assertEqual((node["type"], node["player"]), ("action", 1))
+        with self.assertRaisesRegex(postflop.SolverError, "out of range"):
+            session.node([{"type": "action", "index": 7}])
+        self.assertEqual(postflop.cached_node(raw, raw["decisions"][1]["path"]), raw["decisions"][1]["node"])
+        self.assertIsNone(postflop.cached_node(raw, [{"type": "action", "index": 0}]))
+        session.close()
+        self.assertFalse(session.alive)
+        with self.assertRaises(postflop.SolverError):
+            session.node([])
+
+    def test_node_summary_and_classes(self):
+        self.assertEqual(postflop.class_of("AhKd"), "AKo")
+        self.assertEqual(postflop.class_of("7c9c"), "97s")
+        self.assertEqual(postflop.live_combos(["Ah", "Kd", "2c"])["AK"[0] + "K" + "o"], 7)  # 9 - 2 bloqués
+        node = {"player": 0, "board": ["Ah", "Kd", "2c"],
+                "actions": [{"kind": "check"}, {"kind": "bet"}],
+                "hands": [[["QsQh", 1.0, 0.6, 3.0, 0.25, 0.75, 2.9, 3.1], ["QdQc", 0.5, 0.6, 3.0, 1.0, 0.0, 3.0, 2.0]], []]}
+        range_, classes = postflop.node_summary(node)
+        self.assertEqual(range_, [0.5, 0.5])
+        self.assertEqual(classes, {"QQ": [0.25, 0.5, 0.5]})  # 1,5 combo présent sur 6
+
     def test_queue(self):
         queue = SolveQueue(iterations=10, target=5.0)
         self.assertEqual(queue.lookup(self.spot)["state"], "absent")
@@ -163,6 +193,20 @@ class SolveTest(unittest.TestCase):
         self.assertEqual(done["state"], "done")
         self.assertEqual(done["result"]["decisions"][0]["who"], "H")
         self.assertEqual(queue.lookup(self.spot)["state"], "done")  # désormais en cache
+        self.assertTrue(queue.lookup(self.spot)["live"])  # la session reste ouverte pour l'explorateur
+        self.assertTrue(queue.node(self.spot, [{"type": "action", "index": 0}])["live"])
+        queue._set_live("", None)  # session fermée (inactivité) : seule la ligne jouée reste
+        self.assertFalse(queue.lookup(self.spot)["live"])
+        line_path = done["result"]["decisions"][1]["path"]
+        self.assertEqual(queue.node(self.spot, line_path)["live"], False)
+        with self.assertRaises(NeedSession):
+            queue.node(self.spot, [{"type": "action", "index": 0}])
+        reopened = queue.start(self.spot, force=True)  # relance pour rouvrir une session
+        self.assertIn(reopened["state"], ("waiting", "running"))
+        deadline = time.time() + 20
+        while queue.get(reopened["job"])["state"] in ("waiting", "running") and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(queue.lookup(self.spot)["live"])
         queue.shutdown()
 
     def test_cancel(self):

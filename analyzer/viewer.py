@@ -155,6 +155,7 @@ button, select, input { font: inherit; color: inherit; }
 .gto .go, .gto .stop { border-radius: 6px; padding: 5px 12px; cursor: pointer; margin-top: 4px; }
 .gto .go { background: var(--accent); color: #fff; border: 1px solid var(--accent); }
 .gto .stop { background: var(--page); border: 1px solid var(--border); }
+.gto a.explore { display: inline-block; text-decoration: none; padding: 4px 12px; border-radius: 6px; font-weight: 600; }
 .gto code { font-family: ui-monospace, monospace; background: var(--page); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 12px; user-select: all; }
 .gto .err { color: var(--loss); }
 .gto-bar { height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; margin: 6px 0; }
@@ -772,6 +773,10 @@ SCRIPT = r"""
       return;
     }
     const res = v.result;
+    const s0 = steps[stepIndex];
+    const at = s0 && s0.kind === 'action' ? res.decisions.findIndex((x) => x.i === s0.i) : -1;
+    box.append(el('p', {}, el('a', { class: 'go explore', href: '/explorateur/' + encodeURIComponent(r.id) + (at > 0 ? '#d=' + at : ''), target: '_blank', rel: 'noopener' }, 'Ouvrir l\'explorateur ↗'),
+      el('span', { class: 'muted' }, ' navigue dans tout l\'arbre, comme dans un solveur')));
     box.append(el('p', {}, el('b', {}, res.pot_type), ' · ' + res.iterations + ' itérations · exploitabilité ' + num(res.exploit_pct, 2) + ' % du pot · ' + duration(res.seconds)));
     box.append(el('p', { class: 'muted' }, 'Tailles de l\'arbre — ' + res.menu + '.'));
     if (res.added.length) box.append(el('p', { class: 'muted' }, (res.added.includes('H') ? 'Ta main' : 'Sa main') + ' n\'était pas dans la range du solveur : elle a été ajoutée avec un poids infime pour lire sa stratégie.'));
