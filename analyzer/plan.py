@@ -17,6 +17,7 @@ from typing import Optional
 
 from .insights import MIN_SAMPLE, bluff_break_even, size_bucket, wilson
 from .lines import Line, check_ranges, pooled_by_size, verdict, villain_lines
+from .theory.preflop import NodeSummary, decisions, gto_ref, gto_value, summarize
 from .models import BET, CALL, FOLD, POSTFLOP, RAISE, Hand
 from .stats import PlayerStats, Ratio
 
@@ -83,15 +84,22 @@ def _priority(level: int, n: int) -> float:
 
 # --- Profil -------------------------------------------------------------------------
 
+def _below(r: Ratio, node: str, action: str) -> bool:
+    return r.opps >= MIN_SAMPLE and r.pct < gto_ref(node, action)[0]
+
+
+def _above(r: Ratio, node: str, action: str) -> bool:
+    return r.opps >= MIN_SAMPLE and r.pct > gto_ref(node, action)[1]
+
+
 def profile(v: PlayerStats) -> str:
     tags = []
-    if v.r("bb_vs_open.fold").opps >= MIN_SAMPLE and v.pct("bb_vs_open.fold") < 25:
+    if _below(v.r("bb_vs_open.fold"), "bb_vs_open", "fold"):
         tags.append("défend presque toutes ses BB")
-    if v.r("bb_vs_open.raise").opps >= MIN_SAMPLE and v.pct("bb_vs_open.raise") > 20:
+    if _above(v.r("bb_vs_open.raise"), "bb_vs_open", "raise"):
         tags.append("3bet beaucoup")
-    sticky = [k for k in ("vs_cbet_flop.fold", "vs_cbet_turn.fold", "sb_vs_3bet.fold")
-              if v.r(k).opps >= MIN_SAMPLE and v.pct(k) < 35]
-    if sticky:
+    sticky = [k for k in ("vs_cbet_flop.fold", "vs_cbet_turn.fold") if v.r(k).opps >= MIN_SAMPLE and v.pct(k) < 35]
+    if sticky or _below(v.r("sb_vs_3bet.fold"), "sb_vs_3bet", "fold"):
         tags.append("collant (lâche peu face aux mises)")
     _, afq = v.aggression()
     if (afq is not None and afq > 55) or (v.r("xr_flop").opps >= MIN_SAMPLE and v.pct("xr_flop") > 18):
@@ -110,64 +118,127 @@ def profile(v: PlayerStats) -> str:
 
 # --- Préflop ------------------------------------------------------------------------
 
-def _preflop(v: PlayerStats, h: PlayerStats) -> list[PlanItem]:
+# Consigne associée à un écart au solveur : (nœud, action jouée, action du solveur).
+DEVIATION_PHRASES = {
+    ("sb_open", "raise", "fold"): "Au bouton, jette ces mains que le solveur n'ouvre jamais",
+    ("sb_open", "fold", "raise"): "Au bouton, ouvre aussi ces mains",
+    ("sb_open", "call", "raise"): "Au bouton, ne limpe pas ces mains : ouvre-les",
+    ("sb_open", "call", "fold"): "Au bouton, ne limpe pas ces mains : jette-les",
+    ("bb_vs_open", "raise", "fold"): "En BB, arrête ces 3bets bluff : le solveur jette ces mains",
+    ("bb_vs_open", "raise", "call"): "En BB, paye plutôt que 3bet avec ces mains",
+    ("bb_vs_open", "fold", "call"): "En BB, défends ces mains au lieu de les jeter",
+    ("bb_vs_open", "fold", "raise"): "En BB, 3bet ces mains au lieu de les jeter",
+    ("bb_vs_open", "call", "fold"): "En BB, jette ces mains au lieu de payer",
+    ("bb_vs_open", "call", "raise"): "En BB, 3bet ces mains au lieu de payer",
+    ("sb_vs_3bet", "fold", "call"): "Face au 3bet, continue avec ces mains",
+    ("sb_vs_3bet", "fold", "raise"): "Face au 3bet, 4bet ces mains au lieu de les jeter",
+    ("sb_vs_3bet", "call", "fold"): "Face au 3bet, jette ces mains",
+    ("bb_vs_4bet", "fold", "call"): "Face au 4bet, continue avec ces mains",
+    ("bb_vs_4bet", "call", "fold"): "Face au 4bet, jette ces mains",
+}
+
+
+def _exploit_allows(key: tuple[str, str, str], v: PlayerStats) -> bool:
+    """Un écart au solveur peut être un bon exploit : on ne le reproche pas dans ce cas."""
+    node, action, best = key
+    if node == "bb_vs_open" and action == "raise" and best == "call":
+        return _below(v.r("sb_vs_3bet.fold"), "sb_vs_3bet", "fold")  # il paie trop : 3bet value plus large
+    if node == "bb_vs_open" and action == "raise" and best == "fold":
+        return _above(v.r("sb_vs_3bet.fold"), "sb_vs_3bet", "fold")  # il lâche trop : 3bet light
+    if node == "sb_open" and action == "raise" and best == "fold":
+        return _above(v.r("bb_vs_open.fold"), "bb_vs_open", "fold")  # il abandonne sa BB : open large
+    return False
+
+
+def _theory_items(v: PlayerStats, summaries: list[NodeSummary]) -> list[PlanItem]:
     items = []
-    v3, hf3 = v.r("bb_vs_open.raise"), h.r("sb_vs_3bet.fold")
-    if v3.opps >= MIN_SAMPLE and hf3.opps >= 8:
-        if v3.pct > 20 and hf3.pct > 50:
-            items.append(PlanItem(
-                "Préflop",
-                "Face à ses 3bets, défends beaucoup plus : paye en position avec les paires, les As, les broadways "
-                "et les connecteurs assortis ; ne jette que le bas de ton range.",
-                f"Il 3bet {_pct(v3)} ; tu folds {_pct(hf3)} au bouton.",
-                _confidence(hf3, 50, above=True), weight=_priority(5, hf3.opps)))
-        elif v3.pct < 12 and hf3.pct < 40:
-            items.append(PlanItem(
-                "Préflop", "Ses 3bets sont rares, donc forts : folde davantage tes mains moyennes.",
-                f"Il 3bet {_pct(v3)} ; tu ne folds que {_pct(hf3)}.",
-                _confidence(v3, 12, above=False), weight=_priority(4, v3.opps)))
+    for s in summaries:
+        for (action, best), group in s.deviations():
+            key = (s.node.key, action, best)
+            if len(group) < 4 or _exploit_allows(key, v):
+                continue
+            combos = ", ".join(sorted({d.combo for d in group}, key=lambda c: (len(c) != 2, c))[:10])
+            phrase = DEVIATION_PHRASES.get(key, f"{s.node.label} : {s.node.word(best)} plutôt que "
+                                                f"{s.node.word(action)} avec ces mains")
+            share = 100 * sum(d.strategy.get(best, 0.0) for d in group) / len(group)
+            never = "jamais" if all(not d.frequency for d in group) else "presque jamais"
+            why = f"{len(group)} fois {s.node.word(action)} ; le solveur {s.node.word(best)} " + (
+                "toujours ces mains." if share >= 99.5 else
+                f"ces mains {share:.0f} % du temps et ne les {s.node.word(action)} {never}.")
+            if key == ("sb_open", "raise", "fold") and _below(v.r("bb_vs_open.fold"), "bb_vs_open", "fold"):
+                why += f" Lui ne folde que {_pct(v.r('bb_vs_open.fold'))} de ses BB : ces opens ne volent rien."
+            items.append(PlanItem("Préflop", f"{phrase} : {combos}.", why,
+                                  "solide" if len(group) >= 8 else "indicatif",
+                                  weight=_priority(5 if len(group) >= 8 else 4, len(group))))
+    return items
+
+
+def _defense_vs_3bet(v: PlayerStats, summaries: list[NodeSummary]) -> list[PlanItem]:
+    """Ta défense contre ses 3bets, comparée à ce que ferait le solveur avec les mêmes mains."""
+    s = next((x for x in summaries if x.node.key == "sb_vs_3bet"), None)
+    if s is None or len(s.in_range) < MIN_SAMPLE:
+        return []
+    n = len(s.in_range)
+    act, exp = s.actual.get("fold", 0.0), s.expected.get("fold", 0.0)
+    folds = round(act * n / 100)
+    v3 = v.r("bb_vs_open.raise")
+    context = f" Lui 3bet {_pct(v3)} (solveur {gto_value('bb_vs_open', 'raise'):.0f} %)." if v3.opps else ""
+    if act - exp >= 5:
+        return [PlanItem(
+            "Préflop", "Face à ses 3bets, défends plus : paye en position les mains jouables que tu jettes.",
+            f"Avec les mêmes mains, le solveur folde {exp:.0f} % ; toi {act:.0f} % ({folds}/{n}).{context}",
+            _confidence(Ratio(folds, n), exp, above=True), weight=_priority(5, n))]
+    return []
+
+
+def _preflop(v: PlayerStats, h: PlayerStats, summaries: list[NodeSummary]) -> list[PlanItem]:
+    items = _theory_items(v, summaries) + _defense_vs_3bet(v, summaries)
     v4 = v.r("bb_vs_4bet.fold")
-    if v4.opps >= 3 and v4.pct < 40:
+    if v4.opps >= 3 and v4.pct < gto_ref("bb_vs_4bet", "fold")[0]:
         items.append(PlanItem(
             "Préflop", "Tes 4bets : uniquement pour la value, il ne lâche pas.",
             (f"Il n'a jamais foldé face à tes 4bets (0/{v4.opps})." if v4.hits == 0
-             else f"Il n'a foldé que {v4.hits}/{v4.opps} fois face à tes 4bets."),
+             else f"Il n'a foldé que {v4.hits}/{v4.opps} fois face à tes 4bets.")
+            + f" Le solveur folde {gto_value('bb_vs_4bet', 'fold'):.0f} %.",
             _line_confidence(v4.opps), weight=_priority(2, v4.opps)))
     vf3 = v.r("sb_vs_3bet.fold")
-    if vf3.opps >= MIN_SAMPLE:
-        if vf3.pct < 35:
-            calls = Counter(e.combo for e in v.showdowns if e.position == "BTN" and e.preflop_line == "open → call 3bet")
-            examples = ", ".join(c for c, _ in calls.most_common(5))
-            items.append(PlanItem(
-                "Préflop",
-                "En BB, 3bet pour la value avec un range large et linéaire (As, broadways, paires), presque sans bluff : "
-                "il paie trop.",
-                f"Il ne folde que {_pct(vf3)} face à tes 3bets" + (f" et a payé avec {examples}." if examples else "."),
-                _confidence(vf3, 35, above=False), weight=_priority(4, vf3.opps)))
-        elif vf3.pct > 50:
-            items.append(PlanItem(
-                "Préflop", "En BB, 3bet light : il lâche trop souvent face aux 3bets.",
-                f"Il folde {_pct(vf3)} face à tes 3bets.", _confidence(vf3, 50, above=True), weight=_priority(4, vf3.opps)))
+    lo, hi = gto_ref("sb_vs_3bet", "fold")
+    if _below(vf3, "sb_vs_3bet", "fold"):
+        calls = Counter(e.combo for e in v.showdowns if e.position == "BTN" and e.preflop_line == "open → call 3bet")
+        examples = ", ".join(c for c, _ in calls.most_common(5))
+        items.append(PlanItem(
+            "Préflop",
+            "En BB, 3bet pour la value avec un range large et linéaire (As, broadways, paires), presque sans bluff : "
+            "il paie trop.",
+            f"Il ne folde que {_pct(vf3)} face à tes 3bets (solveur {gto_value('sb_vs_3bet', 'fold'):.0f} %)"
+            + (f" et a payé avec {examples}." if examples else "."),
+            _confidence(vf3, lo, above=False), weight=_priority(4, vf3.opps)))
+    elif _above(vf3, "sb_vs_3bet", "fold"):
+        items.append(PlanItem(
+            "Préflop", "En BB, 3bet light : il lâche trop souvent face aux 3bets.",
+            f"Il folde {_pct(vf3)} face à tes 3bets (solveur {gto_value('sb_vs_3bet', 'fold'):.0f} %).",
+            _confidence(vf3, hi, above=True), weight=_priority(4, vf3.opps)))
     vfo = v.r("bb_vs_open.fold")
-    if vfo.opps >= MIN_SAMPLE:
-        if vfo.pct < 25:
-            extra = " et 3bet souvent" if v3.opps >= MIN_SAMPLE and v3.pct > 20 else ""
-            items.append(PlanItem(
-                "Préflop",
-                "Au bouton, n'ouvre pas pour voler : resserre le bas de ton range d'ouverture et joue les mains "
-                "qui gagnent de la value après le flop.",
-                f"Il ne folde que {_pct(vfo)} de ses BB{extra}.",
-                _confidence(vfo, 25, above=False), weight=_priority(3, vfo.opps)))
-        elif vfo.pct > 42:
-            items.append(PlanItem(
-                "Préflop", "Ouvre très large et petit au bouton : il abandonne trop sa BB.",
-                f"Il folde {_pct(vfo)} de ses BB.", _confidence(vfo, 42, above=True), weight=_priority(3, vfo.opps)))
+    lo, hi = gto_ref("bb_vs_open", "fold")
+    opens_flagged = any(it.action.startswith(DEVIATION_PHRASES[("sb_open", "raise", "fold")]) for it in items)
+    if _below(vfo, "bb_vs_open", "fold") and not opens_flagged:
+        items.append(PlanItem(
+            "Préflop",
+            "Au bouton, n'ouvre pas pour voler : resserre le bas de ton range d'ouverture et joue les mains "
+            "qui gagnent de la value après le flop.",
+            f"Il ne folde que {_pct(vfo)} de ses BB (solveur {gto_value('bb_vs_open', 'fold'):.0f} %).",
+            _confidence(vfo, lo, above=False), weight=_priority(3, vfo.opps)))
+    elif _above(vfo, "bb_vs_open", "fold"):
+        items.append(PlanItem(
+            "Préflop", "Ouvre très large et petit au bouton : il abandonne trop sa BB.",
+            f"Il folde {_pct(vfo)} de ses BB (solveur {gto_value('bb_vs_open', 'fold'):.0f} %).",
+            _confidence(vfo, hi, above=True), weight=_priority(3, vfo.opps)))
     vo, hdo = v.r("sb_first.raise"), h.r("bb_vs_open.fold")
-    if vo.opps >= MIN_SAMPLE and hdo.opps >= MIN_SAMPLE and vo.pct > 80 and hdo.pct > 40:
+    if _above(vo, "sb_open", "raise") and _above(hdo, "bb_vs_open", "fold"):
         items.append(PlanItem(
             "Préflop", "En BB, défends plus large : il ouvre presque tout.",
-            f"Il ouvre {_pct(vo)} ; tu folds {_pct(hdo)} de tes BB.",
-            _confidence(hdo, 40, above=True), weight=_priority(3, hdo.opps)))
+            f"Il ouvre {_pct(vo)} ; tu folds {_pct(hdo)} de tes BB (solveur {gto_value('bb_vs_open', 'fold'):.0f} %).",
+            _confidence(hdo, gto_ref("bb_vs_open", "fold")[1], above=True), weight=_priority(3, hdo.opps)))
     return items
 
 
@@ -359,7 +430,7 @@ def build_plan(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, vill
     v, h = stats[villain], stats[hero]
     lines = lines if lines is not None else villain_lines(hands, villain, hero)
     plan = Plan(profile(v))
-    plan.items += _preflop(v, h)
+    plan.items += _preflop(v, h, summarize(decisions(hands, hero)))
     plan.items += _betting(hands, hero, villain, lines)
     plan.items += _facing(hands, hero, villain, lines)
     plan.items += _to_test(lines)

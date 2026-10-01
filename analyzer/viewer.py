@@ -18,8 +18,11 @@ def _json_for_script(data) -> str:
 
 
 def build_viewer(hands: list[Hand], hero: str, villain: Optional[str] = None, report_href: str = "",
-                 embed: bool = False) -> str:
-    """villain=None : toutes tes mains, contre tous tes adversaires."""
+                 embed: bool = False, solver: bool = False) -> str:
+    """villain=None : toutes tes mains, contre tous tes adversaires.
+
+    solver=True (application) : le replayer propose de résoudre le coup avec GTOpen.
+    """
     records = spot_records(hands, hero, villain)
     title = f"Spots — {villain}" if villain else "Mes spots — tous adversaires"
     data = {
@@ -27,6 +30,7 @@ def build_viewer(hands: list[Hand], hero: str, villain: Optional[str] = None, re
         "villain": villain or "",
         "records": records,
         "lines": line_options(records),
+        "solver": solver,
     }
     values = {
         "TITLE": escape(title),
@@ -54,6 +58,7 @@ TEMPLATE = r"""<!doctype html>
   --win: #006300; --loss: #d03b3b;
   --sc: #0b0b0b; --sh: #d03b3b; --sd: #2a78d6; --sclub: #008300;
   --hero: #2a78d6; --villain: #eb6834;
+  --g-fold: #2a78d6; --g-pass: #1baf7a; --g-bet1: #f2a65a; --g-bet2: #eb6834; --g-bet3: #c4441c; --g-bet4: #8f2d14; --g-allin: #4a3aa7; --g-empty: #ecebe6;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -64,6 +69,7 @@ TEMPLATE = r"""<!doctype html>
     --win: #0ca30c; --loss: #e66767;
     --sc: #ffffff; --sh: #e66767; --sd: #6da7ec; --sclub: #0ca30c;
     --hero: #3987e5; --villain: #d95926;
+    --g-fold: #3987e5; --g-pass: #199e70; --g-bet1: #e8954a; --g-bet2: #d95926; --g-bet3: #b8401b; --g-bet4: #8a2c13; --g-allin: #9085e9; --g-empty: #242423;
   }
 }
 :root[data-theme="dark"] {
@@ -74,6 +80,7 @@ TEMPLATE = r"""<!doctype html>
   --win: #0ca30c; --loss: #e66767;
   --sc: #ffffff; --sh: #e66767; --sd: #6da7ec; --sclub: #0ca30c;
   --hero: #3987e5; --villain: #d95926;
+  --g-fold: #3987e5; --g-pass: #199e70; --g-bet1: #e8954a; --g-bet2: #d95926; --g-bet3: #b8401b; --g-bet4: #8a2c13; --g-allin: #9085e9; --g-empty: #242423;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -110,7 +117,7 @@ button, select, input { font: inherit; color: inherit; }
 .pc.ss { color: var(--sc); } .pc.sh { color: var(--sh); } .pc.sd { color: var(--sd); } .pc.sc { color: var(--sclub); }
 .pc.back { color: var(--muted); background: repeating-linear-gradient(45deg, var(--grid) 0 3px, var(--surface) 3px 6px); }
 .cards { white-space: nowrap; }
-.player { position: sticky; top: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; min-width: 0; }
+.player { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px; min-width: 0; }
 .player-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .player-head h2 { font-size: 15px; margin: 0; }
 .close { display: none; background: none; border: 1px solid var(--border); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
@@ -141,10 +148,41 @@ button, select, input { font: inherit; color: inherit; }
 .log .t { color: var(--muted); font-size: 11px; }
 .tag-h { color: var(--hero); font-weight: 700; } .tag-v { color: var(--villain); font-weight: 700; }
 .foot { margin-top: 10px; font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.gto { border-top: 1px solid var(--grid); margin-top: 10px; padding-top: 8px; font-size: 13px; }
+.gto h3 { font-size: 12px; margin: 4px 0 6px; color: var(--muted); font-weight: 600; }
+.gto p { margin: 4px 0; }
+.gto .muted { font-size: 12px; }
+.gto .go, .gto .stop { border-radius: 6px; padding: 5px 12px; cursor: pointer; margin-top: 4px; }
+.gto .go { background: var(--accent); color: #fff; border: 1px solid var(--accent); }
+.gto .stop { background: var(--page); border: 1px solid var(--border); }
+.gto code { font-family: ui-monospace, monospace; background: var(--page); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 12px; user-select: all; }
+.gto .err { color: var(--loss); }
+.gto-bar { height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; margin: 6px 0; }
+.gto-bar span { display: block; height: 100%; background: var(--accent); transition: width 0.4s; }
+.gto-list button { display: grid; grid-template-columns: 44px 30px 1fr auto; gap: 6px; width: 100%; text-align: left; background: none; border: 0; border-radius: 4px; padding: 3px 6px; cursor: pointer; font-size: 12px; }
+.gto-list button:hover { background: var(--accent-bg); }
+.gto-list button[aria-current="true"] { background: var(--accent-bg); font-weight: 600; }
+.gto-list .st { color: var(--muted); }
+.v-main { color: var(--win); } .v-mixed { color: var(--ink-2); } .v-dev { color: var(--loss); font-weight: 700; }
+.gto-detail { margin-top: 8px; padding: 10px; background: var(--page); border: 1px solid var(--border); border-radius: 8px; }
+.gto-detail .title { font-weight: 600; margin-bottom: 4px; }
+.gto table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; margin: 6px 0; }
+.gto th, .gto td { padding: 3px 6px; border-bottom: 1px solid var(--grid); text-align: right; white-space: nowrap; }
+.gto th:first-child, .gto td:first-child { text-align: left; white-space: normal; }
+.gto th { font-size: 11px; color: var(--muted); font-weight: 600; }
+.gto tr.chosen td { font-weight: 700; }
+.gto .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.g-grid { display: grid; grid-template-columns: repeat(13, minmax(0, 1fr)); gap: 1px; margin-top: 8px; }
+.g-c { position: relative; aspect-ratio: 1.25; background-color: var(--g-empty); border-radius: 2px; font-size: 9px; line-height: 1; overflow: hidden; }
+.g-c span { position: absolute; left: 2px; top: 2px; color: #fff; font-weight: 600; text-shadow: 0 0 2px rgba(0,0,0,0.85); }
+.g-c.out span { color: var(--muted); font-weight: 400; text-shadow: none; }
+.g-c.low span { color: var(--ink-2); text-shadow: none; }
+.g-c.me { box-shadow: inset 0 0 0 2px var(--ink); }
+.g-note { font-size: 11px; color: var(--muted); margin-top: 4px; }
 .empty { padding: 24px; text-align: center; color: var(--muted); background: var(--surface); border: 1px dashed var(--axis); border-radius: 10px; }
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; }
-  .player { position: fixed; inset: 0; border-radius: 0; overflow-y: auto; z-index: 10; padding: 14px 16px 32px; }
+  .player { position: fixed; inset: 0; max-height: none; border-radius: 0; overflow-y: auto; z-index: 10; padding: 14px 16px 32px; }
   .player[hidden] { display: none; }
   .close { display: inline-block; }
   .table { border-radius: 24px; }
@@ -182,6 +220,7 @@ button, select, input { font: inherit; color: inherit; }
         <label><input type="checkbox" id="reveal"> Montrer sa main</label>
       </div>
       <div class="log" id="log"></div>
+      <div class="gto" id="gto" hidden></div>
       <div class="foot"><span id="p-id"></span><a id="p-link" href="#">Lien vers ce coup</a></div>
     </section>
   </div>
@@ -499,6 +538,7 @@ SCRIPT = r"""
     renderStep();
     markCurrent();
     writeHash();
+    gtoLoad(r, false);
     if (window.matchMedia('(max-width: 860px)').matches) player.scrollTop = 0;
   }
 
@@ -539,6 +579,7 @@ SCRIPT = r"""
     document.getElementById('b-first').disabled = document.getElementById('b-prev').disabled = stepIndex === 0;
     document.getElementById('b-last').disabled = document.getElementById('b-next').disabled = stepIndex === steps.length - 1;
     document.querySelectorAll('#log button').forEach((b) => b.setAttribute('aria-current', +b.dataset.step === stepIndex ? 'true' : 'false'));
+    renderGto();
   }
 
   function renderLog() {
@@ -572,6 +613,185 @@ SCRIPT = r"""
     writeHash();
   }
 
+
+  // ---------- solveur GTOpen (application seulement) ----------
+  const GTO = { state: {}, timer: null };
+  const GRID_RANKS = 'AKQJT98765432';
+  const VERDICT_CLASS = { 'principale': 'v-main', 'secondaire': 'v-mixed', 'écart': 'v-dev' };
+  const pct = (x) => Math.round(100 * x) + ' %';
+  const duration = (s) => (s >= 60 ? Math.floor(s / 60) + ' min ' : '') + Math.round(s % 60) + ' s';
+
+  async function gtoCall(url, body) {
+    const opts = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+    const res = await fetch(url, opts);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Erreur ' + res.status);
+    return data;
+  }
+
+  function gtoEligible(r) {
+    return DATA.solver && r && r.b.length >= 3;
+  }
+
+  function gtoLoad(r, start) {
+    clearTimeout(GTO.timer);
+    if (!gtoEligible(r)) { renderGto(); return; }
+    gtoCall('/api/resoudre', { hand: r.id, start: !!start })
+      .then((v) => gtoUpdate(r.id, v))
+      .catch((e) => gtoUpdate(r.id, { state: 'error', error: e.message }));
+  }
+
+  function gtoUpdate(id, v) {
+    GTO.state[id] = v;
+    if (!current || current.id !== id) return;
+    renderGto();
+    clearTimeout(GTO.timer);
+    if (v.state === 'running' || v.state === 'waiting') {
+      GTO.timer = setTimeout(() => gtoCall('/api/resoudre/' + encodeURIComponent(v.job))
+        .then((w) => gtoUpdate(id, w)).catch((e) => gtoUpdate(id, { state: 'error', error: e.message })), 1500);
+    }
+  }
+
+  function gtoColors(actions) {
+    const shades = ['var(--g-bet1)', 'var(--g-bet2)', 'var(--g-bet3)', 'var(--g-bet4)'];
+    const sized = actions.map((a, k) => k).filter((k) => (actions[k].kind === 'bet' || actions[k].kind === 'raise') && !actions[k].allin);
+    return actions.map((a, k) => {
+      if (a.kind === 'fold') return 'var(--g-fold)';
+      if (a.kind === 'check' || a.kind === 'call') return 'var(--g-pass)';
+      if (a.allin) return 'var(--g-allin)';
+      const rank = sized.indexOf(k);
+      return shades[sized.length === 1 ? 1 : Math.round(rank * 3 / (sized.length - 1))];
+    });
+  }
+
+  function classOf(combo) {
+    const r1 = combo[0], r2 = combo[2];
+    if (r1 === r2) return r1 + r2;
+    const [hi, lo] = GRID_RANKS.indexOf(r1) < GRID_RANKS.indexOf(r2) ? [r1, r2] : [r2, r1];
+    return hi + lo + (combo[1] === combo[3] ? 's' : 'o');
+  }
+
+  function gtoGrid(d, colors) {
+    const grid = el('div', { class: 'g-grid', role: 'img', 'aria-label': 'Stratégie de la range par main' });
+    const mine = d.combo ? classOf(d.combo) : null;
+    for (let i = 0; i < 13; i++) {
+      for (let j = 0; j < 13; j++) {
+        const hand = i === j ? GRID_RANKS[i] + GRID_RANKS[i] : i < j ? GRID_RANKS[i] + GRID_RANKS[j] + 's' : GRID_RANKS[j] + GRID_RANKS[i] + 'o';
+        const c = d.classes[hand];
+        const cell = el('div', { class: 'g-c' + (c ? '' : ' out') + (hand === mine ? ' me' : '') }, el('span', {}, hand));
+        if (c) {
+          const [w, ...s] = c;
+          let x = 0;
+          const stops = [];
+          s.forEach((f, k) => { if (f > 0) { stops.push(colors[k] + ' ' + (100 * x).toFixed(1) + '% ' + (100 * (x + f)).toFixed(1) + '%'); x += f; } });
+          if (stops.length) cell.style.background = 'linear-gradient(to right, ' + stops.join(', ') + ') bottom / 100% ' + Math.max(8, Math.round(100 * Math.min(1, w))) + '% no-repeat, var(--g-empty)';
+          if (w < 0.85) cell.classList.add('low');  // libellé sur le fond vide : texte sombre
+          cell.title = hand + ' : ' + s.map((f, k) => d.actions[k].label + ' ' + pct(f)).join(' · ') + ' · présence ' + pct(Math.min(1, w));
+        }
+        grid.append(cell);
+      }
+    }
+    return grid;
+  }
+
+  function gtoRevealed() {
+    const s = steps[stepIndex];
+    return document.getElementById('reveal').checked || !!(s && s.reveal);
+  }
+
+  // Sa main n'est montrée que si le replayer la dévoile (case « Montrer sa main » ou abattage).
+  function gtoVisible(d) {
+    if (d.who === 'H' || gtoRevealed()) return d;
+    return Object.assign({}, d, { combo: null, strategy: null, evs: null, verdict: null, frequency: null, ev_loss: null });
+  }
+
+  function gtoDetail(d) {
+    d = gtoVisible(d);
+    const colors = gtoColors(d.actions);
+    const mine = d.who === 'H';
+    const box = el('div', { class: 'gto-detail' });
+    const handCards = d.combo ? cards([d.combo.slice(0, 2), d.combo.slice(2)]) : '';
+    box.append(el('div', { class: 'title' }, STREETS[d.street] + ' · ' + WHO[d.who] + ' ', handCards, ' — ' + (mine ? 'tu as joué : ' : 'il a joué : ') + d.played));
+    if (d.chosen === null) box.append(el('div', { class: 'muted' }, 'Cette action n\'existe pas dans l\'arbre résolu.'));
+    else if (d.approx) box.append(el('div', { class: 'muted' }, 'Taille la plus proche dans l\'arbre : ' + d.actions[d.chosen].label + '.'));
+    const head = [el('th', {}, 'Action')];
+    if (d.strategy) head.push(el('th', {}, mine ? 'Ta main' : 'Sa main'));
+    head.push(el('th', {}, mine ? 'Ta range' : 'Sa range'));
+    if (d.evs) head.push(el('th', {}, 'EV (bb)'));
+    const rows = d.actions.map((a, k) => {
+      const tds = [el('td', {}, el('span', { class: 'sw', style: 'background:' + colors[k] }), a.label)];
+      if (d.strategy) tds.push(el('td', {}, pct(d.strategy[k])));
+      tds.push(el('td', {}, pct(d.range[k])));
+      if (d.evs) tds.push(el('td', {}, d.evs[k] === null ? '—' : num(d.evs[k], 2)));
+      return el('tr', { class: k === d.chosen ? 'chosen' : '' }, tds);
+    });
+    box.append(el('table', {}, el('thead', {}, el('tr', {}, head)), el('tbody', {}, rows)));
+    if (d.verdict) {
+      const text = (mine ? 'Avec ta main' : 'Avec sa main') + ', le solveur joue « ' + d.actions[d.chosen].label + ' » ' + pct(d.frequency) + ' du temps : ';
+      const loss = d.ev_loss > 0.005 ? ' · perte d\'EV ≈ ' + num(d.ev_loss, 2) + ' bb' : '';
+      box.append(el('p', {}, text, el('b', { class: VERDICT_CLASS[d.verdict] }, 'action ' + d.verdict), loss));
+      if (d.reach !== null && d.reach < 0.05) box.append(el('p', { class: 'muted' }, 'Le solveur n\'arrive presque jamais ici avec cette main : stratégie à lire avec prudence.'));
+    } else if (!mine) {
+      box.append(el('p', { class: 'muted' }, 'Sa main est inconnue : la colonne « Sa range » montre ce que le solveur fait avec toutes les mains qu\'il peut avoir ici.'));
+    }
+    box.append(gtoGrid(d, colors));
+    box.append(el('div', { class: 'g-note' }, 'Grille : ' + (mine ? 'ta' : 'sa') + ' range à ce moment du coup ; couleurs = actions, hauteur = part de la main encore présente.'));
+    return box;
+  }
+
+  function renderGto() {
+    const box = document.getElementById('gto');
+    box.textContent = '';
+    const r = current;
+    const v = r && GTO.state[r.id];
+    if (!gtoEligible(r) || !v) { box.hidden = true; return; }
+    box.hidden = false;
+    box.append(el('h3', {}, 'Solveur GTOpen'));
+    const solver = v.solver || {};
+    if (v.state === 'unsupported') { box.append(el('p', { class: 'muted' }, v.message)); return; }
+    if (v.state === 'unavailable' || (v.state === 'absent' && solver.ready === false)) {
+      box.append(el('p', {}, v.message || solver.message));
+      box.append(el('p', {}, 'Commande : ', el('code', {}, v.install || solver.install)));
+      return;
+    }
+    if (v.state === 'absent' || v.state === 'cancelled' || v.state === 'error') {
+      if (v.error) box.append(el('p', { class: 'err' }, v.error));
+      box.append(el('p', { class: 'muted' }, 'Calcule la stratégie d\'équilibre à partir du flop (ranges de ta solution préflop, tailles jouées dans la main) puis la compare à chaque décision du coup. Compte quelques minutes ; tu peux continuer à naviguer pendant le calcul.'));
+      box.append(el('button', { type: 'button', class: 'go', onclick: () => gtoLoad(r, true) }, v.state === 'error' ? 'Réessayer' : 'Résoudre ce coup'));
+      return;
+    }
+    if (v.state === 'waiting' || v.state === 'running') {
+      const p = v.progress || {};
+      const frac = p.iteration ? Math.min(1, p.iteration / v.max_iterations) : 0;
+      const text = v.state === 'waiting' ? 'En attente : une autre résolution est en cours.'
+        : (p.iteration ? 'Itération ' + p.iteration + ' / ' + v.max_iterations + ' · exploitabilité ' + num(p.exploit_pct, 1) + ' % du pot (objectif ' + num(v.target, 1) + ' %)'
+          : 'Construction de l\'arbre' + (p.tree_nodes ? ' (' + p.tree_nodes.toLocaleString('fr-FR') + ' nœuds)' : '') + '…')
+          + (v.elapsed ? ' · ' + duration(v.elapsed) : '');
+      box.append(el('p', {}, text), el('div', { class: 'gto-bar' }, el('span', { style: 'width:' + (100 * frac).toFixed(1) + '%' })));
+      box.append(el('button', { type: 'button', class: 'stop', onclick: () => gtoCall('/api/resoudre/' + encodeURIComponent(v.job) + '/arreter', {}).then((w) => gtoUpdate(r.id, w)) }, 'Arrêter'));
+      return;
+    }
+    const res = v.result;
+    box.append(el('p', {}, el('b', {}, res.pot_type), ' · ' + res.iterations + ' itérations · exploitabilité ' + num(res.exploit_pct, 2) + ' % du pot · ' + duration(res.seconds)));
+    box.append(el('p', { class: 'muted' }, 'Tailles de l\'arbre — ' + res.menu + '.'));
+    if (res.added.length) box.append(el('p', { class: 'muted' }, (res.added.includes('H') ? 'Ta main' : 'Sa main') + ' n\'était pas dans la range du solveur : elle a été ajoutée avec un poids infime pour lire sa stratégie.'));
+    if (res.stopped) box.append(el('p', { class: 'err' }, 'Suivi de la ligne interrompu : ' + res.stopped));
+    const s = steps[stepIndex];
+    const list = el('div', { class: 'gto-list' });
+    res.decisions.map(gtoVisible).forEach((d) => {
+      const k = steps.findIndex((x) => x.kind === 'action' && x.i === d.i);
+      const badge = d.chosen === null ? el('span', { class: 'muted' }, 'hors de l\'arbre')
+        : d.verdict ? el('span', { class: VERDICT_CLASS[d.verdict] }, d.verdict + (d.frequency !== null ? ' ' + pct(d.frequency) : ''))
+          : el('span', { class: 'muted' }, 'range : ' + pct(d.range[d.chosen]));
+      list.append(el('button', { type: 'button', 'aria-current': s && s.i === d.i ? 'true' : 'false', onclick: () => go(k) },
+        el('span', { class: 'st' }, STREETS[d.street]), el('span', { class: 'tag-' + d.who.toLowerCase() }, WHO[d.who]), d.played, badge));
+    });
+    box.append(list);
+    const d = s && s.kind === 'action' ? res.decisions.find((x) => x.i === s.i) : null;
+    if (d) box.append(gtoDetail(d));
+    else box.append(el('p', { class: 'muted' }, 'Clique sur une décision (ou avance dans le coup) pour voir la stratégie du solveur.'));
+  }
+
   // ---------- URL ----------
   function writeHash() {
     const params = new URLSearchParams();
@@ -601,7 +821,7 @@ SCRIPT = r"""
   document.getElementById('b-next').onclick = () => go(stepIndex + 1);
   document.getElementById('b-last').onclick = () => go(steps.length - 1);
   document.getElementById('p-close').onclick = close;
-  document.getElementById('reveal').onchange = renderStep;
+  document.getElementById('reveal').onchange = renderStep;  // met aussi à jour le panneau du solveur
   document.addEventListener('keydown', (e) => {
     if (!current || ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
     if (e.key === 'ArrowRight') { go(stepIndex + 1); e.preventDefault(); }

@@ -1,7 +1,8 @@
 """Catalogue des stats, repères indicatifs et lectures automatiques (exploits / fuites).
 
-Les repères correspondent à un régulier HU solide en 100bb+ ; ce sont des ordres
-de grandeur pour repérer les écarts, pas des fréquences « GTO » exactes.
+Repères préflop : fréquences du solveur de référence (theory/data), ± 5 points.
+Repères postflop : ordres de grandeur pour un régulier HU solide à 100bb+, pour repérer
+les écarts, pas des fréquences « GTO » exactes.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from typing import Optional
 from .cards import describe_holding
 from .models import BET, CALL, FOLD, RAISE
 from .stats import PlayerStats, Ratio
+from .theory.preflop import gto_ref
 
 MIN_SAMPLE = 15
 
@@ -39,24 +41,24 @@ SECTIONS: list[tuple[str, list[StatDef]]] = [
     (
         "Préflop — au bouton (SB)",
         [
-            StatDef("vpip_sb", "VPIP bouton", (80, 95)),
-            StatDef("sb_first.raise", "Open-raise", (75, 92),
+            StatDef("vpip_sb", "VPIP bouton", gto_ref("sb_open", "vpip")),
+            StatDef("sb_first.raise", "Open-raise", gto_ref("sb_open", "raise"),
                     R("Ouvre très large au bouton", "défends plus large en BB et 3bet plus souvent (value + bluffs avec bloqueurs)",
                       "ton open est très large : garde des mains qui jouent bien contre 3bet"),
                     R("Ouvre serré au bouton", "respecte ses opens et 3bet surtout en value",
                       "tu ouvres peu : en HU le bouton se joue large")),
-            StatDef("sb_first.call", "Limp"),
-            StatDef("sb_first.fold", "Fold d'entrée", (8, 22),
+            StatDef("sb_first.call", "Limp", gto_ref("sb_open", "call")),
+            StatDef("sb_first.fold", "Fold d'entrée", gto_ref("sb_open", "fold"),
                     R("Folde souvent son bouton", "il te laisse des blindes gratuites", "tu folds trop ton bouton : ouvre plus large"),
                     R("Ne folde presque jamais son bouton", "ses opens contiennent des mains faibles : défends et 3bet plus",
                       "tu joues presque tout au bouton : attention aux mains dominées")),
-            StatDef("sb_vs_3bet.fold", "Fold vs 3bet", (35, 50),
+            StatDef("sb_vs_3bet.fold", "Fold vs 3bet", gto_ref("sb_vs_3bet", "fold"),
                     R("Folde trop contre 3bet", "3bet light (mains jouables, bloqueurs A/K)",
                       "défends plus contre 3bet, surtout en payant en position"),
                     R("Ne lâche presque jamais contre 3bet", "3bet plus large en value, réduis les 3bets bluff",
                       "tu défends très large contre 3bet : attention aux mains dominées")),
-            StatDef("sb_vs_3bet.call", "Call 3bet", (35, 55)),
-            StatDef("sb_vs_3bet.raise", "4bet", (8, 16),
+            StatDef("sb_vs_3bet.call", "Call 3bet", gto_ref("sb_vs_3bet", "call")),
+            StatDef("sb_vs_3bet.raise", "4bet", gto_ref("sb_vs_3bet", "raise"),
                     R("4bet souvent", "5bet jam ou call ses 4bets avec tes mains fortes, arrête les 3bets bluff marginaux",
                       "tu 4bet beaucoup : rentable s'il folde, risqué s'il 5bet"),
                     R("4bet rarement", "ses 4bets sont très forts : folde tes 3bets bluff",
@@ -68,22 +70,22 @@ SECTIONS: list[tuple[str, list[StatDef]]] = [
     (
         "Préflop — en big blind",
         [
-            StatDef("vpip_bb", "VPIP big blind"),
-            StatDef("bb_vs_open.fold", "Fold vs open", (25, 42),
+            StatDef("vpip_bb", "VPIP big blind", gto_ref("bb_vs_open", "vpip")),
+            StatDef("bb_vs_open.fold", "Fold vs open", gto_ref("bb_vs_open", "fold"),
                     R("Folde trop sa BB", "open-raise plus large (voire 100 %) et petit", "défends ta BB plus large"),
                     R("Défend très large sa BB", "moins de c-bets bluff, value-bets plus fins postflop",
                       "tu défends très large : il faut ensuite bien réaliser ton équité postflop")),
-            StatDef("bb_vs_open.call", "Call open", (40, 58)),
-            StatDef("bb_vs_open.raise", "3bet vs open", (12, 20),
+            StatDef("bb_vs_open.call", "Call open", gto_ref("bb_vs_open", "call")),
+            StatDef("bb_vs_open.raise", "3bet vs open", gto_ref("bb_vs_open", "raise"),
                     R("3bet très souvent", "ne folde pas trop contre 3bet : paye plus large en position",
                       "tu 3bet beaucoup : rentable seulement s'il folde assez"),
                     R("3bet rarement", "ses 3bets sont forts : folde tes mains marginales",
                       "ajoute des 3bets (value + bluffs) en BB")),
             StatDef("bb_vs_limp.raise", "Iso-raise vs limp"),
-            StatDef("bb_vs_4bet.fold", "Fold vs 4bet", (40, 65),
+            StatDef("bb_vs_4bet.fold", "Fold vs 4bet", gto_ref("bb_vs_4bet", "fold"),
                     R("Folde trop contre 4bet", "4bet bluff plus souvent", "tu folds trop contre 4bet : ses 4bets bluff deviennent rentables"),
                     R("Paye ou 5bet beaucoup contre 4bet", "4bet surtout en value", "tu continues beaucoup contre 4bet")),
-            StatDef("bb_vs_4bet.raise", "5bet"),
+            StatDef("bb_vs_4bet.raise", "5bet (tapis)", gto_ref("bb_vs_4bet", "raise")),
         ],
     ),
     (
@@ -241,8 +243,10 @@ class Duel:
 
 
 DUELS = [
-    Duel("Ses 3bets en BB → tes folds vs 3bet au bouton", "bb_vs_open.raise", "sb_vs_3bet.fold", (12, 20), (35, 50)),
-    Duel("Tes 3bets en BB → ses folds vs 3bet au bouton", "sb_vs_3bet.fold", "bb_vs_open.raise", (35, 50), (12, 20)),
+    Duel("Ses 3bets en BB → tes folds vs 3bet au bouton", "bb_vs_open.raise", "sb_vs_3bet.fold",
+          gto_ref("bb_vs_open", "raise"), gto_ref("sb_vs_3bet", "fold")),
+    Duel("Tes 3bets en BB → ses folds vs 3bet au bouton", "sb_vs_3bet.fold", "bb_vs_open.raise",
+          gto_ref("sb_vs_3bet", "fold"), gto_ref("bb_vs_open", "raise")),
     Duel("Ses c-bets flop → tes folds vs c-bet", "cbet_flop", "vs_cbet_flop.fold", (50, 75), (30, 45), "flop"),
     Duel("Ses barrels turn → tes folds vs barrel turn", "cbet_turn", "vs_cbet_turn.fold", (45, 65), (35, 50), "turn"),
     Duel("Ses probes turn → tes folds vs probe", "probe_turn", "vs_probe_turn.fold", (30, 55), (35, 55), "turn"),

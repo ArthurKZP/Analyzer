@@ -13,10 +13,13 @@ from ..parsers import load_hands, parse_text
 from ..report import build_plan_page, build_report
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
+from ..theory import postflop
+from ..theory.page import build_preflop_page
 from ..viewer import build_viewer
+from .solves import SolveQueue
 
-PLAYER_PAGES = ("plan", "rapport", "spots")
-SELF_PAGES = ("bilan", "spots")
+PLAYER_PAGES = ("plan", "preflop", "rapport", "spots")
+SELF_PAGES = ("bilan", "preflop", "spots")
 MAX_IMPORT_FILES = 200
 
 
@@ -36,8 +39,10 @@ class Library:
         self._key_locks: dict[tuple, threading.Lock] = {}
         self._cache: dict[tuple, object] = {}
         self.hands: list[Hand] = []
+        self.by_id: dict[str, Hand] = {}
         self.hero: Optional[str] = None
         self.known_ids: set[str] = set()
+        self.solves = SolveQueue()
         self.reload()
 
     # --- chargement -------------------------------------------------------------
@@ -48,6 +53,7 @@ class Library:
         with self._lock:
             self.known_ids = {f"{h.site}:{h.hand_id}" for h in hands}
             self.hands = heads_up
+            self.by_id = {h.hand_id: h for h in heads_up}
             self.hero = hero
             self.version += 1
             self._cache.clear()
@@ -106,9 +112,11 @@ class Library:
             hands, stats, lines = self._analysis(player)
             if page == "plan":
                 return build_plan_page(hands, stats, self.hero, player, embed=True, lines=lines)
+            if page == "preflop":
+                return build_preflop_page(hands, self.hero, player, stats, embed=True, spots_href="spots")
             if page == "rapport":
                 return build_report(hands, stats, self.hero, player, spots_href="spots", embed=True, lines=lines)
-            return build_viewer(hands, self.hero, player, embed=True)
+            return build_viewer(hands, self.hero, player, embed=True, solver=True)
         return self._cached(("player", player, page), build)
 
     def self_page(self, page: str) -> str:
@@ -120,8 +128,32 @@ class Library:
         def build():
             if page == "bilan":
                 return build_self_report(self.hands, analyze(self.hands), self.hero, embed=True, spots_href="")
-            return build_viewer(self.hands, self.hero, None, embed=True)
+            if page == "preflop":
+                return build_preflop_page(self.hands, self.hero, embed=True, spots_href="spots")
+            return build_viewer(self.hands, self.hero, None, embed=True, solver=True)
         return self._cached(("self", page), build)
+
+    # --- résolution postflop ----------------------------------------------------
+    def solve(self, hand_id: str, start: bool = False) -> dict:
+        """État de la résolution GTOpen d'une main ; start=True la lance si besoin."""
+        hand = self.by_id.get(hand_id)
+        if hand is None or not self.hero:
+            raise UnknownPlayer(hand_id)
+        try:
+            spot = postflop.build_spot(hand, self.hero)
+        except postflop.Unsupported as exc:
+            return {"hand": hand_id, "state": "unsupported", "message": str(exc)}
+        view = self.solves.lookup(spot)
+        if view["state"] in ("absent", "error", "cancelled") and start:
+            solver = postflop.status()
+            if not solver["ready"]:
+                return {"hand": hand_id, "state": "unavailable", "message": solver["message"],
+                        "install": solver["install"]}
+            view = self.solves.start(spot)
+        if view["state"] == "absent":
+            solver = postflop.status()
+            view["solver"] = {k: solver[k] for k in ("ready", "message", "install")}
+        return view
 
     # --- import -----------------------------------------------------------------
     def import_files(self, files: list[dict]) -> dict:
