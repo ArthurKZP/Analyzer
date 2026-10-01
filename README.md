@@ -146,8 +146,10 @@ python -m analyzer gtopen --installer --source ~/GTOpen   # si tu as déjà une 
 python -m analyzer gtopen                             # état du solveur
 ```
 
-L'installation fait une copie partielle de GTOpen (seulement le moteur, sans ses données de recherche)
-dans `~/.analyzer/GTOpen`, puis compile `analyzer-solve`, un petit programme d'Analyzer
+L'installation fait une copie partielle de GTOpen dans `~/.analyzer/GTOpen` : le moteur et les quelques
+fichiers qu'il lit à la compilation, sans ses données de recherche, à la version testée avec Analyzer
+(`GTOPEN_COMMIT` dans `postflop.py`). Relancer `--installer` complète ou remet à niveau une copie
+existante. Elle compile ensuite `analyzer-solve`, un petit programme d'Analyzer
 (`analyzer/theory/native/main.rs`) qui utilise ce moteur : il résout le spot et suit la ligne jouée.
 `--gpu` compile aussi le moteur CUDA de GTOpen pour une carte NVIDIA (expérimental, voir le README de
 GTOpen pour les bibliothèques CUDA nécessaires).
