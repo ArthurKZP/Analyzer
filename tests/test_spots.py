@@ -68,6 +68,7 @@ class ViewerTest(unittest.TestCase):
         data = json.loads(payload)
         self.assertEqual(len(data["records"]), 4)
         self.assertEqual(data["hero"], "Hero")
+        self.assertFalse(data["solver"])  # fichier autonome : pas de serveur pour résoudre
 
 
 if __name__ == "__main__":

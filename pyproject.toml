@@ -22,4 +22,4 @@ include = ["analyzer*"]
 
 [tool.setuptools.package-data]
 "analyzer.app" = ["static/*"]
-"analyzer.theory" = ["data/*.json"]
+"analyzer.theory" = ["data/*.json", "native/*.rs"]

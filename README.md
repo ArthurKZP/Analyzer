@@ -3,10 +3,12 @@
 Outil d'analyse de tes adversaires en **Heads-Up NLHE** à partir de tes historiques de mains.
 Il lit les historiques, calcule le profil complet de l'adversaire (et le tien dans le même
 match), détecte ses tendances exploitables et génère un **rapport HTML** autonome, un
-**visualiseur de spots** pour filtrer et rejouer les coups toi-même, et une comparaison de tes
-décisions préflop à une **solution de solveur** HU.
+**visualiseur de spots** pour filtrer et rejouer les coups toi-même, une comparaison de tes
+décisions préflop à une **solution de solveur** HU, et la **résolution postflop** d'un coup avec le
+moteur de [GTOpen](https://github.com/MatthewPDingle/GTOpen).
 
-- Python 3.10+, **aucune dépendance** à installer (Pillow seulement pour lire de nouvelles captures de ranges).
+- Python 3.10+, **aucune dépendance** à installer (Pillow seulement pour lire de nouvelles captures de ranges ;
+  Rust et git seulement pour installer le solveur postflop).
 - Sites supportés : **Betclic.fr** (cash game HU). D'autres formats peuvent être ajoutés (voir plus bas).
 
 ## Application
@@ -22,7 +24,8 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   nombre de mains, ton résultat contre chacun).
 - **Adversaire** : onglets *Plan de jeu*, *Préflop* (tes décisions et ses fréquences face au solveur),
   *Rapport* et *Spots*. Les liens « voir les mains » et « rejouer » ouvrent directement l'onglet Spots
-  sur la bonne ligne ou la bonne main.
+  sur la bonne ligne ou la bonne main. Dans le replayer, **Résoudre ce coup** lance le solveur GTOpen
+  (voir plus bas).
 - **Mon jeu** : ton bilan contre tous tes adversaires (résultats, courbe, écarts aux repères, stats,
   pertes sans abattage, résultats par adversaire), *Mon préflop* face au solveur sur toutes tes mains,
   et *Mes spots*.
@@ -129,6 +132,57 @@ python -m analyzer.theory.extract capture.png                     # affiche les 
 python -m analyzer.theory.extract capture.png --solution analyzer/theory/data/hu_100bb.json --noeud bb_vs_open
 ```
 
+## Résoudre un coup avec GTOpen (postflop)
+
+Le moteur du solveur open source [GTOpen](https://github.com/MatthewPDingle/GTOpen), de Matthew Dingle,
+résout le coup à partir du flop puis compare chaque décision de la main à la stratégie d'équilibre.
+Son code n'est pas inclus dans ce dépôt : l'installation le récupère depuis son dépôt d'origine.
+
+**Installation** (une fois) : installe [Rust](https://rustup.rs) et git, puis
+
+```bash
+python -m analyzer gtopen --installer                 # récupère GTOpen et compile le solveur
+python -m analyzer gtopen --installer --source ~/GTOpen   # si tu as déjà une copie de GTOpen
+python -m analyzer gtopen                             # état du solveur
+```
+
+L'installation fait une copie partielle de GTOpen (seulement le moteur, sans ses données de recherche)
+dans `~/.analyzer/GTOpen`, puis compile `analyzer-solve`, un petit programme d'Analyzer
+(`analyzer/theory/native/main.rs`) qui utilise ce moteur : il résout le spot et suit la ligne jouée.
+`--gpu` compile aussi le moteur CUDA de GTOpen pour une carte NVIDIA (expérimental, voir le README de
+GTOpen pour les bibliothèques CUDA nécessaires).
+
+**Utilisation** : dans l'application, ouvre un coup dans *Spots* et clique sur **Résoudre ce coup**. Le calcul
+tourne en arrière-plan (une résolution à la fois) ; tu peux continuer à naviguer et revenir plus tard. En
+ligne de commande : `python -m analyzer gtopen -m <numéro de main>` (options `--precision`, `--iterations`,
+`--threads`). Chaque résolution est enregistrée dans `~/.analyzer/resolutions` : un coup déjà résolu
+s'affiche tout de suite.
+
+**Le spot** construit pour une main :
+
+- ranges de départ tirées de la solution préflop : SRP (open du bouton / call de la BB), pot 3bet
+  (3bet de la BB / call du bouton), pot 4bet (4bet du bouton / call de la BB) ;
+- board, pot et tapis effectif au flop, en bb, sans rake ;
+- tailles : mise 33 % au flop, 75 % à la turn et à la river, relance 60 % du pot au flop et à la turn,
+  deux relances au plus par street. Les tailles réellement jouées dans la main sont ajoutées (ou remplacent
+  la taille par défaut la plus proche) pour que chaque décision tombe sur une branche de l'arbre.
+
+**La lecture**, pour chaque décision : la stratégie du solveur avec ta main exacte, avec toute ta range,
+l'EV de chaque action et la perte d'EV de ton choix ; le même verdict qu'au préflop (action principale,
+secondaire ou écart) ; une grille 13 × 13 de la range de celui qui agit. Sa main n'apparaît que si le
+replayer la dévoile.
+
+**Durée** : un arbre de flop compte environ 700 000 nœuds et 2 Go de mémoire avec les ranges HU complètes.
+Sur un processeur à 4 cœurs, l'objectif par défaut (1,5 % du pot d'exploitabilité, 120 itérations au plus)
+demande environ 5 minutes ; c'est plus rapide avec plus de cœurs.
+
+**Limites** : les tailles et la profondeur de l'arbre simplifient le jeu réel ; une main que la range du
+solveur ne contient pas (par exemple un open que le solveur ne fait jamais) y est ajoutée avec un poids
+infime pour lire sa stratégie, à prendre avec prudence ; les pots limpés et les 5bets ne sont pas couverts.
+
+Variables d'environnement : `ANALYZER_HOME` (dossier de travail, `~/.analyzer` par défaut),
+`GTOPEN_DIR` (copie de GTOpen à utiliser), `ANALYZER_SOLVER` (chemin d'un `analyzer-solve` déjà compilé).
+
 ## Contenu du rapport
 
 | Section | Ce qu'on y trouve |
@@ -177,9 +231,11 @@ analyzer/
   viewer.py            visualiseur de spots (HTML + JavaScript, sans dépendance)
   selfreport.py        « Mon jeu » : ton bilan contre tous tes adversaires
   theory/              préflop vs solveur : solution (data/), comparaison (preflop.py), page (page.py),
-                       lecture de captures de ranges (extract.py)
+                       lecture de captures de ranges (extract.py) ; postflop avec GTOpen : spots,
+                       installation et lecture des résultats (postflop.py), pont Rust (native/main.rs),
+                       commande `gtopen` (solve_cli.py)
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
-                       (library.py), interface (static/)
+                       (library.py), résolutions en arrière-plan (solves.py), interface (static/)
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)
 hands/                 tes historiques (ignorés par git)
@@ -197,7 +253,11 @@ Les montants d'une `Action` sont des incréments (`amount`) et le total engagé 
 
 ```bash
 python -m unittest discover -s tests
+ANALYZER_TEST_GTOPEN=1 python -m unittest tests.test_postflop   # + une vraie résolution (solveur installé)
 ```
+
+Les autres tests du postflop utilisent un faux solveur (`tests/fixtures/fake_solver.py`) : ils ne
+demandent ni Rust ni GTOpen.
 
 ## Plan de jeu
 

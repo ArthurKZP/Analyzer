@@ -15,11 +15,13 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlsplit
 
+from ..theory import postflop
 from .library import Library, UnknownPlayer
 
 STATIC = Path(__file__).parent / "static"
 STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8"}
 MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
+MAX_SMALL_BODY = 64 * 1024
 
 
 class AppServer(ThreadingHTTPServer):
@@ -71,6 +73,15 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return origin is None or origin.removeprefix("http://") in self.server.allowed_hosts
 
+    def _small_json(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > MAX_SMALL_BODY:
+            return None
+        try:
+            return json.loads(self.rfile.read(length))
+        except ValueError:
+            return None
+
     def _parts(self) -> list[str]:
         return [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
 
@@ -87,6 +98,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, STATIC_FILES[parts[1]], (STATIC / parts[1]).read_bytes())
             if parts == ["api", "state"]:
                 return self._json(library.summary())
+            if parts == ["api", "solveur"]:
+                return self._json(postflop.status())
+            if len(parts) == 3 and parts[:2] == ["api", "resoudre"]:
+                job = library.solves.get(parts[2])
+                return self._json(job) if job else self._error(404, "Résolution inconnue.")
             if len(parts) == 2 and parts[0] == "moi":
                 return self._html(library.self_page(parts[1]))
             if len(parts) == 3 and parts[0] == "p":
@@ -107,6 +123,17 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "reload"]:
             library.reload()
             return self._json(library.summary())
+        if parts == ["api", "resoudre"]:
+            payload = self._small_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.solve(payload["hand"], bool(payload.get("start"))))
+            except UnknownPlayer:
+                return self._error(404, "Main introuvable.")
+        if len(parts) == 4 and parts[:2] == ["api", "resoudre"] and parts[3] == "arreter":
+            job = library.solves.cancel(parts[2])
+            return self._json(job) if job else self._error(404, "Résolution inconnue.")
         if parts == ["api", "import"]:
             length = int(self.headers.get("Content-Length") or 0)
             if length <= 0 or length > MAX_BODY:
@@ -154,6 +181,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     except KeyboardInterrupt:
         print("\nArrêt.")
     finally:
+        library.solves.shutdown()
         server.server_close()
     return 0
 
