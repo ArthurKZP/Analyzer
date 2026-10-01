@@ -13,7 +13,7 @@ from ..parsers import load_hands, parse_text
 from ..report import build_plan_page, build_report
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
-from ..theory import postflop
+from ..theory import handclass, postflop
 from ..theory.page import build_preflop_page
 from ..viewer import build_viewer
 from .solves import SolveQueue
@@ -175,10 +175,13 @@ class Library:
             "hero_position": "BTN" if hand.button == self.hero else "BB",
             "net": round(hand.net(self.hero) / bb, 2),
         }
+        view["categories"] = handclass.labels()
         return view
 
     def explorer_node(self, hand_id: str, path: list) -> dict:
-        return self.solves.node(self._spot(hand_id), path)
+        reply = self.solves.node(self._spot(hand_id), path)
+        handclass.annotate(reply["node"])  # catégories des mains, pour les filtres
+        return reply
 
     # --- import -----------------------------------------------------------------
     def import_files(self, files: list[dict]) -> dict:

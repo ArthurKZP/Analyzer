@@ -58,6 +58,9 @@ h2 { font-size: 13px; margin: 0; }
 
 /* déroulé du coup */
 .ribbon:empty { display: none; }
+body.busy { cursor: progress; }
+body.busy .layout, body.busy .ribbon { opacity: 0.55; transition: opacity 0.15s 0.15s; }
+body.busy .brand::after { content: " · chargement…"; color: var(--muted); font-weight: 400; }
 .ribbon { display: flex; gap: 6px; padding: 10px 16px; overflow-x: auto; border-bottom: 1px solid var(--border); background: var(--surface); }
 .step { flex: 0 0 auto; min-width: 118px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--page); display: flex; flex-direction: column; gap: 2px; }
 .step.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
@@ -68,6 +71,8 @@ h2 { font-size: 13px; margin: 0; }
 .step button.act.on { background: var(--accent-bg); color: var(--ink); font-weight: 700; }
 .step button.act:disabled { cursor: default; opacity: 0.45; }
 .step button.act .dot { color: var(--villain); font-weight: 700; }
+.step.nav { cursor: pointer; }
+.step.nav:hover { border-color: var(--axis); background: var(--surface); }
 .step.cards { align-items: center; justify-content: center; }
 .step.cards .pc { font-size: 18px; padding: 2px 6px; }
 .step.cards button { background: none; border: 0; padding: 0; cursor: pointer; }
@@ -107,6 +112,27 @@ h2 { font-size: 13px; margin: 0; }
 .stack { display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 6px; background: var(--grid); }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
 .card .ttl { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin-bottom: 6px; }
+.rtabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+.rtabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 6px 12px; cursor: pointer; color: var(--ink-2); font-weight: 600; margin-bottom: -1px; }
+.rtabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.rtabs .count { display: inline-block; min-width: 18px; margin-left: 6px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 11px; }
+.filter-badge { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--ink-2); margin: -2px 0 8px; }
+.filter-badge b { color: var(--accent); }
+.filter-badge button, .fhead button.clear { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 1px 8px; cursor: pointer; font-size: 12px; }
+.fhead { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0 8px; }
+.suits { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--ink-2); margin-bottom: 10px; }
+.suits .grp { display: flex; gap: 4px; align-items: center; }
+.suits button { min-width: 30px; padding: 2px 5px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; font-size: 14px; line-height: 1.2; }
+.suits button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-bg); }
+.suits .ss { color: var(--sc); } .suits .sh { color: var(--sh); } .suits .sd { color: var(--sd); } .suits .sc { color: var(--sclub); }
+.fgroups { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 18px; }
+.fgroup h3 { font-size: 12px; color: var(--muted); margin: 0 0 4px; font-weight: 600; }
+.frow { display: grid; grid-template-columns: minmax(0, 1fr) 56px minmax(70px, 1.1fr); gap: 8px; align-items: center; width: 100%; background: none; border: 0; border-radius: 4px; padding: 2px 4px; cursor: pointer; text-align: left; font-size: 13px; }
+.frow:hover { background: var(--accent-bg); }
+.frow[aria-pressed="true"] { background: var(--accent-bg); box-shadow: inset 3px 0 0 var(--accent); font-weight: 700; }
+.frow .pc-share { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.frow .fbar { display: flex; height: 9px; border-radius: 3px; overflow: hidden; background: var(--grid); }
+.frow.empty { opacity: 0.45; }
 .combos-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
 .combos { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px; }
 .combo { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 12px; }

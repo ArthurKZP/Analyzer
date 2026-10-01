@@ -24,7 +24,13 @@
   let selected = null;
   let notice = '';
   let pollTimer = null;
+  let rightTab = 'combos';
   const nodes = new Map();
+  // Filtres : clés « m:i » (main faite), « d:i » (tirage), « e:i » / « q:i » (équité), « o:s » / « s:s » (couleurs).
+  const filters = { mode: 'include', keys: new Set() };
+  const EQ_SIMPLE = [['Meilleures mains', 0.7, 2], ['Mains bonnes', 0.5, 0.7], ['Mains faibles', 0.33, 0.5], ['Mains poubelles', -1, 0.33]];
+  const EQ_ADVANCED = [['Mains 90-100', 0.9, 2], ['Mains 80-90', 0.8, 0.9], ['Mains 70-80', 0.7, 0.8], ['Mains 60-70', 0.6, 0.7],
+    ['Mains 50-60', 0.5, 0.6], ['Mains 25-50', 0.25, 0.5], ['Mains 0-25', -1, 0.25]];
 
   // ---------- utilitaires ----------
   function el(tag, attrs, ...children) {
@@ -125,6 +131,7 @@
 
   async function goTo(target) {
     let p = target.slice();
+    document.body.classList.add('busy');  // un nœud proche du flop peut prendre une ou deux secondes
     try {
       // Sans session, seules les décisions de la ligne jouée sont connues : on passe les cartes jouées.
       if (!live) while (prefixOf(p, played) && p.length < played.length && played[p.length].type === 'card') p.push(played[p.length]);
@@ -147,6 +154,8 @@
         try { await loadState(); } catch (err) { /* l'avis suffit */ }
       }
       render();
+    } finally {
+      document.body.classList.remove('busy');
     }
   }
 
@@ -251,11 +260,25 @@
     if (notice) box.append(el('span', { class: 'err' }, notice));
   }
 
+  // Une case du déroulé ramène à son moment du coup (sans session : seulement les décisions de la ligne jouée).
+  function reachable(p) {
+    return live || (state.result && state.result.decisions.some((d) => same(d.path, p)));
+  }
+  function navStep(step, target, current) {
+    if (current || !reachable(target)) return step;
+    step.classList.add('nav');
+    step.title = 'Revenir à ce moment du coup';
+    step.addEventListener('click', (e) => { if (!e.target.closest('button')) goTo(target); });
+    return step;
+  }
+
   function actionStep(h, k, current) {
     const role = roleOf(h.player);
     const step = el('div', { class: 'step' + (current ? ' current' : '') },
-      el('div', { class: 'head' }, el('span', { class: role }, POS[h.player] + ' · ' + NAME[role]), el('span', {}, num(h.stack))));
+      el('div', { class: 'head' }, el('span', { class: role }, POS[h.player] + ' · ' + NAME[role]),
+        el('span', { title: 'tapis ' + num(h.stack) + ' bb' }, 'pot ' + num(h.pot))));
     const prefix = path.slice(0, k);
+    navStep(step, prefix, current);
     const onLine = prefixOf(prefix, played) && played[k] && played[k].type === 'action';
     const labels = actLabels(h.actions, h.pot, h.put, h.player);
     h.actions.forEach((a, j) => {
@@ -275,14 +298,16 @@
       type: 'button', disabled: !live, title: live ? 'Changer de carte' : 'Recalcule pour changer de carte',
       onclick: (e) => openPicker(k, e.currentTarget),
     }, h.card ? card(h.card) : '?');
-    return el('div', { class: 'step cards' }, el('div', { class: 'head' }, el('span', {}, STREET[h.street] || 'Carte'), el('span', {}, 'pot ' + num(h.pot))), btn);
+    const step = el('div', { class: 'step cards' }, el('div', { class: 'head' }, el('span', {}, STREET[h.street] || 'Carte'), el('span', {}, 'pot ' + num(h.pot))), btn);
+    return navStep(step, path.slice(0, k + 1), false);
   }
 
   function renderRibbon() {
     const box = $('ribbon');
     box.textContent = '';
-    box.append(el('div', { class: 'step cards' },
-      el('div', { class: 'head' }, el('span', {}, 'Flop'), el('span', {}, 'pot ' + num(state.result.pot))), cards(meta.board.slice(0, 3))));
+    box.append(navStep(el('div', { class: 'step cards' },
+      el('div', { class: 'head' }, el('span', {}, 'Flop'), el('span', {}, 'pot ' + num(state.result.pot))), cards(meta.board.slice(0, 3))),
+    [], path.length === 0));
     node.history.forEach((h, k) => {
       const current = k === node.history.length - 1;
       if (h.kind === 'card') box.append(cardStep(h, k));
@@ -316,11 +341,40 @@
   }
   function closePicker() { $('picker').hidden = true; }
 
-  function aggregate(p) {
+  function comboKeys(p, i, row) {
+    const keys = [];
+    const c = node.cats && node.cats[p] && node.cats[p][i];
+    if (c) {
+      keys.push('m:' + c[0]);
+      state.categories.draws.forEach((_, b) => { if (c[1] & (1 << b)) keys.push('d:' + b); });
+    }
+    const eq = row[2];
+    if (eq !== null) {
+      EQ_SIMPLE.forEach(([, lo, hi], k) => { if (eq >= lo && eq < hi) keys.push('e:' + k); });
+      EQ_ADVANCED.forEach(([, lo, hi], k) => { if (eq >= lo && eq < hi) keys.push('q:' + k); });
+    }
+    const s1 = row[0][1], s2 = row[0][3];
+    if (s1 === s2) keys.push('s:' + s1); else keys.push('o:' + s1, 'o:' + s2);
+    return keys;
+  }
+  const filterActive = () => filters.keys.size > 0;
+
+  function passes(p, i, row) {
+    if (!filterActive()) return true;
+    const keys = comboKeys(p, i, row);
+    if (filters.mode === 'exclude') return !keys.some((k) => filters.keys.has(k));
+    const sel = [...filters.keys];
+    const hands = sel.filter((k) => k[0] !== 'o' && k[0] !== 's');
+    const suits = sel.filter((k) => k[0] === 'o' || k[0] === 's');
+    return (!hands.length || hands.some((k) => keys.includes(k))) && (!suits.length || suits.some((k) => keys.includes(k)));
+  }
+
+  function aggregate(p, filtered = true) {
     const na = node.actions.length;
     const strat = p === node.player;
     const out = {};
-    for (const row of node.hands[p]) {
+    node.hands[p].forEach((row, i) => {
+      if (filtered && p === viewPlayer && !passes(p, i, row)) return;
       const cls = classOf(row[0]);
       const r = row[1];
       const a = out[cls] || (out[cls] = { w: 0, ev: 0, evw: 0, eq: 0, eqw: 0, s: new Array(na).fill(0), rows: [] });
@@ -329,7 +383,7 @@
       if (row[3] !== null) { a.ev += r * row[3]; a.evw += r; }
       if (row[2] !== null) { a.eq += r * row[2]; a.eqw += r; }
       if (strat) for (let j = 0; j < na; j++) a.s[j] += r * row[4 + j];
-    }
+    });
     for (const a of Object.values(out)) {
       a.ev = a.evw ? a.ev / a.evw : null;
       a.eq = a.eqw ? a.eq / a.eqw : null;
@@ -424,6 +478,7 @@
       const role = roleOf(p);
       const agg = aggregate(p);
       const total = Object.values(agg).reduce((s, a) => s + a.w, 0);
+      const full = filterActive() && p === viewPlayer ? node.hands[p].reduce((s, r) => s + r[1], 0) : 0;
       const freqs = node.actions.map((_, k) => Object.values(agg).reduce((s, a) => s + a.w * a.s[k], 0));
       const cols = colors(node.actions);
       panel.append(el('div', { class: 'ttl' }, el('h2', {}, STREET[node.street] + ' · ' + POS[p] + ' · ' + NAME[role] + ' agit'),
@@ -436,6 +491,8 @@
       const stack = el('div', { class: 'stack' });
       freqs.forEach((f, k) => stack.append(el('span', { style: 'width:' + (total ? 100 * f / total : 0).toFixed(2) + '%;background:' + cols[k] })));
       panel.append(stack);
+      if (full) panel.append(el('div', { class: 'muted small', style: 'margin-top:6px' },
+        'Filtre actif : ' + pct(total / full) + ' de la range (' + num(total, 1) + ' combos) ; fréquences de ces mains seulement.'));
     } else {
       panel.append(el('div', { class: 'ttl' }, el('h2', {}, node.type === 'terminal_fold' ? 'Fin du coup : fold' : 'Abattage'),
         el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb')));
@@ -505,9 +562,100 @@
     $('combos-hint').hidden = !!hand;
     if (!hand) return;
     const a = aggregate(viewPlayer)[hand];
-    if (!a) { box.append(el('div', { class: 'empty' }, 'Pas dans la range à ce moment du coup.')); return; }
+    if (!a) {
+      box.append(el('div', { class: 'empty' }, filterActive() && aggregate(viewPlayer, false)[hand]
+        ? 'Aucun combo de cette case ne passe le filtre.' : 'Pas dans la range à ce moment du coup.'));
+      return;
+    }
     a.rows.slice().sort((x, y) => y[1] - x[1]).forEach((row) => box.append(comboCard(row, viewPlayer)));
   }
+
+  // ---------- filtres ----------
+  function toggleFilter(key) {
+    if (filters.keys.has(key)) filters.keys.delete(key); else filters.keys.add(key);
+    render();
+  }
+  function clearFilters() { filters.keys.clear(); render(); }
+
+  function renderFilters() {
+    const box = $('filters');
+    box.textContent = '';
+    const p = viewPlayer;
+    const strat = p === node.player;
+    const na = node.actions.length;
+    const cols = strat ? colors(node.actions) : [];
+    const rows = node.hands[p];
+    const total = rows.reduce((s, r) => s + r[1], 0);
+    const stats = {};
+    rows.forEach((row, i) => {
+      for (const k of comboKeys(p, i, row)) {
+        const st = stats[k] || (stats[k] = { w: 0, s: new Array(na).fill(0) });
+        st.w += row[1];
+        if (strat) for (let j = 0; j < na; j++) st.s[j] += row[1] * row[4 + j];
+      }
+    });
+    const head = el('div', { class: 'fhead' });
+    const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Mode du filtre' });
+    [['include', 'Inclure'], ['exclude', 'Exclure']].forEach(([id, label]) => seg.append(el('button', {
+      type: 'button', 'aria-pressed': filters.mode === id ? 'true' : 'false', onclick: () => { filters.mode = id; render(); },
+    }, label)));
+    head.append(seg, el('span', { class: 'muted small' }, 'Range : ' + POS[p] + ' · ' + NAME[roleOf(p)]));
+    if (filterActive()) head.append(el('button', { type: 'button', class: 'clear', onclick: clearFilters }, 'Effacer les filtres'));
+    box.append(head);
+
+    const suits = el('div', { class: 'suits' });
+    const suitBtn = (key, text, cls, title) => el('button', {
+      type: 'button', class: cls, title, 'aria-pressed': filters.keys.has(key) ? 'true' : 'false', onclick: () => toggleFilter(key),
+    }, text);
+    suits.append(el('div', { class: 'grp' }, el('span', {}, 'Dépareillées'),
+      [...'shdc'].map((s) => suitBtn('o:' + s, SUITS[s], 's' + s, 'Mains dépareillées avec une carte ' + SUITS[s]))));
+    suits.append(el('div', { class: 'grp' }, el('span', {}, 'Assorties'),
+      [...'shdc'].map((s) => suitBtn('s:' + s, SUITS[s] + SUITS[s], 's' + s, 'Mains assorties à ' + SUITS[s]))));
+    box.append(suits);
+
+    const row = (key, label, hideEmpty) => {
+      const st = stats[key];
+      if (!st && hideEmpty) return null;
+      const w = st ? st.w : 0;
+      const bar = el('span', { class: 'fbar' });
+      if (st && strat && st.w) st.s.forEach((x, j) => bar.append(el('span', { style: 'width:' + (100 * x / st.w).toFixed(1) + '%;background:' + cols[j] })));
+      else if (w) bar.append(el('span', { style: 'width:' + (100 * w / total).toFixed(1) + '%;background:var(--axis)' }));
+      return el('button', {
+        type: 'button', class: 'frow' + (w ? '' : ' empty'), 'aria-pressed': filters.keys.has(key) ? 'true' : 'false',
+        title: strat ? 'Barre : actions de ces mains' : 'Barre : part de la range', onclick: () => toggleFilter(key),
+      }, el('span', {}, label), el('span', { class: 'pc-share' }, total ? (100 * w / total).toFixed(1).replace('.', ',') + ' %' : '—'), bar);
+    };
+    const groups = el('div', { class: 'fgroups' });
+    const group = (title, items) => {
+      const rowsEl = items.filter(Boolean);
+      if (rowsEl.length) groups.append(el('div', { class: 'fgroup' }, el('h3', {}, title), rowsEl));
+    };
+    group('Mains', state.categories.made.map(([, label], k) => row('m:' + k, label, true)));
+    if (node.board.length < 5) group('Tirages', state.categories.draws.map(([, label], k) => row('d:' + k, label, true)));
+    group('Équité — simple', EQ_SIMPLE.map(([label], k) => row('e:' + k, label, false)));
+    group('Équité — avancée', EQ_ADVANCED.map(([label], k) => row('q:' + k, label, false)));
+    box.append(groups);
+    box.append(el('p', { class: 'muted small' }, 'Clique une ou plusieurs lignes pour ne garder (ou écarter) ces mains dans la grille, '
+      + 'la synthèse et le détail des combos. Les catégories se combinent (« ou ») ; les couleurs s\'ajoutent comme une condition (« et »). '
+      + 'L\'équité est celle de la main contre la range adverse à ce moment du coup.'));
+  }
+
+  function renderTabs() {
+    const n = filters.keys.size;
+    $('tab-combos').setAttribute('aria-selected', rightTab === 'combos' ? 'true' : 'false');
+    $('tab-filters').setAttribute('aria-selected', rightTab === 'filters' ? 'true' : 'false');
+    $('tab-filters').textContent = 'Filtres';
+    if (n) $('tab-filters').append(el('span', { class: 'count' }, n));
+    $('pane-combos').hidden = rightTab !== 'combos';
+    $('pane-filters').hidden = rightTab !== 'filters';
+    const badge = $('filter-badge');
+    badge.textContent = '';
+    badge.hidden = !n;
+    if (n) badge.append(el('span', {}, el('b', {}, 'Filtre actif'), ' (' + n + ', ' + (filters.mode === 'include' ? 'inclure' : 'exclure') + ')'),
+      el('button', { type: 'button', onclick: () => { rightTab = 'filters'; renderTabs(); } }, 'Voir'),
+      el('button', { type: 'button', onclick: clearFilters }, 'Effacer'));
+  }
+
 
   function render() {
     renderMeta();
@@ -519,6 +667,8 @@
     renderOverview();
     renderMine();
     renderCombos();
+    renderFilters();
+    renderTabs();
     $('b-back').disabled = !path.some((s) => s.type === 'action');
   }
 
@@ -530,6 +680,8 @@
 
   // ---------- démarrage ----------
   $('b-back').onclick = back;
+  $('tab-combos').onclick = () => { rightTab = 'combos'; renderTabs(); };
+  $('tab-filters').onclick = () => { rightTab = 'filters'; renderTabs(); };
   $('b-line').onclick = () => state && state.result && goTo(state.result.decisions[0].path);
   $('reveal').onchange = render;
   document.addEventListener('keydown', (e) => {

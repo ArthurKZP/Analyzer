@@ -185,7 +185,12 @@ s'ouvre dans une nouvelle fenêtre, comme un solveur :
 - à droite, la fréquence de chaque action pour toute la range (et le nombre de combos), ta main et,
   quand le coup est dévoilé, la sienne ;
 - au survol d'une case, le détail de chacun de ses combos : fréquence et/ou EV de chaque action selon
-  l'affichage choisi, équité, présence ; un clic garde la case affichée.
+  l'affichage choisi, équité, présence ; un clic garde la case affichée ;
+- l'onglet *Filtres* : la part de la range et la stratégie de chaque catégorie de mains (mains faites, de la
+  quinte flush aux mains non faites ; tirages au flop et à la turn ; équité, en 4 ou 7 tranches ; couleurs
+  dépareillées ou assorties). Un clic sur une ou plusieurs lignes ne garde (ou n'écarte) que ces mains dans
+  la grille, la synthèse et le détail des combos ; le filtre reste actif d'un nœud à l'autre ;
+- chaque case du déroulé affiche le pot à ce moment ; un clic sur une case ramène à ce moment du coup.
 
 Les mises sont en % du pot ; les relances aussi, selon la convention des solveurs : le montant ajouté
 rapporté au pot après le call (relancer à 4,5 sur une mise de 1,7 dans un pot de 5 = 2,8 / 8,4 = 33 %).
@@ -262,6 +267,7 @@ analyzer/
   viewer.py            visualiseur de spots (HTML + JavaScript, sans dépendance)
   selfreport.py        « Mon jeu » : ton bilan contre tous tes adversaires
   theory/              préflop vs solveur : solution (data/), comparaison (preflop.py), page (page.py),
+                       catégories de mains pour les filtres (handclass.py),
                        lecture de captures de ranges (extract.py) ; postflop avec GTOpen : spots,
                        installation et lecture des résultats (postflop.py), pont Rust (native/main.rs),
                        commande `gtopen` (solve_cli.py)

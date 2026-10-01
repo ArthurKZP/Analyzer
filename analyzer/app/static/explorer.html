@@ -24,14 +24,24 @@
       <div class="seg" id="modes" role="group" aria-label="Affichage"></div>
       <div class="seg" id="players" role="group" aria-label="Range affichée"></div>
     </div>
+    <div class="filter-badge" id="filter-badge" hidden></div>
     <div class="grid-wrap"><div class="grid" id="grid"></div></div>
     <div class="legend" id="legend"></div>
   </section>
   <aside class="right" aria-label="Détail">
     <div id="overview"></div>
     <div id="mine"></div>
-    <div class="combos-head"><h2 id="combos-title">Mains</h2><span class="muted small" id="combos-hint">Survole une case pour voir ses combos ; clique pour la garder.</span></div>
-    <div class="combos" id="combos"></div>
+    <div class="rtabs" role="tablist" aria-label="Panneau">
+      <button type="button" role="tab" id="tab-combos" aria-selected="true">Mains</button>
+      <button type="button" role="tab" id="tab-filters" aria-selected="false">Filtres</button>
+    </div>
+    <section id="pane-combos" role="tabpanel" aria-labelledby="tab-combos">
+      <div class="combos-head"><h2 id="combos-title">Mains</h2><span class="muted small" id="combos-hint">Survole une case pour voir ses combos ; clique pour la garder.</span></div>
+      <div class="combos" id="combos"></div>
+    </section>
+    <section id="pane-filters" role="tabpanel" aria-labelledby="tab-filters" hidden>
+      <div id="filters"></div>
+    </section>
   </aside>
 </main>
 <div class="picker" id="picker" hidden></div>

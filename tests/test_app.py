@@ -80,6 +80,9 @@ class LibraryTest(unittest.TestCase):
             self.assertEqual((state["meta"]["hero_cards"], state["meta"]["hero_position"]), (["Qh", "Jh"], "BB"))
             reply = lib.explorer_node("HAND02", [{"type": "action", "index": 1}])
             self.assertEqual((reply["live"], reply["node"]["type"]), (True, "action"))
+            # catégories des mains pour les filtres, alignées sur les mains de chaque joueur
+            self.assertEqual([len(c) for c in reply["node"]["cats"]], [len(h) for h in reply["node"]["hands"]])
+            self.assertEqual(state["categories"]["made"][0], ["sf", "Quinte flush"])
         lib.solves.shutdown()
 
     def test_import(self):
