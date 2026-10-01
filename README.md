@@ -202,17 +202,18 @@ et les mises à venir sont dépensées. Pour une action (au survol), c'est ce qu
 suite jouée par le solveur ; pour une main (dans la grille), c'est l'EV de sa stratégie, la moyenne de ses
 actions pondérée par leurs fréquences. Une main qui folde 100 % vaut donc 0 même si payer coûterait 14 bb.
 
-**Études du solveur** : chaque coup résolu est gardé sur disque (`~/.analyzer/etudes`, environ 170 Mo pour
-un pot simplement relancé) sous une forme compacte : la stratégie de chaque nœud sur 8 bits, compressée.
+**Études du solveur** : chaque coup résolu est gardé sur disque (`~/.analyzer/etudes`, 50 à 170 Mo selon
+l'arbre) sous une forme compacte : la stratégie de chaque nœud sur 8 bits, compressée.
 L'explorateur rouvre une étude en une quinzaine de secondes au lieu de la recalculer (les fréquences
 restent à 1 point près, les EV à quelques centièmes de bb). La page *Études du solveur* de l'application
 liste les études, avec leur précision et leur taille, et permet de les rouvrir ou de les supprimer.
 Une étude ouverte occupe environ 2 Go de mémoire : une seule reste ouverte, fermée après 30 minutes sans
 activité ou quand une autre s'ouvre.
 
-**Durée** : un arbre de flop compte environ 700 000 nœuds et 2 Go de mémoire avec les ranges HU complètes.
-Sur un processeur à 4 cœurs, l'objectif par défaut (1,5 % du pot d'exploitabilité, 120 itérations au plus)
-demande environ 5 minutes ; c'est plus rapide avec plus de cœurs.
+**Durée** : un arbre de flop compte des centaines de milliers de nœuds et jusqu'à 2 Go de mémoire avec les
+ranges HU complètes. Sur un processeur à 4 cœurs, l'objectif par défaut (1,5 % du pot d'exploitabilité,
+120 itérations au plus) demande 30 secondes à 2 minutes pour un SRP, davantage quand des tailles jouées
+s'ajoutent à l'arbre ; c'est plus rapide avec plus de cœurs.
 
 **Spots d'étude** : des spots résolus sans main jouée, pour travailler une situation type. La première
 série est le **SRP** (open du bouton à 2,5 bb, call de la BB, 100 bb, mêmes ranges et même arbre que
@@ -240,8 +241,11 @@ python -m analyzer gtopen --spots srp --texture Monotone --texture "Ace high"   
 ```
 
 La série alterne les textures (un flop de chaque, puis un deuxième…) : interrompue, elle couvre déjà
-toutes les textures, et une relance reprend où elle s'était arrêtée. Compter 1 à 5 minutes par flop sur
-4 cœurs et 70 à 170 Mo sur le disque. La page *Études du solveur* montre ensuite, texture par texture
+toutes les textures, et une relance reprend où elle s'était arrêtée. Compter 30 secondes à 2 minutes par
+flop sur 4 cœurs (la série : une demi-heure) et 50 à 80 Mo sur le disque (1,6 Go pour les 24 flops).
+Sans attendre, la page montre déjà une synthèse de référence livrée avec Analyzer
+(`analyzer/theory/data/srp_reference.json`, calculée avec le même arbre) pour les flops pas encore
+résolus ; il faut les résoudre sur ton ordinateur pour les explorer. La page *Études du solveur* montre ensuite, texture par texture
 (avec la moyenne de ses flops), la stratégie de toute la range : la c-bet du bouton après le check de la
 BB, la réponse de la BB (fold, call, check-raise), puis celle du bouton face au check-raise. *Explorer ↗*
 ouvre le spot dans l'explorateur (`/explorateur/spot:srp:KsKd4c`), turn et river comprises : l'étude se

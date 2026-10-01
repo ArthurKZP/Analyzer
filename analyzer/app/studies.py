@@ -216,8 +216,8 @@ river comprises).{" Les flops marqués <b>réf.</b> montrent la synthèse livré
   <button type="button" id="spot-stop" hidden>Arrêter</button>
   <span class="spot-status" id="spot-status"></span>
 </div>
-<p class="note">Un flop prend 1 à 5 minutes sur 4 cœurs (la série complète : environ une heure, moins avec plus
-de cœurs) et 70 à 170 Mo sur le disque. Les flops se résolvent l'un après l'autre en arrière-plan, tant que
+<p class="note">Un flop prend 30 secondes à 2 minutes sur 4 cœurs (la série complète : environ une demi-heure,
+moins avec plus de cœurs) et 50 à 80 Mo sur le disque. Les flops se résolvent l'un après l'autre en arrière-plan, tant que
 l'application reste ouverte ; tu peux fermer cette page. En ligne de commande : <code>python -m analyzer gtopen --spots {escape(family)}</code>.</p>
 <div class="scroll"><table class="stats studies spots"><thead><tr><th>Flop</th>{head}<th class="num">Précision</th>
 <th></th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
