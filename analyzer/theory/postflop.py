@@ -285,6 +285,13 @@ def _merge_sizes(defaults: list, played: list) -> list:
     return sizes
 
 
+def default_sizes(oop: str, ip: str, oop_initiative: bool) -> dict[str, list[dict[str, list]]]:
+    """Tailles par défaut. Sans l'initiative préflop (SRP, pot 4bet), la BB ne mène pas au flop :
+    c'est un donk, écarté comme aux streets suivantes (seuls les donks joués entrent dans l'arbre)."""
+    return {p: [{"bet": [] if s == 0 and p == oop and not oop_initiative else [DEFAULT_BETS[s]],
+                 "raise": list(DEFAULT_RAISES[s]), "donk": []} for s in range(3)] for p in (oop, ip)}
+
+
 def _size_order(size) -> float:
     return float("inf") if size == "a" else size
 
@@ -293,30 +300,8 @@ def _size_json(sizes: list) -> list:
     return ["AllIn" if s == "a" else {"PotPct": s} for s in sizes]
 
 
-@dataclass
-class PostflopSpot:
-    hand: Hand
-    hero: str
-    villain: str
-    pot_type: str
-    oop: str
-    ip: str
-    pot_bb: float
-    stack_bb: float
-    ranges: dict[str, dict[str, float]]
-    line: list[dict]
-    action_index: list[int]  # indice dans hand.actions de chaque étape de la ligne (-1 : carte)
-    sizes: dict[str, list[dict[str, list]]]  # joueur -> street -> {"bet", "raise", "donk"}
-    added: list[str] = field(default_factory=list)  # joueurs dont la main a été ajoutée à la range
-
-    @property
-    def board(self) -> list[str]:
-        return self.hand.board[:3]
-
-    def combos(self) -> dict[str, int]:
-        """Mains connues -> joueur (0 = hors de position, 1 = en position)."""
-        return {"".join(self.hand.hole_cards[p]): 0 if p == self.oop else 1 for p in (self.hero, self.villain)
-                if len(self.hand.hole_cards.get(p, [])) == 2}
+class SpotTree:
+    """Arbre et requête d'un spot : attend board, ranges, sizes, oop, ip, pot_bb, stack_bb et line."""
 
     def tree(self) -> dict:
         def streets(player: str) -> list[dict]:
@@ -348,6 +333,42 @@ class PostflopSpot:
                 text += f", donk {fmt(donks)}"
             parts.append(text)
         return " · ".join(parts)
+
+
+@dataclass
+class PostflopSpot(SpotTree):
+    hand: Hand
+    hero: str
+    villain: str
+    pot_type: str
+    oop: str
+    ip: str
+    pot_bb: float
+    stack_bb: float
+    ranges: dict[str, dict[str, float]]
+    line: list[dict]
+    action_index: list[int]  # indice dans hand.actions de chaque étape de la ligne (-1 : carte)
+    sizes: dict[str, list[dict[str, list]]]  # joueur -> street -> {"bet", "raise", "donk"}
+    added: list[str] = field(default_factory=list)  # joueurs dont la main a été ajoutée à la range
+
+    @property
+    def board(self) -> list[str]:
+        return self.hand.board[:3]
+
+    def combos(self) -> dict[str, int]:
+        """Mains connues -> joueur (0 = hors de position, 1 = en position)."""
+        return {"".join(self.hand.hole_cards[p]): 0 if p == self.oop else 1 for p in (self.hero, self.villain)
+                if len(self.hand.hole_cards.get(p, [])) == 2}
+
+    @property
+    def ident(self) -> str:
+        return self.hand.hand_id
+
+    def interpret(self, raw: dict) -> dict:
+        return interpret(self, raw)
+
+    def write_meta(self, request: dict, raw: dict, session: "Optional[Session]" = None) -> None:
+        write_study_meta(self, request, raw)
 
 
 def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> PostflopSpot:
@@ -417,9 +438,9 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> Po
         line.append(step)
         index.append(i)
 
-    sizes = {p: [{"bet": _merge_sizes([DEFAULT_BETS[s]], played[p][s]["bet"]),
-                  "raise": _merge_sizes(list(DEFAULT_RAISES[s]), played[p][s]["raise"]),
-                  "donk": _merge_sizes([], played[p][s]["donk"]) if p == oop else []}
+    initiative = [a.player for a in pre if a.kind == RAISE][-1] == oop
+    defaults = default_sizes(oop, ip, initiative)
+    sizes = {p: [{k: _merge_sizes(defaults[p][s][k], played[p][s][k]) for k in ("bet", "raise", "donk")}
                  for s in range(3)] for p in (oop, ip)}
     return PostflopSpot(hand, hero, villain, pot_type, oop, ip, round(pot / bb, 4), round(stack / bb, 4),
                         ranges, line, index, sizes, added)
@@ -427,9 +448,21 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> Po
 
 # --- Exécution et cache --------------------------------------------------------------------
 
+RUNTIME_FIELDS = ("threads", "gpu", "max_nodes")  # réglages d'exécution : ne changent pas la solution
+
+
+def _identity(request: dict) -> str:
+    return json.dumps({k: v for k, v in request.items() if k not in RUNTIME_FIELDS}, sort_keys=True, ensure_ascii=False)
+
+
 def cache_key(request: dict) -> str:
-    text = json.dumps(request, sort_keys=True, ensure_ascii=False) + _native_hash()
-    return hashlib.sha256(text.encode()).hexdigest()[:20]
+    """Clé du résultat de la ligne jouée (dépend aussi du programme, dont le format de sortie peut changer)."""
+    return hashlib.sha256((_identity(request) + _native_hash()).encode()).hexdigest()[:20]
+
+
+def study_key(request: dict) -> str:
+    """Clé d'une étude : le spot seul. Le fichier d'étude a son propre format versionné (en-tête)."""
+    return hashlib.sha256(_identity(request).encode()).hexdigest()[:20]
 
 
 def cache_path(request: dict) -> Path:
@@ -512,14 +545,14 @@ def studies_dir() -> Path:
 
 
 def study_path(request: dict) -> Path:
-    return studies_dir() / f"{cache_key(request)}.etude"
+    return studies_dir() / f"{study_key(request)}.etude"
 
 
 def write_study_meta(spot: PostflopSpot, request: dict, raw: dict) -> None:
     """Fiche de l'étude (pour la bibliothèque), à côté du fichier de l'arbre."""
     hand = spot.hand
     meta = {
-        "key": cache_key(request), "hand": hand.hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"),
+        "kind": "hand", "key": study_key(request), "hand": hand.hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"),
         "hero": spot.hero, "villain": spot.villain, "hero_cards": hand.hole_cards.get(spot.hero, []),
         "board": hand.board, "pot_type": spot.pot_type, "hero_position": "BB" if spot.oop == spot.hero else "BTN",
         "pot": spot.pot_bb, "stack": spot.stack_bb, "net": round(hand.net(spot.hero) / hand.bb, 2),

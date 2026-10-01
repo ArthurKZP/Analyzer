@@ -33,6 +33,9 @@ class SpotTest(unittest.TestCase):
         self.assertEqual(spot.sizes["Hero"][0]["bet"], [32.0])
         self.assertEqual(spot.sizes["Villain"][0]["raise"], [53.7])
         self.assertEqual(spot.sizes["Hero"][2]["raise"], [])  # pas de relance river par défaut
+        # La BB a payé l'open : pas de mise en tête au flop (donk), mais une mise à la turn.
+        self.assertEqual(spot.sizes["Villain"][0]["bet"], [])
+        self.assertEqual(spot.sizes["Villain"][1]["bet"], [75.0])
         request = spot.request(50, 2.0)
         tree = request["spot"]["tree"]
         self.assertNotIn("combos", request)
@@ -42,7 +45,7 @@ class SpotTest(unittest.TestCase):
         self.assertIn("AA", request["spot"]["range_ip"].split(","))
         self.assertNotIn("72o", request["spot"]["range_ip"])
         self.assertEqual((request["max_iterations"], request["target_exploit_pct"]), (50, 2.0))
-        self.assertEqual(spot.menu_text().split(" · ")[0], "flop : mise 32 % / 33 %, relance 53,7 % / 60 %")
+        self.assertEqual(spot.menu_text().split(" · ")[0], "flop : mise 32 %, relance 53,7 % / 60 %")
 
     def test_3bet_pot_with_cards(self):
         spot = postflop.build_spot(self.hands["HAND02"], "Hero")
@@ -51,6 +54,15 @@ class SpotTest(unittest.TestCase):
         self.assertEqual([s.get("card") for s in spot.line if "card" in s], ["3d", "4h"])
         self.assertEqual(spot.action_index.count(-1), 2)
         self.assertEqual(spot.sizes["Villain"][2]["bet"], [75.0, 16.7])  # petite mise river jouée
+        self.assertEqual(spot.sizes["Hero"][0]["bet"], [25.0])  # c-bet de la BB (3betteuse), jouée à 25 %
+
+    def test_default_sizes(self):
+        # Avec l'initiative préflop (pot 3bet), la BB mise au flop ; sans (SRP, pot 4bet), elle ne mène pas.
+        self.assertEqual(postflop.default_sizes("BB", "BTN", True)["BB"][0]["bet"], [33.0])
+        no_lead = postflop.default_sizes("BB", "BTN", False)
+        self.assertEqual([s["bet"] for s in no_lead["BB"]], [[], [75.0], [75.0]])
+        self.assertEqual([s["bet"] for s in no_lead["BTN"]], [[33.0], [75.0], [75.0]])
+        self.assertTrue(all(s["donk"] == [] for p in no_lead.values() for s in p))
 
     def test_unsupported(self):
         with self.assertRaisesRegex(postflop.Unsupported, "Tapis préflop"):

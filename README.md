@@ -166,7 +166,9 @@ s'affiche tout de suite.
   (3bet de la BB / call du bouton), pot 4bet (4bet du bouton / call de la BB) ;
 - board, pot et tapis effectif au flop, en bb, sans rake ;
 - tailles : mise 33 % au flop, 75 % à la turn et à la river, relance 60 % du pot au flop et à la turn,
-  deux relances au plus par street, pas de donk (mise d'ouverture hors de position après avoir payé).
+  deux relances au plus par street, pas de donk (mise d'ouverture hors de position après avoir payé) :
+  en SRP et en pot 4bet, la BB ne mène ni au flop ni après une mise du bouton ; elle mise à la turn après
+  un flop checké. En pot 3bet, la BB a l'initiative et c-bette normalement.
   Les tailles réellement jouées dans la main sont ajoutées (ou remplacent la taille par défaut la plus
   proche) pour que chaque décision tombe sur une branche de l'arbre, y compris un donk joué.
 
@@ -211,6 +213,42 @@ activité ou quand une autre s'ouvre.
 **Durée** : un arbre de flop compte environ 700 000 nœuds et 2 Go de mémoire avec les ranges HU complètes.
 Sur un processeur à 4 cœurs, l'objectif par défaut (1,5 % du pot d'exploitabilité, 120 itérations au plus)
 demande environ 5 minutes ; c'est plus rapide avec plus de cœurs.
+
+**Spots d'étude** : des spots résolus sans main jouée, pour travailler une situation type. La première
+série est le **SRP** (open du bouton à 2,5 bb, call de la BB, 100 bb, mêmes ranges et même arbre que
+ci-dessus) sur 24 flops : trois par texture (un sec, un connecté, un deux couleurs), dans cet ordre de
+classement :
+
+| Texture | Flops |
+| --- | --- |
+| Pairé | K♠K♦4♣ · 8♥8♣5♠ · J♦3♣3♥ |
+| Monotone | A♠8♠3♠ · J♥9♥5♥ · 7♦5♦2♦ |
+| Ace high | A♠7♥2♦ · A♣K♦9♥ · A♥6♥4♣ |
+| King high | K♠8♦3♥ · K♥Q♣9♦ · K♦7♦5♣ |
+| Queen high | Q♠7♦2♥ · Q♥J♣9♦ · Q♣8♣4♦ |
+| Jack high | J♠6♦3♥ · J♥T♣8♦ · J♣9♣4♦ |
+| Ten high | T♠5♦2♥ · T♥9♣7♦ · T♣8♣3♦ |
+| Low board (9 et moins) | 9♠5♦2♥ · 8♥7♣5♦ · 6♣4♣2♦ |
+
+Un flop pairé ou monotone est classé comme tel ; sinon par sa plus haute carte. Pour les résoudre :
+le bouton **Résoudre les flops manquants** de la page *Études du solveur* (en arrière-plan, l'un après
+l'autre, avec une barre de progression ; *Arrêter* interrompt la série), ou en ligne de commande :
+
+```bash
+python -m analyzer gtopen --spots srp                          # les 24 flops (ceux déjà résolus sont passés)
+python -m analyzer gtopen --spots srp --texture Monotone --texture "Ace high"   # quelques textures
+```
+
+La série alterne les textures (un flop de chaque, puis un deuxième…) : interrompue, elle couvre déjà
+toutes les textures, et une relance reprend où elle s'était arrêtée. Compter 1 à 5 minutes par flop sur
+4 cœurs et 70 à 170 Mo sur le disque. La page *Études du solveur* montre ensuite, texture par texture
+(avec la moyenne de ses flops), la stratégie de toute la range : la c-bet du bouton après le check de la
+BB, la réponse de la BB (fold, call, check-raise), puis celle du bouton face au check-raise. *Explorer ↗*
+ouvre le spot dans l'explorateur (`/explorateur/spot:srp:KsKd4c`), turn et river comprises : l'étude se
+rouvre d'elle-même, le choix de la carte s'ouvre quand on arrive à la turn ou à la river, et les checks
+forcés de la BB (qui ne mène pas) sont passés pour aller droit à la décision suivante.
+*Étudier un autre flop* ouvre n'importe quel flop dans l'explorateur ; une fois résolu, il rejoint sa
+texture dans la page.
 
 **Limites** : les tailles et la profondeur de l'arbre simplifient le jeu réel ; une main que la range du
 solveur ne contient pas (par exemple un open que le solveur ne fait jamais) y est ajoutée avec un poids
