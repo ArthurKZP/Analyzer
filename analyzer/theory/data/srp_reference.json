@@ -3,10 +3,10 @@
  "label": "Pot relancé simple : open du bouton à 2,5 bb, call de la BB, 100 bb",
  "spots": {
   "spot:srp:KsKd4c": {
-   "key": "3a32f8822b1896cb62a6",
+   "key": "1843c0fb81a3bda6f183",
    "texture": "Pairé",
-   "iterations": 60,
-   "exploit_pct": 1.177,
+   "iterations": 80,
+   "exploit_pct": 1.466,
    "summary": [
     {
      "title": "C-bet du BTN",
@@ -17,8 +17,8 @@
       }
      ],
      "freqs": [
-      0.3581,
-      0.6419
+      0.3429,
+      0.6571
      ],
      "actions": [
       {
@@ -46,9 +46,9 @@
       }
      ],
      "freqs": [
-      0.3182,
-      0.4828,
-      0.1991
+      0.3396,
+      0.4428,
+      0.2176
      ],
      "actions": [
       {
@@ -62,7 +62,7 @@
        "allin": false
       },
       {
-       "label": "relance à 6,6 bb (60 %)",
+       "label": "relance à 4,4 bb (33 %)",
        "kind": "raise",
        "allin": false
       }
@@ -85,9 +85,9 @@
       }
      ],
      "freqs": [
-      0.4588,
-      0.3213,
-      0.2199
+      0.3786,
+      0.138,
+      0.4833
      ],
      "actions": [
       {
@@ -101,7 +101,7 @@
        "allin": false
       },
       {
-       "label": "relance à 17,6 bb (60 %)",
+       "label": "relance à 8,9 bb (33 %)",
        "kind": "raise",
        "allin": false
       }

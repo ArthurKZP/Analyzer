@@ -140,13 +140,16 @@ def _bar(actions: list[dict], freqs: list[float]) -> str:
 
 
 def _average(entries: list[dict]) -> tuple[list[dict], list[float]]:
-    """Moyenne des fréquences de plusieurs flops, action par action (même libellé)."""
-    actions: dict[str, dict] = {}
-    totals: dict[str, float] = {}
+    """Moyenne des fréquences de plusieurs flops, par sorte d'action (mise, relance, tapis…) : les tailles
+    peuvent différer d'un flop à l'autre."""
+    actions: dict[tuple, dict] = {}
+    totals: dict[tuple, float] = {}
     for e in entries:
         for a, f in zip(e["actions"], e["freqs"]):
-            actions.setdefault(a["label"], a)
-            totals[a["label"]] = totals.get(a["label"], 0.0) + f
+            key = (a["kind"], bool(a.get("allin")))
+            actions.setdefault(key, {"label": "tapis" if key[1] else SHORT.get(a["kind"], a["kind"]),
+                                     "kind": a["kind"], "allin": key[1]})
+            totals[key] = totals.get(key, 0.0) + f
     return list(actions.values()), [totals[k] / len(entries) for k in actions]
 
 
@@ -170,18 +173,21 @@ def _sizes_row(spot, width: int, series: bool) -> str:
     lines = []
     for key in shown:
         e = report[key]
+        k = e["options"].index(e["chosen"])
+        gaps = e.get("per_occurrence") or [ev - e["evs"][k] for ev in e["evs"]]
         opts = " · ".join(
-            (f"<b>{escape(sizing.sizes_text(o))} {num(ev, 3)}</b>" if o == e["chosen"] else
-             f"{escape(sizing.sizes_text(o))} {num(ev, 3)}") for o, ev in zip(e["options"], e["evs"]))
-        reach = "flop" if e.get("method") == "arbre complet" else f'{num(100 * e.get("reach", 0), 1)} %'
+            f"<b>{escape(sizing.sizes_text(o))}</b>" if j == k else
+            f"{escape(sizing.sizes_text(o))} {num(g, 2, sign=True) if g is not None else '–'}"
+            for j, (o, g) in enumerate(zip(e["options"], gaps)))
+        reach = "100 %" if e.get("method") == "arbre complet" else f'{num(100 * e.get("reach", 0), 1)} %'
         lines.append(f'<tr><td>{escape(e["label"])}</td><td>{reach}</td><td class="opt">{opts}</td></tr>')
     rare = sum(1 for e in report.values() if e.get("method") == "rare")
     source = "livrées avec Analyzer" if chosen.get("source") == "livré" else f'choisies le {escape(chosen.get("created", ""))}'
-    detail = (f'<table><thead><tr><th>Situation</th><th>Atteinte</th><th>EV de celui qui mise (bb), par taille'
-              f'</th></tr></thead><tbody>{"".join(lines)}</tbody></table>'
+    detail = (f'<table><thead><tr><th>Situation</th><th>Atteinte</th><th>Taille retenue, et écart des autres '
+              f'(bb, quand la situation arrive)</th></tr></thead><tbody>{"".join(lines)}</tbody></table>'
               f'<div class="muted">{len(shown)} situations comparées ({source}) ; {rare} situation(s) presque jamais '
-              'atteinte(s) : la plus petite taille. EV au début du flop (arbre complet) ou moyenne au début de la '
-              'turn (sous-jeux) ; à moins de 0,02 bb de la meilleure, la plus petite taille l\'emporte.</div>')
+              'atteinte(s) : la plus petite taille. Écart d\'EV pour celui qui mise ; un écart minime (moins de '
+              '0,02 bb au flop, de 0,5 % du pot ensuite) laisse la plus petite taille.</div>')
     return (f'<tr class="sizes"><td></td><td colspan="{width - 1}"><details><summary>Tailles : '
             f'{escape(sizing.plan_text(spot.plan))}</summary>{detail}</details></td></tr>')
 
@@ -273,8 +279,9 @@ river comprises).{" Les flops marqués <b>réf.</b> montrent la synthèse livré
   <button type="button" id="spot-stop" hidden>Arrêter</button>
   <span class="spot-status" id="spot-status"></span>
 </div>
-<p class="note">Un flop sans tailles choisies passe d'abord par leur choix (de l'ordre de 45 minutes sur 4 cœurs,
-moins avec plus de cœurs), puis par sa résolution (quelques minutes, 50 à 150 Mo sur le disque). Les flops se
+<p class="note">Un flop sans tailles choisies passe d'abord par leur choix (environ 1 h 15 sur 4 cœurs, moins avec
+plus de cœurs), puis par sa résolution (une dizaine de minutes, environ 450 Mo sur le disque et 4 Go de mémoire
+pendant le calcul). Les flops se
 traitent l'un après l'autre en arrière-plan, tant que l'application reste ouverte ; tu peux fermer cette page. En ligne de commande : <code>python -m analyzer gtopen --spots {escape(family)}</code>.</p>
 <div class="scroll"><table class="stats studies spots"><thead><tr><th>Flop</th>{head}<th class="num">Précision</th>
 <th></th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>

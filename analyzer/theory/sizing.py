@@ -26,10 +26,14 @@ from typing import Callable, Optional
 
 from . import postflop
 
-EPS = 0.02  # bb : en dessous, deux choix sont à égalité et le plus petit l'emporte
+EPS = 0.02  # bb (arbres complets) : en dessous, deux choix sont à égalité et le plus petit l'emporte
+# Sous-jeux : égalité sous 0,5 % du pot de la turn par occurrence de la situation (au moins 0,002 bb à la racine).
+EPS_POT, EPS_FLOOR = 0.005, 0.002
+METHOD = 2  # version de la méthode (un choix plus ancien peut se refaire)
 FLOP_TARGET = 0.4  # % du pot : précision des arbres complets comparés
 SUB_TARGET = 0.5  # % du pot du sous-jeu
 TURN_CARDS = 12  # cartes turn de l'échantillon (situations fréquentes)
+RIVER_CARDS = 8  # pour les tailles de la river (plus de situations, chacune plus coûteuse)
 RARE_CARDS = 4  # cartes turn pour une situation rare
 COMMON, RARE = 0.03, 0.003  # probabilité d'atteindre la situation (depuis le flop) : fréquente, rare
 
@@ -172,10 +176,10 @@ def run_lot(bases: list[dict], runs: list[dict], threads: int = 0,
     return results
 
 
-def pick(options: list, evs: list[float]) -> int:
-    """Meilleure EV ; à moins de EPS de la meilleure, la plus petite option (la première)."""
+def pick(options: list, evs: list[float], eps: float = EPS) -> int:
+    """Meilleure EV ; à moins de eps de la meilleure, la plus petite option (la première)."""
     best = max(evs)
-    return next(k for k, ev in enumerate(evs) if ev >= best - EPS)
+    return next(k for k, ev in enumerate(evs) if ev >= best - eps)
 
 
 def subgame(spot, node: dict, card: str, past: str) -> dict:
@@ -254,41 +258,48 @@ class Selection:
         self._check()
         return run_lot(bases, runs, self.threads, self.on_start)
 
-    def _solve(self, plan: dict, save: bool = False, keep: bool = False):
+    def _solve(self, plan: dict) -> tuple[dict, postflop.Session]:
+        """Arbre complet résolu, gardé en mémoire (environ 1 Go) : les ranges de la turn en viendront."""
         self._check()
-        session = postflop.Session(self._request(self._flop_plan(plan)), save=save)
+        session = postflop.Session(self._request(self._flop_plan(plan)), save=False)
         try:
-            raw = session.start(on_start=self.on_start)
+            return session.start(on_start=self.on_start), session
         except BaseException:
             session.close()
             raise
-        if not keep:
-            session.close()
-        return raw, session
 
     def flop(self) -> None:
-        known: dict[str, dict] = {}  # plan (json) -> résultat, pour ne pas résoudre deux fois le même arbre
-        for sit in situations()[:3]:
-            options = sit.options()
-            evs = []
-            for opt in options:
-                plan = dict(self.plan, **{sit.key: list(opt)})
-                ident = json.dumps(self._flop_plan(plan), sort_keys=True)
-                if ident not in known:
-                    start = time.time()
-                    known[ident], _ = self._solve(plan)
-                    raw = known[ident]
-                    self.log(f"    {label(sit.key)} {sizes_text(opt)} : EV {raw['root_ev'][sit.player]:.3f} bb "
-                             f"({raw['iterations']} itérations, {raw['exploit_pct']} % du pot, {time.time() - start:.0f} s)")
-                evs.append(known[ident]["root_ev"][sit.player])
-            k = pick(options, evs)
-            self.plan[sit.key] = list(options[k])
-            self.report[sit.key] = {"label": label(sit.key), "options": [list(o) for o in options],
-                                    "evs": [round(e, 4) for e in evs], "chosen": list(options[k]), "reach": 1.0,
-                                    "cards": None, "method": "arbre complet"}
-            self.log(f"  {label(sit.key)} : {sizes_text(options[k])}")
-        # L'arbre retenu, gardé en mémoire : les ranges de la turn de chaque ligne en viennent.
-        _, self.session = self._solve(self.plan, keep=True)
+        known: dict[str, tuple[dict, postflop.Session]] = {}  # arbre (plan) -> résolution, sans doublon
+        try:
+            for sit in situations()[:3]:
+                options = sit.options()
+                evs, idents = [], []
+                for opt in options:
+                    plan = dict(self.plan, **{sit.key: list(opt)})
+                    ident = json.dumps(self._flop_plan(plan), sort_keys=True)
+                    if ident not in known:
+                        start = time.time()
+                        known[ident] = self._solve(plan)
+                        raw = known[ident][0]
+                        self.log(f"    {label(sit.key)} {sizes_text(opt)} : EV {raw['root_ev'][sit.player]:.3f} bb "
+                                 f"({raw['iterations']} itérations, {raw['exploit_pct']} % du pot, "
+                                 f"{time.time() - start:.0f} s)")
+                    evs.append(known[ident][0]["root_ev"][sit.player])
+                    idents.append(ident)
+                k = pick(options, evs)
+                for ident in [i for i in known if i != idents[k]]:  # seul l'arbre retenu reste en mémoire
+                    known.pop(ident)[1].close()
+                self.plan[sit.key] = list(options[k])
+                self.report[sit.key] = {"label": label(sit.key), "options": [list(o) for o in options],
+                                        "evs": [round(e, 4) for e in evs], "chosen": list(options[k]), "reach": 1.0,
+                                        "cards": None, "method": "arbre complet"}
+                self.log(f"  {label(sit.key)} : {sizes_text(options[k])}")
+        except BaseException:
+            for _, session in known.values():
+                session.close()
+            raise
+        # L'arbre retenu : les ranges de la turn de chaque ligne en viennent.
+        self.session = next(iter(known.values()))[1]
         self.root_mass = _mass(self.session.node([]))
 
     # --- turn et river : sous-jeux ---
@@ -299,45 +310,79 @@ class Selection:
                 continue
             node = self.session.node(path)
             weight = _mass(node) / self.root_mass  # probabilité d'arriver à la turn par cette ligne
-            cards = sample(node["cards"], self.cards)
+            cards = sample(node["cards"], self.cards if street == 1 else min(self.cards, RIVER_CARDS))
             bases = [subgame(self.spot, node, card, line) for card in cards]
             sits = [s for s in situations() if s.street == street and s.past[0] == line]
             # Pour la turn, la river reste simple (comme au flop) ; elle se choisit ensuite.
             view = self._flop_plan if street == 1 else dict
-            # Fréquence de chaque situation avec le plan courant, puis comparaison, la plus fréquente d'abord.
+            # Fréquence de chaque situation dans le sous-jeu, avec le plan courant.
             stats = self._lot(bases, [{"base": k, "plan": view(self.plan)} for k in range(len(bases))])
-            reach = {s.key: weight * sum(r["stats"].get(s.key, {}).get("reach", 0.0) for r in stats) / len(stats)
-                     for s in sits}
+            reach = {s.key: sum(r["stats"].get(s.key, {}).get("reach", 0.0) for r in stats) / len(stats) for s in sits}
+            usage = self._river_usage(bases, sits, reach, weight) if street == 2 else {}
             for sit in sorted(sits, key=lambda s: -reach[s.key]):
-                self._compare(sit, bases, reach[sit.key], view)
+                self._compare(sit, bases, reach[sit.key], weight, node["pot"], view, usage.get(sit.key))
 
-    def _compare(self, sit: Situation, bases: list[dict], reach: float, view: Callable[[dict], dict]) -> None:
+    def _river_usage(self, bases: list[dict], sits: list[Situation], reach: dict, weight: float) -> dict:
+        """River : chaque mise propose ses cinq tailles à la fois ; leur fréquence d'emploi retient les trois
+        plus utilisées, dont on compare ensuite les paires (trois au lieu de dix)."""
+        bets = [s for s in sits if s.choose == 2 and weight * reach[s.key] >= RARE]
+        if not bets:
+            return {}
+        plan = dict(self.plan, **{s.key: list(s.candidates) for s in bets})
+        n = min(RARE_CARDS * 2, len(bases))
+        used = bases[:: max(1, len(bases) // n)][:n]
+        results = self._lot(used, [{"base": b, "plan": plan} for b in range(len(used))])
+        out = {}
+        for sit in bets:
+            share = [sum(r["stats"].get(sit.key, {}).get("usage", [0.0] * 5)[j] for r in results) for j in range(5)]
+            out[sit.key] = [round(x / len(results), 6) for x in share]
+        return out
+
+    def _compare(self, sit: Situation, bases: list[dict], reach: float, weight: float, pot: float,
+                 view: Callable[[dict], dict], usage: Optional[list] = None) -> None:
+        """Choisit la taille d'une situation. reach : sa fréquence dans le sous-jeu ; weight : la probabilité
+        d'atteindre ce sous-jeu depuis le flop."""
         options = sit.options()
-        entry = {"label": label(sit.key), "options": [list(o) for o in options], "reach": round(reach, 5)}
-        if reach < RARE:
+        if usage is not None:  # river : paires parmi les trois tailles les plus employées
+            top = sorted(sorted(range(len(sit.candidates)), key=lambda j: -usage[j])[:3])
+            options = list(itertools.combinations([sit.candidates[j] for j in top], 2))
+        overall = weight * reach  # probabilité d'atteindre la situation depuis le flop
+        entry = {"label": label(sit.key), "options": [list(o) for o in options], "reach": round(overall, 5)}
+        if usage is not None:
+            entry["usage"] = usage
+        if overall < RARE:
             k, entry["evs"], entry["cards"], entry["method"] = 0, None, 0, "rare"
         else:
-            n = len(bases) if reach >= COMMON else min(RARE_CARDS, len(bases))
+            n = len(bases) if overall >= COMMON else min(RARE_CARDS, len(bases))
             used = bases[:: max(1, len(bases) // n)][:n]
             runs = [{"base": b, "plan": view(dict(self.plan, **{sit.key: list(opt)}))}
                     for opt in options for b in range(len(used))]
             results = self._lot(used, runs)
             evs = [sum(r["root_ev"][sit.player] for r in results[j * len(used):(j + 1) * len(used)]) / len(used)
                    for j in range(len(options))]
-            k = pick(options, evs)
-            entry.update(evs=[round(e, 4) for e in evs], cards=len(used), method="sous-jeux")
+            # L'écart se juge quand la situation arrive : à la racine du sous-jeu, il est dilué par sa fréquence.
+            eps = max(EPS_FLOOR, EPS_POT * pot * reach)
+            k = pick(options, evs, eps)
+            entry.update(evs=[round(e, 4) for e in evs], cards=len(used), method="sous-jeux",
+                         per_occurrence=[round((e - evs[k]) / reach, 3) if reach > 0 else None for e in evs])
         self.plan[sit.key] = list(options[k])
         entry["chosen"] = list(options[k])
         self.report[sit.key] = entry
         if entry["method"] != "rare":
-            self.log(f"  {label(sit.key)} : {sizes_text(options[k])} (atteinte {100 * reach:.1f} %, "
-                     f"{entry['cards']} cartes)")
+            gaps = ", ".join(f"{sizes_text(o)} {g:+.2f}" for o, g in zip(options, entry["per_occurrence"]) if o != options[k])
+            self.log(f"  {label(sit.key)} : {sizes_text(options[k])} (atteinte {100 * overall:.1f} %, "
+                     f"{entry['cards']} cartes ; écart par occurrence : {gaps} bb)")
 
-    def run(self) -> dict:
+    def run(self, resume: Optional[dict] = None) -> dict:
+        """resume : un choix précédent dont on garde le flop (seule la turn et la river se refont)."""
         start = time.time()
         try:
-            self.log("  Flop (arbres complets)…")
-            self.flop()
+            if resume:
+                self.log("  Flop : choix repris…")
+                self.resume_flop(resume)
+            else:
+                self.log("  Flop (arbres complets)…")
+                self.flop()
             self.log("  Turn (sous-jeux)…")
             self.later(1)
             self.log("  River (sous-jeux)…")
@@ -346,4 +391,11 @@ class Selection:
             if self.session is not None:
                 self.session.close()
         return {"plan": self.plan, "report": self.report, "seconds": round(time.time() - start),
-                "cards": self.cards, "created": time.strftime("%d/%m/%Y %H:%M")}
+                "cards": self.cards, "created": time.strftime("%d/%m/%Y %H:%M"), "method": METHOD}
+
+    def resume_flop(self, previous: dict) -> None:
+        for sit in situations()[:3]:
+            self.plan[sit.key] = list(previous["plan"][sit.key])
+            self.report[sit.key] = previous["report"][sit.key]
+        _, self.session = self._solve(self.plan)
+        self.root_mass = _mass(self.session.node([]))

@@ -44,7 +44,7 @@ class TextureTest(unittest.TestCase):
             self.assertIsNone(studyspots.parse_ident(bad), bad)
 
     def test_tree(self):
-        spot = StudySpot("srp", cards_of("KsKd4c"))
+        spot = StudySpot("srp", cards_of("KsKd4c"), plan={})  # arbre par défaut (sans tailles choisies)
         request = spot.request(50, 2.0)
         tree = request["spot"]["tree"]
         self.assertEqual((tree["starting_pot"], tree["effective_stack"]), (5.0, 97.5))
@@ -93,8 +93,12 @@ class SolveSpotsTest(unittest.TestCase):
         env = {"ANALYZER_HOME": str(self.folder / "home"), "ANALYZER_SOLVER": str(FAKE_SOLVER)}
         self.env = mock.patch.dict(os.environ, env)
         self.env.start()
+        # Sans les tailles livrées avec Analyzer : chaque test part d'aucun choix.
+        self.shipped = mock.patch.object(studyspots, "shipped_path", lambda family: self.folder / "aucun.json")
+        self.shipped.start()
 
     def tearDown(self):
+        self.shipped.stop()
         self.env.stop()
         self.tmp.cleanup()
 
@@ -211,10 +215,12 @@ class SolveSpotsTest(unittest.TestCase):
         self.assertEqual(studyspots.load_selection("srp", "KsKd4c")["source"], "local")
         # fichier livré : les choix de cet ordinateur, rassemblés
         shipped = studyspots.export_selections("srp", self.folder / "livre.json")
+        self.shipped.stop()
         with mock.patch.object(studyspots, "shipped_path", lambda family: shipped):
             studyspots.selection_path("srp", "KsKd4c").unlink()
             self.assertEqual(studyspots.load_selection("srp", "KsKd4c")["source"], "livré")
             self.assertEqual(StudySpot("srp", cards_of("KsKd4c")).plan["bet:fi:"], [75])
+        self.shipped.start()
 
     def test_app_chooses_then_solves(self):
         lib = Library(self.folder / "mains")

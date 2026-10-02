@@ -277,10 +277,15 @@ Méthode, street par street, chaque situation à son tour (les autres gardent le
 
 - flop : arbres complets, comparés à 0,4 % du pot près (c-bet, check-raise, relance du bouton) ;
 - turn, puis river : sous-jeux qui partent de la turn avec les ranges du flop résolu, sur 12 cartes turn
-  (`--cartes`) ; une situation rare se compare sur 4 cartes, une situation presque jamais atteinte
-  (moins de 0,3 % des coups) prend la plus petite taille.
+  (`--cartes`), 8 pour la river ; l'écart d'EV se juge quand la situation arrive (l'écart à la racine
+  du sous-jeu, rapporté à sa fréquence) : sous 0,5 % du pot, la plus petite taille l'emporte. Une
+  situation rare se compare sur 4 cartes ; presque jamais atteinte (moins de 0,3 % des coups), elle prend
+  la plus petite taille. À la river, une première résolution propose les cinq tailles à la fois : les
+  trois plus employées restent, et leurs trois paires se comparent.
 
-Compter de l'ordre de 45 minutes par flop sur 4 cœurs, puis la résolution du flop avec ses tailles. Le
+Mesuré sur K♠K♦4♣ avec 4 cœurs : 35 minutes pour le flop, 5 pour la turn, une demi-heure pour la river,
+puis une dizaine de minutes pour résoudre le flop avec ses tailles (arbre d'environ 1,2 million de nœuds,
+4 Go de mémoire, étude de 430 Mo) : compter une nuit pour une dizaine de flops, moins avec plus de cœurs. Le
 choix est gardé dans `~/.analyzer/tailles` ; ceux calculés à l'avance sont livrés avec Analyzer
 (`analyzer/theory/data/srp_tailles.json`) et ne se refont pas. La page *Études du solveur* montre sous
 chaque flop ses tailles et, en dépliant, l'EV de chaque taille comparée. Le bouton **Résoudre les flops
