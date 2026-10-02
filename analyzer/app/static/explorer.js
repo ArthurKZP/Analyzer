@@ -753,9 +753,11 @@
     // Un spot d'étude n'a pas de ligne jouée en cache : il s'affiche une fois l'étude ouverte.
     if (state.result && (live || !SPOT)) await goStart();
     else $('grid').append(el('div', { class: 'empty', style: 'grid-column: 1 / -1' },
-      SPOT && state.study ? 'Ouverture de l\'étude…' : SPOT ? 'Résous ce spot pour voir la stratégie du solveur.'
+      state.study ? 'Ouverture de l\'étude…' : SPOT ? 'Résous ce spot pour voir la stratégie du solveur.'
         : 'Résous ce coup pour voir la stratégie du solveur.'));
-    if (state.state === 'done' && !live && state.study) solve();  // l'étude se rouvre seule, en quelques secondes
+    // L'étude se rouvre seule, en quelques secondes (aussi quand le résultat en cache manque, par exemple
+    // après une mise à jour du solveur).
+    if (['done', 'absent'].includes(state.state) && !live && state.study) solve();
     else poll();
   })();
 })();

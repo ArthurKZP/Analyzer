@@ -35,7 +35,7 @@ GTOPEN_URL = "https://github.com/MatthewPDingle/GTOpen"
 GTOPEN_COMMIT = "b69ea07c79884fc598757dc45c712e73976db810"  # version de GTOpen testée avec analyzer-solve
 GTOPEN_PATHS = ("/crates/solver/", "/cache/contextual/")  # le moteur ; les fichiers qu'il lit sont ajoutés
 INCLUDE_RE = re.compile(r'include_(?:str|bytes)!\(\s*"([^"]+)"\s*\)')
-NATIVE_SOURCE = Path(__file__).parent / "native" / "main.rs"
+NATIVE_DIR = Path(__file__).parent / "native"  # sources du pont analyzer-solve (main.rs, arbre.rs)
 EXE = "analyzer-solve" + (".exe" if os.name == "nt" else "")
 INSTALL_COMMAND = "python -m analyzer gtopen --installer"
 
@@ -111,7 +111,10 @@ def binary_path() -> Path:
 
 
 def _native_hash() -> str:
-    return hashlib.sha256(NATIVE_SOURCE.read_bytes()).hexdigest()[:16]
+    digest = hashlib.sha256()
+    for path in sorted(NATIVE_DIR.glob("*.rs")):
+        digest.update(path.name.encode() + b"\0" + path.read_bytes())
+    return digest.hexdigest()[:16]
 
 
 def _valid_source(path: Path) -> bool:
@@ -238,7 +241,8 @@ def install(source: Optional[str] = None, log: Callable[[str], None] = print, gp
         prepare(src, log)
     root = build_dir()
     root.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(NATIVE_SOURCE, root / "main.rs")
+    for path in NATIVE_DIR.glob("*.rs"):
+        shutil.copyfile(path, root / path.name)
     (root / "Cargo.toml").write_text(CARGO_TOML.format(solver=(src / "crates" / "solver").as_posix()),
                                      encoding="utf-8")
     (root / "source.txt").write_text(str(src), encoding="utf-8")
@@ -312,13 +316,19 @@ class SpotTree:
 
     def request(self, iterations: int = DEFAULT_ITERATIONS, target: float = DEFAULT_TARGET,
                 threads: int = 0) -> dict:
-        return {
+        out = {
             "spot": {"board": "".join(self.board), "range_oop": range_text(self.ranges[self.oop]),
                      "range_ip": range_text(self.ranges[self.ip]), "tree": self.tree()},
             "line": self.line,
             "max_iterations": iterations, "target_exploit_pct": target, "threads": threads,
             "gpu": gpu_enabled(),
         }
+        # Tailles par situation de la ligne (c-bet, 2e barrel, probe…), voir native/arbre.rs. Sans plan,
+        # la requête (et donc la clé des études déjà enregistrées) ne change pas.
+        plan = getattr(self, "plan", None)
+        if plan:
+            out["plan"] = {key: _size_json(sizes) for key, sizes in sorted(plan.items())}
+        return out
 
     def menu_text(self) -> str:
         def fmt(values: list) -> str:

@@ -82,6 +82,7 @@ class StudySpot(postflop.SpotTree):
     oop: str = "BB"
     ip: str = "BTN"
     line: list = field(default_factory=list)
+    plan: dict = field(default_factory=dict)  # situation -> tailles (voir native/arbre.rs)
 
     def __post_init__(self):
         info = FAMILIES[self.family]

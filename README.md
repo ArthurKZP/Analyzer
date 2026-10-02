@@ -258,6 +258,15 @@ texture dans la page.
 solveur ne contient pas (par exemple un open que le solveur ne fait jamais) y est ajoutée avec un poids
 infime pour lire sa stratégie, à prendre avec prudence ; les pots limpés et les 5bets ne sont pas couverts.
 
+**Tailles selon la ligne** : GTOpen fixe les tailles par street et par joueur seulement (la même mise du
+bouton à la turn après une c-bet payée ou après un flop checké). `analyzer-solve` sait construire lui-même
+l'arbre (`analyzer/theory/native/arbre.rs`, mêmes règles que GTOpen) quand la requête porte un *plan* :
+une liste de tailles par situation, c-bet, 2e barrel, c-bet retardée, probe, bet/check/bet, check-raise…
+(clés décrites en tête du fichier). Sans plan, l'arbre est celui de GTOpen ; avec un plan vide, celui
+d'Analyzer lui est identique nœud pour nœud (`analyzer-solve --verifier-arbre requete.json`). C'est la
+base du choix des tailles par situation et de la modification des tailles d'un spot.
+Après une mise à jour d'Analyzer qui touche ce pont, relance `python -m analyzer gtopen --installer`.
+
 Variables d'environnement : `ANALYZER_HOME` (dossier de travail, `~/.analyzer` par défaut),
 `GTOPEN_DIR` (copie de GTOpen à utiliser), `ANALYZER_SOLVER` (chemin d'un `analyzer-solve` déjà compilé).
 

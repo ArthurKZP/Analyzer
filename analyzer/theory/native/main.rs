@@ -6,7 +6,10 @@
 //!
 //! Requête :
 //!   {"spot": <SpotConfig GTOpen>, "line": [étapes], "max_iterations": 300,
-//!    "target_exploit_pct": 0.5, "threads": 0, "max_nodes": 4000000, "gpu": false}
+//!    "target_exploit_pct": 0.5, "threads": 0, "max_nodes": 4000000, "gpu": false,
+//!    "plan": {"bet:fi:": [{"PotPct": 33.0}], ...}}
+//! "plan" (facultatif) : tailles par situation de la ligne (voir arbre.rs) ; l'arbre est alors
+//! construit par Analyzer au lieu de GTOpen.
 //!   étape = {"action": "check" | "bet" | "call" | "raise" | "fold", "to": 3.5, "allin": false}
 //!         | {"card": "Ah"}
 //! Les montants sont des totaux de la street, dans l'unité du spot (Analyzer utilise la bb).
@@ -23,8 +26,13 @@
 //! stratégie moyenne de chaque nœud sur 8 bits (sans la dernière action, qui s'en déduit), le tout
 //! compressé. --load la recharge en quelques secondes, sans recalculer, pour naviguer à nouveau.
 //!
+//! analyzer-solve --verifier-arbre requete.json : vérifie qu'avec un plan vide, l'arbre d'Analyzer
+//! est identique à celui de GTOpen.
+//!
 //! Compilé avec la fonctionnalité `gpu` (cargo build --features gpu), "gpu": true résout sur une
 //! carte NVIDIA via le moteur CUDA de GTOpen, et revient au processeur si la carte n'est pas utilisable.
+
+mod arbre;
 
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -53,6 +61,30 @@ struct Request {
     max_nodes: usize,
     #[serde(default)]
     gpu: bool,
+    #[serde(default)]
+    plan: Option<arbre::Plan>,
+}
+
+/// Le spot de la requête. Avec un plan, GTOpen prépare les ranges et les symétries sur un arbre
+/// minimal (sans mise), puis l'arbre d'Analyzer, construit selon le plan, le remplace.
+fn make_spot(request: &Request) -> Result<Spot, String> {
+    let Some(plan) = &request.plan else {
+        return Spot::new_with_limit(request.spot.clone(), Some(request.max_nodes));
+    };
+    let mut bare = request.spot.clone();
+    for sizing in bare.tree.oop.iter_mut().chain(bare.tree.ip.iter_mut()) {
+        sizing.bet.clear();
+        sizing.raise.clear();
+        sizing.donk.clear();
+    }
+    bare.tree.add_allin = false;
+    let mut spot = Spot::new_with_limit(bare, Some(request.max_nodes))?;
+    let mut config = request.spot.tree.clone();
+    config.carry_aggressor_through_checks = Some(false);
+    let hands = [spot.hands[0].len(), spot.hands[1].len()];
+    spot.tree = arbre::build(&config, plan, spot.board.len(), spot.board_mask, hands, Some(request.max_nodes))?;
+    spot.config.tree = config;
+    Ok(spot)
 }
 
 fn default_iterations() -> u32 {
@@ -352,7 +384,7 @@ fn load_study(path: &str) -> Result<(Request, Value, Solver), String> {
     r.read_line(&mut line).map_err(err)?;
     let header: Value = serde_json::from_str(&line).map_err(|e| format!("en-tête d'étude invalide : {e}"))?;
     let request: Request = serde_json::from_value(header["request"].clone()).map_err(|e| format!("requête invalide : {e}"))?;
-    let spot = Spot::new_with_limit(request.spot.clone(), Some(request.max_nodes))?;
+    let spot = make_spot(&request)?;
     let solver = Solver::with_storage(Arc::new(spot), Storage::Compressed);
     let mut z = GzDecoder::new(r);
     let tree = &solver.spot.tree;
@@ -410,6 +442,20 @@ fn option(args: &[String], name: &str) -> Option<String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let session = args.iter().any(|a| a == "--serve");
+    if let Some(path) = option(&args, "--verifier-arbre") {
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| fail(format!("lecture de {path} : {e}")));
+        let mut request: Request = serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("requête invalide : {e}")));
+        request.plan = None;
+        let gtopen = make_spot(&request).unwrap_or_else(|e| fail(e));
+        request.plan = Some(arbre::Plan::new());
+        let ours = make_spot(&request).unwrap_or_else(|e| fail(e));
+        let reply = match arbre::same_tree(&gtopen.tree, &ours.tree) {
+            Ok(()) => json!({ "identique": true, "noeuds": ours.tree.nodes.len() }),
+            Err(e) => json!({ "identique": false, "difference": e }),
+        };
+        println!("{reply}");
+        return;
+    }
     if let Some(study) = option(&args, "--load") {
         let start = std::time::Instant::now();
         let (request, summary, solver) = load_study(&study).unwrap_or_else(|e| fail(e));
@@ -439,7 +485,7 @@ fn main() {
         rayon::ThreadPoolBuilder::new().num_threads(request.threads).build_global().ok();
     }
 
-    let spot = Spot::new_with_limit(request.spot, Some(request.max_nodes)).unwrap_or_else(|e| fail(e));
+    let spot = make_spot(&request).unwrap_or_else(|e| fail(e));
     let tree_nodes = spot.tree.nodes.len();
     // Le moteur GPU travaille en précision complète (f32).
     let storage = if request.gpu { Storage::F32 } else { Storage::Compressed };

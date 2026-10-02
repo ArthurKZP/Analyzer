@@ -53,6 +53,11 @@ class TextureTest(unittest.TestCase):
         self.assertEqual(tree["oop"][1]["bet"], [{"PotPct": 75.0}])
         self.assertEqual(request["line"], [])
         self.assertIn("AA", request["spot"]["range_ip"].split(","))
+        self.assertNotIn("plan", request)  # sans plan, la requête (et la clé de l'étude) ne change pas
+        planned = StudySpot("srp", cards_of("KsKd4c"), plan={"bet:ti:x": [100.0], "bet:fi:": [75.0, "a"]})
+        self.assertEqual(planned.request()["plan"], {"bet:fi:": [{"PotPct": 75.0}, "AllIn"],
+                                                     "bet:ti:x": [{"PotPct": 100.0}]})
+        self.assertNotEqual(postflop.study_key(planned.request(50, 2.0)), postflop.study_key(request))
         # le nombre de threads ne change pas l'étude
         self.assertEqual(postflop.study_key(spot.request(50, 2.0, threads=4)), postflop.study_key(request))
         result = spot.interpret({"iterations": 50, "exploit_pct": 1.0, "seconds": 3.0})

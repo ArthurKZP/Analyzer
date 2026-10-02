@@ -1,5 +1,7 @@
 import copy
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -269,6 +271,19 @@ class GTOpenIntegrationTest(unittest.TestCase):
         self.assertEqual((hero["who"], hero["combo"]), ("H", "QhJh"))
         self.assertAlmostEqual(sum(hero["strategy"]), 1.0, places=2)
         print(postflop.result_text(result, "Hero"), file=sys.stderr)
+
+    def test_plan_tree(self):
+        # Sans plan, l'arbre d'Analyzer (native/arbre.rs) est celui de GTOpen, nœud pour nœud.
+        hand = {h.hand_id: h for h in load_hands([FIXTURES])}["HAND02"]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "requete.json"
+            for allin in (False, True):
+                request = postflop.build_spot(hand, "Hero").request()
+                request["spot"]["tree"]["add_allin"] = allin
+                path.write_text(json.dumps(request), encoding="utf-8")
+                out = subprocess.run([str(postflop.binary_path()), "--verifier-arbre", str(path)],
+                                     capture_output=True, text=True, check=True)
+                self.assertTrue(json.loads(out.stdout)["identique"], out.stdout)
 
 
 if __name__ == "__main__":
