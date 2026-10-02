@@ -13,17 +13,79 @@
 //! retardée ; "bet:to:x" probe turn ; "bet:ri:ix" bet/check/bet ; "bet:ro:ix" probe river ;
 //! "raise:fo::0" check-raise au flop ; "raise:fi::1" relance du bouton face au check-raise.
 //!
+//! Une taille du plan : un nombre (% du pot ; pour une relance, du pot après le call), "geo" (la
+//! même fraction du pot à chaque street restante pour finir à tapis à la river : à la river, le
+//! tapis) ou "a" (tapis).
+//!
 //! Une situation absente du plan prend les tailles de sa street dans la configuration de GTOpen
 //! (bet, donk quand la BB mène dans l'agresseur de la street précédente, raise) : un plan vide
 //! redonne exactement l'arbre de GTOpen (voir `same_tree`).
+//!
+//! Un sous-jeu (board de 4 ou 5 cartes, ranges du nœud d'origine) reçoit le passé des streets déjà
+//! jouées (`root_past`, ex. "i" à la turn après une c-bet payée) : les clés et la règle du donk
+//! s'appliquent alors comme dans l'arbre complet.
 
+use serde::de::{Deserializer, Error};
+use serde::Deserialize;
 use solver::tree::{
     Action, BetSize, Node, Tree, TreeConfig, IP, KIND_ACTION, KIND_CHANCE, KIND_TERM_FOLD,
     KIND_TERM_SHOWDOWN, OOP, SENTINEL,
 };
 use std::collections::HashMap;
 
-pub type Plan = HashMap<String, Vec<BetSize>>;
+pub type Plan = HashMap<String, Vec<Size>>;
+
+/// Taille d'une mise ou d'une relance (voir l'en-tête). `Mult` ne vient que de la configuration de
+/// GTOpen (relance en multiple de la mise adverse).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Size {
+    Pct(f64),
+    Mult(f64),
+    Geo,
+    AllIn,
+}
+
+impl<'de> Deserialize<'de> for Size {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Num(f64),
+            Text(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Num(p) if p.is_finite() && p > 0.0 => Ok(Size::Pct(p)),
+            Raw::Text(t) if t == "geo" => Ok(Size::Geo),
+            Raw::Text(t) if t == "a" => Ok(Size::AllIn),
+            _ => Err(D::Error::custom("taille invalide : un % du pot, \"geo\" ou \"a\"")),
+        }
+    }
+}
+
+impl From<&BetSize> for Size {
+    fn from(size: &BetSize) -> Size {
+        match *size {
+            BetSize::PotPct(p) => Size::Pct(p),
+            BetSize::PrevMult(m) => Size::Mult(m),
+            BetSize::AllIn => Size::AllIn,
+        }
+    }
+}
+
+/// Une situation du plan rencontrée dans l'arbre : son nœud, sa clé et, pour chaque action du nœud,
+/// les tailles du plan (indices dans sa liste) qui y mènent (geo et tapis peuvent se confondre).
+pub struct Tag {
+    pub node: u32,
+    pub key: String,
+    pub sizes: usize,
+    pub actions: Vec<Vec<usize>>,
+}
+
+/// Fraction du pot à miser à chaque street restante (`streets`, celle-ci comprise) pour engager
+/// `stack` dans un pot `pot` : (1 + 2f)^streets = 1 + 2·stack/pot.
+pub fn geometric(pot: f64, stack: f64, streets: u32) -> f64 {
+    ((1.0 + 2.0 * stack / pot).powf(1.0 / streets as f64) - 1.0) / 2.0
+}
 
 const STREETS: [char; 3] = ['f', 't', 'r'];
 
@@ -45,7 +107,6 @@ struct State {
 struct Builder<'a> {
     config: &'a TreeConfig,
     plan: &'a Plan,
-    root_street: u8,
     board_mask: u64,
     max_nodes: Option<usize>,
     nodes: Vec<Node>,
@@ -53,6 +114,7 @@ struct Builder<'a> {
     actions: Vec<Action>,
     num_hands: [u64; 2],
     data_size: [u64; 2],
+    tags: Vec<Tag>,
 }
 
 /// Construit l'arbre du plan. `config` : la configuration de GTOpen (pot, tapis, seuil de tapis,
@@ -60,25 +122,22 @@ struct Builder<'a> {
 pub fn build(
     config: &TreeConfig,
     plan: &Plan,
+    root_past: &str,
     board_len: usize,
     board_mask: u64,
     num_hands: [usize; 2],
     max_nodes: Option<usize>,
-) -> Result<Tree, String> {
-    for (key, sizes) in plan {
+) -> Result<(Tree, Vec<Tag>), String> {
+    for key in plan.keys() {
         check_key(key)?;
-        if key.starts_with("bet:") && sizes.iter().any(|s| matches!(s, BetSize::PrevMult(_))) {
-            return Err(format!("plan {key} : une mise se donne en % du pot ou tapis, pas en multiple"));
-        }
-        if sizes.iter().any(|s| matches!(s, BetSize::PotPct(p) | BetSize::PrevMult(p) if !p.is_finite() || *p <= 0.0)) {
-            return Err(format!("plan {key} : taille invalide"));
-        }
     }
     let root_street = (board_len - 3) as u8;
+    if root_past.len() != root_street as usize || !root_past.chars().all(|c| matches!(c, 'o' | 'i' | 'x')) {
+        return Err(format!("passé {root_past:?} invalide pour un board de {board_len} cartes"));
+    }
     let mut b = Builder {
         config,
         plan,
-        root_street,
         board_mask,
         max_nodes,
         nodes: Vec::new(),
@@ -86,6 +145,7 @@ pub fn build(
         actions: Vec::new(),
         num_hands: [num_hands[0] as u64, num_hands[1] as u64],
         data_size: [0, 0],
+        tags: Vec::new(),
     };
     let half = config.starting_pot / 2.0;
     b.action_node(State {
@@ -95,18 +155,27 @@ pub fn build(
         street_bet: [0.0, 0.0],
         last_increment: 0.0,
         num_raises: 0,
-        last_aggressor: None,
+        last_aggressor: aggressor_of(root_past.chars().last()),
         checked: false,
-        past: String::new(),
+        past: root_past.to_string(),
     })?;
-    Ok(Tree {
+    let tree = Tree {
         config: config.clone(),
         root_street,
         nodes: b.nodes,
         children: b.children,
         actions: b.actions,
         data_size: b.data_size,
-    })
+    };
+    Ok((tree, b.tags))
+}
+
+fn aggressor_of(letter: Option<char>) -> Option<u8> {
+    match letter {
+        Some('o') => Some(OOP),
+        Some('i') => Some(IP),
+        _ => None,
+    }
 }
 
 fn check_key(key: &str) -> Result<(), String> {
@@ -149,52 +218,65 @@ impl<'a> Builder<'a> {
     }
 
     /// Tailles proposées : celles du plan pour cette situation, sinon celles de la street.
-    fn sizes(&self, st: &State, raise: bool, donking: bool) -> &'a [BetSize] {
+    fn sizes(&self, st: &State, raise: bool, donking: bool) -> Vec<Size> {
         if let Some(sizes) = self.plan.get(&self.key(st, raise)) {
-            return sizes;
+            return sizes.clone();
         }
+        self.default_sizes(st, raise, donking)
+    }
+
+    fn default_sizes(&self, st: &State, raise: bool, donking: bool) -> Vec<Size> {
         let streets = if st.to_act == OOP { &self.config.oop } else { &self.config.ip };
         let sizing = &streets[st.street as usize];
-        if raise {
+        let list = if raise {
             &sizing.raise
         } else if donking {
             &sizing.donk
         } else {
             &sizing.bet
-        }
+        };
+        list.iter().map(Size::from).collect()
     }
 
     fn stack_of(&self, put: f64) -> f64 {
         self.config.effective_stack - (put - self.config.starting_pot / 2.0)
     }
 
-    fn legal_actions(&self, st: &State) -> Vec<Action> {
+    /// Actions du nœud et, pour chacune, les tailles (indices) qui y mènent.
+    fn legal_actions(&self, st: &State) -> (Vec<Action>, Vec<Vec<usize>>) {
         let me = st.to_act as usize;
         let opp = 1 - me;
         let stack_me = self.stack_of(st.put[me]);
         let facing = st.street_bet[opp] - st.street_bet[me];
         let mut actions = Vec::new();
+        let mut from: Vec<Vec<usize>> = Vec::new();
         if facing > 1e-9 {
             actions.push(Action::Fold);
             actions.push(Action::Call(st.street_bet[opp]));
+            from.extend([Vec::new(), Vec::new()]);
             if stack_me > facing + 1e-9 && st.num_raises < self.config.max_raises {
                 let pot_after_call = st.put[0] + st.put[1] + facing;
                 let max_to = st.street_bet[me] + stack_me;
-                let mut wanted: Vec<f64> = self
+                let streets_left = 3 - st.street as u32;
+                let mut wanted: Vec<(f64, Vec<usize>)> = self
                     .sizes(st, true, false)
                     .iter()
-                    .map(|size| match size {
-                        BetSize::PotPct(p) => st.street_bet[opp] + p / 100.0 * pot_after_call,
-                        BetSize::PrevMult(m) => st.street_bet[opp] * m,
-                        BetSize::AllIn => max_to,
-                    })
+                    .enumerate()
+                    .map(|(k, size)| (match *size {
+                        Size::Pct(p) => st.street_bet[opp] + p / 100.0 * pot_after_call,
+                        Size::Mult(m) => st.street_bet[opp] * m,
+                        Size::Geo => {
+                            st.street_bet[opp] + geometric(pot_after_call, stack_me - facing, streets_left) * pot_after_call
+                        }
+                        Size::AllIn => max_to,
+                    }, vec![k]))
                     .collect();
                 if self.config.add_allin {
-                    wanted.push(max_to);
+                    wanted.push((max_to, Vec::new()));
                 }
                 let min_to = st.street_bet[opp] + st.last_increment.max(1e-9);
-                let mut tos: Vec<f64> = Vec::new();
-                for mut to in wanted {
+                let mut tos: Vec<(f64, Vec<usize>)> = Vec::new();
+                for (mut to, ids) in wanted {
                     if to < min_to {
                         to = min_to;
                     }
@@ -202,45 +284,62 @@ impl<'a> Builder<'a> {
                         to = max_to;
                     }
                     if to > st.street_bet[opp] + 1e-9 {
-                        tos.push(to);
+                        tos.push((to, ids));
                     }
                 }
-                dedupe(&mut tos);
-                actions.extend(tos.into_iter().map(Action::Raise));
+                for (to, ids) in merge(tos) {
+                    actions.push(Action::Raise(to));
+                    from.push(ids);
+                }
             }
         } else {
             actions.push(Action::Check);
+            from.push(Vec::new());
             if stack_me > 1e-9 {
-                let donking = st.to_act == OOP && st.street > self.root_street && st.last_aggressor == Some(IP);
+                // Donk : la BB mène dans l'agresseur de la street précédente (aussi à la racine d'un
+                // sous-jeu, dont le passé est connu).
+                let donking = st.to_act == OOP && st.last_aggressor == Some(IP);
                 let sizes = self.sizes(st, false, donking);
                 let pot = st.put[0] + st.put[1];
                 let max_to = stack_me;
-                let mut wanted: Vec<f64> = sizes
+                let streets_left = 3 - st.street as u32;
+                let mut wanted: Vec<(f64, Vec<usize>)> = sizes
                     .iter()
-                    .filter_map(|size| match size {
-                        BetSize::PotPct(p) => Some(p / 100.0 * pot),
-                        BetSize::PrevMult(_) => None,
-                        BetSize::AllIn => Some(max_to),
+                    .enumerate()
+                    .filter_map(|(k, size)| match *size {
+                        Size::Pct(p) => Some((p / 100.0 * pot, vec![k])),
+                        Size::Mult(_) => None,
+                        Size::Geo => Some((geometric(pot, stack_me, streets_left) * pot, vec![k])),
+                        Size::AllIn => Some((max_to, vec![k])),
                     })
                     .collect();
                 if self.config.add_allin && (!sizes.is_empty() || !donking) {
-                    wanted.push(max_to);
+                    wanted.push((max_to, Vec::new()));
                 }
-                let mut tos: Vec<f64> = Vec::new();
-                for mut to in wanted {
+                let mut tos: Vec<(f64, Vec<usize>)> = Vec::new();
+                for (mut to, ids) in wanted {
                     if to <= 1e-9 {
                         continue;
                     }
                     if to >= max_to - 1e-9 || to >= self.config.allin_threshold * max_to - 1e-9 {
                         to = max_to;
                     }
-                    tos.push(to);
+                    tos.push((to, ids));
                 }
-                dedupe(&mut tos);
-                actions.extend(tos.into_iter().map(Action::Bet));
+                for (to, ids) in merge(tos) {
+                    actions.push(Action::Bet(to));
+                    from.push(ids);
+                }
             }
         }
-        actions
+        (actions, from)
+    }
+
+    /// Clé de la situation du nœud si elle est dans le plan (mise ou relance possible).
+    fn planned(&self, st: &State) -> Option<(String, usize)> {
+        let facing = st.street_bet[1 - st.to_act as usize] - st.street_bet[st.to_act as usize];
+        let key = self.key(st, facing > 1e-9);
+        self.plan.get(&key).map(|sizes| (key, sizes.len()))
     }
 
     fn rake(&self, pot: f64) -> f64 {
@@ -275,7 +374,7 @@ impl<'a> Builder<'a> {
 
     fn action_node(&mut self, st: State) -> Result<u32, String> {
         self.check_budget()?;
-        let actions = self.legal_actions(&st);
+        let (actions, from) = self.legal_actions(&st);
         let n = actions.len();
         if n == 0 || n > 250 {
             return Err(format!("nombre d'actions invalide ({n}) pendant la construction de l'arbre"));
@@ -292,6 +391,11 @@ impl<'a> Builder<'a> {
             data_offset,
             ..Self::node(KIND_ACTION, st.to_act, st.street, st.put)
         });
+        if let Some((key, sizes)) = self.planned(&st) {
+            if from.iter().any(|ids| !ids.is_empty()) {
+                self.tags.push(Tag { node: idx, key, sizes, actions: from });
+            }
+        }
         let mut kids = Vec::with_capacity(n);
         for action in actions {
             kids.push(self.apply(&st, action)?);
@@ -352,15 +456,7 @@ impl<'a> Builder<'a> {
         self.check_budget()?;
         let next = st.street + 1;
         let idx = self.push(Self::node(KIND_CHANCE, 0, next, put));
-        let past = format!(
-            "{}{}",
-            st.past,
-            match aggressor {
-                Some(p) if p == OOP => 'o',
-                Some(_) => 'i',
-                None => 'x',
-            }
-        );
+        let past = format!("{}{}", st.past, letter_of(aggressor));
         let mut kids = vec![SENTINEL; 52];
         for card in 0..52u8 {
             if self.board_mask & (1 << card) != 0 {
@@ -412,9 +508,26 @@ impl<'a> Builder<'a> {
     }
 }
 
-fn dedupe(v: &mut Vec<f64>) {
-    v.sort_by(f64::total_cmp);
-    v.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+fn letter_of(aggressor: Option<u8>) -> char {
+    match aggressor {
+        Some(p) if p == OOP => 'o',
+        Some(_) => 'i',
+        None => 'x',
+    }
+}
+
+/// Montants triés, ceux à moins de 1e-6 confondus (le premier reste, comme dans GTOpen), avec les
+/// tailles qui y mènent.
+fn merge(mut v: Vec<(f64, Vec<usize>)>) -> Vec<(f64, Vec<usize>)> {
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out: Vec<(f64, Vec<usize>)> = Vec::new();
+    for (x, ids) in v {
+        match out.last_mut() {
+            Some(last) if (x - last.0).abs() < 1e-6 => last.1.extend(ids),
+            _ => out.push((x, ids)),
+        }
+    }
+    out
 }
 
 /// Les deux arbres sont-ils identiques (nœuds, enfants, actions, tailles des données) ? Sinon, où

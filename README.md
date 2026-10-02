@@ -236,7 +236,7 @@ le bouton **Résoudre les flops manquants** de la page *Études du solveur* (en 
 l'autre, avec une barre de progression ; *Arrêter* interrompt la série), ou en ligne de commande :
 
 ```bash
-python -m analyzer gtopen --spots srp                          # les 24 flops (ceux déjà résolus sont passés)
+python -m analyzer gtopen --spots srp                          # les 24 flops : choix des tailles, puis résolution
 python -m analyzer gtopen --spots srp --texture Monotone --texture "Ace high"   # quelques textures
 ```
 
@@ -253,6 +253,39 @@ rouvre d'elle-même, le choix de la carte s'ouvre quand on arrive à la turn ou 
 forcés de la BB (qui ne mène pas) sont passés pour aller droit à la décision suivante.
 *Étudier un autre flop* ouvre n'importe quel flop dans l'explorateur ; une fois résolu, il rejoint sa
 texture dans la page.
+
+**Choix des tailles** (`analyzer/theory/sizing.py`) : chaque flop de la série a ses propres tailles, une par
+situation pour tout le flop (quelles que soient la turn et la river), deux à la river. Pour chaque situation,
+la taille retenue est celle qui donne la meilleure EV à celui qui mise (ou relance) quand c'est sa seule
+option ; à moins de 0,02 bb de la meilleure, la plus petite l'emporte. Les candidates :
+
+| Situation | Tailles comparées |
+| --- | --- |
+| C-bet | 33 % · 75 % · géométrique |
+| 2e barrel (c-bet payée) | 50 % · pot · géométrique |
+| C-bet retardée (flop checké) | 33 % · 66 % · géométrique |
+| Probe turn de la BB (flop checké) | 33 % · 75 % · pot · géométrique |
+| Mises de la BB et du bouton après un check-raise payé | 50 % · pot · géo / 33 % · 66 % · géo |
+| River : 3e barrel, bet/check/bet, check/bet/bet, probes river… | deux parmi 50 % · 75 % · pot · 150 % · tapis |
+| Relances et sur-relances (check-raise, relance d'un probe…) | 33 % · 66 % · géométrique (tapis à la river) |
+
+Le géométrique mise la même fraction du pot à chaque street restante pour finir à tapis à la river
+(121 % au flop d'un SRP à 100 bb ; à la turn, selon la ligne). Les relances se comptent en % du pot après
+le call. La BB ne mène toujours pas dans l'agresseur (pas de donk).
+
+Méthode, street par street, chaque situation à son tour (les autres gardent leur choix courant) :
+
+- flop : arbres complets, comparés à 0,4 % du pot près (c-bet, check-raise, relance du bouton) ;
+- turn, puis river : sous-jeux qui partent de la turn avec les ranges du flop résolu, sur 12 cartes turn
+  (`--cartes`) ; une situation rare se compare sur 4 cartes, une situation presque jamais atteinte
+  (moins de 0,3 % des coups) prend la plus petite taille.
+
+Compter de l'ordre de 45 minutes par flop sur 4 cœurs, puis la résolution du flop avec ses tailles. Le
+choix est gardé dans `~/.analyzer/tailles` ; ceux calculés à l'avance sont livrés avec Analyzer
+(`analyzer/theory/data/srp_tailles.json`) et ne se refont pas. La page *Études du solveur* montre sous
+chaque flop ses tailles et, en dépliant, l'EV de chaque taille comparée. Le bouton **Résoudre les flops
+manquants** choisit les tailles qui manquent avant de résoudre ; en ligne de commande, `--spots srp` fait
+de même, `--choix-seulement` s'arrête au choix, `--sans-choix` garde les tailles par défaut.
 
 **Limites** : les tailles et la profondeur de l'arbre simplifient le jeu réel ; une main que la range du
 solveur ne contient pas (par exemple un open que le solveur ne fait jamais) y est ajoutée avec un poids

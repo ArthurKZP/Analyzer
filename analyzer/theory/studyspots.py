@@ -3,6 +3,9 @@
 Une famille fixe le préflop (ex. SRP : open du bouton à 2,5 bb, call de la BB, 100 bb) ; les ranges
 viennent de la solution préflop, l'arbre est le même que pour les mains jouées (sans tailles jouées).
 Chaque flop est classé par texture : pairé, monotone, sinon par sa plus haute carte.
+
+Les tailles de mise d'un flop se choisissent par situation (voir sizing.py) ; le choix est gardé dans
+~/.analyzer/tailles, ou livré avec Analyzer (data/<famille>_tailles.json), et le spot l'utilise.
 """
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..cards import RANK_VALUE
-from . import postflop
+from . import postflop, sizing
 from .preflop import Solution, load_solution
 
 TEXTURES = ("Pairé", "Monotone", "Ace high", "King high", "Queen high", "Jack high", "Ten high", "Low board")
@@ -82,7 +85,9 @@ class StudySpot(postflop.SpotTree):
     oop: str = "BB"
     ip: str = "BTN"
     line: list = field(default_factory=list)
-    plan: dict = field(default_factory=dict)  # situation -> tailles (voir native/arbre.rs)
+    # Situation -> tailles (voir native/arbre.rs). None : les tailles choisies pour ce flop s'il y en a,
+    # sinon l'arbre par défaut ; {} : toujours l'arbre par défaut.
+    plan: Optional[dict] = None
 
     def __post_init__(self):
         info = FAMILIES[self.family]
@@ -92,6 +97,12 @@ class StudySpot(postflop.SpotTree):
         self.ranges = {self.oop: postflop.range_weights(solution, *info["oop"]),
                        self.ip: postflop.range_weights(solution, *info["ip"])}
         self.sizes = postflop.default_sizes(self.oop, self.ip, info["oop_initiative"])
+        if self.plan is None:
+            chosen = load_selection(self.family, "".join(self.board))
+            self.plan = dict(chosen["plan"]) if chosen else {}
+
+    def menu_text(self) -> str:
+        return sizing.plan_text(self.plan) if self.plan else super().menu_text()
 
     @property
     def ident(self) -> str:
@@ -154,9 +165,67 @@ def flop_summary(session: postflop.Session) -> list[dict]:
     return out
 
 
+def _current(meta: dict) -> bool:
+    """L'étude correspond-elle à l'arbre actuel du spot (tailles choisies ou par défaut) ?"""
+    spot = parse_ident(meta.get("id", ""))
+    return spot is not None and meta.get("key") == postflop.study_key(spot.request())
+
+
 def spot_studies() -> dict[str, dict]:
-    """Fiches des spots d'étude enregistrés, par identifiant."""
-    return {m["id"]: m for m in postflop.list_studies() if m.get("kind") == "spot"}
+    """Fiches des spots d'étude enregistrés avec l'arbre actuel de leur spot, par identifiant."""
+    return {m["id"]: m for m in postflop.list_studies() if m.get("kind") == "spot" and _current(m)}
+
+
+def stale_spot_studies() -> list[dict]:
+    """Études de spots faites avec un autre arbre (avant le choix des tailles, par exemple)."""
+    return [m for m in postflop.list_studies() if m.get("kind") == "spot" and not _current(m)]
+
+
+# --- Tailles choisies ------------------------------------------------------------------------
+
+def selection_path(family: str, board: str) -> Path:
+    return postflop.home() / "tailles" / f"{family}-{board}.json"
+
+
+def shipped_path(family: str) -> Path:
+    return Path(__file__).parent / "data" / f"{family}_tailles.json"
+
+
+def load_selection(family: str, board: str) -> Optional[dict]:
+    """Choix des tailles d'un flop : fait sur cet ordinateur, sinon livré avec Analyzer ; None sinon."""
+    path = selection_path(family, board)
+    if path.is_file():
+        try:
+            return dict(json.loads(path.read_text(encoding="utf-8")), source="local")
+        except ValueError:
+            pass
+    shipped = shipped_path(family)
+    if shipped.is_file():
+        chosen = json.loads(shipped.read_text(encoding="utf-8")).get("flops", {}).get(board)
+        if chosen:
+            return dict(chosen, source="livré")
+    return None
+
+
+def save_selection(family: str, board: str, result: dict) -> Path:
+    path = selection_path(family, board)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dict(result, family=family, board=board), ensure_ascii=False, indent=1),
+                    encoding="utf-8")
+    return path
+
+
+def export_selections(family: str = "srp", path: Optional[Path] = None) -> Path:
+    """Rassemble les choix de tailles faits sur cet ordinateur dans le fichier livré avec Analyzer."""
+    flops = {}
+    for board in flop_set(family):
+        local = selection_path(family, board)
+        if local.is_file():
+            flops[board] = json.loads(local.read_text(encoding="utf-8"))
+    path = path or shipped_path(family)
+    path.write_text(json.dumps({"family": family, "flops": flops}, ensure_ascii=False, indent=1) + "\n",
+                    encoding="utf-8")
+    return path
 
 
 def parse_ident(ident: str) -> Optional[StudySpot]:
@@ -216,20 +285,39 @@ def export_reference(family: str = "srp", path: Optional[Path] = None) -> Path:
     return path
 
 
+def choose_sizes(family: str, board: str, log: Callable[[str], None] = print, threads: int = 0,
+                 cards: int = sizing.TURN_CARDS, **options) -> dict:
+    """Choisit les tailles de ce flop (voir sizing.py) et garde le choix."""
+    result = sizing.Selection(StudySpot(family, cards_of(board), plan={}), log, threads, cards, **options).run()
+    save_selection(family, board, result)
+    return result
+
+
 def solve_set(family: str = "srp", textures: Optional[list[str]] = None, log: Callable[[str], None] = print,
               iterations: int = postflop.DEFAULT_ITERATIONS, target: float = postflop.DEFAULT_TARGET,
-              threads: int = 0, on_progress: Optional[Callable[[dict], None]] = None) -> int:
-    """Résout les flops de la série qui ne le sont pas encore ; renvoie le nombre de spots résolus."""
+              threads: int = 0, on_progress: Optional[Callable[[dict], None]] = None, choose: bool = True,
+              solve: bool = True, cards: int = sizing.TURN_CARDS) -> int:
+    """Résout les flops de la série qui ne le sont pas encore ; renvoie le nombre de spots résolus.
+
+    choose=True choisit d'abord les tailles des flops qui n'en ont pas (long : de l'ordre de 45 minutes
+    par flop sur 4 cœurs) ; solve=False s'arrête au choix des tailles."""
     done = spot_studies()
     boards = flop_set(family, textures)
     solved = 0
     for k, board in enumerate(boards, 1):
+        head = f"[{k}/{len(boards)}] {board} ({flop_texture(cards_of(board))})"
+        if choose and load_selection(family, board) is None:
+            log(f"{head} : choix des tailles…")
+            result = choose_sizes(family, board, log, threads, cards)
+            log(f"    {sizing.plan_text(result['plan'])} ({result['seconds'] // 60} min)")
+        if not solve:
+            continue
         spot = StudySpot(family, cards_of(board))
         meta = done.get(spot.ident)
         if meta and meta.get("summary"):
-            log(f"[{k}/{len(boards)}] {board} ({spot.texture}) : déjà résolu")
+            log(f"{head} : déjà résolu")
             continue
-        log(f"[{k}/{len(boards)}] {board} ({spot.texture}) : résolution…")
+        log(f"{head} : résolution…")
         request = spot.request(iterations, target, threads)
         session = postflop.Session(request)
         try:

@@ -239,7 +239,7 @@
     if (SPOT) {
       const box = $('meta');
       box.textContent = '';
-      box.title = meta.family_label;
+      box.title = meta.family_label + (meta.sizes ? '\nTailles : ' + meta.sizes : '');
       box.append('Spot d\'étude · ' + meta.pot_type + ' · BTN contre BB · flop ', cards(meta.board), ' · ' + meta.texture
         + ' · pot ' + num(meta.pot) + ' bb, tapis ' + num(meta.stack) + ' bb');
       return;

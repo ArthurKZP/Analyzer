@@ -7,12 +7,13 @@ Sans session, l'explorateur se limite aux nœuds de la ligne jouée, enregistré
 """
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from ..theory import postflop
 
@@ -30,7 +31,7 @@ class Job:
     max_iterations: int
     target: float
     state: str = "waiting"  # waiting | running | done | error | cancelled
-    mode: str = "solve"  # solve (résolution) | load (étude enregistrée)
+    mode: str = "solve"  # solve (résolution) | load (étude enregistrée) | choose (choix des tailles)
     progress: dict = field(default_factory=dict)
     result: Optional[dict] = None
     error: Optional[str] = None
@@ -58,6 +59,7 @@ class SolveQueue:
         # Rouvrir une étude (quelques secondes) ne fait pas la queue derrière une série de résolutions.
         self._loader = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gtopen-etude")
         self._jobs: dict[str, Job] = {}
+        self._series: dict[str, str] = {}  # spot -> tâche « choisir les tailles puis résoudre »
         self._lock = threading.Lock()
         self._live: Optional[tuple[str, postflop.Session]] = None  # (main, session navigable)
         self._stop = threading.Event()
@@ -98,6 +100,9 @@ class SolveQueue:
         study = postflop.study_path(request).is_file()
         with self._lock:
             job = self._jobs.get(key)
+            series = self._jobs.get(self._series.get(hand_id, ""))
+        if series and series.state in ("waiting", "running"):
+            return dict(series.view(), live=False, study=study)
         if job and job.state in ("waiting", "running"):
             return dict(job.view(), live=False, study=study)
         raw = postflop.cached(request)
@@ -122,6 +127,43 @@ class SolveQueue:
             self._jobs[job.key] = job
         (self._loader if job.mode == "load" else self._executor).submit(self._run, job, spot, request, keep_live)
         return dict(job.view(), live=False, study=job.mode == "load")
+
+    def choose_and_solve(self, ident: str, choose: Callable[[Job], None], make_spot: Callable[[], object]) -> dict:
+        """Choisit d'abord les tailles du spot (long), puis le résout sans garder de session.
+
+        choose(job) fait le choix (job.progress["stage"] : l'étape en cours ; job.process : le programme
+        lancé ; job.cancelled : l'arrêt demandé) ; make_spot() rend ensuite le spot avec ses tailles."""
+        with self._lock:
+            current = self._jobs.get(self._series.get(ident, ""))
+            if current and current.state in ("waiting", "running"):
+                return current.view()
+            key = "choix-" + hashlib.sha256(ident.encode()).hexdigest()[:14]
+            job = Job(key, ident, self.iterations, self.target, mode="choose")
+            self._jobs[key] = job
+            self._series[ident] = key
+        self._executor.submit(self._run_series, job, choose, make_spot)
+        return job.view()
+
+    def _run_series(self, job: Job, choose: Callable[[Job], None], make_spot: Callable[[], object]) -> None:
+        if job.cancelled:
+            return
+        job.state, job.started = "running", time.time()
+        try:
+            choose(job)
+        except postflop.SolverError as exc:
+            job.state = "cancelled" if job.cancelled else "error"
+            job.error = None if job.cancelled else str(exc)
+            return
+        except Exception:  # noqa: BLE001 — l'erreur est montrée dans l'interface
+            traceback.print_exc()
+            job.state, job.error = "error", "Erreur inattendue pendant le choix des tailles (détails dans le terminal)."
+            return
+        finally:
+            job.process = None
+        spot = make_spot()
+        job.mode = "solve"
+        job.progress.clear()
+        self._run(job, spot, self._request(spot), keep_live=False)
 
     def _run(self, job: Job, spot, request: dict, keep_live: bool = True) -> None:
         if job.cancelled:

@@ -26,6 +26,16 @@
 //! stratégie moyenne de chaque nœud sur 8 bits (sans la dernière action, qui s'en déduit), le tout
 //! compressé. --load la recharge en quelques secondes, sans recalculer, pour naviguer à nouveau.
 //!
+//! analyzer-solve --lot lot.json : résout une série de variantes (sous-jeux pour le choix des tailles),
+//! en parallèle, sans rien garder ; une ligne JSON par variante, dans l'ordre où elles finissent :
+//!   lot = {"threads": 0, "bases": [requête, ...], "runs": [{"base": 0, "plan": {...}}, ...]}
+//!   ligne = {"i": 3, "iterations": 60, "exploit_pct": 0.4, "seconds": 0.5, "root_ev": [4.1, 4.2],
+//!            "stats": {"bet:ti:i": {"reach": 0.3, "usage": [0.1, 0.05]}, ...}}
+//!   stats : pour chaque situation du plan, sa probabilité d'arriver et celle de chacune de ses
+//!   tailles (rapportées à la racine).
+//! root_ev (aussi dans la sortie normale) : EV de chaque joueur à la racine, part du pot comprise
+//! (EV hors de position + EV en position = pot).
+//!
 //! analyzer-solve --verifier-arbre requete.json : vérifie qu'avec un plan vide, l'arbre d'Analyzer
 //! est identique à celui de GTOpen.
 //!
@@ -40,13 +50,13 @@ use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use solver::query::{ActionView, NodeView};
-use solver::tree::KIND_ACTION;
+use solver::tree::{KIND_ACTION, KIND_CHANCE, SENTINEL};
 use solver::{PathStep, RunOptions, Solver, Spot, SpotConfig, Storage};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct Request {
     spot: SpotConfig,
     #[serde(default)]
@@ -63,13 +73,21 @@ struct Request {
     gpu: bool,
     #[serde(default)]
     plan: Option<arbre::Plan>,
+    /// Sous-jeu : une lettre par street déjà jouée (voir arbre.rs), avec un plan.
+    #[serde(default)]
+    past: String,
 }
 
 /// Le spot de la requête. Avec un plan, GTOpen prépare les ranges et les symétries sur un arbre
 /// minimal (sans mise), puis l'arbre d'Analyzer, construit selon le plan, le remplace.
 fn make_spot(request: &Request) -> Result<Spot, String> {
+    make_spot_tagged(request).map(|(spot, _)| spot)
+}
+
+/// `make_spot`, avec les situations du plan rencontrées dans l'arbre (voir arbre::Tag).
+fn make_spot_tagged(request: &Request) -> Result<(Spot, Vec<arbre::Tag>), String> {
     let Some(plan) = &request.plan else {
-        return Spot::new_with_limit(request.spot.clone(), Some(request.max_nodes));
+        return Ok((Spot::new_with_limit(request.spot.clone(), Some(request.max_nodes))?, Vec::new()));
     };
     let mut bare = request.spot.clone();
     for sizing in bare.tree.oop.iter_mut().chain(bare.tree.ip.iter_mut()) {
@@ -82,9 +100,90 @@ fn make_spot(request: &Request) -> Result<Spot, String> {
     let mut config = request.spot.tree.clone();
     config.carry_aggressor_through_checks = Some(false);
     let hands = [spot.hands[0].len(), spot.hands[1].len()];
-    spot.tree = arbre::build(&config, plan, spot.board.len(), spot.board_mask, hands, Some(request.max_nodes))?;
+    let (tree, tags) = arbre::build(&config, plan, &request.past, spot.board.len(), spot.board_mask, hands, Some(request.max_nodes))?;
+    spot.tree = tree;
     spot.config.tree = config;
-    Ok(spot)
+    Ok((spot, tags))
+}
+
+/// Pour chaque situation du plan : sa probabilité d'arriver (les deux joueurs y parviennent, cartes
+/// comprises) et celle de chacune de ses tailles, rapportées à la racine.
+fn situation_stats(solver: &Solver, tags: &[arbre::Tag]) -> Value {
+    let spot = &solver.spot;
+    let by_node: std::collections::HashMap<u32, usize> = tags.iter().enumerate().map(|(i, t)| (t.node, i)).collect();
+    let mut acc: Vec<(f64, Vec<f64>)> = tags.iter().map(|t| (0.0, vec![0.0; t.sizes])).collect();
+    let reach = [spot.weights[0].clone(), spot.weights[1].clone()];
+    let root_mass = reach[0].iter().map(|&x| x as f64).sum::<f64>() * reach[1].iter().map(|&x| x as f64).sum::<f64>();
+    walk_stats(solver, 0, reach, 1.0, spot.board_mask, &by_node, tags, &mut acc);
+    let mut out = serde_json::Map::new();
+    for (tag, (mass, usage)) in tags.iter().zip(acc) {
+        let entry = out.entry(tag.key.clone()).or_insert_with(|| json!({"reach": 0.0, "usage": vec![0.0; tag.sizes]}));
+        entry["reach"] = json!(entry["reach"].as_f64().unwrap_or(0.0) + mass / root_mass);
+        for (k, u) in usage.iter().enumerate() {
+            entry["usage"][k] = json!(entry["usage"][k].as_f64().unwrap_or(0.0) + u / root_mass);
+        }
+    }
+    Value::Object(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_stats(
+    solver: &Solver,
+    idx: u32,
+    reach: [Vec<f32>; 2],
+    chance: f64,
+    dealt: u64,
+    by_node: &std::collections::HashMap<u32, usize>,
+    tags: &[arbre::Tag],
+    acc: &mut [(f64, Vec<f64>)],
+) {
+    let tree = &solver.spot.tree;
+    let node = &tree.nodes[idx as usize];
+    let mass = |r: &[f32]| r.iter().map(|&x| x as f64).sum::<f64>();
+    if mass(&reach[0]) <= 0.0 || mass(&reach[1]) <= 0.0 {
+        return;
+    }
+    if node.kind == KIND_ACTION {
+        let p = node.player as usize;
+        let nh = reach[p].len();
+        let na = node.num_children as usize;
+        let sigma = solver.average_strategy(idx, node);
+        if let Some(&t) = by_node.get(&idx) {
+            let opp = mass(&reach[1 - p]);
+            acc[t].0 += chance * mass(&reach[p]) * opp;
+            for (a, ids) in tags[t].actions.iter().enumerate() {
+                let used: f64 = (0..nh).map(|h| reach[p][h] as f64 * sigma[a * nh + h] as f64).sum();
+                for &k in ids {
+                    acc[t].1[k] += chance * used * opp;
+                }
+            }
+        }
+        for a in 0..na {
+            let mut next = reach.clone();
+            for h in 0..nh {
+                next[p][h] *= sigma[a * nh + h];
+            }
+            let child = tree.children[node.children_start as usize + a];
+            walk_stats(solver, child, next, chance, dealt, by_node, tags, acc);
+        }
+    } else if node.kind == KIND_CHANCE {
+        let start = node.children_start as usize;
+        let cards: Vec<u8> = (0..52u8)
+            .filter(|&c| tree.children[start + c as usize] != SENTINEL && dealt & (1u64 << c) == 0)
+            .collect();
+        let share = chance / cards.len().max(1) as f64;
+        for c in cards {
+            let mut next = reach.clone();
+            for p in 0..2 {
+                for (h, info) in solver.spot.hands[p].iter().enumerate() {
+                    if info.mask & (1u64 << c) != 0 {
+                        next[p][h] = 0.0;
+                    }
+                }
+            }
+            walk_stats(solver, tree.children[start + c as usize], next, share, dealt | (1u64 << c), by_node, tags, acc);
+        }
+    }
 }
 
 fn default_iterations() -> u32 {
@@ -97,7 +196,7 @@ fn default_max_nodes() -> usize {
     4_000_000
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(untagged)]
 enum Step {
     Card {
@@ -173,8 +272,82 @@ struct Output {
     exploit_pct: f64,
     seconds: f64,
     tree_nodes: usize,
+    root_ev: [f64; 2],
     decisions: Vec<Decision>,
     stopped: Option<String>,
+}
+
+/// EV de chaque joueur à la racine : moyenne de ses mains pondérée par présence × masse adverse
+/// compatible (la convention de GTOpen, pour que EV hors de position + EV en position = pot).
+fn root_ev(solver: &Solver) -> [f64; 2] {
+    let Ok(view) = solver.node_view(&[]) else { return [f64::NAN; 2] };
+    [0usize, 1].map(|p| {
+        let (mut num, mut den) = (0.0, 0.0);
+        for h in &view.players[p].hands {
+            if let Some(ev) = h.ev {
+                let w = h.reach as f64 * h.valid as f64;
+                num += w * ev as f64;
+                den += w;
+            }
+        }
+        if den > 0.0 { round(num / den, 5) } else { f64::NAN }
+    })
+}
+
+#[derive(Deserialize)]
+struct Lot {
+    #[serde(default)]
+    threads: usize,
+    bases: Vec<Request>,
+    runs: Vec<Run>,
+}
+
+#[derive(Deserialize)]
+struct Run {
+    base: usize,
+    #[serde(default)]
+    plan: arbre::Plan,
+}
+
+/// Résout chaque variante du lot (en parallèle) et écrit son résultat dès qu'elle finit.
+fn run_lot(path: &str) {
+    use rayon::prelude::*;
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| fail(format!("lecture de {path} : {e}")));
+    let lot: Lot = serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("lot invalide : {e}")));
+    if lot.threads > 0 {
+        rayon::ThreadPoolBuilder::new().num_threads(lot.threads).build_global().ok();
+    }
+    let out = std::sync::Mutex::new(std::io::stdout());
+    lot.runs.par_iter().enumerate().for_each(|(i, run)| {
+        let reply = match lot.bases.get(run.base) {
+            None => json!({ "i": i, "error": "base inconnue" }),
+            Some(base) => {
+                let mut request = base.clone();
+                request.plan = Some(run.plan.clone());
+                match make_spot_tagged(&request) {
+                    Err(e) => json!({ "i": i, "error": e }),
+                    Ok((spot, tags)) => {
+                        let mut solver = Solver::with_storage(Arc::new(spot), Storage::Compressed);
+                        let opts = RunOptions {
+                            max_iterations: request.max_iterations,
+                            target_exploit_pct: request.target_exploit_pct,
+                            check_every: 10,
+                        };
+                        let stop = AtomicBool::new(false);
+                        let p = solver.run(&opts, &stop, |_| {});
+                        solver.ensure_symmetric();
+                        json!({
+                            "i": i, "iterations": p.iteration, "exploit_pct": round(p.exploit_pct_pot, 3),
+                            "seconds": round(p.elapsed_secs, 2), "tree_nodes": solver.spot.tree.nodes.len(),
+                            "root_ev": root_ev(&solver), "stats": situation_stats(&solver, &tags),
+                        })
+                    }
+                }
+            }
+        };
+        let mut out = out.lock().unwrap();
+        let _ = writeln!(out, "{reply}").and_then(|_| out.flush());
+    });
 }
 
 fn round(x: f64, digits: i32) -> f64 {
@@ -442,6 +615,10 @@ fn option(args: &[String], name: &str) -> Option<String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let session = args.iter().any(|a| a == "--serve");
+    if let Some(path) = option(&args, "--lot") {
+        run_lot(&path);
+        return;
+    }
     if let Some(path) = option(&args, "--verifier-arbre") {
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| fail(format!("lecture de {path} : {e}")));
         let mut request: Request = serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("requête invalide : {e}")));
@@ -467,6 +644,7 @@ fn main() {
             exploit_pct: summary["exploit_pct"].as_f64().unwrap_or(f64::NAN),
             seconds: summary["seconds"].as_f64().unwrap_or(0.0),
             tree_nodes: solver.spot.tree.nodes.len(),
+            root_ev: root_ev(&solver),
             decisions,
             stopped,
         };
@@ -541,6 +719,7 @@ fn main() {
         exploit_pct: round(exploit_pct, 3),
         seconds: round(seconds, 1),
         tree_nodes,
+        root_ev: root_ev(&solver),
         decisions,
         stopped,
     };

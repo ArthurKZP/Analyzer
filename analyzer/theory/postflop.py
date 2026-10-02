@@ -323,11 +323,13 @@ class SpotTree:
             "max_iterations": iterations, "target_exploit_pct": target, "threads": threads,
             "gpu": gpu_enabled(),
         }
-        # Tailles par situation de la ligne (c-bet, 2e barrel, probe…), voir native/arbre.rs. Sans plan,
+        # Tailles par situation de la ligne (c-bet, 2e barrel, probe…) : % du pot, "geo" ou "a" (tapis),
+        # voir native/arbre.rs. Sans plan,
         # la requête (et donc la clé des études déjà enregistrées) ne change pas.
         plan = getattr(self, "plan", None)
         if plan:
-            out["plan"] = {key: _size_json(sizes) for key, sizes in sorted(plan.items())}
+            out["plan"] = {key: [s if isinstance(s, str) else float(s) for s in sizes]
+                           for key, sizes in sorted(plan.items())}
         return out
 
     def menu_text(self) -> str:
@@ -609,12 +611,14 @@ class Session:
     """Résolution gardée en mémoire (analyzer-solve --serve) pour naviguer dans tout l'arbre.
 
     Sans étude enregistrée, résout puis enregistre l'étude ; sinon la recharge (quelques secondes).
+    save=False : résolution de travail (choix des tailles), ni étude ni cache.
     """
 
-    def __init__(self, request: dict):
+    def __init__(self, request: dict, save: bool = True):
         self.request = request
+        self.save = save
         self.study = study_path(request)
-        self.loading = self.study.is_file()
+        self.loading = save and self.study.is_file()
         self.result: Optional[dict] = None
         self.proc: Optional[subprocess.Popen] = None
         self.last_used = time.time()
@@ -633,8 +637,10 @@ class Session:
         else:
             req_path = Path(self._tmp.name) / "requete.json"
             req_path.write_text(json.dumps(self.request), encoding="utf-8")
-            self.study.parent.mkdir(parents=True, exist_ok=True)
-            cmd = [str(exe), str(req_path), "--save", str(self.study), "--serve"]
+            cmd = [str(exe), str(req_path), "--serve"]
+            if self.save:
+                self.study.parent.mkdir(parents=True, exist_ok=True)
+                cmd[2:2] = ["--save", str(self.study)]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      **PIPE_TEXT)
         if on_start:
@@ -650,7 +656,8 @@ class Session:
             raise SolverError(self._errors[-1] if self._errors
                               else f"analyzer-solve s'est arrêté (code {self.proc.returncode}).")
         self.result = json.loads(line)
-        _save_cache(self.request, self.result)
+        if self.save:
+            _save_cache(self.request, self.result)
         self.last_used = time.time()
         return self.result
 

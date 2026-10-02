@@ -6,7 +6,7 @@ from html import escape
 from urllib.parse import quote
 
 from ..report import cards_html, html_page, num
-from ..theory import postflop, studyspots
+from ..theory import postflop, sizing, studyspots
 
 STYLE = """
 .studies td.actions { white-space: nowrap; text-align: right; }
@@ -41,6 +41,14 @@ STYLE = """
 .spot-other { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; font-size: 13px; }
 .spot-other input { font: inherit; font-size: 13px; padding: 4px 8px; width: 9em; border-radius: 6px;
   border: 1px solid var(--border); background: var(--page); color: var(--ink); }
+.spots tr.sizes td { border-top: none; padding-top: 0; font-size: 12px; color: var(--ink-2); }
+.spots tr.sizes summary { cursor: pointer; }
+.spots tr.sizes table { border-collapse: collapse; margin: 6px 0 4px; font-size: 12px; }
+.spots tr.sizes table td, .spots tr.sizes table th { padding: 2px 10px 2px 0; border: none; text-align: left; vertical-align: top; }
+.spots tr.sizes table th { color: var(--muted); font-weight: 500; }
+.spots tr.sizes .opt b { color: var(--ink); }
+.stale { margin-top: 14px; font-size: 13px; }
+.stale ul { margin: 6px 0 0; padding-left: 18px; }
 .spot-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--muted); margin: 8px 0 0; }
 .spot-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 """
@@ -70,7 +78,10 @@ document.querySelectorAll('button.del').forEach(function (b) {
     run.disabled = !s.ready;
     if (!s.ready) { status.append('Installe d\\'abord le solveur : python -m analyzer gtopen --installer'); return; }
     run.hidden = !!s.busy || s.done === s.total;
-    if (current) {
+    if (current && current.mode === 'choose') {
+      status.append('Choix des tailles de ' + current.board.join('') + ' (' + current.texture + ') : '
+        + ((current.progress || {}).stage || 'démarrage') + (waiting ? ' · ' + waiting + ' en attente' : ''));
+    } else if (current) {
       var p = current.progress || {}, frac = p.iteration ? Math.min(1, p.iteration / current.max_iterations) : 0;
       status.append('En cours : ' + current.board.join('') + ' (' + current.texture + ')'
         + (p.iteration ? ', itération ' + p.iteration + ' / ' + current.max_iterations : ', construction de l\\'arbre')
@@ -145,12 +156,54 @@ def _columns(metas: list[dict]) -> list[str]:
     return [t for t in order if t in titles] or [title for _, title in studyspots.SUMMARY_STEPS]
 
 
+def _sizes_row(spot, width: int, series: bool) -> str:
+    """Sous la ligne d'un flop : ses tailles et, dépliable, le détail des comparaisons."""
+    chosen = studyspots.load_selection(spot.family, "".join(spot.board)) if spot.plan else None
+    if not chosen:
+        later = " (pas encore choisies : elles le seront avant la résolution)" if series else ""
+        return f'<tr class="sizes"><td></td><td colspan="{width - 1}">Tailles par défaut{later}.</td></tr>'
+
+    report = chosen.get("report", {})
+    order = {k: i for i, k in enumerate(s.key for s in sizing.situations())}
+    shown = sorted((k for k, e in report.items() if e.get("evs")),
+                   key=lambda k: (sizing.Situation(k, []).street, -report[k].get("reach", 0), order.get(k, 0)))
+    lines = []
+    for key in shown:
+        e = report[key]
+        opts = " · ".join(
+            (f"<b>{escape(sizing.sizes_text(o))} {num(ev, 3)}</b>" if o == e["chosen"] else
+             f"{escape(sizing.sizes_text(o))} {num(ev, 3)}") for o, ev in zip(e["options"], e["evs"]))
+        reach = "flop" if e.get("method") == "arbre complet" else f'{num(100 * e.get("reach", 0), 1)} %'
+        lines.append(f'<tr><td>{escape(e["label"])}</td><td>{reach}</td><td class="opt">{opts}</td></tr>')
+    rare = sum(1 for e in report.values() if e.get("method") == "rare")
+    source = "livrées avec Analyzer" if chosen.get("source") == "livré" else f'choisies le {escape(chosen.get("created", ""))}'
+    detail = (f'<table><thead><tr><th>Situation</th><th>Atteinte</th><th>EV de celui qui mise (bb), par taille'
+              f'</th></tr></thead><tbody>{"".join(lines)}</tbody></table>'
+              f'<div class="muted">{len(shown)} situations comparées ({source}) ; {rare} situation(s) presque jamais '
+              'atteinte(s) : la plus petite taille. EV au début du flop (arbre complet) ou moyenne au début de la '
+              'turn (sous-jeux) ; à moins de 0,02 bb de la meilleure, la plus petite taille l\'emporte.</div>')
+    return (f'<tr class="sizes"><td></td><td colspan="{width - 1}"><details><summary>Tailles : '
+            f'{escape(sizing.plan_text(spot.plan))}</summary>{detail}</details></td></tr>')
+
+
+def _stale_section() -> str:
+    stale = studyspots.stale_spot_studies()
+    if not stale:
+        return ""
+    items = "".join(
+        f'<li>{cards_html(m.get("board", []))} · {escape(m.get("created", ""))} · {_size(m["size"])}'
+        f'<button type="button" class="del" data-key="{escape(m["key"])}">Supprimer</button></li>' for m in stale)
+    return (f'<div class="stale"><b>Anciennes études de spots</b> ({len(stale)}, {_size(sum(m["size"] for m in stale))}) '
+            f': faites avec un autre arbre (avant le choix des tailles), elles ne s\'ouvrent plus.<ul>{items}</ul></div>')
+
+
 def _spot_section(family: str = "srp") -> str:
     info = studyspots.FAMILIES[family]
     studies = studyspots.spot_studies()
     boards = studyspots.family_boards(family)
     spots = [studyspots.StudySpot(family, studyspots.cards_of(b)) for b in boards]
     metas = {s.ident: studies[s.ident] for s in spots if s.ident in studies and studies[s.ident].get("summary")}
+    series = set(studyspots.flop_set(family))
     refs = {i: r for i, r in studyspots.reference(family).items() if i not in metas}
     shown = {**refs, **metas}  # une étude de cet ordinateur passe avant la référence
     columns = _columns(list(shown.values()))
@@ -179,6 +232,7 @@ def _spot_section(family: str = "srp") -> str:
                 rows.append(f'<tr class="todo"><td class="flop">{cards_html(spot.board)}</td>'
                             f'<td colspan="{len(columns)}">pas encore résolu</td><td></td>'
                             f'<td class="actions">{link}</td></tr>')
+                rows.append(_sizes_row(spot, width, ''.join(spot.board) in series))
                 continue
             by_title = {e["title"]: e for e in data["summary"]}
             cells = "".join(f'<td class="bars">{_bar(by_title[t]["actions"], by_title[t]["freqs"]) if t in by_title else ""}'
@@ -193,19 +247,22 @@ def _spot_section(family: str = "srp") -> str:
                 f'<tr><td class="flop">{cards_html(spot.board)}{tag}</td>{cells}'
                 f'<td class="num">{num(exploit, 2) + " %" if exploit is not None else "–"}</td>'
                 f'<td class="actions">{link}{delete}</td></tr>')
+            rows.append(_sizes_row(spot, width, ''.join(spot.board) in series))
     head = "".join(f"<th>{escape(t)}</th>" for t in columns)
     done, total = len(metas), len(spots)
     size = sum(m["size"] for m in metas.values())
     missing = total - done
-    menu = spots[0].menu_text() if spots else ""
     legend = "".join(f'<span><i class="{c}"></i>{label}</span>' for c, label in
                      (("k-pass", "check / call"), ("k-bet", "mise"), ("k-raise", "relance"), ("k-fold", "fold"),
                       ("k-allin", "tapis")))
     return f"""
 <h2>Spots d'étude · {escape(info["name"])}</h2>
 <div class="card">
-<p class="note" style="margin-top:0">{escape(info["label"])}. Ranges de la solution préflop ; arbre : {escape(menu)} ;
-la BB ne mène pas (pas de donk). Trois flops par texture : pairé, monotone, puis selon la plus haute carte.
+<p class="note" style="margin-top:0">{escape(info["label"])}. Ranges de la solution préflop ; la BB ne mène pas
+(pas de donk). Trois flops par texture : pairé, monotone, puis selon la plus haute carte. Les tailles de mise
+sont choisies flop par flop, une par situation (deux à la river) : c-bet 33 / 75 % / géo, 2e barrel 50 % / pot
+/ géo, c-bet retardée 33 / 66 % / géo, probe turn 33 / 75 % / pot / géo, river deux parmi 50 / 75 % / pot /
+150 % / tapis, relances 33 / 66 % / géo (tapis à la river) ; la meilleure EV pour celui qui mise l'emporte.
 Chaque ligne donne la stratégie de toute la range : la c-bet du bouton après le check de la BB, la réponse de
 la BB, puis celle du bouton face au check-raise. <b>Explorer ↗</b> ouvre le spot dans l'explorateur (turn et
 river comprises).{" Les flops marqués <b>réf.</b> montrent la synthèse livrée avec Analyzer (même arbre, calculée "
@@ -216,15 +273,16 @@ river comprises).{" Les flops marqués <b>réf.</b> montrent la synthèse livré
   <button type="button" id="spot-stop" hidden>Arrêter</button>
   <span class="spot-status" id="spot-status"></span>
 </div>
-<p class="note">Un flop prend 30 secondes à 2 minutes sur 4 cœurs (la série complète : environ une demi-heure,
-moins avec plus de cœurs) et 50 à 80 Mo sur le disque. Les flops se résolvent l'un après l'autre en arrière-plan, tant que
-l'application reste ouverte ; tu peux fermer cette page. En ligne de commande : <code>python -m analyzer gtopen --spots {escape(family)}</code>.</p>
+<p class="note">Un flop sans tailles choisies passe d'abord par leur choix (de l'ordre de 45 minutes sur 4 cœurs,
+moins avec plus de cœurs), puis par sa résolution (quelques minutes, 50 à 150 Mo sur le disque). Les flops se
+traitent l'un après l'autre en arrière-plan, tant que l'application reste ouverte ; tu peux fermer cette page. En ligne de commande : <code>python -m analyzer gtopen --spots {escape(family)}</code>.</p>
 <div class="scroll"><table class="stats studies spots"><thead><tr><th>Flop</th>{head}<th class="num">Précision</th>
 <th></th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
 <div class="spot-legend">{legend}</div>
 <form class="spot-other" id="spot-other"><label for="spot-flop">Étudier un autre flop :</label>
 <input id="spot-flop" name="flop" placeholder="ex. Ah7d2c" autocomplete="off" spellcheck="false">
 <button type="submit">Ouvrir ↗</button><span class="muted" id="spot-other-msg"></span></form>
+{_stale_section()}
 </div>
 """
 
