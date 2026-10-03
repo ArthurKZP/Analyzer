@@ -205,12 +205,14 @@ def _stale_section(family: str) -> str:
 COST = {
     "srp": "environ 1 h 15, puis une dizaine de minutes (450 Mo sur le disque, 4 Go de mémoire pendant le calcul)",
     "3bet": "environ 30 minutes, puis 2 à 3 minutes (150 Mo sur le disque, 1,5 Go de mémoire pendant le calcul)",
+    "4bet": "une dizaine de minutes, puis une minute environ (petits arbres : peu de jetons derrière)",
 }
 
 READING = {
     "srp": "la c-bet du bouton après le check de la BB, la réponse de la BB, puis celle du bouton face au check-raise",
     "3bet": "la c-bet de la BB, la réponse du bouton, celle de la BB face à sa relance, puis le stab du bouton quand "
             "la BB checke et la réponse de la BB",
+    "4bet": "la c-bet du bouton après le check de la BB, la réponse de la BB, puis celle du bouton face au check-raise",
 }
 
 

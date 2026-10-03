@@ -41,7 +41,7 @@ class TextureTest(unittest.TestCase):
         spot = studyspots.parse_ident("spot:srp:KsKd4c")
         self.assertEqual((spot.ident, spot.board, spot.texture), ("spot:srp:KsKd4c", ["Ks", "Kd", "4c"], "Pairé"))
         self.assertEqual(studyspots.parse_ident("spot:3bet:KsKd4c").name, "pot 3bet")
-        for bad in ("spot:srp:KsKs4c", "spot:4bet:KsKd4c", "spot:srp:KsKd", "srp:KsKd4c", "spot:srp:KsKd4c5h",
+        for bad in ("spot:srp:KsKs4c", "spot:5bet:KsKd4c", "spot:srp:KsKd", "srp:KsKd4c", "spot:srp:KsKd4c5h",
                     "spot:srp:kskd4c", "spot:srp:KsKd4c:x"):
             self.assertIsNone(studyspots.parse_ident(bad), bad)
 
@@ -93,6 +93,26 @@ class ThreeBetTest(unittest.TestCase):
         self.assertEqual(sizing.label("bet:fi:", "3bet"), "Stab flop du BTN")
         self.assertEqual(sizing.sizes_text([33, "geo2"]), "33 % / géo 2 streets")
         self.assertTrue(sizing.plan_text(sizing.initial_plan("3bet"), "3bet").startswith("c-bet 75 % · relance du BTN"))
+
+
+class FourBetTest(unittest.TestCase):
+    def test_family_matches_preflop_solution(self):
+        self.assertEqual(load_solution().nodes["sb_vs_3bet"].sizes["raise"], 26)
+        info = studyspots.FAMILIES["4bet"]
+        self.assertEqual((info["pot"], info["stack"]), (2 * 26.0, 100 - 26.0))
+        tree = StudySpot("4bet", cards_of("KsKd4c"), plan={}).request()["spot"]["tree"]
+        self.assertEqual(tree["oop"][0]["bet"], [])  # la BB a payé le 4bet : pas de donk
+
+    def test_situations(self):
+        sits = {s.key: s for s in sizing.situations("4bet")}
+        self.assertEqual(len(sits), 63)
+        self.assertEqual(sits["bet:fi:"].candidates, [25, "geo2", "a"])
+        for key in ("bet:ti:i", "bet:ti:x", "bet:to:x"):  # 2e barrel, c-bet retardée, probe turn
+            self.assertEqual(sits[key].candidates, [25, 50, "a"])
+        river = sits["bet:ri:ii"]
+        self.assertEqual((river.candidates, river.choose, len(river.options()), river.initial()),
+                         ([25, 50, "a"], 2, 3, [25, "a"]))
+        self.assertEqual(sits["raise:fo::0"].candidates, [33, "a"])
 
 
 class SizingRulesTest(unittest.TestCase):
@@ -266,6 +286,13 @@ class SolveSpotsTest(unittest.TestCase):
         self.assertEqual(spot.request()["plan"]["bet:fo:"], [33.0])
         self.assertTrue(spot.menu_text().startswith("c-bet 33 %"))
         self.assertIn("Spots d'étude · pot 3bet", build_studies_page())
+
+    def test_choose_sizes_4bet(self):
+        plan = studyspots.choose_sizes("4bet", "KsKd4c", lambda m: None)["plan"]
+        self.assertEqual((plan["bet:fi:"], plan["raise:fo::0"], plan["raise:fi::1"]), ([25], [33], [33]))
+        self.assertEqual((plan["bet:to:x"], plan["bet:ti:x"]), ([50], [50]))
+        self.assertEqual((plan["bet:ro:xx"], plan["bet:ri:xx"]), ([25, 50], [25, 50]))
+        self.assertIn("Spots d'étude · pot 4bet", build_studies_page())
 
     def test_app_chooses_then_solves(self):
         lib = Library(self.folder / "mains")

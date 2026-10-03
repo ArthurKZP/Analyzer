@@ -64,7 +64,8 @@ class Situation:
     def initial(self) -> list:
         """Choix de départ, avant comparaison : la taille du milieu (deux à la river)."""
         if self.choose == 2:
-            return [self.candidates[1], self.candidates[3]]
+            c = self.candidates
+            return [c[1], c[3]] if len(c) >= 4 else [c[0], c[-1]]
         return [self.candidates[len(self.candidates) // 2]]
 
 
@@ -88,6 +89,12 @@ def _srp_river(bettor: str, past: str) -> Optional[tuple]:
     if bettor == "o" and past[-1] == "i":
         return None  # la BB ne mène pas dans l'agresseur de la street précédente (donk)
     return [50, 75, 100, 150, "a"], 2
+
+
+def _4bet_river(bettor: str, past: str) -> Optional[tuple]:
+    if bettor == "o" and past[-1] == "i":
+        return None  # pas de donk
+    return [25, 50, "a"], 2
 
 
 def _3bet_river(bettor: str, past: str) -> Optional[tuple]:
@@ -126,6 +133,27 @@ PROFILES = {
         description="c-bet 33 / 75 % / géo, 2e barrel 50 % / pot / géo, c-bet retardée 33 / 66 % / géo, probe turn "
                     "33 / 75 % / pot / géo, river deux parmi 50 / 75 % / pot / 150 % / tapis, relances 33 / 66 % / "
                     "géo (tapis à la river)",
+    ),
+    # Pot 4bet : le bouton a 4betté (en position, à l'initiative), la BB a payé ; 74 bb derrière pour un pot
+    # de 52 (SPR 1,4). Au flop, le géométrique sur deux streets fait 48 % du pot ; ensuite, il retombe vers
+    # 20-30 % (presque 25 %), d'où 50 % comme taille intermédiaire à la turn et à la river.
+    "4bet": Profile(
+        flop=(("bet:fi:", [25, "geo2", "a"]), ("raise:fo::0", [33, "a"]), ("raise:fi::1", [33, "a"])),
+        turn_bets={key: [25, 50, "a"] for key in (("i", "i"), ("i", "x"), ("o", "x"), ("o", "o"), ("i", "o"))},
+        river_bets=_4bet_river,
+        raises={"t": [33, "a"], "r": [33, "a"]},
+        lines={"i": ["check", "bet", "call"], "x": ["check", "check"], "o": ["check", "bet", "raise", "call"]},
+        flop_river=[50],
+        names={
+            "bet:fi:": "C-bet", "raise:fo::0": "Check-raise flop", "raise:fi::1": "Relance du BTN face au check-raise",
+            "bet:ti:i": "2e barrel", "bet:ti:x": "C-bet retardée", "bet:to:x": "Probe turn",
+            "bet:ri:ii": "3e barrel", "bet:ri:ix": "Bet/check/bet", "bet:ri:xi": "Check/bet/bet",
+            "bet:ro:ix": "Probe river (c-bet payée, turn checkée)", "bet:ro:xx": "Probe river (deux streets checkées)",
+        },
+        flop_line={"i": "c-bet payée", "x": "flop checké", "o": "check-raise payé"},
+        main=("bet:fi:", "raise:fo::0", "bet:ti:i", "bet:ti:x", "bet:to:x", "bet:ri:ii", "bet:ri:ix", "bet:ro:ix"),
+        description="c-bet du bouton 25 % / géo sur deux streets (48 %) / tapis, puis à la turn 25 / 50 % / tapis "
+                    "(2e barrel, c-bet retardée, probe), river deux parmi 25 / 50 % / tapis, relances 33 % / tapis",
     ),
     # Pot 3bet : la BB a 3betté, elle est hors de position et à l'initiative ; le bouton a payé.
     "3bet": Profile(

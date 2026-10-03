@@ -33,6 +33,12 @@ FAMILIES = {
              "label": "Pot 3bet : open du bouton à 2,5 bb, 3bet de la BB à 11,5 bb, call du bouton, 100 bb",
              "ip": ("sb_vs_3bet", "call"), "oop": ("bb_vs_open", "raise"), "pot": 23.0, "stack": 88.5,
              "oop_initiative": True},
+    # 4bet du bouton à 26 bb (sb_vs_3bet), payé par la BB : pot de 52 bb, 74 bb derrière.
+    "4bet": {"name": "pot 4bet",
+             "label": "Pot 4bet : open du bouton à 2,5 bb, 3bet de la BB à 11,5 bb, 4bet du bouton à 26 bb, "
+                      "call de la BB, 100 bb",
+             "ip": ("sb_vs_3bet", "raise"), "oop": ("bb_vs_4bet", "call"), "pot": 52.0, "stack": 74.0,
+             "oop_initiative": False},
 }
 
 # Trois flops par texture : sec, connecté, deux couleurs (ou leurs équivalents pour pairé et monotone).
@@ -71,7 +77,7 @@ def flop_texture(board: list[str]) -> str:
     return HIGH_CARD.get(max(RANK_VALUE[r] for r in ranks), "Low board")
 
 
-FLOPS = {"srp": SRP_FLOPS, "3bet": SRP_FLOPS}  # les mêmes flops d'une famille à l'autre
+FLOPS = {"srp": SRP_FLOPS, "3bet": SRP_FLOPS, "4bet": SRP_FLOPS}  # les mêmes flops d'une famille à l'autre
 
 
 def flop_set(family: str = "srp", textures: Optional[list[str]] = None) -> list[str]:
@@ -154,6 +160,8 @@ def _index(node: dict, kind: str) -> Optional[int]:
 SUMMARY = {
     "srp": (("BB au flop", []), ("C-bet du BTN", ["check"]), ("BB face à la c-bet", ["check", "bet"]),
             ("BTN face au check-raise", ["check", "bet", "raise"])),
+    "4bet": (("BB au flop", []), ("C-bet du BTN", ["check"]), ("BB face à la c-bet", ["check", "bet"]),
+             ("BTN face au check-raise", ["check", "bet", "raise"])),
     "3bet": (("C-bet de la BB", []), ("BTN face à la c-bet", ["bet"]), ("BB face à la relance", ["bet", "raise"]),
              ("Stab du BTN", ["check"]), ("BB face au stab", ["check", "bet"])),
 }

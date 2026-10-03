@@ -238,6 +238,7 @@ l'autre, avec une barre de progression ; *Arrêter* interrompt la série), ou en
 ```bash
 python -m analyzer gtopen --spots srp                          # les 24 flops : choix des tailles, puis résolution
 python -m analyzer gtopen --spots 3bet                         # la même chose en pot 3bet
+python -m analyzer gtopen --spots 4bet                         # et en pot 4bet
 python -m analyzer gtopen --spots srp --texture Monotone --texture "Ace high"   # quelques textures
 ```
 
@@ -317,6 +318,23 @@ plus petits (moins de jetons derrière) : mesuré sur K♠K♦4♣ avec 4 cœurs
 tailles (21 pour le flop, 1 pour la turn, 4 pour la river) et 2 min 30 pour la résolution (830 000 nœuds,
 1,5 Go de mémoire, étude de 150 Mo), soit une douzaine d'heures pour la série. Les tailles de K♠K♦4♣ sont
 livrées (`analyzer/theory/data/3bet_tailles.json`).
+
+**Pots 4bet** (`--spots 4bet`) : open du bouton à 2,5 bb, 3bet de la BB à 11,5 bb, 4bet du bouton à 26 bb,
+call de la BB ; pot de 52 bb, 74 bb derrière (SPR 1,4). Le bouton est en position et à l'initiative, comme
+en SRP ; la BB ne mène pas. À cette profondeur, 25 % est presque le géométrique sur trois streets (28 %),
+le géométrique sur deux streets fait 48 % et le tapis 142 % du pot. Après le flop, le géométrique retombe
+vers 20-30 % du pot : la turn et la river prennent donc 50 % comme taille intermédiaire.
+
+| Situation | Tailles comparées |
+| --- | --- |
+| C-bet | 25 % · géométrique sur deux streets (48 %) · tapis |
+| Turn : 2e barrel, c-bet retardée, probe | 25 % · 50 % · tapis |
+| River | deux parmi 25 % · 50 % · tapis |
+| Relances | 33 % · tapis (une relance au-delà de 85 % du tapis devient le tapis) |
+
+Les arbres sont petits : sur 4 cœurs, une minute et demie pour choisir les tailles d'un flop et un quart de
+minute pour le résoudre (310 000 nœuds, étude de 20 Mo). Les tailles et la synthèse des 24 flops sont
+livrées (`analyzer/theory/data/4bet_tailles.json`, `4bet_reference.json`).
 
 **Limites** : les tailles et la profondeur de l'arbre simplifient le jeu réel ; une main que la range du
 solveur ne contient pas (par exemple un open que le solveur ne fait jamais) y est ajoutée avec un poids
