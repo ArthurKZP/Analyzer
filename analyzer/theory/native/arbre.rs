@@ -15,7 +15,7 @@
 //!
 //! Une taille du plan : un nombre (% du pot ; pour une relance, du pot après le call), "geo" (la
 //! même fraction du pot à chaque street restante pour finir à tapis à la river : à la river, le
-//! tapis) ou "a" (tapis).
+//! tapis), "geo2" (pareil, à tapis au bout de deux streets : celle-ci et la suivante) ou "a" (tapis).
 //!
 //! Une situation absente du plan prend les tailles de sa street dans la configuration de GTOpen
 //! (bet, donk quand la BB mène dans l'agresseur de la street précédente, raise) : un plan vide
@@ -42,6 +42,8 @@ pub enum Size {
     Pct(f64),
     Mult(f64),
     Geo,
+    /// Géométrique sur ce nombre de streets (celle-ci comprise), même s'il en reste davantage.
+    GeoN(u32),
     AllIn,
 }
 
@@ -57,7 +59,8 @@ impl<'de> Deserialize<'de> for Size {
             Raw::Num(p) if p.is_finite() && p > 0.0 => Ok(Size::Pct(p)),
             Raw::Text(t) if t == "geo" => Ok(Size::Geo),
             Raw::Text(t) if t == "a" => Ok(Size::AllIn),
-            _ => Err(D::Error::custom("taille invalide : un % du pot, \"geo\" ou \"a\"")),
+            Raw::Text(t) if matches!(t.as_str(), "geo1" | "geo2" | "geo3") => Ok(Size::GeoN(t[3..].parse().unwrap())),
+            _ => Err(D::Error::custom("taille invalide : un % du pot, \"geo\", \"geo2\" ou \"a\"")),
         }
     }
 }
@@ -268,6 +271,9 @@ impl<'a> Builder<'a> {
                         Size::Geo => {
                             st.street_bet[opp] + geometric(pot_after_call, stack_me - facing, streets_left) * pot_after_call
                         }
+                        Size::GeoN(n) => {
+                            st.street_bet[opp] + geometric(pot_after_call, stack_me - facing, n.min(streets_left)) * pot_after_call
+                        }
                         Size::AllIn => max_to,
                     }, vec![k]))
                     .collect();
@@ -310,6 +316,7 @@ impl<'a> Builder<'a> {
                         Size::Pct(p) => Some((p / 100.0 * pot, vec![k])),
                         Size::Mult(_) => None,
                         Size::Geo => Some((geometric(pot, stack_me, streets_left) * pot, vec![k])),
+                        Size::GeoN(n) => Some((geometric(pot, stack_me, n.min(streets_left)) * pot, vec![k])),
                         Size::AllIn => Some((max_to, vec![k])),
                     })
                     .collect();

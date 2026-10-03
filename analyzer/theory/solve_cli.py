@@ -19,7 +19,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--gpu", action="store_true",
                         help="avec --installer : compile aussi le moteur CUDA (carte NVIDIA, expérimental)")
     parser.add_argument("-m", "--main", help="numéro de la main à résoudre (ou sa fin)")
-    parser.add_argument("--spots", choices=["srp"], help="résout la série de spots d'étude (ex. srp : 24 flops)")
+    parser.add_argument("--spots", choices=["srp", "3bet"],
+                        help="résout une série de spots d'étude (24 flops) : srp ou 3bet (pot 3bet)")
     parser.add_argument("--texture", action="append", help="avec --spots : seulement cette texture (répétable)")
     parser.add_argument("--choix-seulement", action="store_true",
                         help="avec --spots : choisit les tailles de mise des flops, sans les résoudre ensuite")

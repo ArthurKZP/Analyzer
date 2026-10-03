@@ -28,6 +28,11 @@ FAMILIES = {
     "srp": {"name": "SRP", "label": "Pot relancé simple : open du bouton à 2,5 bb, call de la BB, 100 bb",
             "ip": ("sb_open", "raise"), "oop": ("bb_vs_open", "call"), "pot": 5.0, "stack": 97.5,
             "oop_initiative": False},
+    # La solution préflop 3bette à 11,5 bb (bb_vs_open) : pot de 23 bb, 88,5 bb derrière.
+    "3bet": {"name": "pot 3bet",
+             "label": "Pot 3bet : open du bouton à 2,5 bb, 3bet de la BB à 11,5 bb, call du bouton, 100 bb",
+             "ip": ("sb_vs_3bet", "call"), "oop": ("bb_vs_open", "raise"), "pot": 23.0, "stack": 88.5,
+             "oop_initiative": True},
 }
 
 # Trois flops par texture : sec, connecté, deux couleurs (ou leurs équivalents pour pairé et monotone).
@@ -66,7 +71,7 @@ def flop_texture(board: list[str]) -> str:
     return HIGH_CARD.get(max(RANK_VALUE[r] for r in ranks), "Low board")
 
 
-FLOPS = {"srp": SRP_FLOPS}
+FLOPS = {"srp": SRP_FLOPS, "3bet": SRP_FLOPS}  # les mêmes flops d'une famille à l'autre
 
 
 def flop_set(family: str = "srp", textures: Optional[list[str]] = None) -> list[str]:
@@ -102,7 +107,7 @@ class StudySpot(postflop.SpotTree):
             self.plan = dict(chosen["plan"]) if chosen else {}
 
     def menu_text(self) -> str:
-        return sizing.plan_text(self.plan) if self.plan else super().menu_text()
+        return sizing.plan_text(self.plan, self.family) if self.plan else super().menu_text()
 
     @property
     def ident(self) -> str:
@@ -128,7 +133,7 @@ class StudySpot(postflop.SpotTree):
             "created": time.strftime("%d/%m/%Y %H:%M"),
         }
         if session is not None:
-            meta["summary"] = flop_summary(session)
+            meta["summary"] = flop_summary(session, self.family)
         path = postflop.study_path(request).with_suffix(".json")
         path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
@@ -144,24 +149,38 @@ def _index(node: dict, kind: str) -> Optional[int]:
     return next((i for i, a in enumerate(node["actions"]) if a["kind"] == kind), None)
 
 
-SUMMARY_STEPS = (("check", "C-bet du BTN"), ("bet", "BB face à la c-bet"), ("raise", "BTN face au check-raise"))
+# Synthèse du flop d'une famille : (titre, actions depuis la racine). Une étape n'apparaît que si son nœud
+# laisse un choix (en SRP, la BB qui ne mène pas ne fait que checker).
+SUMMARY = {
+    "srp": (("BB au flop", []), ("C-bet du BTN", ["check"]), ("BB face à la c-bet", ["check", "bet"]),
+            ("BTN face au check-raise", ["check", "bet", "raise"])),
+    "3bet": (("C-bet de la BB", []), ("BTN face à la c-bet", ["bet"]), ("BB face à la relance", ["bet", "raise"]),
+             ("Stab du BTN", ["check"]), ("BB face au stab", ["check", "bet"])),
+}
 
 
-def flop_summary(session: postflop.Session) -> list[dict]:
-    """Stratégies de toute la range au flop : c-bet du bouton après le check, réponse de la BB, puis du bouton
-    face au check-raise (et la BB d'abord, si l'arbre lui laisse une mise)."""
-    root = session.node([])
-    out = [_entry("BB au flop", root, [])] if len(root["actions"]) > 1 else []
-    node, path = root, []
-    for kind, title in SUMMARY_STEPS:
-        k = _index(node, kind)
-        if k is None:
-            break
-        path = path + [{"type": "action", "index": k}]
-        node = session.node(path)
-        if node["type"] != "action":
-            break
-        out.append(_entry(title, node, path))
+def flop_summary(session: postflop.Session, family: str = "srp") -> list[dict]:
+    """Stratégies de toute la range aux nœuds principaux du flop (c-bet, réponses, stab…)."""
+    nodes: dict[str, dict] = {}
+
+    def node_at(path: list) -> dict:
+        key = json.dumps(path)
+        if key not in nodes:
+            nodes[key] = session.node(path)
+        return nodes[key]
+
+    out = []
+    for title, kinds in SUMMARY[family]:
+        node, path = node_at([]), []
+        for kind in kinds:
+            k = _index(node, kind) if node["type"] == "action" else None
+            if k is None:
+                node = None
+                break
+            path = path + [{"type": "action", "index": k}]
+            node = node_at(path)
+        if node is not None and node["type"] == "action" and len(node["actions"]) > 1:
+            out.append(_entry(title, node, path))
     return out
 
 

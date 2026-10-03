@@ -9,6 +9,7 @@ from analyzer.app.library import Library
 from analyzer.app.solves import NeedSession
 from analyzer.app.studies import build_studies_page
 from analyzer.theory import postflop, sizing, studyspots
+from analyzer.theory.preflop import load_solution
 from analyzer.theory.studyspots import SRP_FLOPS, TEXTURES, StudySpot, cards_of, flop_texture
 
 FAKE_SOLVER = Path(__file__).parent / "fixtures" / "fake_solver.py"
@@ -39,7 +40,8 @@ class TextureTest(unittest.TestCase):
     def test_parse_ident(self):
         spot = studyspots.parse_ident("spot:srp:KsKd4c")
         self.assertEqual((spot.ident, spot.board, spot.texture), ("spot:srp:KsKd4c", ["Ks", "Kd", "4c"], "Pairé"))
-        for bad in ("spot:srp:KsKs4c", "spot:3bet:KsKd4c", "spot:srp:KsKd", "srp:KsKd4c", "spot:srp:KsKd4c5h",
+        self.assertEqual(studyspots.parse_ident("spot:3bet:KsKd4c").name, "pot 3bet")
+        for bad in ("spot:srp:KsKs4c", "spot:4bet:KsKd4c", "spot:srp:KsKd", "srp:KsKd4c", "spot:srp:KsKd4c5h",
                     "spot:srp:kskd4c", "spot:srp:KsKd4c:x"):
             self.assertIsNone(studyspots.parse_ident(bad), bad)
 
@@ -61,6 +63,36 @@ class TextureTest(unittest.TestCase):
         self.assertEqual(postflop.study_key(spot.request(50, 2.0, threads=4)), postflop.study_key(request))
         result = spot.interpret({"iterations": 50, "exploit_pct": 1.0, "seconds": 3.0})
         self.assertEqual((result["spot"], result["decisions"], result["texture"]), (True, [], "Pairé"))
+
+
+class ThreeBetTest(unittest.TestCase):
+    def test_family_matches_preflop_solution(self):
+        node = load_solution().nodes["bb_vs_open"]
+        info = studyspots.FAMILIES["3bet"]
+        self.assertEqual(node.sizes["raise"], 11.5)
+        self.assertEqual((info["pot"], info["stack"]), (2 * 11.5, 100 - 11.5))
+        spot = StudySpot("3bet", cards_of("KsKd4c"), plan={})
+        tree = spot.request()["spot"]["tree"]
+        self.assertEqual(tree["oop"][0]["bet"], [{"PotPct": 33.0}])  # la BB a l'initiative : elle c-bette
+        self.assertEqual((spot.pot_bb, spot.stack_bb, spot.name), (23.0, 88.5, "pot 3bet"))
+        self.assertIn("AA", spot.request()["spot"]["range_oop"].split(","))
+
+    def test_situations(self):
+        sits = {s.key: s for s in sizing.situations("3bet")}
+        self.assertEqual(len(sits), 66)
+        self.assertEqual([s.key for s in sizing.situations("3bet")[:3]], ["bet:fo:", "raise:fi::0", "bet:fi:"])
+        self.assertEqual(sits["bet:fo:"].candidates, [33, 75, "geo2"])  # c-bet
+        self.assertEqual(sits["bet:to:o"].candidates, [33, 50, 75, "a"])  # 2e barrel
+        self.assertEqual(sits["bet:to:x"].candidates, [33, 75, "geo"])  # c-bet retardée
+        self.assertEqual((sits["bet:ro:oo"].candidates, sits["bet:ro:oo"].choose), ([33, 50, 75, "a"], 2))  # 3e barrel
+        self.assertEqual(sits["bet:ro:xx"].candidates, [33, 50, 75, "a"])  # probe river
+        for key in ("bet:fi:", "bet:ti:o", "bet:ri:ox"):  # stab du bouton
+            self.assertEqual((sits[key].candidates, sits[key].choose), ([25, 50, "a"], 1))
+        self.assertEqual(sits["raise:fi::0"].candidates, [33, 66, "a"])
+        self.assertNotIn("bet:to:i", sits)  # la BB ne mène pas dans le stab payé du bouton
+        self.assertEqual(sizing.label("bet:fi:", "3bet"), "Stab flop du BTN")
+        self.assertEqual(sizing.sizes_text([33, "geo2"]), "33 % / géo 2 streets")
+        self.assertTrue(sizing.plan_text(sizing.initial_plan("3bet"), "3bet").startswith("c-bet 75 % · relance du BTN"))
 
 
 class SizingRulesTest(unittest.TestCase):
@@ -221,6 +253,19 @@ class SolveSpotsTest(unittest.TestCase):
             self.assertEqual(studyspots.load_selection("srp", "KsKd4c")["source"], "livré")
             self.assertEqual(StudySpot("srp", cards_of("KsKd4c")).plan["bet:fi:"], [75])
         self.shipped.start()
+
+    def test_choose_sizes_3bet(self):
+        # Même faux solveur : 40 % pour la BB, 70 % pour le bouton ; seul le flop checké mène à la turn.
+        result = studyspots.choose_sizes("3bet", "KsKd4c", lambda m: None)
+        plan, report = result["plan"], result["report"]
+        self.assertEqual((plan["bet:fo:"], plan["raise:fi::0"], plan["bet:fi:"]), ([33], [66], [50]))
+        self.assertEqual(len([e for e in report.values() if e["method"] == "arbre complet"]), 6)
+        self.assertEqual((plan["bet:to:x"], plan["bet:ti:x"]), ([33], [50]))
+        self.assertEqual((plan["bet:ro:xx"], plan["bet:ri:xx"]), ([33, 50], [50]))
+        spot = StudySpot("3bet", cards_of("KsKd4c"))
+        self.assertEqual(spot.request()["plan"]["bet:fo:"], [33.0])
+        self.assertTrue(spot.menu_text().startswith("c-bet 33 %"))
+        self.assertIn("Spots d'étude · pot 3bet", build_studies_page())
 
     def test_app_chooses_then_solves(self):
         lib = Library(self.folder / "mains")

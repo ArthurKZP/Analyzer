@@ -237,6 +237,7 @@ l'autre, avec une barre de progression ; *Arrêter* interrompt la série), ou en
 
 ```bash
 python -m analyzer gtopen --spots srp                          # les 24 flops : choix des tailles, puis résolution
+python -m analyzer gtopen --spots 3bet                         # la même chose en pot 3bet
 python -m analyzer gtopen --spots srp --texture Monotone --texture "Ace high"   # quelques textures
 ```
 
@@ -291,6 +292,26 @@ choix est gardé dans `~/.analyzer/tailles` ; ceux calculés à l'avance sont li
 chaque flop ses tailles et, en dépliant, l'EV de chaque taille comparée. Le bouton **Résoudre les flops
 manquants** choisit les tailles qui manquent avant de résoudre ; en ligne de commande, `--spots srp` fait
 de même, `--choix-seulement` s'arrête au choix, `--sans-choix` garde les tailles par défaut.
+
+**Pots 3bet** : la deuxième série (`--spots 3bet`, section *Spots d'étude · pot 3bet* de la page) reprend les
+mêmes 24 flops avec le 3bet de la solution préflop : open du bouton à 2,5 bb, 3bet de la BB à 11,5 bb, call
+du bouton ; pot de 23 bb, 88,5 bb derrière. La BB est hors de position et à l'initiative : c-bet, 2e barrel
+et c-bet retardée sont les siens ; le bouton *stabbe* quand elle checke. Pas de donk : la BB ne mène pas
+dans le bouton quand il a misé à la street précédente. Les tailles comparées :
+
+| Situation | Tailles comparées |
+| --- | --- |
+| C-bet de la BB | 33 % · 75 % · géométrique sur deux streets (97 % : tapis à la turn) |
+| 2e barrel | 33 % · 50 % · 75 % · tapis |
+| C-bet retardée (flop checké) | 33 % · 75 % · géométrique (turn et river) |
+| River de la BB : 3e barrel, bet/check/bet, probe… | deux parmi 33 % · 50 % · 75 % · tapis |
+| Stab du bouton (la BB checke), à chaque street | 25 % · 50 % · tapis |
+| Le bouton qui continue après sa mise payée | 33 % · 50 % · 75 % · tapis (deux à la river) |
+| Relances et sur-relances | 33 % · 66 % · tapis |
+
+La synthèse de chaque flop montre la c-bet de la BB, la réponse du bouton, la BB face à sa relance, puis le
+stab du bouton et la réponse de la BB. La méthode est celle du SRP ; au flop, six situations se comparent
+sur arbres complets (c-bet, relance du bouton, stab, check-raise de la BB, sur-relances).
 
 **Limites** : les tailles et la profondeur de l'arbre simplifient le jeu réel ; une main que la range du
 solveur ne contient pas (par exemple un open que le solveur ne fait jamais) y est ajoutée avec un poids

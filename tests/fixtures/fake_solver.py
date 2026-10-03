@@ -12,7 +12,7 @@ option = lambda name: args[args.index(name) + 1] if name in args else None  # no
 
 def plan_ev(plan, pot):
     """EV fictive : chaque situation rapporte plus quand ses tailles approchent 40 % (BB) ou 70 % (bouton)."""
-    value = lambda s: 120.0 if s == "geo" else 300.0 if s == "a" else float(s)  # noqa: E731
+    value = lambda s: 120.0 if str(s).startswith("geo") else 300.0 if s == "a" else float(s)  # noqa: E731
     ev = [pot / 2, pot / 2]
     for key, sizes in (plan or {}).items():
         p = 0 if key.split(":")[1][1] == "o" else 1

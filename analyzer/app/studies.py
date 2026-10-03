@@ -64,11 +64,10 @@ document.querySelectorAll('button.del').forEach(function (b) {
     post('/api/etudes/supprimer', { key: b.dataset.key }).then(function () { location.reload(); });
   });
 });
-(function () {
-  var box = document.getElementById('spot-head');
-  if (!box) return;
-  var family = box.dataset.family, run = document.getElementById('spot-run'), stop = document.getElementById('spot-stop');
-  var status = document.getElementById('spot-status'), done = Number(box.dataset.done), timer = null;
+document.querySelectorAll('.spot-head').forEach(function (box) {
+  var card = box.closest('.card'), family = box.dataset.family, done = Number(box.dataset.done), timer = null;
+  var run = card.querySelector('.spot-run'), stop = card.querySelector('.spot-stop');
+  var status = card.querySelector('.spot-status');
   function show(s) {
     if (s.done !== done) { location.reload(); return; }
     var current = s.rows.filter(function (r) { return r.state === 'running'; })[0];
@@ -99,12 +98,11 @@ document.querySelectorAll('button.del').forEach(function (b) {
   });
   stop.addEventListener('click', function () { post('/api/spots/' + family + '/arreter').then(show); });
   refresh();  // résolutions déjà lancées, solveur installé ou non
-  var form = document.getElementById('spot-other');
+  var form = card.querySelector('form.spot-other'), msg = form.querySelector('.spot-other-msg');
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     var raw = form.elements.flop.value.replace(/[\\s,]/g, ''), cards = raw.match(/[2-9tjqka][cdhs]/gi) || [];
     var board = cards.map(function (c) { return c[0].toUpperCase() + c[1].toLowerCase(); });
-    var msg = document.getElementById('spot-other-msg');
     if (cards.join('').length !== raw.length || board.length !== 3 || new Set(board).size !== 3) {
       msg.textContent = 'Trois cartes différentes, par exemple Ah7d2c.';
       return;
@@ -112,7 +110,7 @@ document.querySelectorAll('button.del').forEach(function (b) {
     msg.textContent = '';
     window.open('/explorateur/spot:' + family + ':' + board.join(''), '_blank', 'noopener');
   });
-})();
+});
 """
 
 KIND_CLASS = {"fold": "k-fold", "check": "k-pass", "call": "k-pass", "bet": "k-bet", "raise": "k-raise"}
@@ -153,10 +151,10 @@ def _average(entries: list[dict]) -> tuple[list[dict], list[float]]:
     return list(actions.values()), [totals[k] / len(entries) for k in actions]
 
 
-def _columns(metas: list[dict]) -> list[str]:
+def _columns(metas: list[dict], family: str) -> list[str]:
     titles = {e["title"] for m in metas for e in m.get("summary", [])}
-    order = ["BB au flop"] + [title for _, title in studyspots.SUMMARY_STEPS]
-    return [t for t in order if t in titles] or [title for _, title in studyspots.SUMMARY_STEPS]
+    order = [title for title, _ in studyspots.SUMMARY[family]]
+    return [t for t in order if t in titles] or [t for t in order if t != "BB au flop"]
 
 
 def _sizes_row(spot, width: int, series: bool) -> str:
@@ -167,7 +165,7 @@ def _sizes_row(spot, width: int, series: bool) -> str:
         return f'<tr class="sizes"><td></td><td colspan="{width - 1}">Tailles par défaut{later}.</td></tr>'
 
     report = chosen.get("report", {})
-    order = {k: i for i, k in enumerate(s.key for s in sizing.situations())}
+    order = {k: i for i, k in enumerate(s.key for s in sizing.situations(spot.family))}
     shown = sorted((k for k, e in report.items() if e.get("evs")),
                    key=lambda k: (sizing.Situation(k, []).street, -report[k].get("reach", 0), order.get(k, 0)))
     lines = []
@@ -189,11 +187,11 @@ def _sizes_row(spot, width: int, series: bool) -> str:
               'atteinte(s) : la plus petite taille. Écart d\'EV pour celui qui mise ; un écart minime (moins de '
               '0,02 bb au flop, de 0,5 % du pot ensuite) laisse la plus petite taille.</div>')
     return (f'<tr class="sizes"><td></td><td colspan="{width - 1}"><details><summary>Tailles : '
-            f'{escape(sizing.plan_text(spot.plan))}</summary>{detail}</details></td></tr>')
+            f'{escape(sizing.plan_text(spot.plan, spot.family))}</summary>{detail}</details></td></tr>')
 
 
-def _stale_section() -> str:
-    stale = studyspots.stale_spot_studies()
+def _stale_section(family: str) -> str:
+    stale = [m for m in studyspots.stale_spot_studies() if m.get("family") == family]
     if not stale:
         return ""
     items = "".join(
@@ -201,6 +199,13 @@ def _stale_section() -> str:
         f'<button type="button" class="del" data-key="{escape(m["key"])}">Supprimer</button></li>' for m in stale)
     return (f'<div class="stale"><b>Anciennes études de spots</b> ({len(stale)}, {_size(sum(m["size"] for m in stale))}) '
             f': faites avec un autre arbre (avant le choix des tailles), elles ne s\'ouvrent plus.<ul>{items}</ul></div>')
+
+
+READING = {
+    "srp": "la c-bet du bouton après le check de la BB, la réponse de la BB, puis celle du bouton face au check-raise",
+    "3bet": "la c-bet de la BB, la réponse du bouton, celle de la BB face à sa relance, puis le stab du bouton quand "
+            "la BB checke et la réponse de la BB",
+}
 
 
 def _spot_section(family: str = "srp") -> str:
@@ -212,7 +217,7 @@ def _spot_section(family: str = "srp") -> str:
     series = set(studyspots.flop_set(family))
     refs = {i: r for i, r in studyspots.reference(family).items() if i not in metas}
     shown = {**refs, **metas}  # une étude de cet ordinateur passe avant la référence
-    columns = _columns(list(shown.values()))
+    columns = _columns(list(shown.values()), family)
     width = len(columns) + 3
     rows = []
     for texture in studyspots.TEXTURES:
@@ -264,20 +269,18 @@ def _spot_section(family: str = "srp") -> str:
     return f"""
 <h2>Spots d'étude · {escape(info["name"])}</h2>
 <div class="card">
-<p class="note" style="margin-top:0">{escape(info["label"])}. Ranges de la solution préflop ; la BB ne mène pas
-(pas de donk). Trois flops par texture : pairé, monotone, puis selon la plus haute carte. Les tailles de mise
-sont choisies flop par flop, une par situation (deux à la river) : c-bet 33 / 75 % / géo, 2e barrel 50 % / pot
-/ géo, c-bet retardée 33 / 66 % / géo, probe turn 33 / 75 % / pot / géo, river deux parmi 50 / 75 % / pot /
-150 % / tapis, relances 33 / 66 % / géo (tapis à la river) ; la meilleure EV pour celui qui mise l'emporte.
-Chaque ligne donne la stratégie de toute la range : la c-bet du bouton après le check de la BB, la réponse de
-la BB, puis celle du bouton face au check-raise. <b>Explorer ↗</b> ouvre le spot dans l'explorateur (turn et
+<p class="note" style="margin-top:0">{escape(info["label"])}. Ranges de la solution préflop ; pas de donk (la BB
+ne mène pas dans celui qui a misé à la street précédente). Trois flops par texture : pairé, monotone, puis selon
+la plus haute carte. Les tailles de mise sont choisies flop par flop, une par situation (deux à la river) :
+{escape(sizing.PROFILES[family].description)} ; la meilleure EV pour celui qui mise l'emporte. Chaque ligne donne
+la stratégie de toute la range : {READING[family]}. <b>Explorer ↗</b> ouvre le spot dans l'explorateur (turn et
 river comprises).{" Les flops marqués <b>réf.</b> montrent la synthèse livrée avec Analyzer (même arbre, calculée "
 "à l'avance) : résous-les ici pour les explorer." if refs else ""}</p>
-<div class="spot-head" id="spot-head" data-family="{escape(family)}" data-done="{done}">
+<div class="spot-head" data-family="{escape(family)}" data-done="{done}">
   <span><b>{done} / {total}</b> flops résolus{" · " + _size(size) if size else ""}</span>
-  <button type="button" class="go" id="spot-run"{" hidden" if not missing else ""}>Résoudre les {missing} flops manquants</button>
-  <button type="button" id="spot-stop" hidden>Arrêter</button>
-  <span class="spot-status" id="spot-status"></span>
+  <button type="button" class="go spot-run"{" hidden" if not missing else ""}>Résoudre les {missing} flops manquants</button>
+  <button type="button" class="spot-stop" hidden>Arrêter</button>
+  <span class="spot-status"></span>
 </div>
 <p class="note">Un flop sans tailles choisies passe d'abord par leur choix (environ 1 h 15 sur 4 cœurs, moins avec
 plus de cœurs), puis par sa résolution (une dizaine de minutes, environ 450 Mo sur le disque et 4 Go de mémoire
@@ -286,10 +289,10 @@ traitent l'un après l'autre en arrière-plan, tant que l'application reste ouve
 <div class="scroll"><table class="stats studies spots"><thead><tr><th>Flop</th>{head}<th class="num">Précision</th>
 <th></th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
 <div class="spot-legend">{legend}</div>
-<form class="spot-other" id="spot-other"><label for="spot-flop">Étudier un autre flop :</label>
-<input id="spot-flop" name="flop" placeholder="ex. Ah7d2c" autocomplete="off" spellcheck="false">
-<button type="submit">Ouvrir ↗</button><span class="muted" id="spot-other-msg"></span></form>
-{_stale_section()}
+<form class="spot-other"><label for="spot-flop-{escape(family)}">Étudier un autre flop :</label>
+<input id="spot-flop-{escape(family)}" name="flop" placeholder="ex. Ah7d2c" autocomplete="off" spellcheck="false">
+<button type="submit">Ouvrir ↗</button><span class="muted spot-other-msg"></span></form>
+{_stale_section(family)}
 </div>
 """
 
@@ -333,7 +336,7 @@ def build_studies_page(embed: bool = True) -> str:
 <div class="meta">{len(studies)} étude(s) · {_size(total)} sur le disque · {escape(str(postflop.studies_dir()))}</div>
 <p class="note">Précision : exploitabilité de la solution, en % du pot (plus c'est bas, plus elle est proche de
 l'équilibre).</p>
-{_spot_section("srp")}
+{"".join(_spot_section(family) for family in studyspots.FAMILIES)}
 {_hand_section()}
 """
     return html_page("Études du solveur", f"<style>{STYLE}</style>{body}", embed, script=SCRIPT)

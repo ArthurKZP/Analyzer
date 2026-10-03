@@ -37,20 +37,6 @@ RIVER_CARDS = 8  # pour les tailles de la river (plus de situations, chacune plu
 RARE_CARDS = 4  # cartes turn pour une situation rare
 COMMON, RARE = 0.03, 0.003  # probabilité d'atteindre la situation (depuis le flop) : fréquente, rare
 
-BET_FLOP = [33, 75, "geo"]
-RAISES = [33, 66, "geo"]
-RIVER_BETS = [50, 75, 100, 150, "a"]
-RIVER_RAISES = [33, 66, "a"]  # à la river, le géométrique est le tapis
-# Mises turn selon (joueur, flop) : i = bouton, o = BB ; flop i = c-bet payée, x = checké, o = check-raise payé.
-TURN_BETS = {
-    ("i", "i"): [50, 100, "geo"],  # 2e barrel
-    ("i", "x"): [33, 66, "geo"],  # c-bet retardée
-    ("o", "x"): [33, 75, 100, "geo"],  # probe turn
-    ("o", "o"): [50, 100, "geo"],  # barrel de la BB après son check-raise payé
-    ("i", "o"): [33, 66, "geo"],  # mise du bouton quand la BB checke après son check-raise payé
-}
-
-
 @dataclass
 class Situation:
     key: str
@@ -74,83 +60,168 @@ class Situation:
         return list(itertools.combinations(self.candidates, self.choose))
 
     def initial(self) -> list:
-        """Choix de départ, avant comparaison : la taille du milieu (75 % et 150 % à la river)."""
+        """Choix de départ, avant comparaison : la taille du milieu (deux à la river)."""
         if self.choose == 2:
             return [self.candidates[1], self.candidates[3]]
         return [self.candidates[len(self.candidates) // 2]]
 
 
-def situations() -> list[Situation]:
-    """Les situations d'un SRP (le bouton en position et à l'initiative) : mises et relances par street."""
-    out = [Situation("bet:fi:", BET_FLOP), Situation("raise:fo::0", RAISES), Situation("raise:fi::1", RAISES)]
-    for street, pasts in (("t", ["i", "x", "o"]), ("r", [a + b for a in "ixo" for b in "ixo"])):
+@dataclass(frozen=True)
+class Profile:
+    """Les tailles comparées d'une famille de pots. Clés et lettres : voir native/arbre.rs (o = BB, i = bouton ;
+    pour chaque street jouée, son dernier agresseur, ou x si elle a été checkée)."""
+    flop: tuple  # situations du flop, dans l'ordre où elles se choisissent : (clé, tailles)
+    turn_bets: dict  # (joueur, flop) -> tailles ; absente : la BB ne mène pas (donk)
+    river_bets: Callable[[str, str], Optional[tuple]]  # (joueur, passé) -> (tailles, nombre à garder) ou None
+    raises: dict  # street -> tailles de relance (et de sur-relance)
+    lines: dict  # lettre du flop -> actions qui mènent à la turn
+    flop_river: list  # mise river unique pendant le choix du flop (arbre complet plus petit)
+    names: dict  # libellés des situations principales
+    flop_line: dict  # lettre du flop -> « c-bet payée »…
+    main: tuple  # situations résumées dans les menus
+    description: str
+
+
+def _srp_river(bettor: str, past: str) -> Optional[tuple]:
+    if bettor == "o" and past[-1] == "i":
+        return None  # la BB ne mène pas dans l'agresseur de la street précédente (donk)
+    return [50, 75, 100, 150, "a"], 2
+
+
+def _3bet_river(bettor: str, past: str) -> Optional[tuple]:
+    if bettor == "o":
+        return None if past[-1] == "i" else ([33, 50, 75, "a"], 2)  # 3e barrel, probe, bet/check/bet…
+    if past[-1] == "i":
+        return [33, 50, 75, "a"], 2  # le bouton continue après sa mise payée
+    return [25, 50, "a"], 1  # stab : la BB checke
+
+
+PROFILES = {
+    "srp": Profile(
+        flop=(("bet:fi:", [33, 75, "geo"]), ("raise:fo::0", [33, 66, "geo"]), ("raise:fi::1", [33, 66, "geo"])),
+        turn_bets={
+            ("i", "i"): [50, 100, "geo"],  # 2e barrel
+            ("i", "x"): [33, 66, "geo"],  # c-bet retardée
+            ("o", "x"): [33, 75, 100, "geo"],  # probe turn
+            ("o", "o"): [50, 100, "geo"],  # barrel de la BB après son check-raise payé
+            ("i", "o"): [33, 66, "geo"],  # mise du bouton quand la BB checke après son check-raise payé
+        },
+        river_bets=_srp_river,
+        raises={"t": [33, 66, "geo"], "r": [33, 66, "a"]},  # à la river, le géométrique est le tapis
+        lines={"i": ["check", "bet", "call"], "x": ["check", "check"], "o": ["check", "bet", "raise", "call"]},
+        flop_river=[75],
+        names={
+            "bet:fi:": "C-bet", "raise:fo::0": "Check-raise flop", "raise:fi::1": "Relance du BTN face au check-raise",
+            "bet:ti:i": "2e barrel", "bet:ti:x": "C-bet retardée", "bet:to:x": "Probe turn",
+            "bet:to:o": "Barrel de la BB après son check-raise", "bet:ti:o": "Mise du BTN après le check-raise payé",
+            "bet:ri:ii": "3e barrel", "bet:ri:ix": "Bet/check/bet", "bet:ri:xi": "Check/bet/bet",
+            "bet:ri:xx": "Mise river du BTN après deux streets checkées",
+            "bet:ro:ix": "Probe river (c-bet payée, turn checkée)", "bet:ro:xx": "Probe river (deux streets checkées)",
+            "bet:ro:xo": "Barrel de la BB après son probe turn payé",
+        },
+        flop_line={"i": "c-bet payée", "x": "flop checké", "o": "check-raise payé"},
+        main=("bet:fi:", "raise:fo::0", "bet:ti:i", "bet:ti:x", "bet:to:x", "bet:ri:ii", "bet:ri:ix", "bet:ro:ix"),
+        description="c-bet 33 / 75 % / géo, 2e barrel 50 % / pot / géo, c-bet retardée 33 / 66 % / géo, probe turn "
+                    "33 / 75 % / pot / géo, river deux parmi 50 / 75 % / pot / 150 % / tapis, relances 33 / 66 % / "
+                    "géo (tapis à la river)",
+    ),
+    # Pot 3bet : la BB a 3betté, elle est hors de position et à l'initiative ; le bouton a payé.
+    "3bet": Profile(
+        flop=(("bet:fo:", [33, 75, "geo2"]),  # c-bet : géométrique sur deux streets (tapis à la turn)
+              ("raise:fi::0", [33, 66, "a"]),  # relance du bouton face à la c-bet
+              ("bet:fi:", [25, 50, "a"]),  # stab du bouton quand la BB checke
+              ("raise:fo::0", [33, 66, "a"]),  # check-raise de la BB face au stab
+              ("raise:fo::1", [33, 66, "a"]),  # sur-relance de la BB
+              ("raise:fi::1", [33, 66, "a"])),  # sur-relance du bouton
+        turn_bets={
+            ("o", "o"): [33, 50, 75, "a"],  # 2e barrel
+            ("o", "x"): [33, 75, "geo"],  # c-bet retardée : les tailles de la c-bet (géo sur turn et river)
+            ("i", "o"): [25, 50, "a"],  # stab turn du bouton (c-bet payée, la BB checke)
+            ("i", "x"): [25, 50, "a"],  # stab turn du bouton (flop checké)
+            ("i", "i"): [33, 50, 75, "a"],  # le bouton continue après son stab payé
+        },
+        river_bets=_3bet_river,
+        raises={"t": [33, 66, "a"], "r": [33, 66, "a"]},
+        lines={"o": ["bet", "call"], "x": ["check", "check"], "i": ["check", "bet", "call"]},
+        flop_river=[50],
+        names={
+            "bet:fo:": "C-bet", "raise:fi::0": "Relance du BTN face à la c-bet",
+            "raise:fo::1": "Sur-relance de la BB face à la relance", "bet:fi:": "Stab flop du BTN",
+            "raise:fo::0": "Check-raise de la BB face au stab", "raise:fi::1": "Sur-relance du BTN face au check-raise",
+            "bet:to:o": "2e barrel", "bet:to:x": "C-bet retardée", "bet:ti:o": "Stab turn du BTN (c-bet payée)",
+            "bet:ti:x": "Stab turn du BTN (flop checké)", "bet:ti:i": "Barrel turn du BTN après son stab payé",
+            "bet:ro:oo": "3e barrel", "bet:ro:ox": "Bet/check/bet de la BB", "bet:ro:xo": "Barrel river après la c-bet retardée",
+            "bet:ro:xx": "Probe river de la BB (deux streets checkées)", "bet:ri:oo": "Stab river du BTN (deux barrels payés)",
+            "bet:ri:ox": "Stab river du BTN (c-bet payée, turn checkée)", "bet:ri:xx": "Stab river du BTN (deux streets checkées)",
+        },
+        flop_line={"o": "c-bet payée", "x": "flop checké", "i": "stab payé"},
+        main=("bet:fo:", "raise:fi::0", "bet:fi:", "bet:to:o", "bet:to:x", "bet:ti:o", "bet:ro:oo", "bet:ro:ox"),
+        description="c-bet de la BB 33 / 75 % / géo sur deux streets, 2e barrel 33 / 50 / 75 % / tapis, c-bet retardée "
+                    "33 / 75 % / géo, river (3e barrel, probe) deux parmi 33 / 50 / 75 % / tapis, stab du bouton "
+                    "25 / 50 % / tapis, relances 33 / 66 % / tapis",
+    ),
+}
+
+
+def situations(family: str = "srp") -> list[Situation]:
+    """Les situations d'une famille de pots : mises et relances, street par street (le flop dans l'ordre du choix)."""
+    profile = PROFILES[family]
+    out = [Situation(key, sizes) for key, sizes in profile.flop]
+    for street, pasts in (("t", list(profile.lines)), ("r", [a + b for a in profile.lines for b in "ixo"])):
         for past in pasts:
             for bettor in "oi":
-                if bettor == "o" and past[-1] == "i":
-                    continue  # la BB ne mène pas dans l'agresseur de la street précédente (donk)
-                other = "i" if bettor == "o" else "o"
                 if street == "t":
-                    bets, raises, n = TURN_BETS[(bettor, past)], RAISES, 1
+                    bets, n = profile.turn_bets.get((bettor, past)), 1
                 else:
-                    bets, raises, n = RIVER_BETS, RIVER_RAISES, 2
+                    bets, n = profile.river_bets(bettor, past) or (None, 1)
+                if bets is None:
+                    continue  # pas de donk
+                other = "i" if bettor == "o" else "o"
                 out.append(Situation(f"bet:{street}{bettor}:{past}", bets, n))
-                out.append(Situation(f"raise:{street}{other}:{past}:0", raises))
-                out.append(Situation(f"raise:{street}{bettor}:{past}:1", raises))
+                out.append(Situation(f"raise:{street}{other}:{past}:0", profile.raises[street]))
+                out.append(Situation(f"raise:{street}{bettor}:{past}:1", profile.raises[street]))
     return out
 
 
-def initial_plan() -> dict:
-    return {s.key: s.initial() for s in situations()}
+def initial_plan(family: str = "srp") -> dict:
+    return {s.key: s.initial() for s in situations(family)}
 
 
 # --- Libellés ------------------------------------------------------------------------------
 
-FLOP_LINE = {"i": "c-bet payée", "x": "flop checké", "o": "check-raise payé"}
-NAMES = {
-    "bet:fi:": "C-bet",
-    "raise:fo::0": "Check-raise flop",
-    "raise:fi::1": "Relance du BTN face au check-raise",
-    "bet:ti:i": "2e barrel",
-    "bet:ti:x": "C-bet retardée",
-    "bet:to:x": "Probe turn",
-    "bet:to:o": "Barrel de la BB après son check-raise",
-    "bet:ti:o": "Mise du BTN après le check-raise payé",
-    "bet:ri:ii": "3e barrel",
-    "bet:ri:ix": "Bet/check/bet",
-    "bet:ri:xi": "Check/bet/bet",
-    "bet:ri:xx": "Mise river du BTN après deux streets checkées",
-    "bet:ro:ix": "Probe river (c-bet payée, turn checkée)",
-    "bet:ro:xx": "Probe river (deux streets checkées)",
-    "bet:ro:xo": "Barrel de la BB après son probe turn payé",
-}
-
-
 def size_text(size) -> str:
-    return "tapis" if size == "a" else "géo" if size == "geo" else "pot" if size == 100 else f"{size} %"
+    if size == "a":
+        return "tapis"
+    if isinstance(size, str) and size.startswith("geo"):
+        return "géo" if size == "geo" else f"géo {size[3:]} streets"
+    return "pot" if size == 100 else f"{size} %"
 
 
 def sizes_text(sizes: list) -> str:
     return " / ".join(size_text(s) for s in sizes)
 
 
-def label(key: str) -> str:
-    if key in NAMES:
-        return NAMES[key]
+def label(key: str, family: str = "srp") -> str:
+    profile = PROFILES[family]
+    if key in profile.names:
+        return profile.names[key]
     kind, where, past, *level = key.split(":")
     street = {"f": "flop", "t": "turn", "r": "river"}[where[0]]
     who = "BB" if where[1] == "o" else "BTN"
-    line = [FLOP_LINE[past[0]]] if past else []
+    line = [profile.flop_line[past[0]]] if past else []
     if len(past) > 1:
         line.append({"i": "mise du BTN payée à la turn", "x": "turn checkée", "o": "mise de la BB payée à la turn"}[past[1]])
     what = "Mise" if kind == "bet" else "Relance" if level == ["0"] else "Sur-relance"
     return f"{what} {street} {'de la' if who == 'BB' else 'du'} {who}" + (f" ({', '.join(line)})" if line else "")
 
 
-def plan_text(plan: dict) -> str:
+def plan_text(plan: dict, family: str = "srp") -> str:
     """Les tailles des situations principales, pour les menus."""
-    keys = ["bet:fi:", "raise:fo::0", "bet:ti:i", "bet:ti:x", "bet:to:x", "bet:ri:ii", "bet:ri:ix", "bet:ro:ix"]
-    return " · ".join(f"{NAMES[k].lower() if k != 'bet:fi:' else 'c-bet'} {sizes_text(plan[k])}"
-                      for k in keys if k in plan)
+    profile = PROFILES[family]
+    def name(key: str) -> str:
+        text = label(key, family)
+        return text[0].lower() + text[1:]
+    return " · ".join(f"{name(k)} {sizes_text(plan[k])}" for k in profile.main if k in plan)
 
 
 # --- Résolutions -----------------------------------------------------------------------------
@@ -203,12 +274,11 @@ def _mass(node: dict) -> float:
     return sum(r[1] for r in node["hands"][0]) * sum(r[1] for r in node["hands"][1])
 
 
-def _path_to_turn(session, line: str) -> Optional[list]:
-    """Chemin du nœud de chance de la turn pour la ligne de flop (i, x, o), si l'arbre l'a."""
+def _path_to_turn(session, kinds: list[str]) -> Optional[list]:
+    """Chemin du nœud de chance de la turn au bout de ces actions du flop, si l'arbre l'a."""
     def step(node, kind):
         k = next((i for i, a in enumerate(node["actions"]) if a["kind"] == kind and not a.get("allin")), None)
         return None if k is None else {"type": "action", "index": k}
-    kinds = {"x": ["check", "check"], "i": ["check", "bet", "call"], "o": ["check", "bet", "raise", "call"]}[line]
     path: list = []
     for kind in kinds:
         node = session.node(path)
@@ -231,7 +301,9 @@ class Selection:
         self.spot, self.log, self.threads, self.cards = spot, log, threads, cards
         self.on_start = on_start
         self.stopped = stopped or (lambda: False)
-        self.plan = initial_plan()
+        self.family = spot.family
+        self.profile = PROFILES[spot.family]
+        self.plan = initial_plan(spot.family)
         self.report: dict[str, dict] = {}
         self.session: Optional[postflop.Session] = None
         self.root_mass = 0.0
@@ -242,13 +314,19 @@ class Selection:
 
     # --- flop : arbres complets ---
     def _flop_plan(self, plan: dict) -> dict:
-        """Pendant le choix du flop, la river garde une seule mise (75 %) et pas de relance : l'arbre complet
-        reste deux fois plus petit ; ses tailles se choisissent ensuite, sur les sous-jeux."""
+        """Pendant le choix du flop, la river garde une seule mise (75 % en SRP) et pas de relance : l'arbre
+        complet reste deux fois plus petit ; ses tailles se choisissent ensuite, sur les sous-jeux."""
         out = dict(plan)
-        for sit in situations():
+        for sit in situations(self.family):
             if sit.street == 2:
-                out[sit.key] = [75] if sit.key.startswith("bet:") else []
+                out[sit.key] = list(self.profile.flop_river) if sit.key.startswith("bet:") else []
         return out
+
+    def _flop_situations(self) -> list[Situation]:
+        return [s for s in situations(self.family) if s.street == 0]
+
+    def _label(self, key: str) -> str:
+        return label(key, self.family)
 
     def _check(self) -> None:
         if self.stopped():
@@ -271,7 +349,7 @@ class Selection:
     def flop(self) -> None:
         known: dict[str, tuple[dict, postflop.Session]] = {}  # arbre (plan) -> résolution, sans doublon
         try:
-            for sit in situations()[:3]:
+            for sit in self._flop_situations():
                 options = sit.options()
                 evs, idents = [], []
                 for opt in options:
@@ -281,7 +359,7 @@ class Selection:
                         start = time.time()
                         known[ident] = self._solve(plan)
                         raw = known[ident][0]
-                        self.log(f"    {label(sit.key)} {sizes_text(opt)} : EV {raw['root_ev'][sit.player]:.3f} bb "
+                        self.log(f"    {self._label(sit.key)} {sizes_text(opt)} : EV {raw['root_ev'][sit.player]:.3f} bb "
                                  f"({raw['iterations']} itérations, {raw['exploit_pct']} % du pot, "
                                  f"{time.time() - start:.0f} s)")
                     evs.append(known[ident][0]["root_ev"][sit.player])
@@ -290,10 +368,10 @@ class Selection:
                 for ident in [i for i in known if i != idents[k]]:  # seul l'arbre retenu reste en mémoire
                     known.pop(ident)[1].close()
                 self.plan[sit.key] = list(options[k])
-                self.report[sit.key] = {"label": label(sit.key), "options": [list(o) for o in options],
+                self.report[sit.key] = {"label": self._label(sit.key), "options": [list(o) for o in options],
                                         "evs": [round(e, 4) for e in evs], "chosen": list(options[k]), "reach": 1.0,
                                         "cards": None, "method": "arbre complet"}
-                self.log(f"  {label(sit.key)} : {sizes_text(options[k])}")
+                self.log(f"  {self._label(sit.key)} : {sizes_text(options[k])}")
         except BaseException:
             for _, session in known.values():
                 session.close()
@@ -304,15 +382,15 @@ class Selection:
 
     # --- turn et river : sous-jeux ---
     def later(self, street: int) -> None:
-        for line in "ixo":
-            path = _path_to_turn(self.session, line)
+        for line, kinds in self.profile.lines.items():
+            path = _path_to_turn(self.session, kinds)
             if path is None:
                 continue
             node = self.session.node(path)
             weight = _mass(node) / self.root_mass  # probabilité d'arriver à la turn par cette ligne
             cards = sample(node["cards"], self.cards if street == 1 else min(self.cards, RIVER_CARDS))
             bases = [subgame(self.spot, node, card, line) for card in cards]
-            sits = [s for s in situations() if s.street == street and s.past[0] == line]
+            sits = [s for s in situations(self.family) if s.street == street and s.past[0] == line]
             # Pour la turn, la river reste simple (comme au flop) ; elle se choisit ensuite.
             view = self._flop_plan if street == 1 else dict
             # Fréquence de chaque situation dans le sous-jeu, avec le plan courant.
@@ -323,9 +401,9 @@ class Selection:
                 self._compare(sit, bases, reach[sit.key], weight, node["pot"], view, usage.get(sit.key))
 
     def _river_usage(self, bases: list[dict], sits: list[Situation], reach: dict, weight: float) -> dict:
-        """River : chaque mise propose ses cinq tailles à la fois ; leur fréquence d'emploi retient les trois
-        plus utilisées, dont on compare ensuite les paires (trois au lieu de dix)."""
-        bets = [s for s in sits if s.choose == 2 and weight * reach[s.key] >= RARE]
+        """River : chaque mise propose toutes ses tailles à la fois ; leur fréquence d'emploi retient les trois
+        plus utilisées, dont on compare ensuite les paires (trois au lieu de dix sur cinq tailles)."""
+        bets = [s for s in sits if s.choose == 2 and len(s.candidates) > 3 and weight * reach[s.key] >= RARE]
         if not bets:
             return {}
         plan = dict(self.plan, **{s.key: list(s.candidates) for s in bets})
@@ -334,7 +412,8 @@ class Selection:
         results = self._lot(used, [{"base": b, "plan": plan} for b in range(len(used))])
         out = {}
         for sit in bets:
-            share = [sum(r["stats"].get(sit.key, {}).get("usage", [0.0] * 5)[j] for r in results) for j in range(5)]
+            n = len(sit.candidates)
+            share = [sum(r["stats"].get(sit.key, {}).get("usage", [0.0] * n)[j] for r in results) for j in range(n)]
             out[sit.key] = [round(x / len(results), 6) for x in share]
         return out
 
@@ -347,7 +426,7 @@ class Selection:
             top = sorted(sorted(range(len(sit.candidates)), key=lambda j: -usage[j])[:3])
             options = list(itertools.combinations([sit.candidates[j] for j in top], 2))
         overall = weight * reach  # probabilité d'atteindre la situation depuis le flop
-        entry = {"label": label(sit.key), "options": [list(o) for o in options], "reach": round(overall, 5)}
+        entry = {"label": self._label(sit.key), "options": [list(o) for o in options], "reach": round(overall, 5)}
         if usage is not None:
             entry["usage"] = usage
         if overall < RARE:
@@ -370,7 +449,7 @@ class Selection:
         self.report[sit.key] = entry
         if entry["method"] != "rare":
             gaps = ", ".join(f"{sizes_text(o)} {g:+.2f}" for o, g in zip(options, entry["per_occurrence"]) if o != options[k])
-            self.log(f"  {label(sit.key)} : {sizes_text(options[k])} (atteinte {100 * overall:.1f} %, "
+            self.log(f"  {self._label(sit.key)} : {sizes_text(options[k])} (atteinte {100 * overall:.1f} %, "
                      f"{entry['cards']} cartes ; écart par occurrence : {gaps} bb)")
 
     def run(self, resume: Optional[dict] = None) -> dict:
@@ -394,7 +473,7 @@ class Selection:
                 "cards": self.cards, "created": time.strftime("%d/%m/%Y %H:%M"), "method": METHOD}
 
     def resume_flop(self, previous: dict) -> None:
-        for sit in situations()[:3]:
+        for sit in self._flop_situations():
             self.plan[sit.key] = list(previous["plan"][sit.key])
             self.report[sit.key] = previous["report"][sit.key]
         _, self.session = self._solve(self.plan)
