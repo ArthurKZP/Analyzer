@@ -250,8 +250,11 @@ def export_selections(family: str = "srp", path: Optional[Path] = None) -> Path:
         if local.is_file():
             flops[board] = json.loads(local.read_text(encoding="utf-8"))
     path = path or shipped_path(family)
-    path.write_text(json.dumps({"family": family, "flops": flops}, ensure_ascii=False, indent=1) + "\n",
-                    encoding="utf-8")
+    # Une ligne par flop : le fichier reste lisible sans grossir (le détail de chaque comparaison y est).
+    lines = [f"  {json.dumps(board)}: {json.dumps(chosen, ensure_ascii=False, separators=(',', ':'))}"
+             for board, chosen in flops.items()]
+    body = ",\n".join(lines)
+    path.write_text(f'{{"family": {json.dumps(family)}, "flops": {{\n{body}\n}}}}\n', encoding="utf-8")
     return path
 
 
