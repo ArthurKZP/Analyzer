@@ -26,7 +26,9 @@ from typing import Callable, Optional
 
 from . import postflop
 
-EPS = 0.02  # bb (arbres complets) : en dessous, deux choix sont à égalité et le plus petit l'emporte
+EPS = 0.02  # bb : en dessous, deux choix sont à égalité et le plus petit l'emporte
+# Arbres complets (flop) : égalité sous 0,4 % du pot de départ (0,02 bb en SRP, 0,09 bb en pot 3bet).
+EPS_FLOP_POT = 0.004
 # Sous-jeux : égalité sous 0,5 % du pot de la turn par occurrence de la situation (au moins 0,002 bb à la racine).
 EPS_POT, EPS_FLOOR = 0.005, 0.002
 METHOD = 2  # version de la méthode (un choix plus ancien peut se refaire)
@@ -364,7 +366,7 @@ class Selection:
                                  f"{time.time() - start:.0f} s)")
                     evs.append(known[ident][0]["root_ev"][sit.player])
                     idents.append(ident)
-                k = pick(options, evs)
+                k = pick(options, evs, EPS_FLOP_POT * self.spot.pot_bb)
                 for ident in [i for i in known if i != idents[k]]:  # seul l'arbre retenu reste en mémoire
                     known.pop(ident)[1].close()
                 self.plan[sit.key] = list(options[k])

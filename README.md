@@ -258,7 +258,8 @@ texture dans la page.
 **Choix des tailles** (`analyzer/theory/sizing.py`) : chaque flop de la série a ses propres tailles, une par
 situation pour tout le flop (quelles que soient la turn et la river), deux à la river. Pour chaque situation,
 la taille retenue est celle qui donne la meilleure EV à celui qui mise (ou relance) quand c'est sa seule
-option ; à moins de 0,02 bb de la meilleure, la plus petite l'emporte. Les candidates :
+option ; si l'écart est minime (moins de 0,4 % du pot au flop, soit 0,02 bb en SRP), la plus petite l'emporte.
+Les candidates :
 
 | Situation | Tailles comparées |
 | --- | --- |
@@ -311,7 +312,11 @@ dans le bouton quand il a misé à la street précédente. Les tailles comparée
 
 La synthèse de chaque flop montre la c-bet de la BB, la réponse du bouton, la BB face à sa relance, puis le
 stab du bouton et la réponse de la BB. La méthode est celle du SRP ; au flop, six situations se comparent
-sur arbres complets (c-bet, relance du bouton, stab, check-raise de la BB, sur-relances).
+sur arbres complets (c-bet, relance du bouton, stab, check-raise de la BB, sur-relances). Les arbres sont
+plus petits (moins de jetons derrière) : mesuré sur K♠K♦4♣ avec 4 cœurs, 26 minutes pour le choix des
+tailles (21 pour le flop, 1 pour la turn, 4 pour la river) et 2 min 30 pour la résolution (830 000 nœuds,
+1,5 Go de mémoire, étude de 150 Mo), soit une douzaine d'heures pour la série. Les tailles de K♠K♦4♣ sont
+livrées (`analyzer/theory/data/3bet_tailles.json`).
 
 **Limites** : les tailles et la profondeur de l'arbre simplifient le jeu réel ; une main que la range du
 solveur ne contient pas (par exemple un open que le solveur ne fait jamais) y est ajoutée avec un poids

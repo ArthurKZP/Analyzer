@@ -177,15 +177,16 @@ def _sizes_row(spot, width: int, series: bool) -> str:
             f"<b>{escape(sizing.sizes_text(o))}</b>" if j == k else
             f"{escape(sizing.sizes_text(o))} {num(g, 2, sign=True) if g is not None else '–'}"
             for j, (o, g) in enumerate(zip(e["options"], gaps)))
-        reach = "100 %" if e.get("method") == "arbre complet" else f'{num(100 * e.get("reach", 0), 1)} %'
+        reach = "flop" if e.get("method") == "arbre complet" else f'{num(100 * e.get("reach", 0), 1)} %'
         lines.append(f'<tr><td>{escape(e["label"])}</td><td>{reach}</td><td class="opt">{opts}</td></tr>')
     rare = sum(1 for e in report.values() if e.get("method") == "rare")
     source = "livrées avec Analyzer" if chosen.get("source") == "livré" else f'choisies le {escape(chosen.get("created", ""))}'
     detail = (f'<table><thead><tr><th>Situation</th><th>Atteinte</th><th>Taille retenue, et écart des autres '
               f'(bb, quand la situation arrive)</th></tr></thead><tbody>{"".join(lines)}</tbody></table>'
               f'<div class="muted">{len(shown)} situations comparées ({source}) ; {rare} situation(s) presque jamais '
-              'atteinte(s) : la plus petite taille. Écart d\'EV pour celui qui mise ; un écart minime (moins de '
-              '0,02 bb au flop, de 0,5 % du pot ensuite) laisse la plus petite taille.</div>')
+              'atteinte(s) : la plus petite taille. Écart d\'EV pour celui qui mise : au flop, sur tout le coup (arbre '
+              'complet) ; ensuite, quand la situation arrive. Un écart minime (moins de '
+              '0,4 % du pot au flop, de 0,5 % ensuite) laisse la plus petite taille.</div>')
     return (f'<tr class="sizes"><td></td><td colspan="{width - 1}"><details><summary>Tailles : '
             f'{escape(sizing.plan_text(spot.plan, spot.family))}</summary>{detail}</details></td></tr>')
 
@@ -200,6 +201,11 @@ def _stale_section(family: str) -> str:
     return (f'<div class="stale"><b>Anciennes études de spots</b> ({len(stale)}, {_size(sum(m["size"] for m in stale))}) '
             f': faites avec un autre arbre (avant le choix des tailles), elles ne s\'ouvrent plus.<ul>{items}</ul></div>')
 
+
+COST = {
+    "srp": "environ 1 h 15, puis une dizaine de minutes (450 Mo sur le disque, 4 Go de mémoire pendant le calcul)",
+    "3bet": "environ 30 minutes, puis 2 à 3 minutes (150 Mo sur le disque, 1,5 Go de mémoire pendant le calcul)",
+}
 
 READING = {
     "srp": "la c-bet du bouton après le check de la BB, la réponse de la BB, puis celle du bouton face au check-raise",
@@ -282,9 +288,8 @@ river comprises).{" Les flops marqués <b>réf.</b> montrent la synthèse livré
   <button type="button" class="spot-stop" hidden>Arrêter</button>
   <span class="spot-status"></span>
 </div>
-<p class="note">Un flop sans tailles choisies passe d'abord par leur choix (environ 1 h 15 sur 4 cœurs, moins avec
-plus de cœurs), puis par sa résolution (une dizaine de minutes, environ 450 Mo sur le disque et 4 Go de mémoire
-pendant le calcul). Les flops se
+<p class="note">Un flop sans tailles choisies passe d'abord par leur choix, puis par sa résolution : {COST[family]}
+(sur 4 cœurs ; moins avec plus de cœurs). Les flops se
 traitent l'un après l'autre en arrière-plan, tant que l'application reste ouverte ; tu peux fermer cette page. En ligne de commande : <code>python -m analyzer gtopen --spots {escape(family)}</code>.</p>
 <div class="scroll"><table class="stats studies spots"><thead><tr><th>Flop</th>{head}<th class="num">Précision</th>
 <th></th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
