@@ -4,8 +4,9 @@
   const $ = (id) => document.getElementById(id);
   const frame = $('frame');
   const TABS = {
-    moi: [['bilan', 'Bilan'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots']],
-    adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots']],
+    moi: [['bilan', 'Bilan'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots'], ['solveur', 'Face au solveur']],
+    adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
+      ['solveur', 'Face au solveur']],
   };
   let state = null;
   let route = null;

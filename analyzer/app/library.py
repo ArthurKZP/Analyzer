@@ -13,13 +13,14 @@ from ..parsers import load_hands, parse_text
 from ..report import build_plan_page, build_report
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
-from ..theory import handclass, postflop, studyspots
+from ..theory import handclass, postflop, review, studyspots
 from ..theory.page import build_preflop_page
 from ..viewer import build_viewer
+from .review_page import build_review_page
 from .solves import SolveQueue
 
-PLAYER_PAGES = ("plan", "preflop", "rapport", "spots")
-SELF_PAGES = ("bilan", "preflop", "spots")
+PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur")
+SELF_PAGES = ("bilan", "preflop", "spots", "solveur")
 MAX_IMPORT_FILES = 200
 
 
@@ -106,7 +107,9 @@ class Library:
     def player_page(self, player: str, page: str) -> str:
         if page not in PLAYER_PAGES:
             raise KeyError(page)
-        self.hands_against(player)  # 404 si le joueur est inconnu
+        hands = self.hands_against(player)  # 404 si le joueur est inconnu
+        if page == "solveur":  # change au fil des analyses : jamais en cache
+            return build_review_page(hands, self.hero, player)
 
         def build():
             hands, stats, lines = self._analysis(player)
@@ -124,6 +127,8 @@ class Library:
             raise KeyError(page)
         if not self.hands:
             raise UnknownPlayer("moi")
+        if page == "solveur":
+            return build_review_page(self.hands, self.hero)
 
         def build():
             if page == "bilan":
@@ -247,6 +252,35 @@ class Library:
             if row.get("state") in ("waiting", "running"):
                 self.solves.cancel(row["job"])
         return self.spot_set(family)
+
+    # --- analyse des mains jouées ---------------------------------------------------
+    def review_state(self, villain: Optional[str] = None, start: bool = False) -> dict:
+        """Mains allées au flop (toutes, ou face à cet adversaire) : analysées, à analyser, en cours ;
+        start=True met en file celles qui restent (les plus gros pots d'abord)."""
+        hands = self.hands_against(villain) if villain else self.hands
+        done, todo = review.collect(hands, self.hero)
+        ready = postflop.status()["ready"]
+        busy, current = 0, None
+        for spot in todo:
+            view = self.solves.lookup(spot)
+            if start and ready and view["state"] not in ("waiting", "running"):
+                view = self.solves.analyze(spot, review.save_digest)
+            if view["state"] in ("waiting", "running"):
+                busy += 1
+                if view["state"] == "running":
+                    current = {"hand": spot.hand.hand_id, "progress": view.get("progress"),
+                               "max_iterations": view.get("max_iterations"), "job": view.get("job")}
+        return {"total": len(done) + len(todo), "done": len(done), "busy": busy, "current": current,
+                "ready": ready}
+
+    def review_cancel(self, villain: Optional[str] = None) -> dict:
+        hands = self.hands_against(villain) if villain else self.hands
+        _, todo = review.collect(hands, self.hero)
+        for spot in todo:
+            view = self.solves.lookup(spot)
+            if view["state"] in ("waiting", "running"):
+                self.solves.cancel(view["job"])
+        return self.review_state(villain)
 
     # --- import -----------------------------------------------------------------
     def import_files(self, files: list[dict]) -> dict:

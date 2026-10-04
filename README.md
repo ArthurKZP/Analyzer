@@ -23,12 +23,13 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
 - **Menu latéral** : « Mon jeu », « Importer des mains » et la liste de tes adversaires (recherche,
   nombre de mains, ton résultat contre chacun).
 - **Adversaire** : onglets *Plan de jeu*, *Préflop* (tes décisions et ses fréquences face au solveur),
-  *Rapport* et *Spots*. Les liens « voir les mains » et « rejouer » ouvrent directement l'onglet Spots
+  *Rapport*, *Spots* et *Face au solveur* (tes mains postflop contre lui comparées au solveur, et ses écarts
+  à exploiter). Les liens « voir les mains » et « rejouer » ouvrent directement l'onglet Spots
   sur la bonne ligne ou la bonne main. Dans le replayer, **Résoudre ce coup** lance le solveur GTOpen
   (voir plus bas).
 - **Mon jeu** : ton bilan contre tous tes adversaires (résultats, courbe, écarts aux repères, stats,
   pertes sans abattage, résultats par adversaire), *Mon préflop* face au solveur sur toutes tes mains,
-  et *Mes spots*.
+  *Mes spots* et *Face au solveur* (tes erreurs postflop, voir plus bas).
 - **Importer des mains** : glisse tes historiques ou choisis-les ; ils sont copiés dans le dossier des
   mains (`hands/` par défaut), les doublons et les formats non reconnus sont signalés.
 
@@ -352,6 +353,37 @@ Après une mise à jour d'Analyzer qui touche ce pont, relance `python -m analyz
 Variables d'environnement : `ANALYZER_HOME` (dossier de travail, `~/.analyzer` par défaut),
 `GTOPEN_DIR` (copie de GTOpen à utiliser), `ANALYZER_SOLVER` (chemin d'un `analyzer-solve` déjà compilé).
 
+## Face au solveur (mains jouées)
+
+L'onglet *Face au solveur* (dans « Mon jeu » et pour chaque adversaire) compare tes mains allées au flop à la
+théorie. Chaque main (SRP, pot 3bet ou 4bet ; pas les limps ni les tapis préflop) est résolue une fois, sur
+sa ligne réelle, avec les tailles de l'arbre par défaut ; on en garde un résumé de quelques Ko
+(`~/.analyzer/revue/`), qui survit aux mises à jour du solveur.
+
+```bash
+python -m analyzer gtopen --analyser            # toutes les mains pas encore analysées
+python -m analyzer gtopen --analyser --max 40   # les 40 plus gros pots seulement
+```
+
+Ou bouton **Analyser les mains restantes** dans l'onglet (la page se complète au fur et à mesure, on peut la
+fermer). Les plus gros pots passent d'abord. Compte 3 minutes par SRP, 2 par pot 3bet et un quart de minute
+par pot 4bet sur 4 cœurs : une vingtaine d'heures pour 430 mains, à étaler sur plusieurs nuits.
+
+- **Les erreurs qui coûtent le plus** : décision par décision, l'EV que l'action jouée rapporte de moins
+  que la meilleure action pour ta main (en bb). Une action que le solveur joue au moins 10 % du temps avec
+  cette main ne coûte rien (à l'équilibre, les actions mélangées se valent ; un écart d'EV entre elles vient
+  d'un nœud profond pas tout à fait convergé). Seuil d'erreur : 0,25 bb. **Revoir ↗** ouvre la main
+  dans l'explorateur à cette décision.
+- **Les erreurs récurrentes** : par situation de la ligne (c-bet, face à la c-bet, 2e barrel, probe,
+  check-raise… les mêmes que pour le choix des tailles), le nombre de fois, les erreurs, l'EV perdue, et tes
+  fréquences fold / passif / agressif face à celles qu'aurait eues le solveur avec toute sa range dans les
+  mêmes coups.
+- **Ses écarts à exploiter** (page d'un adversaire) : ses fréquences dans chaque situation face à la
+  théorie. Ses cartes ne sont pas nécessaires : toutes ses décisions comptent. Un écart s'affiche à partir
+  de 8 occurrences et 10 points ; « solide » quand le hasard l'explique très mal (écart de plus de 2,5
+  écarts-types), « indicatif » sinon, avec la façon d'en profiter (il folde trop face à la c-bet : bluffe
+  plus…). **Ses erreurs connues** : l'EV qu'il a laissée quand ses cartes ont été montrées.
+
 ## Contenu du rapport
 
 | Section | Ce qu'on y trouve |
@@ -403,10 +435,10 @@ analyzer/
                        catégories de mains pour les filtres (handclass.py),
                        lecture de captures de ranges (extract.py) ; postflop avec GTOpen : spots,
                        installation et lecture des résultats (postflop.py), pont Rust (native/main.rs),
-                       commande `gtopen` (solve_cli.py)
+                       commande `gtopen` (solve_cli.py), mains jouées face au solveur (review.py)
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
-                       (library.py), résolutions et sessions du solveur (solves.py), interface
-                       (static/, dont l'explorateur explorer.*)
+                       (library.py), résolutions et sessions du solveur (solves.py), page « Face au
+                       solveur » (review_page.py), interface (static/, dont l'explorateur explorer.*)
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)
 hands/                 tes historiques (ignorés par git)

@@ -15,7 +15,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..theory import postflop, studyspots
 from .library import Library, UnknownPlayer
@@ -115,6 +115,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.player_page(parts[1], parts[2]))
             if parts == ["etudes"]:
                 return self._html(build_studies_page(embed=True))
+            if parts == ["api", "revue"]:
+                villain = parse_qs(urlsplit(self.path).query).get("adversaire", [None])[0]
+                return self._json(library.review_state(villain))
             if len(parts) == 3 and parts[:2] == ["api", "spots"]:
                 return self._json(library.spot_set(parts[2]))
             if len(parts) == 2 and parts[0] == "explorateur" and (parts[1] in library.by_id
@@ -175,6 +178,17 @@ class Handler(BaseHTTPRequestHandler):
                                    "state": "session"}, 409)
             except postflop.SolverError as exc:
                 return self._json({"error": str(exc), "state": "session"}, 409)
+        if len(parts) == 3 and parts[:2] == ["api", "revue"] and parts[2] in ("lancer", "arreter"):
+            payload = self._small_json()
+            villain = payload.get("adversaire") if isinstance(payload, dict) else None
+            if villain is not None and not isinstance(villain, str):
+                return self._error(400, "Requête invalide.")
+            try:
+                if parts[2] == "arreter":
+                    return self._json(library.review_cancel(villain))
+                return self._json(library.review_state(villain, start=True))
+            except UnknownPlayer:
+                return self._error(404, "Adversaire inconnu.")
         if len(parts) == 4 and parts[:2] == ["api", "spots"] and parts[3] in ("resoudre", "arreter"):
             if parts[2] not in studyspots.FAMILIES:
                 return self._error(404, "Série inconnue.")

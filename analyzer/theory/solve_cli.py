@@ -28,6 +28,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                         help="avec --spots : ne choisit pas les tailles (tailles par défaut si aucun choix n'existe)")
     parser.add_argument("--cartes", type=int, default=12,
                         help="avec --spots : cartes turn comparées pour choisir les tailles (défaut : %(default)s)")
+    parser.add_argument("--analyser", action="store_true",
+                        help="résout les mains allées au flop pas encore analysées (onglet « Face au solveur »)")
+    parser.add_argument("--max", type=int, help="avec --analyser : nombre de mains au plus (les plus gros pots)")
     parser.add_argument("--hero", help="ton pseudo (détecté automatiquement)")
     parser.add_argument("--iterations", type=int, default=postflop.DEFAULT_ITERATIONS, help="itérations maximum")
     parser.add_argument("--precision", type=float, default=postflop.DEFAULT_TARGET,
@@ -60,6 +63,23 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(exc, file=sys.stderr)
             return 1
         print(f"{n} spot(s) résolu(s) ; ils sont dans « Études du solveur ».")
+        return 0
+
+    if args.analyser:
+        from ..cli import detect_hero
+        from ..parsers import load_hands
+        from .review import analyze
+        hands = load_hands(args.paths)
+        hero = args.hero or detect_hero(hands)
+        if not hero:
+            print("Pseudo introuvable : précise --hero.", file=sys.stderr)
+            return 1
+        try:
+            n = analyze(hands, hero, limit=args.max)
+        except postflop.SolverError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print(f"{n} main(s) analysée(s) ; le bilan est dans l'onglet « Face au solveur ».")
         return 0
 
     if not args.main:

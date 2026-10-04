@@ -31,7 +31,7 @@ class Job:
     max_iterations: int
     target: float
     state: str = "waiting"  # waiting | running | done | error | cancelled
-    mode: str = "solve"  # solve (résolution) | load (étude enregistrée) | choose (choix des tailles)
+    mode: str = "solve"  # solve | load (étude enregistrée) | choose (choix des tailles) | analyse (main jouée)
     progress: dict = field(default_factory=dict)
     result: Optional[dict] = None
     error: Optional[str] = None
@@ -164,6 +164,42 @@ class SolveQueue:
         job.mode = "solve"
         job.progress.clear()
         self._run(job, spot, self._request(spot), keep_live=False)
+
+    def analyze(self, spot, on_done: Callable[[object, dict], None]) -> dict:
+        """Résout une main jouée pour l'analyse : le résultat seul (cache), sans étude ni session ;
+        on_done(spot, raw) le range ensuite (résumé de la main)."""
+        view = self.lookup(spot)
+        if view["state"] in ("waiting", "running", "done"):
+            return view
+        request = self._request(spot)
+        job = Job(view["job"], spot.ident, self.iterations, self.target, mode="analyse")
+        with self._lock:
+            self._jobs[job.key] = job
+        self._executor.submit(self._run_analysis, job, spot, request, on_done)
+        return job.view()
+
+    def _run_analysis(self, job: Job, spot, request: dict, on_done: Callable[[object, dict], None]) -> None:
+        if job.cancelled:
+            return
+        job.state, job.started = "running", time.time()
+
+        def started(proc) -> None:
+            job.process = proc
+            if job.cancelled:
+                proc.terminate()
+        try:
+            raw = postflop.solve(request, on_progress=job.progress.update, on_start=started)
+            on_done(spot, raw)
+            job.result = spot.interpret(raw)
+            job.state = "done"
+        except postflop.SolverError as exc:
+            job.state = "cancelled" if job.cancelled else "error"
+            job.error = None if job.cancelled else str(exc)
+        except Exception:  # noqa: BLE001 — l'erreur est montrée dans l'interface
+            traceback.print_exc()
+            job.state, job.error = "error", "Erreur inattendue pendant l'analyse (détails dans le terminal)."
+        finally:
+            job.process = None
 
     def _run(self, job: Job, spot, request: dict, keep_live: bool = True) -> None:
         if job.cancelled:
