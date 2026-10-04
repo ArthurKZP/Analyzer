@@ -7,6 +7,8 @@
     moi: [['bilan', 'Bilan'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots'], ['solveur', 'Face au solveur']],
     adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
       ['solveur', 'Face au solveur']],
+    // L'explorateur part du préflop ; les séries de spots et les coups joués ont chacun leur onglet.
+    etudes: [['explorateur', 'Explorateur'], ['srp', 'SRP'], ['3bet', 'Pots 3bet'], ['4bet', 'Pots 4bet'], ['coups', 'Coups joués']],
   };
   let state = null;
   let route = null;
@@ -41,7 +43,7 @@
     const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
     const tabOf = (view, name, fallback) => (TABS[view].some(([id]) => id === name) ? name : fallback);
     if (parts[0] === 'importer') return { view: 'importer' };
-    if (parts[0] === 'etudes') return { view: 'etudes' };
+    if (parts[0] === 'etudes') return { view: 'etudes', tab: tabOf('etudes', parts[1], 'explorateur') };
     if (parts[0] === 'entraineur') return { view: 'entraineur' };
     if (parts[0] === 'sauvegarde') return { view: 'sauvegarde' };
     if (parts[0] === 'adversaire' && parts[1]) return { view: 'adv', player: parts[1], tab: tabOf('adv', parts[2], 'plan') };
@@ -52,7 +54,7 @@
   function hashFor(r) {
     if (r.view === 'adv') return '#/adversaire/' + encodeURIComponent(r.player) + '/' + r.tab;
     if (r.view === 'moi') return '#/moi/' + r.tab;
-    if (r.view === 'etudes') return '#/etudes';
+    if (r.view === 'etudes') return '#/etudes/' + r.tab;
     if (r.view === 'entraineur') return '#/entraineur';
     if (r.view === 'sauvegarde') return '#/sauvegarde';
     return '#/importer';
@@ -60,7 +62,7 @@
 
   function srcFor(r) {
     if (r.view === 'adv') return '/p/' + encodeURIComponent(r.player) + '/' + r.tab;
-    if (r.view === 'etudes') return '/etudes';
+    if (r.view === 'etudes') return r.tab === 'explorateur' ? '/explorateur/preflop' : '/etudes/' + r.tab;
     if (r.view === 'entraineur') return '/entraineur';
     return '/moi/' + r.tab;
   }
@@ -72,7 +74,8 @@
     renderTabs();
     markActive();
     if (route.view === 'importer') return showImport();
-    if (route.view === 'entraineur') return showFrame(srcFor(route));  // sans mains : les spots d'étude suffisent
+    // sans mains : les spots d'étude suffisent à l'entraîneur et à l'explorateur
+    if (route.view === 'entraineur' || route.view === 'etudes') return showFrame(srcFor(route));
     if (route.view === 'sauvegarde') return showBackup();
     if (!state.hands) return showWelcome();
     if (route.view === 'adv' && !state.opponents.some((o) => o.name === route.player)) {
@@ -139,8 +142,8 @@
   function renderTabs() {
     const tabs = $('tabs');
     tabs.textContent = '';
-    const list = route.view === 'adv' ? TABS.adv : route.view === 'moi' ? TABS.moi : [];
-    tabs.hidden = !list.length || !state.hands;
+    const list = TABS[route.view] || [];
+    tabs.hidden = !list.length || (!state.hands && route.view !== 'etudes');
     for (const [id, label] of list) {
       const r = Object.assign({}, route, { tab: id });
       tabs.append(el('a', { href: hashFor(r), 'aria-current': id === route.tab ? 'page' : null }, label));
@@ -360,7 +363,7 @@
     let r = null;
     if (parts[0] === 'p' && parts.length === 3) r = { view: 'adv', player: parts[1], tab: parts[2] };
     else if (parts[0] === 'moi' && parts.length === 2) r = { view: 'moi', tab: parts[1] };
-    else if (parts[0] === 'etudes' && parts.length === 1) r = { view: 'etudes' };
+    else if (parts[0] === 'etudes' && parts.length <= 2) r = { view: 'etudes', tab: parts[1] || 'srp' };
     else if (parts[0] === 'entraineur' && parts.length === 1) r = { view: 'entraineur' };
     if (!r) return;
     frame.dataset.src = srcFor(r);

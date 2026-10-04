@@ -209,7 +209,8 @@ actions pondérée par leurs fréquences. Une main qui folde 100 % vaut donc 0 m
 l'arbre) sous une forme compacte : la stratégie de chaque nœud sur 8 bits, compressée.
 L'explorateur rouvre une étude en une quinzaine de secondes au lieu de la recalculer (les fréquences
 restent à 1 point près, les EV à quelques centièmes de bb). La page *Études du solveur* de l'application
-liste les études, avec leur précision et leur taille, et permet de les rouvrir ou de les supprimer.
+liste les études (onglet *Coups joués*), avec leur précision et leur taille, et permet de les rouvrir ou
+de les supprimer.
 Une étude ouverte occupe environ 2 Go de mémoire : une seule reste ouverte, fermée après 30 minutes sans
 activité ou quand une autre s'ouvre.
 
@@ -258,6 +259,16 @@ rouvre d'elle-même, le choix de la carte s'ouvre quand on arrive à la turn ou 
 forcés de la BB (qui ne mène pas) sont passés pour aller droit à la décision suivante.
 *Étudier un autre flop* ouvre n'importe quel flop dans l'explorateur ; une fois résolu, il rejoint sa
 texture dans la page.
+
+**Explorateur depuis le préflop** : l'onglet *Explorateur* de *Études du solveur* (ou `/explorateur/preflop`)
+part de l'open du bouton. Le déroulé montre les actions préflop de la solution (fold, open 2,5, call, 3bet
+11,5, 4bet 26, tapis) et la grille leurs fréquences main par main, pour le joueur qui agit ou la range de
+l'autre. Au call, on choisit le flop : SRP après le call de l'open, pot 3bet après le call du 3bet, pot 4bet
+après le call du 4bet. La liste montre les 24 flops de la série par texture (surlignés quand ils sont
+résolus), et *Autre flop* ouvre n'importe lequel. Le spot s'ouvre alors avec ses actions préflop en tête
+du déroulé : un clic y revient au préflop, *changer* sous le flop ramène au choix du flop, et *◀ Retour*
+au début du spot aussi. Les autres onglets de *Études du solveur* séparent les séries (SRP, pots 3bet,
+pots 4bet) et les coups joués résolus : plus besoin de dérouler toute la page.
 
 **Choix des tailles** (`analyzer/theory/sizing.py`) : chaque flop de la série a ses propres tailles, une par
 situation pour tout le flop (quelles que soient la turn et la river), deux à la river. Pour chaque situation,
@@ -500,6 +511,7 @@ analyzer/
   viewer.py            visualiseur de spots (HTML + JavaScript, sans dépendance)
   selfreport.py        « Mon jeu » : ton bilan contre tous tes adversaires
   theory/              préflop vs solveur : solution (data/), comparaison (preflop.py), page (page.py),
+                       arbre préflop pour l'explorateur (preflop_tree.py),
                        catégories de mains pour les filtres (handclass.py),
                        lecture de captures de ranges (extract.py) ; postflop avec GTOpen : spots,
                        installation et lecture des résultats (postflop.py), pont Rust (native/main.rs),

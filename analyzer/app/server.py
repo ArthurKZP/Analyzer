@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from ..theory import postflop, studyspots
+from ..theory import postflop, preflop_tree, studyspots
 from . import trainer
 from .library import Library, UnknownPlayer
 from .solves import NeedSession
@@ -117,6 +117,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.player_page(parts[1], parts[2]))
             if parts == ["etudes"]:
                 return self._html(build_studies_page(embed=True))
+            if len(parts) == 2 and parts[0] == "etudes":
+                return self._html(build_studies_page(embed=True, section=parts[1]))
             if parts == ["entraineur"]:
                 return self._html((STATIC / "trainer.html").read_text(encoding="utf-8"))
             if parts == ["api", "entraineur"]:
@@ -128,7 +130,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.review_state(villain))
             if len(parts) == 3 and parts[:2] == ["api", "spots"]:
                 return self._json(library.spot_set(parts[2]))
-            if len(parts) == 2 and parts[0] == "explorateur" and (parts[1] in library.by_id
+            if len(parts) == 2 and parts[0] == "explorateur" and (parts[1] in library.by_id or parts[1] == "preflop"
                                                                    or studyspots.parse_ident(parts[1])):
                 page = (STATIC / "explorer.html").read_text(encoding="utf-8")
                 return self._html(page.replace("__HAND__", html.escape(parts[1], quote=True)))
@@ -179,6 +181,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.explorer_state(payload["hand"]))
             except (UnknownPlayer, KeyError):
                 return self._error(404, "Main introuvable.")
+        if parts == ["api", "explorateur", "preflop"]:
+            payload = self._small_json()
+            if not isinstance(payload, dict):
+                return self._error(400, "Requête invalide.")
+            line = payload.get("line")
+            if payload.get("family") in preflop_tree.FAMILY_LINES:
+                line = list(preflop_tree.FAMILY_LINES[payload["family"]])
+            if not (isinstance(line, list) and len(line) <= 6 and all(a in preflop_tree.ACTIONS for a in line)):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(preflop_tree.node(line))
+            except ValueError:
+                return self._error(404, "Ligne préflop hors de la solution.")
         if parts == ["api", "explorateur", "noeud"]:
             payload = self._small_json()
             path = payload.get("path") if isinstance(payload, dict) else None

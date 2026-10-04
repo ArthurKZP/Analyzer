@@ -79,6 +79,24 @@ body.busy .brand::after { content: " · chargement…"; color: var(--muted); fon
 .step.cards button { background: none; border: 0; padding: 0; cursor: pointer; }
 .step.cards button:disabled { cursor: default; }
 .step.end { justify-content: center; color: var(--ink-2); font-size: 12px; }
+.step.pre { background: var(--surface); }
+.step .change { font-size: 11px; color: var(--accent); text-decoration: none; font-weight: 600; }
+.step .change:hover { text-decoration: underline; }
+body.embed .brand { display: none; }
+
+/* choix du flop (fin de la ligne préflop) */
+.fl-note { margin: 0 0 8px; }
+.flops { display: flex; flex-direction: column; gap: 6px; }
+.fl-group { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; align-items: center; }
+.fl-t { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.fl-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.fl { display: inline-flex; padding: 3px 4px; border-radius: 6px; border: 1px solid var(--border); text-decoration: none; opacity: 0.55; }
+.fl.solved { opacity: 1; border-color: var(--accent); background: var(--accent-bg); }
+.fl:hover { opacity: 1; box-shadow: 0 0 0 1px var(--accent); }
+.fl .pc { margin-right: 1px; }
+.fl-other { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; font-size: 13px; }
+.fl-other input { font: inherit; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--page); width: 9em; }
+.fl-other button { background: var(--page); border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
 
 /* mise en page */
 .layout { display: grid; grid-template-columns: minmax(0, 7fr) minmax(300px, 5fr); gap: 16px; padding: 12px 16px 32px; align-items: start; }

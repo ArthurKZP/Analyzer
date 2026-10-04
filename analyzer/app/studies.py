@@ -3,6 +3,7 @@ gardés sur disque pour être réexplorés."""
 from __future__ import annotations
 
 from html import escape
+from typing import Optional
 from urllib.parse import quote
 
 from ..report import cards_html, html_page, num
@@ -336,14 +337,23 @@ quelques secondes, sans recalculer.</p>{table}</div>
 """
 
 
-def build_studies_page(embed: bool = True) -> str:
+SECTIONS = tuple(studyspots.FAMILIES) + ("coups",)
+
+
+def build_studies_page(embed: bool = True, section: Optional[str] = None) -> str:
+    """Toutes les études, ou une seule section (onglets de l'application) : srp, 3bet, 4bet ou coups."""
+    if section is not None and section not in SECTIONS:
+        raise KeyError(section)
     studies = postflop.list_studies()
     total = sum(s["size"] for s in studies)
+    if section is None:
+        content = "".join(_spot_section(family) for family in studyspots.FAMILIES) + _hand_section()
+    else:
+        content = _hand_section() if section == "coups" else _spot_section(section)
     body = f"""
 <div class="meta">{len(studies)} étude(s) · {_size(total)} sur le disque · {escape(str(postflop.studies_dir()))}</div>
 <p class="note">Précision : exploitabilité de la solution, en % du pot (plus c'est bas, plus elle est proche de
 l'équilibre).</p>
-{"".join(_spot_section(family) for family in studyspots.FAMILIES)}
-{_hand_section()}
+{content}
 """
     return html_page("Études du solveur", f"<style>{STYLE}</style>{body}", embed, script=SCRIPT)

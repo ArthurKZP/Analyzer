@@ -2,7 +2,9 @@
   'use strict';
 
   const HAND = document.body.dataset.hand;
+  const PRE = HAND === 'preflop';  // arbre préflop de la solution, jusqu'au choix du flop d'un spot d'étude
   const SPOT = HAND.startsWith('spot:');  // spot d'étude : pas de main jouée, les joueurs sont nommés par leur position
+  const FAMILY = SPOT ? HAND.split(':')[1] : null;
   const $ = (id) => document.getElementById(id);
   const RANKS = 'AKQJT98765432';
   const SUITS = { s: '♠', h: '♥', d: '♦', c: '♣' };
@@ -26,6 +28,8 @@
   let notice = '';
   let pollTimer = null;
   let rightTab = 'combos';
+  let preLine = [];   // PRE : actions préflop depuis l'open du bouton
+  let prefix = null;  // SPOT : la ligne préflop de la famille (nœud « flop »), en tête du déroulé
   const nodes = new Map();
   // Filtres : clés « m:i » (main faite), « d:i » (tirage), « e:i » / « q:i » (équité), « o:s » / « s:s » (couleurs).
   const filters = { mode: 'include', keys: new Set() };
@@ -57,7 +61,9 @@
     return p === 0 ? oop : (oop === 'H' ? 'V' : 'H');
   }
   const playerOf = (role) => (roleOf(0) === role ? 0 : 1);
-  const who = (p) => (SPOT ? POS[p] : POS[p] + ' · ' + NAME[roleOf(p)]);
+  const who = (p) => (SPOT || PRE ? POS[p] : POS[p] + ' · ' + NAME[roleOf(p)]);
+  const streetName = (s) => (s < 0 ? 'Préflop' : STREET[s]);
+  const preHref = (line) => '/explorateur/preflop#ligne=' + line.join('.');
 
   // Libellés des actions d'un nœud. Mise : % du pot ; relance : montant ajouté en % du pot après le
   // call (convention des solveurs : relancer à 4,5 sur une mise de 1,7 dans un pot de 5 = 33 %).
@@ -65,6 +71,7 @@
     const call = actions.find((x) => x.kind === 'call');
     const base = call && put && player !== null && player !== undefined ? 2 * put[1 - player] : 0;
     return actions.map((a) => {
+      if (a.name) return a.name;  // préflop : « Open 2,5 », « 3bet 11,5 »…
       if ((a.kind === 'bet' || a.kind === 'raise') && a.allin) return 'Tapis ' + num(a.amount);
       if (a.kind === 'bet') return 'Mise ' + num(a.amount) + ' (' + Math.round(100 * a.amount / pot) + ' %)';
       if (a.kind === 'raise') return 'Relance ' + num(a.amount) + (base ? ' (' + Math.round(100 * (a.amount - call.amount) / base) + ' %)' : '');
@@ -176,17 +183,37 @@
   }
 
   async function back() {
+    if (PRE) { if (preLine.length) goLine(preLine.slice(0, -1)); return; }
     const p = path.slice();
     for (;;) {
       while (p.length && p[p.length - 1].type === 'card') p.pop();
-      if (!p.length) return;
+      if (!p.length) { if (prefix) location.href = preHref(prefix.preflop.line); return; }  // retour au préflop
       p.pop();
+      // au début d'un spot, un check forcé (la BB ne mène pas) ramène directement au préflop
+      if (SPOT && !p.length && prefix && nodes.has('[]') && forced(nodes.get('[]'))) { location.href = preHref(prefix.preflop.line); return; }
       if (!SPOT || !p.length) break;
       // dans un spot, on remonte aussi au-delà d'un nœud forcé (sauf la racine)
       const n = nodes.get(JSON.stringify(p));
       if (!n || !forced(n)) break;
     }
     goTo(p);
+  }
+
+  async function goLine(line) {
+    document.body.classList.add('busy');
+    try {
+      node = await api('/api/explorateur/preflop', { line });
+      preLine = line.slice();
+      history.replaceState(null, '', '#ligne=' + preLine.join('.'));
+      if (node.player !== null && node.player !== undefined) viewPlayer = node.player;
+      selected = null;
+      notice = '';
+    } catch (e) {
+      notice = e.message;
+    } finally {
+      document.body.classList.remove('busy');
+    }
+    render();
   }
 
   async function loadState() {
@@ -236,6 +263,10 @@
 
   // ---------- rendu ----------
   function renderMeta() {
+    if (PRE) {
+      $('meta').textContent = node ? 'Préflop · ' + node.preflop.description : 'Préflop';
+      return;
+    }
     if (SPOT) {
       const box = $('meta');
       box.textContent = '';
@@ -257,6 +288,13 @@
   function renderStatus() {
     const box = $('status');
     box.textContent = '';
+    if (PRE) {
+      if (node) box.append(el('span', {}, node.type === 'flop' ? 'Choisis le flop : les flops résolus s\'ouvrent en quelques secondes.'
+        : node.type === 'allin' ? 'Tapis préflop : pas de jeu après le flop à étudier.'
+          : 'Solution préflop : choisis les actions dans le déroulé ; au call, tu choisis le flop et le coup continue au postflop.'));
+      if (notice) box.append(el('span', { class: 'err' }, notice));
+      return;
+    }
     if (!state) return;
     const s = state.state;
     if (s === 'unsupported') box.append(el('span', {}, state.message));
@@ -307,7 +345,7 @@
     if (current || !reachable(target)) return step;
     step.classList.add('nav');
     step.title = 'Revenir à ce moment du coup';
-    step.addEventListener('click', (e) => { if (!e.target.closest('button')) goTo(target); });
+    step.addEventListener('click', (e) => { if (!e.target.closest('button, a')) goTo(target); });
     return step;
   }
 
@@ -341,11 +379,38 @@
     return navStep(step, path.slice(0, k + 1), false);
   }
 
+  // Étape préflop : chaque action mène à son nœud (navigate reçoit la ligne jusqu'à cette action).
+  function preStep(h, k, line, current, navigate) {
+    const step = el('div', { class: 'step pre' + (current ? ' current' : '') },
+      el('div', { class: 'head' }, el('span', {}, POS[h.player] + ' · préflop'), el('span', {}, 'pot ' + num(h.pot))));
+    h.actions.forEach((a, j) => step.append(el('button', {
+      type: 'button', class: 'act' + (h.chosen === j ? ' on' : ''), onclick: () => navigate(line.slice(0, k).concat([h.keys[j]])),
+    }, el('span', {}, a.name))));
+    return step;
+  }
+
   function renderRibbon() {
     const box = $('ribbon');
     box.textContent = '';
+    if (PRE) {
+      node.history.forEach((h, k) => {
+        const current = k === node.history.length - 1;
+        if (h.kind === 'action') box.append(preStep(h, k, preLine, current, goLine));
+        else if (h.kind === 'flop') box.append(el('div', { class: 'step cards current' },
+          el('div', { class: 'head' }, el('span', {}, 'Flop'), el('span', {}, 'pot ' + num(h.pot))), el('span', { class: 'muted small' }, 'à choisir')));
+        else box.append(el('div', { class: 'step end current' }, h.kind === 'terminal_fold' ? 'Fin : fold' : 'Tapis préflop'));
+      });
+      box.scrollLeft = box.scrollWidth;
+      return;
+    }
+    if (prefix) {
+      prefix.history.forEach((h, k) => {
+        if (h.kind === 'action') box.append(preStep(h, k, prefix.preflop.line, false, (line) => { location.href = preHref(line); }));
+      });
+    }
     box.append(navStep(el('div', { class: 'step cards' },
-      el('div', { class: 'head' }, el('span', {}, 'Flop'), el('span', {}, 'pot ' + num(state.result.pot))), cards(meta.board.slice(0, 3))),
+      el('div', { class: 'head' }, el('span', {}, 'Flop'), el('span', {}, 'pot ' + num(state.result.pot))), cards(meta.board.slice(0, 3)),
+      prefix ? el('a', { class: 'change', href: preHref(prefix.preflop.line), title: 'Choisir un autre flop' }, 'changer') : ''),
     [], path.length === 0));
     node.history.forEach((h, k) => {
       const current = k === node.history.length - 1;
@@ -435,7 +500,7 @@
     const modes = $('modes');
     modes.textContent = '';
     const actor = node.player !== null && node.player !== undefined;
-    MODES.forEach(([id, label]) => modes.append(el('button', {
+    (PRE ? MODES.slice(0, 1) : MODES).forEach(([id, label]) => modes.append(el('button', {
       type: 'button', 'aria-pressed': mode === id ? 'true' : 'false',
       onclick: () => { mode = id; render(); },
     }, label)));
@@ -520,7 +585,7 @@
       const full = filterActive() && p === viewPlayer ? node.hands[p].reduce((s, r) => s + r[1], 0) : 0;
       const freqs = node.actions.map((_, k) => Object.values(agg).reduce((s, a) => s + a.w * a.s[k], 0));
       const cols = colors(node.actions);
-      panel.append(el('div', { class: 'ttl' }, el('h2', {}, STREET[node.street] + ' · ' + who(p) + ' agit'),
+      panel.append(el('div', { class: 'ttl' }, el('h2', {}, streetName(node.street) + ' · ' + who(p) + ' agit'),
         el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb · tapis ' + num(node.stacks[p]) + ' bb')));
       const tiles = el('div', { class: 'tiles' });
       node.actions.forEach((a, k) => tiles.append(el('div', { class: 'tile', style: 'background:' + cols[k] },
@@ -532,18 +597,61 @@
       panel.append(stack);
       if (full) panel.append(el('div', { class: 'muted small', style: 'margin-top:6px' },
         'Filtre actif : ' + pct(total / full) + ' de la range (' + num(total, 1) + ' combos) ; fréquences de ces mains seulement.'));
+    } else if (node.type === 'flop') {
+      box.append(flopChooser());
+      return;
     } else {
-      panel.append(el('div', { class: 'ttl' }, el('h2', {}, node.type === 'terminal_fold' ? 'Fin du coup : fold' : 'Abattage'),
-        el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb')));
+      panel.append(el('div', { class: 'ttl' }, el('h2', {}, node.type === 'terminal_fold' ? 'Fin du coup : fold'
+        : node.type === 'allin' ? 'Tapis préflop' : 'Abattage'),
+      el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb')));
     }
     const eqs = [0, 1].map((p) => {
       const rows = node.hands[p].filter((r) => r[2] !== null);
       const w = rows.reduce((s, r) => s + r[1], 0);
       return w ? rows.reduce((s, r) => s + r[1] * r[2], 0) / w : null;
     });
-    panel.append(el('div', { class: 'muted small', style: 'margin-top:6px' },
-      'Équité des ranges : ' + [0, 1].map((p) => (SPOT ? POS[p] : POS[p] + ' (' + NAME[roleOf(p)] + ')') + ' ' + (eqs[p] === null ? '—' : pct(eqs[p]))).join(' · ')));
+    if (eqs.some((e) => e !== null)) {
+      panel.append(el('div', { class: 'muted small', style: 'margin-top:6px' },
+        'Équité des ranges : ' + [0, 1].map((p) => (SPOT ? POS[p] : POS[p] + ' (' + NAME[roleOf(p)] + ')') + ' ' + (eqs[p] === null ? '—' : pct(eqs[p]))).join(' · ')));
+    } else if (PRE) {
+      panel.append(el('div', { class: 'muted small', style: 'margin-top:6px' }, 'Fréquences de la solution préflop (pas d\'EV à ce stade).'));
+    }
     box.append(panel);
+  }
+
+  // Fin de la ligne préflop (call) : les flops de la série, puis n'importe quel flop.
+  function flopChooser() {
+    const info = node.preflop;
+    const panel = el('div', { class: 'card' }, el('div', { class: 'ttl' }, el('h2', {}, 'Flop · ' + info.family_name),
+      el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb · tapis ' + num(node.stacks[0]) + ' bb')));
+    panel.append(el('p', { class: 'muted small fl-note' }, info.family_label + '. Grille : la range de chacun au flop. '
+      + 'Les flops surlignés sont résolus ; les autres se résolvent à l\'ouverture (quelques minutes).'));
+    const groups = el('div', { class: 'flops' });
+    for (const t of info.textures) {
+      const list = info.spots.filter((x) => x.texture === t);
+      if (!list.length) continue;
+      groups.append(el('div', { class: 'fl-group' }, el('div', { class: 'fl-t' }, t), el('div', { class: 'fl-list' }, list.map((x) => el('a', {
+        class: 'fl' + (x.solved ? ' solved' : ''), href: '/explorateur/' + encodeURIComponent(x.id),
+        title: x.solved ? 'Ouvrir l\'étude' : 'Pas encore résolu : il se résout à l\'ouverture',
+      }, cards(x.board))))));
+    }
+    panel.append(groups);
+    const input = el('input', { placeholder: 'ex. Ah7d2c', autocomplete: 'off', spellcheck: 'false', size: '10', 'aria-label': 'Autre flop' });
+    const msg = el('span', { class: 'muted small' });
+    panel.append(el('form', {
+      class: 'fl-other',
+      onsubmit: (e) => {
+        e.preventDefault();
+        const v = input.value.replace(/[\s,]+/g, '');
+        const list = v.length === 6 ? [0, 2, 4].map((i) => v[i].toUpperCase() + v[i + 1].toLowerCase()) : [];
+        if (!list.length || !list.every((c) => /^[2-9TJQKA][cdhs]$/.test(c)) || new Set(list).size < 3) {
+          msg.textContent = 'Trois cartes différentes, ex. Ah7d2c';
+          return;
+        }
+        location.href = '/explorateur/' + encodeURIComponent('spot:' + info.family + ':' + list.join(''));
+      },
+    }, el('label', {}, 'Autre flop '), input, el('button', { type: 'submit' }, 'Ouvrir'), msg));
+    return panel;
   }
 
   function comboCard(row, p, title) {
@@ -572,7 +680,7 @@
       if (mode !== 'strategy' && row[3] !== null) {
         box.append(el('div', { class: 'muted evs' }, 'EV de la main avec cette stratégie : ' + num(row[3], 2) + ' bb'));
       }
-    } else {
+    } else if (!PRE) {
       box.append(el('div', { class: 'muted' }, 'EV ' + (row[3] === null ? '—' : num(row[3], 2) + ' bb')));
     }
     return box;
@@ -708,9 +816,9 @@
     renderCombos();
     renderFilters();
     renderTabs();
-    $('b-back').disabled = !path.some((s) => s.type === 'action');
+    $('b-back').disabled = PRE ? !preLine.length : !path.some((s) => s.type === 'action') && !prefix;
     // L'entraîneur rejoue depuis ce nœud : il faut l'étude ouverte et une vraie décision.
-    $('b-train').disabled = !live || node.type !== 'action' || node.actions.length < 2;
+    $('b-train').disabled = PRE || !live || node.type !== 'action' || node.actions.length < 2;
   }
 
   function initialPath() {
@@ -753,7 +861,28 @@
     if (!picker.hidden && !picker.contains(e.target) && !e.target.closest('.step.cards')) closePicker();
   });
 
+  if (window.self !== window.top) document.body.classList.add('embed');  // dans l'application : pas de bandeau
+  if (PRE) {
+    meta = { hero_cards: [], villain_cards: [], board: [], hero_position: 'BB' };
+    state = { state: 'pre', categories: { made: [], draws: [] } };
+    mode = 'strategy';
+    $('b-line').hidden = true;
+    $('reveal').closest('label').hidden = true;
+    $('b-train').hidden = true;
+    $('tab-filters').hidden = true;  // les filtres (mains faites, tirages, équité) n'ont de sens qu'au postflop
+    document.title = 'Explorateur — préflop';
+  }
+  if (SPOT) {  // ligne préflop du spot, en tête du déroulé
+    api('/api/explorateur/preflop', { family: FAMILY }).then((n) => { prefix = n; if (node) render(); }).catch(() => {});
+  }
+
   (async () => {
+    if (PRE) {
+      const line = (new URLSearchParams(location.hash.slice(1)).get('ligne') || '').split('.').filter(Boolean);
+      await goLine(line);
+      if (!node) await goLine([]);
+      return;
+    }
     try {
       await loadState();
     } catch (e) {
