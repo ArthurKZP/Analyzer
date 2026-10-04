@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 from html import escape
+from typing import Optional
 from urllib.parse import quote
 
 from .insights import SECTIONS
 from .lines import hero_fold_holdings
 from .models import Hand
+from .players import KINDS
 from .report import SCRIPT, chart_svg, findings_html, html_page, legend, nonshowdown_html, num, pct_cell, tiles
 from .stats import PlayerStats, allin_ev
 
@@ -37,6 +39,24 @@ def opponent_results(hands: list[Hand], hero: str) -> list[dict]:
     return sorted(out, key=lambda r: (-r["hands"], r["name"]))
 
 
+def by_kind_html(results: list[dict], kinds: dict) -> str:
+    """Résultats contre les réguliers et contre les récréatifs (rien si un seul type est présent)."""
+    groups: dict[str, list[dict]] = {}
+    for r in results:
+        groups.setdefault(kinds.get(r["name"], {}).get("kind", "reg"), []).append(r)
+    if len(groups) < 2:
+        return ""
+    cells = []
+    for kind in ("reg", "rec"):
+        rows = groups.get(kind, [])
+        n = sum(r["hands"] for r in rows)
+        net = sum(r["net_bb"] for r in rows)
+        cells.append(f'<div class="tile"><div class="label">Contre les {KINDS[kind].lower()}s</div>'
+                     f'<div class="value">{num(100 * net / n, 1, sign=True) if n else "–"} bb/100</div>'
+                     f'<div class="sub">{n} mains · {len(rows)} joueur(s) · {num(net, 1, sign=True)} bb</div></div>')
+    return f'<div class="tiles">{"".join(cells)}</div>'
+
+
 def opponent_link(name: str) -> str:
     """Lien vers la fiche d'un adversaire dans l'application."""
     return f'<a href="/#/adversaire/{quote(name, safe="")}" target="_top">{escape(name)}</a>'
@@ -62,12 +82,21 @@ def self_stat_tables(ps: PlayerStats) -> str:
 
 
 def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str,
-                      embed: bool = False, spots_href: str = "spots") -> str:
+                      embed: bool = False, spots_href: str = "spots", kinds: Optional[dict] = None) -> str:
+    """kinds : type de chaque adversaire (players.classify), pour séparer réguliers et récréatifs."""
     h = stats[hero]
     results = opponent_results(hands, hero)
+    kinds = kinds or {}
+
+    def kind_cell(name: str) -> str:
+        info = kinds.get(name)
+        if not info:
+            return "<td></td>"
+        source = "" if info["source"] == "toi" else f' <span class="muted">({info["source"]})</span>'
+        return f"<td>{escape(KINDS[info['kind']])}{source}</td>"
     period = f"{hands[0].date:%d/%m/%Y} → {hands[-1].date:%d/%m/%Y}" if hands else ""
     rows = "".join(
-        f"<tr><td>{opponent_link(r['name'])}</td><td class=\"num\">{r['hands']}</td>"
+        f"<tr><td>{opponent_link(r['name'])}</td>{kind_cell(r['name'])}<td class=\"num\">{r['hands']}</td>"
         f"<td class=\"num\">{num(r['net_bb'], 1, sign=True)}</td><td class=\"num\">{num(r['bb100'], 1, sign=True)}</td>"
         f"<td class=\"num\">{num(r['ev_bb'], 1, sign=True)}</td><td class=\"num\">{num(r['net'], 2, sign=True)}&nbsp;€</td>"
         f"<td class=\"muted nowrap\">{r['first']:%d/%m/%Y} → {r['last']:%d/%m/%Y}</td></tr>"
@@ -84,7 +113,8 @@ def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: st
 <p class="note">« EV all-in » remplace le résultat réel des all-in payés avant la river par ton espérance : l'écart mesure la chance.</p></div>
 
 <h2>Résultats par adversaire</h2>
-<div class="card scroll"><table class="stats"><thead><tr><th>Adversaire</th><th class="num">Mains</th>
+{by_kind_html(results, kinds)}
+<div class="card scroll"><table class="stats"><thead><tr><th>Adversaire</th><th>Type</th><th class="num">Mains</th>
 <th class="num">Résultat (bb)</th><th class="num">bb/100</th><th class="num">EV all-in (bb)</th><th class="num">€</th>
 <th>Période</th></tr></thead><tbody>{rows}</tbody></table></div>
 

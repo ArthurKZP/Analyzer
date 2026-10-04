@@ -5,6 +5,7 @@ from html import escape
 from typing import Optional
 from urllib.parse import quote
 
+from .. import players
 from ..models import Hand
 from ..report import cards_html, html_page, num
 from ..theory import review
@@ -182,7 +183,11 @@ def _exploits_table(digests: list[dict]) -> str:
             f'</tr></thead><tbody>{"".join(html_rows)}</tbody></table></div>')
 
 
-def build_review_page(hands: list[Hand], hero: str, villain: Optional[str] = None, embed: bool = True) -> str:
+def build_review_page(hands: list[Hand], hero: str, villain: Optional[str] = None, embed: bool = True,
+                      excluded: Optional[dict] = None, kind: Optional[dict] = None) -> str:
+    """excluded : mains contre des récréatifs laissées de côté (Mon jeu) ; kind : type de l'adversaire.
+    Face à un récréatif, seuls ses écarts comptent : tes décisions ne sont pas comparées à la théorie."""
+    rec = bool(kind and kind["kind"] == "rec")
     digests, todo = review.collect(hands, hero)
     total = len(digests) + len(todo)
     mine = review.decisions_of(digests, "H")
@@ -207,10 +212,32 @@ def build_review_page(hands: list[Hand], hero: str, villain: Optional[str] = Non
             + (f'<p class="note">Chaque main se résout une fois (les plus gros pots d\'abord) : compte environ {_duration(eta)} '
                'sur 4 cœurs pour les restantes. La page se complète au fur et à mesure ; tu peux la fermer. '
                'En ligne de commande : <code>python -m analyzer gtopen --analyser</code>.</p>' if todo else ""))
-    who = f"face à {escape(villain)}" if villain else "toutes tables confondues"
+    who = f"face à {escape(villain)}" if villain else "contre les réguliers"
+    kind_line = ""
+    if excluded and excluded["hands"]:
+        kind_line = (f'<p class="note">{excluded["hands"]} mains contre des récréatifs '
+                     f'({escape(", ".join(excluded["players"]))}) sont exclues : contre eux, l\'exploitation prime '
+                     'sur la théorie. Le type de chaque adversaire se règle en haut de sa fiche.</p>')
+    elif kind:
+        kind_line = (f'<p class="note">{escape(villain or "")} : {escape(players.describe(kind))}. '
+                     'Le type se règle en haut de sa fiche.</p>')
+    if rec:
+        body = f"""
+<div class="meta">Tes mains allées au flop face à {escape(villain or "")}, joueur classé récréatif.</div>
+<div class="card">{head}<p class="note">Contre un récréatif, tes décisions ne sont pas comparées à la théorie : le bon
+jeu est de l'exploiter. Ses écarts à la théorie, eux, disent comment.</p>{kind_line}</div>
+<h2>Ses écarts à exploiter</h2>
+<div class="card">{_exploits_table(digests)}
+<p class="note">Ses fréquences dans chaque situation, face à celles du solveur dans les mêmes coups : pas besoin de
+voir ses cartes, toutes ses décisions comptent.</p></div>
+<h2>Ses erreurs connues</h2>
+<div class="card">{_costly_table(digests, "V", False)}
+<p class="note">Quand ses cartes ont été montrées : l'EV qu'il a laissée, décision par décision.</p></div>
+"""
+        return html_page(f"Face au solveur — {villain}", f"<style>{STYLE}</style>{body}", embed, script=SCRIPT)
     body = f"""
 <div class="meta">Tes mains allées au flop {who}, comparées au solveur (pots simples, 3bet et 4bet).</div>
-<div class="card">{head}</div>
+<div class="card">{head}{kind_line}</div>
 {tiles}
 <h2>Les erreurs qui coûtent le plus</h2>
 <div class="card">{_costly_table(digests, "H", villain is None)}

@@ -4,7 +4,7 @@ Destination : un dossier (de préférence synchronisé en ligne : OneDrive, Goog
 stockage en ligne configuré avec rclone (« gdrive:Analyzer », « s3:mon-bucket/analyzer »… voir rclone.org).
 
 - L'essentiel, quelques Mo : tailles de mise choisies, résolutions en cache, résumés des mains analysées,
-  journal de l'entraîneur et fiches des études. Une archive datée par sauvegarde (archives/), les
+  journal de l'entraîneur, type des adversaires et fiches des études. Une archive datée par sauvegarde (archives/), les
   KEEP dernières sont gardées.
 - Les études (.etude : de 20 Mo à quelques centaines de Mo chacune), en option : copiées dans etudes/,
   puis seules les nouvelles ou les modifiées passent.
@@ -28,6 +28,7 @@ from typing import Callable, Optional
 from .theory import postflop
 
 FOLDERS = ("tailles", "resolutions", "revue", "entrainement")  # recopiés en entier dans l'archive
+FILES = ("joueurs.json",)  # type des adversaires (régulier / récréatif)
 JOURNAL = "entrainement/journal.jsonl"
 KEEP = 10      # archives gardées à destination
 KEEP_LOCAL = 2
@@ -103,6 +104,7 @@ def essential_files() -> list[Path]:
     root = home()
     files = [p for folder in FOLDERS if (root / folder).is_dir() for p in sorted((root / folder).rglob("*"))
              if p.is_file()]
+    files += [root / name for name in FILES if (root / name).is_file()]
     studies = root / "etudes"
     if studies.is_dir():
         files += sorted(studies.glob("*.json"))

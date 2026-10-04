@@ -24,7 +24,7 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   nombre de mains, ton résultat contre chacun).
 - **Adversaire** : onglets *Plan de jeu*, *Préflop* (tes décisions et ses fréquences face au solveur),
   *Rapport*, *Spots* et *Face au solveur* (tes mains postflop contre lui comparées au solveur, et ses écarts
-  à exploiter). Les liens « voir les mains » et « rejouer » ouvrent directement l'onglet Spots
+  à exploiter). En haut de la fiche, son type : régulier ou récréatif (voir « Face au solveur »). Les liens « voir les mains » et « rejouer » ouvrent directement l'onglet Spots
   sur la bonne ligne ou la bonne main. Dans le replayer, **Résoudre ce coup** lance le solveur GTOpen
   (voir plus bas).
 - **Mon jeu** : ton bilan contre tous tes adversaires (résultats, courbe, écarts aux repères, stats,
@@ -367,6 +367,16 @@ python -m analyzer gtopen --analyser            # toutes les mains pas encore an
 python -m analyzer gtopen --analyser --max 40   # les 40 plus gros pots seulement
 ```
 
+**Réguliers et récréatifs** : contre un récréatif, le bon jeu est l'exploitation, pas la théorie. Le type de
+chaque adversaire se règle en haut de sa fiche (*Auto*, *Régulier*, *Récréatif*) ; en *Auto*, Analyzer le
+suggère d'après ses stats (récréatif quand au moins deux signaux concordent : il limpe plus de 20 % de ses
+boutons, ouvre moins de la moitié, folde plus de 55 % de ses BB face à l'open, ne 3bette presque jamais,
+folde trop face au 3bet, très passif après le flop), sinon régulier. Les mains contre les récréatifs sortent
+des comparaisons à la théorie : *Face au solveur* et *Mon préflop* de « Mon jeu », tes décisions sur sa fiche
+(qui ne garde que ses écarts à exploiter) ; le *Bilan* sépare tes résultats contre les deux types, et
+`--analyser` les laisse de côté (`--recreatifs` pour les inclure, pour lire leurs écarts). Le type est gardé
+par joueur (`~/.analyzer/joueurs.json`, inclus dans les sauvegardes) : il resservira aux tables à 3 et à 6.
+
 Ou bouton **Analyser les mains restantes** dans l'onglet (la page se complète au fur et à mesure, on peut la
 fermer). Les plus gros pots passent d'abord. Compte 3 minutes par SRP, 2 par pot 3bet et un quart de minute
 par pot 4bet sur 4 cœurs : une vingtaine d'heures pour 430 mains, à étaler sur plusieurs nuits.
@@ -500,6 +510,7 @@ analyzer/
                        sauvegardes en arrière-plan (backups.py), interface
                        (static/, dont l'explorateur explorer.*)
   backup.py            sauvegarde et restauration de ~/.analyzer (commande `sauvegarde`)
+  players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)
 hands/                 tes historiques (ignorés par git)

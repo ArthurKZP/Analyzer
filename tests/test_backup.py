@@ -55,6 +55,7 @@ class BackupTest(unittest.TestCase):
         self.write("etudes/k1.json", '{"kind": "spot"}')
         self.write("etudes/k1.etude", "x" * 1000)
         self.write("solveur/main.rs", "// pas sauvegardé")
+        self.write("joueurs.json", '{"Lui": "rec"}')
 
     def tearDown(self):
         self.env.stop()
@@ -79,7 +80,7 @@ class BackupTest(unittest.TestCase):
         self.assertEqual(len(archives), 1)
         names = set(zipfile.ZipFile(archives[0]).namelist())
         self.assertEqual(names, {"tailles/srp-KsKd4c.json", "revue/abc.json", "resolutions/r.json",
-                                 "entrainement/journal.jsonl", "etudes/k1.json"})
+                                 "entrainement/journal.jsonl", "etudes/k1.json", "joueurs.json"})
         self.assertEqual((dest / "etudes" / "k1.etude").stat().st_size, 1000)
         self.assertEqual(backup.load_config()["last"]["archive"], archives[0].name)
         self.assertEqual(backup.backup(log=lambda m: None)["studies"], 0)  # rien de neuf à copier

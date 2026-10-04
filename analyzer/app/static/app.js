@@ -84,12 +84,14 @@
 
   function renderHeader() {
     const title = $('title'), subtitle = $('subtitle');
+    renderKind(null);
     if (route.view === 'adv') {
       const o = state.opponents.find((x) => x.name === route.player);
       title.textContent = route.player;
       subtitle.textContent = o
         ? o.hands + ' mains · ton résultat ' + signed(o.net_bb) + ' bb (' + signed(o.bb100) + ' bb/100) · dernière main le ' + o.last
         : '';
+      renderKind(o);
     } else if (route.view === 'moi') {
       title.textContent = 'Mon jeu';
       subtitle.textContent = state.hands
@@ -109,6 +111,29 @@
       subtitle.textContent = 'Historiques Betclic (.txt) — les mains déjà présentes sont ignorées';
     }
     document.title = (route.view === 'adv' ? route.player : title.textContent) + ' — Analyzer HU';
+  }
+
+  // Type de l'adversaire : contre un récréatif, ses mains sortent des comparaisons à la théorie.
+  const KIND_NAMES = { reg: 'Régulier', rec: 'Récréatif' };
+  function renderKind(o) {
+    const box = $('kind'), select = $('kind-select');
+    box.hidden = !o;
+    if (!o) return;
+    select.textContent = '';
+    const auto = o.suggestion ? 'Auto : ' + KIND_NAMES[o.suggestion] : 'Auto : Régulier (pas de signal net)';
+    select.append(el('option', { value: '' }, auto), el('option', { value: 'reg' }, 'Régulier'), el('option', { value: 'rec' }, 'Récréatif'));
+    select.value = o.source === 'toi' ? o.kind : '';
+    box.title = (o.reasons.length ? 'Signaux : ' + o.reasons.join(', ') + '. ' : '')
+      + 'Contre un récréatif, tes mains ne sont pas comparées à la théorie (Face au solveur, Préflop).';
+    select.onchange = async () => {
+      const res = await fetch('/api/joueurs', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: o.name, kind: select.value || null }) });
+      if (!res.ok) return;
+      state = await res.json();
+      renderSidebar();
+      frame.dataset.src = '';  // les pages qui dépendent du type sont recalculées
+      render();
+    };
   }
 
   function renderTabs() {
@@ -141,7 +166,7 @@
     const shown = state.opponents.filter((o) => !q || o.name.toLowerCase().includes(q));
     for (const o of shown) {
       list.append(el('li', {}, el('a', { href: '#/adversaire/' + encodeURIComponent(o.name), 'data-name': o.name },
-        el('span', { class: 'n' }, o.name),
+        el('span', { class: 'n' }, o.name, o.kind === 'rec' ? el('span', { class: 'k', title: 'Récréatif' }, 'réc.') : null),
         el('span', { class: 'h' }, o.hands + ' mains'),
         el('span', { class: 'r ' + tone(o.net_bb) }, signed(o.net_bb) + ' bb'))));
     }

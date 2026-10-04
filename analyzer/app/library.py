@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .. import players
 from ..cli import detect_hero, slugify
 from ..lines import villain_lines
 from ..models import Hand
@@ -27,6 +28,20 @@ MAX_IMPORT_FILES = 200
 
 class UnknownPlayer(KeyError):
     pass
+
+
+def _excluded_note(excluded: dict) -> str:
+    if not excluded["hands"]:
+        return ""
+    return (f"{excluded['hands']} mains contre des récréatifs ({', '.join(excluded['players'])}) sont exclues : "
+            "contre eux, l'exploitation prime sur la théorie.")
+
+
+def _kind_note(kind: dict) -> str:
+    if kind["kind"] != "rec":
+        return ""
+    return ("Joueur classé récréatif : tes décisions contre lui ne sont pas comparées à la théorie ; "
+            "ses fréquences ci-dessous servent à l'exploiter.")
 
 
 class Library:
@@ -72,8 +87,31 @@ class Library:
             raise UnknownPlayer(name)
         return match
 
+    # --- type des adversaires (régulier / récréatif) ---------------------------------
+    def all_stats(self) -> dict:
+        return self._cached(("stats",), lambda: analyze(self.hands))
+
+    def kinds(self) -> dict[str, dict]:
+        """Type retenu pour chaque adversaire (choix enregistré, sinon suggestion d'après ses stats)."""
+        return players.classify([o["name"] for o in self.opponents()], self.all_stats())
+
+    def _kinds_key(self) -> tuple:
+        return tuple(sorted((name, info["kind"]) for name, info in self.kinds().items()))
+
+    def regular_hands(self) -> tuple[list[Hand], dict]:
+        """Mains contre les réguliers (celles qu'on compare à la théorie) et ce qui est laissé de côté."""
+        recs = {name for name, info in self.kinds().items() if info["kind"] == "rec"}
+        hands = [h for h in self.hands if h.opponent_of(self.hero) not in recs]
+        return hands, {"hands": len(self.hands) - len(hands), "players": sorted(recs)}
+
+    def set_kind(self, player: str, kind: Optional[str]) -> dict:
+        self.hands_against(player)  # 404 si le joueur est inconnu
+        players.set_kind(player, kind)
+        return self.summary()
+
     def summary(self) -> dict:
         opponents = self.opponents()
+        kinds = self.kinds()
         return {
             "hero": self.hero,
             "folder": str(self.folder),
@@ -83,7 +121,7 @@ class Library:
             "net_bb": round(sum(o["net_bb"] for o in opponents), 1),
             "opponents": [
                 {"name": o["name"], "hands": o["hands"], "net_bb": round(o["net_bb"], 1),
-                 "bb100": round(o["bb100"], 1), "last": o["last"].strftime("%d/%m/%Y")}
+                 "bb100": round(o["bb100"], 1), "last": o["last"].strftime("%d/%m/%Y"), **kinds[o["name"]]}
                 for o in opponents
             ],
         }
@@ -111,35 +149,40 @@ class Library:
         if page not in PLAYER_PAGES:
             raise KeyError(page)
         hands = self.hands_against(player)  # 404 si le joueur est inconnu
+        kind = self.kinds()[player]
         if page == "solveur":  # change au fil des analyses : jamais en cache
-            return build_review_page(hands, self.hero, player)
+            return build_review_page(hands, self.hero, player, kind=kind)
 
         def build():
             hands, stats, lines = self._analysis(player)
             if page == "plan":
                 return build_plan_page(hands, stats, self.hero, player, embed=True, lines=lines)
             if page == "preflop":
-                return build_preflop_page(hands, self.hero, player, stats, embed=True, spots_href="spots")
+                return build_preflop_page(hands, self.hero, player, stats, embed=True, spots_href="spots",
+                                          compare_hero=kind["kind"] != "rec", note=_kind_note(kind))
             if page == "rapport":
                 return build_report(hands, stats, self.hero, player, spots_href="spots", embed=True, lines=lines)
             return build_viewer(hands, self.hero, player, embed=True, solver=True)
-        return self._cached(("player", player, page), build)
+        return self._cached(("player", player, page) + ((kind["kind"],) if page == "preflop" else ()), build)
 
     def self_page(self, page: str) -> str:
         if page not in SELF_PAGES:
             raise KeyError(page)
         if not self.hands:
             raise UnknownPlayer("moi")
+        regular, excluded = self.regular_hands()
         if page == "solveur":
-            return build_review_page(self.hands, self.hero)
+            return build_review_page(regular, self.hero, excluded=excluded)
 
         def build():
             if page == "bilan":
-                return build_self_report(self.hands, analyze(self.hands), self.hero, embed=True, spots_href="")
+                return build_self_report(self.hands, self.all_stats(), self.hero, embed=True, spots_href="",
+                                         kinds=self.kinds())
             if page == "preflop":
-                return build_preflop_page(self.hands, self.hero, embed=True, spots_href="spots")
+                return build_preflop_page(regular, self.hero, embed=True, spots_href="spots",
+                                          note=_excluded_note(excluded))
             return build_viewer(self.hands, self.hero, None, embed=True, solver=True)
-        return self._cached(("self", page), build)
+        return self._cached(("self", page) + (self._kinds_key() if page in ("bilan", "preflop") else ()), build)
 
     # --- résolution postflop ----------------------------------------------------
     def _spot(self, hand_id: str):
@@ -260,7 +303,7 @@ class Library:
     def review_state(self, villain: Optional[str] = None, start: bool = False) -> dict:
         """Mains allées au flop (toutes, ou face à cet adversaire) : analysées, à analyser, en cours ;
         start=True met en file celles qui restent (les plus gros pots d'abord)."""
-        hands = self.hands_against(villain) if villain else self.hands
+        hands = self.hands_against(villain) if villain else self.regular_hands()[0]
         done, todo = review.collect(hands, self.hero)
         ready = postflop.status()["ready"]
         busy, current = 0, None
@@ -277,7 +320,7 @@ class Library:
                 "ready": ready}
 
     def review_cancel(self, villain: Optional[str] = None) -> dict:
-        hands = self.hands_against(villain) if villain else self.hands
+        hands = self.hands_against(villain) if villain else self.regular_hands()[0]
         _, todo = review.collect(hands, self.hero)
         for spot in todo:
             view = self.solves.lookup(spot)

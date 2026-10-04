@@ -145,6 +145,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(403, "Accès refusé.")
         parts = self._parts()
         library = self.server.library
+        if parts == ["api", "joueurs"]:
+            payload = self._small_json()
+            if not (isinstance(payload, dict) and isinstance(payload.get("name"), str)
+                    and payload.get("kind") in (None, "reg", "rec")):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.set_kind(payload["name"], payload.get("kind")))
+            except UnknownPlayer:
+                return self._error(404, "Adversaire inconnu.")
         if parts == ["api", "reload"]:
             library.reload()
             return self._json(library.summary())

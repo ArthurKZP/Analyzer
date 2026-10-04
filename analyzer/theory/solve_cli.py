@@ -31,6 +31,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--analyser", action="store_true",
                         help="résout les mains allées au flop pas encore analysées (onglet « Face au solveur »)")
     parser.add_argument("--max", type=int, help="avec --analyser : nombre de mains au plus (les plus gros pots)")
+    parser.add_argument("--recreatifs", action="store_true",
+                        help="avec --analyser : aussi les mains contre les récréatifs (pour lire leurs écarts)")
     parser.add_argument("--hero", help="ton pseudo (détecté automatiquement)")
     parser.add_argument("--iterations", type=int, default=postflop.DEFAULT_ITERATIONS, help="itérations maximum")
     parser.add_argument("--precision", type=float, default=postflop.DEFAULT_TARGET,
@@ -74,6 +76,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         if not hero:
             print("Pseudo introuvable : précise --hero.", file=sys.stderr)
             return 1
+        if not args.recreatifs:
+            from .. import players
+            from ..stats import analyze as player_stats
+            names = sorted({h.opponent_of(hero) for h in hands if hero in h.seats and len(h.seats) == 2})
+            recs = {n for n, info in players.classify(names, player_stats(hands)).items() if info["kind"] == "rec"}
+            if recs:
+                print(f"Mains contre les récréatifs laissées de côté ({', '.join(sorted(recs))}) : --recreatifs "
+                      "pour les inclure.")
+            hands = [h for h in hands if not (hero in h.seats and len(h.seats) == 2 and h.opponent_of(hero) in recs)]
         try:
             n = analyze(hands, hero, limit=args.max)
         except postflop.SolverError as exc:
