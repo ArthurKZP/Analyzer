@@ -272,6 +272,29 @@ class GTOpenIntegrationTest(unittest.TestCase):
         self.assertAlmostEqual(sum(hero["strategy"]), 1.0, places=2)
         print(postflop.result_text(result, "Hero"), file=sys.stderr)
 
+    def test_profile_lock(self):
+        # Profil d'adversaire verrouillé (native/profil.rs), meilleure réponse en face, puis retour au solveur.
+        hand = {h.hand_id: h for h in load_hands([FIXTURES])}["HAND02"]
+        session = postflop.Session(postflop.build_spot(hand, "Hero").request(iterations=3, target=50.0), save=False)
+        session.start()
+        try:
+            before = session.node([])
+            profile = {"villain": 1, "aggressor": 0, "tilts": {"fold_flop": 0.3, "raise": 3.0}}
+            reply = session.exploit([], profile, 0)
+            fold = reply["profile"]["situations"]["fold_flop"]
+            self.assertLess(fold["profile"], fold["solver"])
+            self.assertGreater(reply["profile"]["locked"], 0)
+            ex = reply["exploit"]
+            self.assertGreaterEqual(ex["avg"][2], -1e-3)  # la meilleure réponse vaut au moins le jeu du solveur
+            na = len(ex["actions"])
+            for row in ex["hands"][:20]:
+                self.assertAlmostEqual(sum(row[5:5 + na]), 1.0, places=2)
+            facing = session.exploit([{"type": "action", "index": 1}], profile, 0)["node"]
+            self.assertEqual(facing["player"], 1)
+            self.assertEqual(session.node([])["hands"], before["hands"])  # profil retiré : l'arbre du solveur
+        finally:
+            session.close()
+
     def test_plan_tree(self):
         # Sans plan, l'arbre d'Analyzer (native/arbre.rs) est celui de GTOpen, nœud pour nœud.
         hand = {h.hand_id: h for h in load_hands([FIXTURES])}["HAND02"]

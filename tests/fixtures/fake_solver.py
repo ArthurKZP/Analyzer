@@ -111,7 +111,8 @@ print(json.dumps({"engine": "etude" if option("--load") else "cpu", "iterations"
 
 if "--serve" in sys.argv:
     for line in sys.stdin:
-        query = json.loads(line)["path"]
+        request = json.loads(line)
+        query = request["path"]
         if any(s.get("type") == "action" and s["index"] > 1 for s in query):
             reply = {"error": "action index out of range"}
         elif query == [{"type": "action", "index": 0}] * 2:  # check-check : la turn
@@ -121,4 +122,17 @@ if "--serve" in sys.argv:
                               "hands": [[[c, 1.0, 0.5, 2.5] for c in ranges[p]] for p in (0, 1)], "history": []}}
         else:
             reply = {"node": node(len(query) % 2, ["check", "bet"], 0, 5.0, [])}
+        if "node" in reply and request.get("profile"):  # profil verrouillé : fréquences fictives
+            reply["profile"] = {"locked": 3, "seconds": 0.0, "situations": {
+                k: {"solver": 0.4, "profile": round(0.4 * t / (0.6 + 0.4 * t), 4), "nodes": 1}
+                for k, t in request["profile"]["tilts"].items()}}
+        if "node" in reply and request.get("exploit") is not None:  # meilleure réponse : tout en dernière action
+            n, p = reply["node"], request["exploit"]
+            na = len(n["actions"])
+            acting = n.get("player") == p
+            reply["exploit"] = {"type": n["type"], "exploiter": p, "player": n.get("player"), "actions": n["actions"],
+                                "locked": False, "avg": [2.5, 2.0, 0.5], "hands": [
+                                    [r[0], r[1], 2.5, 2.0, 0.5] + ([float(a == na - 1) for a in range(na)] +
+                                                                   [2.0 + 0.5 * (a == na - 1) for a in range(na)]
+                                                                   if acting else []) for r in n["hands"][p]]}
         print(json.dumps(reply), flush=True)

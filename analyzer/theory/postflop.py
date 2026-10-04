@@ -625,6 +625,7 @@ class Session:
         self._lock = threading.Lock()
         self._errors: list = []
         self._tmp = tempfile.TemporaryDirectory(prefix="analyzer-session-")
+        self.profile: Optional[dict] = None  # profil d'adversaire verrouillé dans le pont (Session.ask)
 
     def start(self, on_progress: Optional[Callable[[dict], None]] = None,
               on_start: Optional[Callable[[subprocess.Popen], None]] = None) -> dict:
@@ -665,24 +666,38 @@ class Session:
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None and self.result is not None
 
-    def node(self, path: list) -> dict:
-        """Nœud de l'arbre au bout du chemin (étapes {"type": "action", "index": i} / {"type": "card", "card": c})."""
+    def ask(self, query: dict) -> dict:
+        """Requête au pont : {"path": [...]} et, au besoin, "profile" (profil d'adversaire verrouillé)
+        et "exploit" (joueur dont on veut la meilleure réponse). Renvoie la réponse complète."""
         with self._lock:
             if not self.alive:
                 raise SolverError("La session du solveur est fermée : relance la résolution.")
             self.last_used = time.time()
             try:
-                self.proc.stdin.write(json.dumps({"path": path}) + "\n")
+                self.proc.stdin.write(json.dumps(query) + "\n")
                 self.proc.stdin.flush()
                 line = self.proc.stdout.readline()
             except OSError as exc:
                 raise SolverError("La session du solveur s'est arrêtée.") from exc
-        if not line:
+            reply = json.loads(line) if line else None
+            # le pont garde le profil de la requête (sans profil : l'arbre du solveur) ; en cas d'erreur,
+            # on le considère retiré, la requête suivante le remettra au besoin
+            self.profile = query.get("profile") if reply and "error" not in reply else None
+        if reply is None:
             raise SolverError("La session du solveur s'est arrêtée.")
-        reply = json.loads(line)
         if "error" in reply:
             raise SolverError(reply["error"])
-        return reply["node"]
+        return reply
+
+    def node(self, path: list) -> dict:
+        """Nœud de l'arbre au bout du chemin (étapes {"type": "action", "index": i} / {"type": "card", "card": c}),
+        tel que le solveur le joue (un profil d'adversaire en place est retiré)."""
+        return self.ask({"path": path})["node"]
+
+    def exploit(self, path: list, profile: dict, player: int) -> dict:
+        """Le nœud avec l'adversaire verrouillé sur son profil, et la meilleure réponse de `player` :
+        {"node", "profile" (fréquences du solveur et du profil par situation), "exploit"}."""
+        return self.ask({"path": path, "profile": profile, "exploit": player})
 
     def close(self) -> None:
         proc = self.proc

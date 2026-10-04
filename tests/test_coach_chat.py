@@ -8,7 +8,7 @@ from unittest import mock
 
 from analyzer.app import coach_chat
 from analyzer.app.coach_chat import Coach, CoachError
-from analyzer.theory import coach, postflop
+from analyzer.theory import coach, exploit, postflop
 from analyzer.theory.studyspots import StudySpot
 from tests.test_coach import BOARD, make_query
 
@@ -36,6 +36,9 @@ class FakeClient:
         self.script = list(script)
         self.calls = []
         self.beta = SimpleNamespace(messages=SimpleNamespace(create=self.create))
+        # liste des modèles de l'API, du plus récent au plus ancien
+        self.models = SimpleNamespace(list=lambda limit: [SimpleNamespace(id=m) for m in
+                                                          ("modele-rapide-2", "modele-opus-2", "modele-opus-1")])
 
     def create(self, **kwargs):
         self.calls.append(json.loads(json.dumps(kwargs, default=str)))
@@ -51,14 +54,39 @@ def answer(text):
     return Response([{"type": "text", "text": text}], "end_turn")
 
 
+class FakeSession:
+    """Session ouverte : le petit arbre de test_coach, et la meilleure réponse (tout en dernière action)."""
+
+    def __init__(self, query):
+        self.query = query
+        self.profile = None
+        self.asked = []
+
+    def ask(self, request):
+        self.asked.append(request)
+        self.profile = request.get("profile")
+        return {"node": self.query(request["path"])}
+
+    def exploit(self, path, profile, player):
+        self.asked.append({"path": path, "profile": profile, "exploit": player})
+        self.profile = profile
+        node = self.query(path)
+        na = len(node["actions"])
+        rows = [[r[0], r[1], 2.5, 2.0, 0.5] + [float(a == na - 1) for a in range(na)] + [2.0] * na
+                for r in node["hands"][player]] if node.get("player") == player else []
+        return {"node": node, "exploit": {"avg": [2.5, 2.0, 0.5], "hands": rows},
+                "profile": {"situations": {k: {"solver": 0.3, "profile": 0.4} for k in profile["tilts"]}}}
+
+
 class FakeSolves:
     """La session d'une étude, sur le petit arbre de test_coach."""
 
     def __init__(self):
         self.query = make_query()
+        self.session = FakeSession(self.query)
 
     def live_session(self, ident):
-        return object()
+        return self.session
 
     def node(self, spot, path):
         return {"node": self.query(path), "live": True}
@@ -67,11 +95,18 @@ class FakeSolves:
 class FakeLibrary:
     def __init__(self):
         self.solves = FakeSolves()
+        self.hands = []
+
+    def opponents(self):
+        return [{"name": "Villain", "hands": 300}, {"name": "Fish", "hands": 40}]
+
+    def kinds(self):
+        return {"Villain": {"kind": "reg"}, "Fish": {"kind": "rec"}}
 
     def _spot(self, ident):
         if not ident.startswith("spot:srp:"):
             raise KeyError(ident)
-        return SimpleNamespace(ident=ident)
+        return SimpleNamespace(ident=ident, family="srp", board=list(BOARD))
 
 
 def wait(c, conv_id):
@@ -106,8 +141,9 @@ class CoachChatTest(unittest.TestCase):
         self.assertEqual([m["role"] for m in view["messages"]], ["user", "coach"])
         self.assertIn("lit le plan de jeu (srp)", view["messages"][1]["steps"][0])
         first = client.calls[0]
-        self.assertEqual((first["model"], first["fallbacks"], first["betas"]), ("claude-opus-5-5", "default",
+        self.assertEqual((first["model"], first["fallbacks"], first["betas"]), ("modele-opus-2", "default",
                                                                                  ["server-side-fallback-2026-07-01"]))
+        self.assertEqual((view["model"], c.status()["model"]), ("modele-opus-2", "modele-opus-2"))
         self.assertEqual((first["output_config"], first["cache_control"]), ({"effort": "high"}, {"type": "ephemeral"}))
         self.assertNotIn("tool_choice", first)  # pas d'appel forcé : refusé par le modèle
         second = client.calls[1]["messages"]
@@ -140,6 +176,47 @@ class CoachChatTest(unittest.TestCase):
         error = client.calls[3]["messages"][-1]["content"][0]
         self.assertTrue(error["is_error"])
         self.assertIn("BTN a le choix entre check, mise 33 %", error["content"])
+
+    def test_exploit_tool(self):
+        profile = {"family": "srp", "role": "defenseur", "hands": 120, "bridge": {"villain": 0, "aggressor": 1,
+                                                                                  "tilts": {"fold_flop": 0.6}},
+                   "rows": [{"key": "fold_flop", "label": "Fold face à la c-bet", "opps": 100, "observed": 0.2,
+                             "solver": 0.3, "flops": 24, "kept": 0.22, "reading": "défend plus face à la c-bet",
+                             "confidence": "solide"}]}
+        lib = FakeLibrary()
+        c = Coach(lib)
+        with mock.patch.object(exploit, "profile", return_value=profile) as built:
+            text, error = c._run_tool("exploiter", {"spot": "spot:srp:Ks7d2c"})
+        self.assertFalse(error, text)
+        data = json.loads(text)
+        # au flop, c'est le bouton qui décide (après le check forcé) : l'élève est le bouton, l'adversaire la BB
+        self.assertEqual((data["adversaire"], data["heros"], data["adversaire_joue"]),
+                         ("Villain", "BTN", "BB, face à l'initiative"))
+        self.assertEqual(built.call_args.args[1:], (["Villain"], "srp", "defenseur"))
+        self.assertEqual(data["noeud"]["exploit_pct"], {"check": 0, "mise 33 % (1,6 bb)": 100})
+        self.assertEqual(data["profil"][0]["retenu_pct"], 22)
+        self.assertEqual(data["style"], ["défend plus face à la c-bet"])
+        self.assertEqual(data["sur_ce_flop"], [{"situation": "Fold face à la c-bet", "solveur_pct": 30, "profil_pct": 40}])
+        self.assertNotIn("prudence", data)
+        # la ligne suivante se lit sous le profil en place (pas de retour à l'arbre du solveur entre deux appels)
+        lib.solves.session.asked.clear()
+        with mock.patch.object(exploit, "profile", return_value=profile) as built:
+            text, error = c._run_tool("exploiter", {"spot": "spot:srp:Ks7d2c", "ligne": ["bet"], "heros": "BB",
+                                                    "adversaire": "récréatifs"})
+        self.assertFalse(error, text)
+        self.assertEqual(built.call_args.args[1:], (["Fish"], "srp", "agresseur"))
+        self.assertTrue(all(q.get("profile") == profile["bridge"] for q in lib.solves.session.asked))
+        data = json.loads(text)
+        self.assertEqual((data["adversaire"], data["heros"], data["noeud"]["joueur"]), ("les récréatifs", "BB", "BB"))
+
+        empty = dict(profile, bridge=dict(profile["bridge"], tilts={}))
+        with mock.patch.object(exploit, "profile", return_value=empty):
+            text, error = c._run_tool("exploiter", {"spot": "spot:srp:Ks7d2c"})
+        self.assertTrue(error)
+        self.assertIn("Pas assez de données sur Villain", text)
+        text, error = c._run_tool("exploiter", {"spot": "spot:srp:Ks7d2c", "adversaire": "Inconnu"})
+        self.assertTrue(error)
+        self.assertIn("Adversaires : Villain, Fish", text)
 
     def test_refusal_and_setup_errors(self):
         refused = Response([], "refusal")
@@ -203,7 +280,7 @@ class CoachRoutesTest(unittest.TestCase):
                     conn.close()
                     return resp.status, json.loads(data) if data else None
                 status, data = request("GET", "/api/coach")
-                self.assertEqual((status, data["model"], data["key"]), (200, "claude-opus-5-5", False))
+                self.assertEqual((status, data["model"], data["key"]), (200, coach_chat.MODEL, False))
                 self.assertEqual(request("GET", "/api/coach/inconnue")[0], 404)
                 for bad in ({"text": ""}, {"text": "x" * 5000}, {"text": "ok", "context": {"spot": 3}},
                             {"text": "ok", "context": {"spot": "spot:srp:KsKd4c", "path": "x"}}, ["texte"]):

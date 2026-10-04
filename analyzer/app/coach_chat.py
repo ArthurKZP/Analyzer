@@ -1,13 +1,15 @@
 """Coach conversationnel : Claude (API Anthropic) répond aux questions de stratégie en s'appuyant sur les
 données d'Analyzer, qu'il consulte par des outils : plan de jeu suggéré, études résolues (stratégie d'un
-nœud, d'une main), écarts des adversaires réels.
+nœud, d'une main), écarts des adversaires réels, et node-lock d'un adversaire réel dans une étude pour en
+tirer le jeu qui l'exploite (theory/exploit.py).
 
 Une question = un tour : Claude appelle les outils dont il a besoin, puis répond. La conversation est
 renvoyée telle quelle à chaque question (blocs de réflexion compris) : on n'y fait qu'ajouter, sauf pour
 retirer un tour qui a échoué.
 
 Le module `anthropic` est optionnel (pip install anthropic) ; la clé vient de ANTHROPIC_API_KEY, ou d'un
-profil `ant auth login`. Modèle et effort : ANALYZER_COACH_MODEL, ANALYZER_COACH_EFFORT.
+profil `ant auth login`. Modèle : le plus récent de la famille Opus que la clé peut utiliser (lu dans la liste
+des modèles de l'API), ou ANALYZER_COACH_MODEL ; effort : ANALYZER_COACH_EFFORT.
 """
 from __future__ import annotations
 
@@ -21,16 +23,17 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from ..theory import coach, postflop, review, studyspots
+from ..theory import coach, exploit, postflop, review, studyspots
 
-MODEL = os.environ.get("ANALYZER_COACH_MODEL", "claude-opus-5-5")
+MODEL = os.environ.get("ANALYZER_COACH_MODEL", "")  # vide : choisi dans la liste des modèles de l'API
+FAMILY = "opus"  # par défaut, le plus récent des modèles de cette famille, les plus capables
 EFFORT = os.environ.get("ANALYZER_COACH_EFFORT", "high")
 MAX_TOKENS = 16000
 MAX_ROUNDS = 12  # appels au modèle par question, outils compris
 FALLBACK_BETA = "server-side-fallback-2026-07-01"  # en cas de refus, une autre version du modèle reprend
 MAX_CONVERSATIONS = 20
 LOAD_TIMEOUT = 600  # secondes pour ouvrir une étude (une étude SRP prend environ une minute)
-PRICES = {"input": 4.0, "output": 20.0, "cache_read": 0.2, "cache_write": 5.0}  # $ / million de jetons (Opus 5.5)
+PRICES = {"input": 4.0, "output": 20.0, "cache_read": 0.2, "cache_write": 5.0}  # $ / million de jetons (indicatif)
 
 SETUP = ("Le coach utilise Claude, l'IA d'Anthropic, par son API : installe le module (pip install anthropic) "
          "puis donne ta clé API (créée sur console.anthropic.com) dans la variable d'environnement "
@@ -44,6 +47,7 @@ Tu consultes ses données avec des outils :
 - strategie_noeud : la stratégie du solveur à un moment précis d'un spot résolu (fréquences de toute la range, par famille de mains, équités, EV, exemples de mains).
 - strategie_main : une main précise à ce moment (sa stratégie, l'EV de chaque action, son équité).
 - ecarts_adversaire : un adversaire réel, son type (régulier ou récréatif) et ses écarts de fréquence face au solveur.
+- exploiter : node-lock d'un adversaire réel. Son profil postflop mesuré sur ses mains (c-bet, barrels, fold face aux mises, relances, probes) est verrouillé dans une étude, puis le solveur calcule la meilleure réponse : ce qui change par famille de mains, les mains qui changent d'action, le gain en bb.
 
 Comment répondre :
 - Appuie-toi sur les données : consulte les outils avant de citer une fréquence, une taille ou une EV, et n'invente pas de chiffres. Si un spot n'est pas résolu, dis-le et sers-toi du flop résolu le plus proche ou du plan de jeu.
@@ -52,6 +56,7 @@ Comment répondre :
 - Privilégie des règles simples et applicables par un humain (par exemple « mise toutes tes top pairs et tes tirages couleur, checke les paires moyennes »), avec les fréquences quand elles éclairent.
 - L'arbre du solveur est simplifié : une taille de mise par situation au flop et à la turn, deux à la river, et les ranges préflop de la solution HU 100 bb. Rappelle-le si une question dépend d'une taille absente.
 - Contre un adversaire réel, sépare la théorie de l'exploitation : un écart « solide » justifie de s'adapter, un écart « indicatif » appelle de la prudence. Contre un récréatif, l'exploitation prime.
+- Pour proposer une stratégie exploitante, appuie-toi sur exploiter (un ou plusieurs flops représentatifs, puis les nœuds clés : c-bet, défense face à la c-bet, turn, river). Décris d'abord le type de joueur que dessine son profil, puis les ajustements, du plus rentable au moins rentable. La meilleure réponse est maximale : elle suppose qu'il ne s'adapte pas et pousse les mains vers des actions pures. Retiens la direction (quelles familles de mains changent d'action, où est le gain) et conseille une version tempérée, plus forte quand l'écart est solide.
 - Réponds en français, de façon concise et structurée (listes courtes), montants en bb, cartes notées comme A♠K♦ ou AKs.
 
 Repères : BTN = bouton (petite blinde, en position après le flop), BB = grosse blinde (hors de position). SRP : open du BTN à 2,5 bb payé par la BB (pot 5 bb, 97,5 bb derrière) ; pot 3bet : 3bet de la BB à 11,5 bb payé (pot 23 bb) ; pot 4bet : 4bet du BTN à 26 bb payé (pot 52 bb). Un spot se nomme « spot:<famille>:<flop> », par exemple spot:srp:KsKd4c. Une ligne d'actions est une liste : "check", "bet" (ou "bet 75" pour la taille la plus proche de 75 % du pot), "call", "raise", "fold", "allin", et les cartes de turn et de river ("Qh"). En SRP et en pot 4bet, la BB ne mène pas au flop : la ligne commence par "check"."""
@@ -94,6 +99,22 @@ TOOLS = [
          "main": {"type": "string", "description": "les deux cartes, ex. AhKd"},
          "joueur": {"type": "string", "enum": ["BB", "BTN"], "description": "joueur qui tient la main (par défaut celui qui agit)"}},
          "required": ["spot", "ligne", "main"]}},
+    {"name": "exploiter",
+     "description": ("Node-lock contre un adversaire réel dans un spot résolu. Son profil postflop dans ce type de pot et ce "
+                     "rôle (c-bet, barrels, c-bet retardée, fold face aux mises et aux relances, relances, probes ou stabs), "
+                     "mesuré sur ses mains et ramené vers la théorie quand l'échantillon est petit, est verrouillé dans "
+                     "l'étude ; le solveur calcule ensuite la meilleure réponse au nœud. Renvoie son profil (lui, solveur, "
+                     "retenu, lecture), ce que le verrou donne sur ce flop, et au nœud : le jeu du solveur et le jeu "
+                     "exploitant pour toute la range et par famille de mains, les mains qui changent d'action, l'EV et le "
+                     "gain en bb. Si c'est à l'adversaire d'agir, sa stratégie verrouillée. Lent : de 5 à 40 secondes."),
+     "input_schema": {"type": "object", "properties": {
+         "spot": {"type": "string", "description": "identifiant du spot, ex. spot:srp:KsKd4c"},
+         "ligne": {"type": "array", "items": {"type": "string"}, "description": LINE_HELP},
+         "adversaire": {"type": "string", "description": ("pseudo de l'adversaire, ou « récréatifs » / « réguliers » pour "
+                                                          "le profil moyen de ce groupe ; par défaut l'adversaire le plus joué")},
+         "heros": {"type": "string", "enum": ["BB", "BTN"],
+                   "description": "position de l'élève ; l'adversaire a l'autre (par défaut : le joueur qui agit au nœud)"}},
+         "required": ["spot"]}},
     {"name": "ecarts_adversaire",
      "description": ("Un adversaire réel de l'élève : son type (régulier ou récréatif), ses stats préflop principales, et ses "
                      "écarts de fréquence face au solveur, situation par situation (tirés des mains analysées dans « Face "
@@ -104,7 +125,9 @@ TOOLS = [
 ]
 STEP_TEXT = {"plan_de_jeu": "lit le plan de jeu", "liste_etudes": "regarde les études résolues",
              "strategie_noeud": "consulte la stratégie du solveur", "strategie_main": "regarde une main précise",
-             "ecarts_adversaire": "examine les écarts de l'adversaire"}
+             "ecarts_adversaire": "examine les écarts de l'adversaire",
+             "exploiter": "verrouille le profil de l'adversaire dans le solveur (node-lock)"}
+POOLS = {"recreatifs": "rec", "récréatifs": "rec", "reguliers": "reg", "réguliers": "reg"}
 
 
 class CoachError(RuntimeError):
@@ -139,11 +162,12 @@ class Conversation:
     error: Optional[str] = None
     usage: dict = field(default_factory=lambda: dict.fromkeys(PRICES, 0))
     updated: float = field(default_factory=time.time)
+    model: str = ""  # gardé pour toute la conversation (ses blocs de réflexion lui appartiennent)
 
     def view(self) -> dict:
         cost = sum(self.usage[k] * PRICES[k] for k in PRICES) / 1e6
         return {"id": self.id, "state": self.state, "messages": self.shown, "steps": list(self.steps),
-                "error": self.error, "cost": round(cost, 4), "model": MODEL}
+                "error": self.error, "cost": round(cost, 4), "model": self.model}
 
 
 def _blocks(response) -> list[dict]:
@@ -167,11 +191,24 @@ class Coach:
         self._client_factory = client_factory or default_client
         self._conversations: dict[str, Conversation] = {}
         self._lock = threading.Lock()
+        self._model = MODEL
 
     # --- interface de l'application ---------------------------------------------------------------
     def status(self) -> dict:
         key = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
-        return {"sdk": sdk_available(), "key": key, "model": MODEL, "setup": SETUP}
+        return {"sdk": sdk_available(), "key": key, "model": self._model, "setup": SETUP}
+
+    def _pick_model(self, client) -> str:
+        """ANALYZER_COACH_MODEL, sinon le plus récent des modèles de la famille FAMILY que la clé peut utiliser (la
+        liste de l'API va du plus récent au plus ancien), lu une fois."""
+        if self._model:
+            return self._model
+        models = [m.id for m in client.models.list(limit=100)]
+        chosen = next((m for m in models if FAMILY in m.lower()), models[0] if models else "")
+        if not chosen:
+            raise CoachError("Aucun modèle Claude n'est accessible avec cette clé : précise-le dans ANALYZER_COACH_MODEL.")
+        self._model = chosen
+        return chosen
 
     def view(self, conv_id: str) -> Optional[dict]:
         with self._lock:
@@ -199,6 +236,7 @@ class Coach:
         start = len(conv.transcript)
         try:
             client = self._client_factory()
+            conv.model = conv.model or self._pick_model(client)
             conv.transcript.append({"role": "user", "content": self._question(text, context)})
             answer = self._loop(client, conv)
             conv.shown.append({"role": "coach", "text": answer, "steps": list(conv.steps)})
@@ -226,7 +264,7 @@ class Coach:
     def _loop(self, client, conv: Conversation) -> str:
         for _ in range(MAX_ROUNDS):
             response = client.beta.messages.create(
-                model=MODEL, max_tokens=MAX_TOKENS, system=SYSTEM, tools=TOOLS, messages=conv.transcript,
+                model=conv.model, max_tokens=MAX_TOKENS, system=SYSTEM, tools=TOOLS, messages=conv.transcript,
                 output_config={"effort": EFFORT}, cache_control={"type": "ephemeral"},
                 betas=[FALLBACK_BETA], fallbacks="default",
             )
@@ -286,7 +324,8 @@ class Coach:
         if isinstance(exc, anthropic.PermissionDeniedError):
             return "Cette clé API n'a pas accès au modèle du coach."
         if isinstance(exc, anthropic.NotFoundError):
-            return f"Modèle introuvable : {MODEL} (variable ANALYZER_COACH_MODEL)."
+            return ("Modèle du coach introuvable : vérifie ANALYZER_COACH_MODEL (vide, le coach prend le plus récent "
+                    "des modèles accessibles à ta clé).")
         if isinstance(exc, anthropic.RateLimitError):
             return "Trop de demandes pour le moment : réessaie dans une minute."
         if isinstance(exc, anthropic.APIStatusError):
@@ -318,6 +357,8 @@ class Coach:
                 data["ligne"] = steps
             elif name == "ecarts_adversaire":
                 data = self._villain(args.get("adversaire"))
+            elif name == "exploiter":
+                data = self._exploit(args)
             else:
                 return f"Outil inconnu : {name}.", True
         except CoachError as exc:
@@ -409,6 +450,76 @@ class Coach:
                 "signaux": kind.get("reasons", []), "stats_preflop": stats,
                 "mains_postflop_analysees": len(digests), "mains_a_analyser": len(todo), "ecarts": deviations[:20]}
 
+    def _targets(self, who) -> tuple[str, list[str], str]:
+        """(nom affiché, joueurs, type) : un adversaire, ou le groupe des récréatifs ou des réguliers."""
+        lib = self.library
+        opponents = [o["name"] for o in lib.opponents()]
+        if not opponents:
+            raise CoachError("Aucun adversaire : importe d'abord des mains.")
+        kinds = lib.kinds()
+        who = who.strip() if isinstance(who, str) and who.strip() else opponents[0]
+        pool = POOLS.get(who.lower())
+        if pool:
+            names = [n for n in opponents if kinds.get(n, {}).get("kind") == pool]
+            label = "les récréatifs" if pool == "rec" else "les réguliers"
+            if not names:
+                raise CoachError(f"Aucun adversaire classé parmi {label}.")
+            return label, names, f"groupe de {len(names)} joueur(s)"
+        match = [n for n in opponents if n.lower() == who.lower()]
+        if not match:
+            raise CoachError(f"Adversaire inconnu : {who}. Adversaires : {', '.join(opponents[:10])} ; "
+                             "ou « récréatifs », « réguliers ».")
+        info = kinds.get(match[0], {})
+        return match[0], match, ("récréatif" if info.get("kind") == "rec" else "régulier")
+
+    def _exploit(self, args: dict) -> dict:
+        spot = self._spot(args.get("spot"))
+        label, names, kind = self._targets(args.get("adversaire"))
+        solves = self.library.solves
+        if solves.live_session(spot.ident) is None:
+            self._node(spot, [])  # ouvre l'étude
+        session = solves.live_session(spot.ident)
+        if session is None:
+            raise CoachError("L'étude n'a pas pu être ouverte.")
+        # suivre la ligne ne dépend pas des stratégies : on garde le verrou en place, s'il y en a un
+        path, node, shown = self._resolve(
+            spot.ident, args.get("ligne") or [],
+            fetch=lambda p: session.ask({"path": p, "profile": session.profile})["node"])
+        seat = args.get("heros")
+        if seat in ("BB", "BTN"):
+            hero = 0 if seat == "BB" else 1
+        elif node["type"] == "action":
+            hero = node["player"]
+        else:
+            raise CoachError("La ligne ne s'arrête pas sur une décision : précise ta position (heros : BB ou BTN).")
+        role = exploit.role_of(spot.family, 1 - hero)
+        family = studyspots.FAMILIES[spot.family]["name"]
+        prof = exploit.profile(self.library.hands, names, spot.family, role)
+        if not prof["bridge"]["tilts"]:
+            raise CoachError(
+                f"Pas assez de données sur {label} en {family}, {exploit.ROLES[role]} ({prof['hands']} mains) pour mesurer "
+                "un écart : son jeu reste celui du solveur. Essaie « récréatifs » ou « réguliers » (profil moyen d'un "
+                "groupe), ou un autre type de pot.")
+        reply = session.exploit(path, prof["bridge"], hero)
+        pct = lambda x: None if x is None else round(100 * x)  # noqa: E731
+        rows = [{"situation": r["label"], "lui_pct": pct(r["observed"]), "occasions": r["opps"],
+                 "solveur_pct": pct(r["solver"]), "retenu_pct": pct(r["kept"]), "confiance": r["confidence"],
+                 "lecture": r["reading"]} for r in prof["rows"]]
+        flops = min((r["flops"] for r in prof["rows"] if r["kept"] is not None), default=0)
+        data = {"adversaire": label, "type": kind, "pot": family, "spot": spot.ident,
+                "flop": studyspots.board_text(spot.board), "heros": exploit.seat_name(hero),
+                "adversaire_joue": f"{exploit.seat_name(1 - hero)}, {exploit.ROLES[role]}",
+                "mains_dans_ce_type_de_pot": prof["hands"], "profil": rows,
+                "style": [r["reading"] for r in prof["rows"] if r["reading"]],
+                "sur_ce_flop": exploit.readback(reply.get("profile"), spot.family, role),
+                "ligne": shown, "noeud": exploit.brief(reply, hero),
+                "rappel": ("Meilleure réponse maximale : elle suppose qu'il ne s'adapte pas. Retiens la direction, "
+                           "pas les fréquences extrêmes.")}
+        if flops < exploit.MIN_FLOPS:
+            data["prudence"] = (f"Repère du solveur tiré de {flops} flop(s) résolu(s) seulement dans ce type de pot : "
+                                "l'écart mesuré est approximatif (et volontairement atténué).")
+        return data
+
     # --- études : ouvrir, suivre une ligne -----------------------------------------------------------
     def _node(self, spot, path: list) -> dict:
         solves = self.library.solves
@@ -436,13 +547,15 @@ class Coach:
         except Exception as exc:  # noqa: BLE001 — identifiant inconnu ou hors des spots couverts
             raise CoachError(f"Spot inconnu : {ident}. Exemple : spot:srp:KsKd4c.") from exc
 
-    def _resolve(self, ident, line) -> tuple[list, dict, list[str]]:
-        """Suit la ligne depuis la racine ; renvoie le chemin, le nœud et la ligne lisible."""
+    def _resolve(self, ident, line, fetch: Optional[Callable[[list], dict]] = None) -> tuple[list, dict, list[str]]:
+        """Suit la ligne depuis la racine ; renvoie le chemin, le nœud et la ligne lisible. fetch : lecture
+        d'un nœud (par défaut, l'étude telle que le solveur la joue)."""
         spot = self._spot(ident)
         if not isinstance(line, list):
             raise CoachError("La ligne est une liste d'actions, par exemple [\"check\", \"bet\", \"call\", \"Qh\"].")
+        get = fetch or (lambda p: self._node(spot, p))
         path: list = []
-        node = self._node(spot, path)
+        node = get(path)
         shown: list[str] = []
         for token in line:
             token = str(token).strip()
@@ -451,7 +564,7 @@ class Coach:
                     (card or node["actions"][0]["kind"] != self._kind(token)[0]):
                 path = path + [{"type": "action", "index": 0}]  # check forcé : la BB ne mène pas
                 shown.append("check (forcé)")
-                node = self._node(spot, path)
+                node = get(path)
             if card:
                 value = card.group(1).upper() + card.group(2).lower()
                 if node["type"] != "chance":
@@ -464,11 +577,11 @@ class Coach:
                 index = self._find(node, token)
                 path = path + [{"type": "action", "index": index}]
                 shown.append(postflop.action_labels(node)[index])
-            node = self._node(spot, path)
+            node = get(path)
         while node["type"] == "action" and len(node["actions"]) == 1:  # la décision qui suit, pas un check forcé
             path = path + [{"type": "action", "index": 0}]
             shown.append("check (forcé)")
-            node = self._node(spot, path)
+            node = get(path)
         return path, node, shown
 
     @staticmethod

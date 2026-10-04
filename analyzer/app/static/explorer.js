@@ -838,7 +838,7 @@
       context: () => (PRE ? null : { spot: HAND, path, main: selected || null }),
       suggestions: PRE ? ['Comment construire ma range de défense de BB ?', 'Pourquoi 3better certaines mains en bluff ?']
         : ['Pourquoi le solveur joue-t-il ainsi ici ?', 'Quelle stratégie simple retenir ici ?',
-          'Quelles mains mettent la pression ici, et pourquoi ?'],
+          'Quelles mains mettent la pression ici, et pourquoi ?', 'Comment exploiter mon adversaire ici ?'],
     });
   }
 

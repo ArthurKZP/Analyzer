@@ -441,7 +441,8 @@ Un coach avec qui discuter, dans l'onglet *Plan de jeu suggéré* (« Discuter a
 l'explorateur (onglet *Coach* à droite, qui sait quel spot, quelle ligne et quelle case tu regardes). C'est
 Claude, l'IA d'Anthropic : il consulte tes données avant de répondre (le plan de jeu suggéré, la liste des
 études, la stratégie du solveur à un nœud par famille de mains avec équités et EV, une main précise, les écarts
-d'un adversaire réel) et explique pourquoi le solveur choisit une action, en règles simples.
+d'un adversaire réel) et explique pourquoi le solveur choisit une action, en règles simples. Il sait aussi
+faire lui-même un node-lock contre un adversaire réel (voir plus bas).
 
 ```bash
 pip install anthropic
@@ -450,13 +451,42 @@ python -m analyzer app
 ```
 
 - Clé API à créer sur console.anthropic.com (ou `ant auth login`) ; sans elle, le panneau explique quoi faire.
-- Modèle : Claude Opus 5.5 (`claude-opus-5-5`), effort `high` ; à changer avec `ANALYZER_COACH_MODEL` et
+- Modèle : le plus récent des modèles de la famille Opus (les plus capables) que ta clé peut utiliser, choisi
+  dans la liste des modèles de l'API ; effort `high`. À changer avec `ANALYZER_COACH_MODEL` et
   `ANALYZER_COACH_EFFORT`. Si le modèle décline une question, l'API la confie à un autre modèle Claude
   (`fallbacks: "default"`).
 - Coût : facturé par Anthropic à l'usage, de l'ordre de quelques centimes par question (le contexte est mis en
   cache) ; la page affiche le coût estimé de la discussion.
 - Ouvrir une étude pour répondre prend quelques secondes (une minute en SRP) ; elle reste ouverte pour
   l'explorateur.
+
+### Exploiter un adversaire réel (node-lock)
+
+Demande au coach « Comment exploiter _Bërsërk_ sur ce flop ? » (ou, dans l'explorateur, « Comment exploiter mon
+adversaire ici ? ») : il verrouille lui-même le profil de l'adversaire dans l'étude et lit la meilleure réponse.
+
+1. **Son profil**, mesuré sur tes mains contre lui, dans ce type de pot et ce rôle (à l'initiative ou face à
+   elle) : c-bet, 2e et 3e barrels, c-bet retardée, fold face à la c-bet et aux barrels, relances, fold et
+   sur-relance face à une relance, probe (ou mise quand l'agresseur checke). Chaque fréquence est comparée à
+   celle du solveur dans les mêmes situations (moyenne des plans de jeu des flops résolus de ce type de pot).
+2. **L'écart devient un rapport de cotes**, ramené vers la théorie quand l'échantillon est petit : il compte pour
+   moitié à 30 occasions, pas du tout sous 8, et moins quand le repère du solveur tient sur moins de 5 flops
+   résolus (c'est le cas des pots 3bet tant qu'un seul flop est résolu).
+3. **Le verrou** (`native/profil.rs`) : à chaque nœud de l'adversaire, la fréquence du solveur est déplacée de
+   ce rapport de cotes, par un multiplicateur commun à toutes les mains. Il mise donc plus (ou moins) partout,
+   mais toujours davantage là où le solveur mise déjà beaucoup ; l'ordre des mains et le partage entre les
+   tailles sont gardés, et les mains jouées pures le restent. Les situations sans mesure gardent le jeu du
+   solveur.
+4. **La meilleure réponse** (`exploit_view` de GTOpen) au nœud demandé : le jeu du solveur et le jeu
+   exploitant pour toute la range et par famille de mains, les mains qui changent d'action, l'EV et le gain en
+   bb. Si c'est à l'adversaire d'agir, sa stratégie une fois verrouillée.
+
+« récréatifs » ou « réguliers » à la place d'un pseudo donnent le profil moyen d'un groupe (plus de mains).
+La meilleure réponse est maximale : elle suppose que l'adversaire ne s'adapte pas et pousse chaque main vers une
+action pure. Le coach en tire une direction (quelles familles changent d'action, où est le gain) et conseille
+une version tempérée. Compter de 5 à 40 secondes par nœud : ouverture de l'étude, verrou (de 1 à 5 s, 20 s pour
+la plus grosse étude), meilleure réponse ; le verrou demande de la mémoire en plus (de 70 Mo à 1 Go selon
+l'étude).
 
 ## Entraîneur
 
@@ -563,10 +593,11 @@ analyzer/
   selfreport.py        « Mon jeu » : ton bilan contre tous tes adversaires
   theory/              préflop vs solveur : solution (data/), comparaison (preflop.py), page (page.py),
                        arbre préflop pour l'explorateur (preflop_tree.py), plan de jeu suggéré
-                       (coach.py),
+                       (coach.py), profil d'un adversaire réel et node-lock (exploit.py),
                        catégories de mains pour les filtres (handclass.py),
                        lecture de captures de ranges (extract.py) ; postflop avec GTOpen : spots,
-                       installation et lecture des résultats (postflop.py), pont Rust (native/main.rs),
+                       installation et lecture des résultats (postflop.py), pont Rust (native/main.rs ;
+                       arbre.rs pour les tailles, profil.rs pour le verrou d'un profil d'adversaire),
                        commande `gtopen` (solve_cli.py), mains jouées face au solveur (review.py)
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
