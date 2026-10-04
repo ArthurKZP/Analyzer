@@ -459,12 +459,37 @@ flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de fl
 
 ## Coach
 
-Un coach avec qui discuter, dans l'onglet *Plan de jeu suggéré* (« Discuter avec le coach ») et dans
-l'explorateur (onglet *Coach* à droite, qui sait quel spot, quelle ligne et quelle case tu regardes). C'est
-Claude, l'IA d'Anthropic : il consulte tes données avant de répondre (le plan de jeu suggéré, la liste des
-études, la stratégie du solveur à un nœud par famille de mains avec équités et EV, une main précise, les écarts
-d'un adversaire réel) et explique pourquoi le solveur choisit une action, en règles simples. Il sait aussi
-faire lui-même un node-lock contre un adversaire réel (voir plus bas).
+Un coach avec qui discuter de stratégie. C'est Claude, l'IA d'Anthropic : il consulte tes données avant de
+répondre (le plan de jeu suggéré, la liste des études, la stratégie du solveur à un nœud par famille de mains
+avec équités et EV, une main précise, les écarts et les bluffs d'un adversaire réel) et explique pourquoi le
+solveur choisit une action, en règles simples. Il sait aussi faire lui-même un node-lock contre un adversaire
+réel (voir plus bas). Deux façons de lui parler :
+
+### Dans ton abonnement Claude (sans clé API)
+
+Analyzer donne ses outils à l'application Claude (Claude Desktop) ou à Claude Code par un serveur MCP local : la
+conversation tourne dans ton abonnement, sans coût par question (dans les limites d'usage de ton abonnement).
+
+```bash
+python -m analyzer mcp --config
+```
+
+affiche, avec les chemins de ta machine :
+
+- pour **Claude Desktop** : le bloc à coller dans `claude_desktop_config.json` (Réglages > Développeur >
+  Modifier la configuration), puis redémarre l'application ;
+- pour **Claude Code** : la commande `claude mcp add …` à lancer une fois.
+
+Ensuite, demande simplement « Résume-moi le plan de jeu en SRP » ou « Dans quelles lignes Villain bluffe-t-il ? ».
+Le prompt *coach* du serveur (menu des prompts de l'application) donne au modèle la façon de répondre du coach.
+Le serveur (`python -m analyzer mcp`) est lancé par l'application Claude : il charge tes mains au premier outil
+appelé et ouvre les études comme l'application d'Analyzer (les deux peuvent tourner en même temps, chacune avec sa
+propre session du solveur). Il n'y a pas de dépendance à installer.
+
+### Dans l'application d'Analyzer (clé API)
+
+Le même coach est intégré à l'application : onglet *Plan de jeu suggéré* (« Discuter avec le coach ») et
+explorateur (onglet *Coach* à droite, qui sait quel spot, quelle ligne et quelle case tu regardes).
 
 ```bash
 pip install anthropic
@@ -477,8 +502,8 @@ python -m analyzer app
   dans la liste des modèles de l'API ; effort `high`. À changer avec `ANALYZER_COACH_MODEL` et
   `ANALYZER_COACH_EFFORT`. Si le modèle décline une question, l'API la confie à un autre modèle Claude
   (`fallbacks: "default"`).
-- Coût : facturé par Anthropic à l'usage, de l'ordre de quelques centimes par question (le contexte est mis en
-  cache) ; la page affiche le coût estimé de la discussion.
+- Coût : facturé par Anthropic à l'usage (API séparée de l'abonnement), de 5 à 20 centimes par question environ
+  selon les outils consultés ; la page affiche le coût estimé de la discussion.
 - Ouvrir une étude pour répondre prend quelques secondes (une minute en SRP) ; elle reste ouverte pour
   l'explorateur.
 
@@ -625,9 +650,9 @@ analyzer/
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
                        solveur » (review_page.py), bluffs des adversaires (bluffs_page.py), entraîneur
-                       (trainer.py, static/trainer.*), plan de
-                       jeu suggéré (plan_page.py), coach (coach_chat.py, static/coach.*),
-                       sauvegardes en arrière-plan (backups.py), interface
+                       (trainer.py, static/trainer.*), plan de jeu suggéré (plan_page.py), coach
+                       (coach_chat.py, static/coach.*) et son serveur MCP pour l'abonnement Claude
+                       (mcp_server.py), sauvegardes en arrière-plan (backups.py), interface
                        (static/, dont l'explorateur explorer.*)
   backup.py            sauvegarde et restauration de ~/.analyzer (commande `sauvegarde`)
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)

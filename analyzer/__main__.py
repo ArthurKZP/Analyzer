@@ -5,6 +5,11 @@ if sys.argv[1:2] == ["app"]:
 
     sys.exit(app_main(sys.argv[2:]))
 
+if sys.argv[1:2] == ["mcp"]:
+    from .app.mcp_server import main as mcp_main
+
+    sys.exit(mcp_main(sys.argv[2:]))
+
 if sys.argv[1:2] == ["sauvegarde"]:
     from .backup import main as backup_main
 

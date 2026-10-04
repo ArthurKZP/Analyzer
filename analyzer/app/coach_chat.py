@@ -38,7 +38,9 @@ PRICES = {"input": 4.0, "output": 20.0, "cache_read": 0.2, "cache_write": 5.0}  
 
 SETUP = ("Le coach utilise Claude, l'IA d'Anthropic, par son API : installe le module (pip install anthropic) "
          "puis donne ta clé API (créée sur console.anthropic.com) dans la variable d'environnement "
-         "ANTHROPIC_API_KEY avant de lancer l'application (ou connecte-toi avec « ant auth login »).")
+         "ANTHROPIC_API_KEY avant de lancer l'application (ou connecte-toi avec « ant auth login »). Sans clé API, "
+         "le même coach tourne dans ton abonnement Claude (application Claude ou Claude Code) : lance "
+         "« python -m analyzer mcp --config » et suis les indications.")
 
 SYSTEM = """Tu es le coach de poker intégré à Analyzer, un outil d'étude du heads-up No Limit Hold'em (100 bb, salle Betclic). Ton élève est un joueur régulier qui étudie la théorie pour simplifier son jeu et mieux exploiter ses adversaires.
 
