@@ -352,7 +352,7 @@ class Library:
                 continue
             view = self.solves.plan_view(spot)
             if start and ready and (view is None or view["state"] not in ("waiting", "running")):
-                view = self.solves.prepare_plan(spot, studyspots.StudySpot.after_solve)
+                view = self.solves.prepare_plan(spot, coach.extract_and_save)
             if view and view["state"] in ("waiting", "running"):
                 busy += 1
                 if view["state"] == "running":

@@ -60,6 +60,31 @@ class LibraryTest(unittest.TestCase):
         with self.assertRaises(KeyError):
             lib.player_page("Villain", "inconnue")
 
+    @unittest.skipIf(os.name == "nt", "faux solveur : script exécutable POSIX")
+    def test_prepare_plan(self):
+        # « Préparer le plan » : ouvre l'étude enregistrée et en tire le plan de jeu
+        from analyzer.theory import coach, postflop, studyspots
+        shutil.copy(FIXTURE, self.folder / "sample.txt")
+        lib = Library(self.folder)
+        env = {"ANALYZER_HOME": str(self.folder / "home"), "ANALYZER_SOLVER": str(FAKE_SOLVER)}
+        spot = studyspots.StudySpot("srp", ["Ks", "7d", "2c"], plan={})
+        request = spot.request()
+        with mock.patch.dict(os.environ, env), mock.patch.object(coach, "missing", return_value=[spot.ident]), \
+                mock.patch.object(studyspots, "parse_ident", return_value=spot):
+            study = postflop.study_path(request)
+            study.parent.mkdir(parents=True)
+            study.write_text(json.dumps(request), encoding="utf-8")  # le faux solveur recharge la requête
+            state = lib.plan_state(start=True)
+            self.assertEqual((state["missing"], state["busy"]), (1, 1))
+            deadline = time.time() + 30
+            while lib.solves.plan_view(spot)["state"] in ("waiting", "running") and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(lib.solves.plan_view(spot)["state"], "done", lib.solves.plan_view(spot).get("error"))
+            plan = coach.load_plan(postflop.study_key(request))
+            self.assertEqual(plan["id"], spot.ident)
+            self.assertIn("cbet", plan["nodes"])
+        lib.solves.shutdown()
+
     def test_solve_states(self):
         shutil.copy(FIXTURE, self.folder / "sample.txt")
         lib = Library(self.folder)
