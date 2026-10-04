@@ -153,6 +153,21 @@ class ServerTest(unittest.TestCase):
         cls.env.stop()
         cls.tmp.cleanup()
 
+    def test_client_gone(self):
+        # le navigateur abandonne des requêtes (page rechargée) : pas d'erreur, le serveur continue
+        import io
+        import socket
+        import struct
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            for path in ("/moi/bluffs", "/p/Villain/rapport", "/etudes/plan"):
+                s = socket.create_connection(("127.0.0.1", self.port))
+                s.sendall(f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n\r\n".encode())
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))  # coupure brutale
+                s.close()
+            time.sleep(1.5)
+            self.assertEqual(self.request("GET", "/moi/bluffs")[0], 200)
+        self.assertNotIn("Traceback", err.getvalue())
+
     def request(self, method, path, body=None, headers=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
         conn.request(method, path, body=body, headers=headers or {})

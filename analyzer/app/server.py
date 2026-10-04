@@ -40,6 +40,12 @@ class AppServer(ThreadingHTTPServer):
         super().__init__(address, Handler)
         self.library = library
 
+    def handle_error(self, request, client_address) -> None:
+        # Le navigateur qui abandonne une requête (rechargement, changement d'onglet) n'est pas une erreur.
+        if isinstance(sys.exc_info()[1], ConnectionError):
+            return
+        super().handle_error(request, client_address)
+
     @property
     def allowed_hosts(self) -> set[str]:
         port = self.server_address[1]
@@ -60,8 +66,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except ConnectionError:  # le navigateur est parti avant la réponse (page rechargée, onglet changé)
+            self.close_connection = True
 
     def _json(self, data, status: int = 200) -> None:
         self._send(status, "application/json; charset=utf-8", json.dumps(data, ensure_ascii=False).encode())
@@ -146,7 +155,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(page.replace("__HAND__", html.escape(parts[1], quote=True)))
         except (UnknownPlayer, KeyError):
             return self._error(404, "Page introuvable.")
+        except ConnectionError:
+            self.close_connection = True
+            return None
         except Exception:  # noqa: BLE001 — une erreur d'analyse ne doit pas tuer le serveur
+            print(f"Erreur sur la page {unquote(self.path)} :", file=sys.stderr)
             traceback.print_exc()
             return self._error(500, "Erreur pendant l'analyse (détails dans le terminal).")
         return self._error(404, "Page introuvable.")
