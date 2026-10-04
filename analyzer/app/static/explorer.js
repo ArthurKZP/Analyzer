@@ -29,6 +29,8 @@
   let pollTimer = null;
   let rightTab = 'combos';
   let preLine = [];   // PRE : actions préflop depuis l'open du bouton
+  let picked = [];    // PRE : cartes choisies pour le flop
+  let flopInfo = null;  // PRE : le flop choisi et les flops résolus proches (/api/explorateur/flop)
   let prefix = null;  // SPOT : la ligne préflop de la famille (nœud « flop »), en tête du déroulé
   const nodes = new Map();
   // Filtres : clés « m:i » (main faite), « d:i » (tirage), « e:i » / « q:i » (équité), « o:s » / « s:s » (couleurs).
@@ -203,6 +205,7 @@
     document.body.classList.add('busy');
     try {
       node = await api('/api/explorateur/preflop', { line });
+      if (preLine.join('.') !== line.join('.')) { picked = []; flopInfo = null; }
       preLine = line.slice();
       history.replaceState(null, '', '#ligne=' + preLine.join('.'));
       if (node.player !== null && node.player !== undefined) viewPlayer = node.player;
@@ -246,6 +249,7 @@
         if (v.state === 'done') {
           nodes.clear();
           await loadState();
+          if (SPOT && !live && state.study) { solve(); return; }  // résolu sans session : on rouvre l'étude
           renderMeta();
           await (node ? goTo(path) : goStart());
           renderStatus();
@@ -307,6 +311,7 @@
       const elapsed = state.elapsed ? ' · ' + (state.elapsed >= 60 ? Math.floor(state.elapsed / 60) + ' min ' : '') + Math.round(state.elapsed % 60) + ' s' : '';
       box.append(el('span', {}, s === 'waiting' ? 'En attente d\'une autre résolution…'
         : state.mode === 'load' ? 'Ouverture de l\'étude enregistrée…' + elapsed
+        : state.mode === 'choose' ? 'Flop de la série : choix des tailles de mise, puis résolution. ' + (p.stage || '') + elapsed
         : (p.iteration ? 'Résolution : itération ' + p.iteration + ' / ' + state.max_iterations + ' · exploitabilité ' + num(p.exploit_pct) + ' % du pot (objectif ' + num(state.target) + ' %)'
           : p.tree_nodes ? 'Résolution lancée : arbre de ' + p.tree_nodes.toLocaleString('fr-FR') + ' nœuds, première mesure après 10 itérations'
             : 'Construction de l\'arbre…') + elapsed),
@@ -619,13 +624,65 @@
     box.append(panel);
   }
 
-  // Fin de la ligne préflop (call) : les flops de la série, puis n'importe quel flop.
+  // Fin de la ligne préflop (call) : trois cartes parmi les 52, avec les flops déjà résolus qui s'en approchent.
+  async function pickCard(c) {
+    const i = picked.indexOf(c);
+    if (i >= 0) picked.splice(i, 1);
+    else if (picked.length < 3) picked.push(c);
+    flopInfo = null;
+    if (picked.length === 3) {
+      try {
+        flopInfo = await api('/api/explorateur/flop', { family: node.preflop.family, board: picked });
+      } catch (e) { notice = e.message; renderStatus(); }
+    }
+    renderOverview();
+  }
+
+  const spotHref = (id) => '/explorateur/' + encodeURIComponent(id);
+
+  function flopResult() {
+    const f = flopInfo;
+    const box = el('div', { class: 'fl-result' }, el('div', { class: 'fl-pick' }, cards(f.board),
+      el('span', { class: 'muted small' }, f.texture + ' · ' + f.pattern)));
+    if (f.solved) {
+      box.append(el('a', { class: 'fl-go', href: spotHref(f.id) }, 'Ouvrir l\'étude de ce flop'));
+      return box;
+    }
+    if (f.suggestions.length) {
+      box.append(el('div', { class: 'small' }, 'Déjà résolus, à ouvrir tout de suite :'));
+      box.append(el('ul', { class: 'fl-sugg' }, f.suggestions.map((x) => el('li', {},
+        el('a', { class: 'fl solved', href: spotHref(x.id) }, cards(x.board)), el('span', { class: 'muted small' }, ' ' + x.relation)))));
+    }
+    box.append(el('a', { class: 'fl-go', href: spotHref(f.id) + '#resoudre', title: 'Tailles : ' + f.sizes },
+      'Résoudre ce flop (' + f.cost + ')'));
+    box.append(el('div', { class: 'muted small' }, f.sizes_from
+      ? 'Tailles du flop le plus proche dont les tailles sont choisies (' + f.sizes_from.match(/../g).map((c) => c[0] + SUITS[c[1]]).join('') + '). L\'étude est gardée.'
+      : 'L\'étude est gardée ensuite.'));
+    return box;
+  }
+
   function flopChooser() {
     const info = node.preflop;
     const panel = el('div', { class: 'card' }, el('div', { class: 'ttl' }, el('h2', {}, 'Flop · ' + info.family_name),
       el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb · tapis ' + num(node.stacks[0]) + ' bb')));
-    panel.append(el('p', { class: 'muted small fl-note' }, info.family_label + '. Grille : la range de chacun au flop. '
-      + 'Les flops surlignés sont résolus ; les autres se résolvent à l\'ouverture (quelques minutes).'));
+    panel.append(el('p', { class: 'muted small fl-note' }, info.family_label + '. Grille : la range de chacun au flop.'));
+    const deck = el('div', { class: 'deck', role: 'group', 'aria-label': 'Cartes du flop' });
+    for (const st of 'shdc') {
+      for (const r of RANKS) {
+        const c = r + st, on = picked.includes(c);
+        deck.append(el('button', {
+          type: 'button', class: 'dc s' + st + (on ? ' on' : ''), 'aria-pressed': on ? 'true' : 'false',
+          disabled: picked.length >= 3 && !on, onclick: () => pickCard(c),
+        }, r + SUITS[st]));
+      }
+    }
+    panel.append(el('div', { class: 'deck-head' }, el('b', {}, 'Choisis trois cartes'),
+      picked.length ? cards(picked) : el('span', { class: 'muted small' }, 'ou un flop résolu ci-dessous'),
+      picked.length ? el('button', { type: 'button', class: 'linkish', onclick: () => { picked = []; flopInfo = null; renderOverview(); } }, 'Effacer') : ''),
+    deck);
+    if (picked.length === 3 && flopInfo) panel.append(flopResult());
+    panel.append(el('div', { class: 'fl-head' }, el('b', {}, 'Flops de la série et flops déjà résolus'),
+      el('span', { class: 'muted small' }, ' surlignés quand ils sont résolus')));
     const groups = el('div', { class: 'flops' });
     for (const t of info.textures) {
       const list = info.spots.filter((x) => x.texture === t);
@@ -636,21 +693,6 @@
       }, cards(x.board))))));
     }
     panel.append(groups);
-    const input = el('input', { placeholder: 'ex. Ah7d2c', autocomplete: 'off', spellcheck: 'false', size: '10', 'aria-label': 'Autre flop' });
-    const msg = el('span', { class: 'muted small' });
-    panel.append(el('form', {
-      class: 'fl-other',
-      onsubmit: (e) => {
-        e.preventDefault();
-        const v = input.value.replace(/[\s,]+/g, '');
-        const list = v.length === 6 ? [0, 2, 4].map((i) => v[i].toUpperCase() + v[i + 1].toLowerCase()) : [];
-        if (!list.length || !list.every((c) => /^[2-9TJQKA][cdhs]$/.test(c)) || new Set(list).size < 3) {
-          msg.textContent = 'Trois cartes différentes, ex. Ah7d2c';
-          return;
-        }
-        location.href = '/explorateur/' + encodeURIComponent('spot:' + info.family + ':' + list.join(''));
-      },
-    }, el('label', {}, 'Autre flop '), input, el('button', { type: 'submit' }, 'Ouvrir'), msg));
     return panel;
   }
 
@@ -899,6 +941,9 @@
     // L'étude se rouvre seule, en quelques secondes (aussi quand le résultat en cache manque, par exemple
     // après une mise à jour du solveur).
     if (['done', 'absent'].includes(state.state) && !live && state.study) solve();
-    else poll();
+    else if (state.state === 'absent' && SPOT && /resoudre/.test(location.hash)) {  // choisi dans le sélecteur de flop
+      history.replaceState(null, '', location.pathname);
+      solve();
+    } else poll();
   })();
 })();

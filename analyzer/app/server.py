@@ -194,6 +194,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(preflop_tree.node(line))
             except ValueError:
                 return self._error(404, "Ligne préflop hors de la solution.")
+        if parts == ["api", "explorateur", "flop"]:
+            payload = self._small_json()
+            board = payload.get("board") if isinstance(payload, dict) else None
+            if not (isinstance(payload, dict) and payload.get("family") in studyspots.FAMILIES
+                    and trainer.valid_cards(board, 3)):
+                return self._error(400, "Requête invalide.")
+            return self._json(studyspots.flop_options(payload["family"], board))
         if parts == ["api", "explorateur", "noeud"]:
             payload = self._small_json()
             path = payload.get("path") if isinstance(payload, dict) else None

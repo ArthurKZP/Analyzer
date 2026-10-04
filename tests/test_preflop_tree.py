@@ -92,6 +92,14 @@ class PreflopServerTest(unittest.TestCase):
             check = subprocess.run(["node", "--check", str(STATIC / "explorer.js")], capture_output=True, text=True)
             self.assertEqual(check.returncode, 0, check.stderr)
 
+    def test_flop_options_route(self):
+        status, body = self.request("POST", "/api/explorateur/flop", json.dumps({"family": "srp", "board": ["4c", "Kd", "Ks"]}))
+        data = json.loads(body)
+        self.assertEqual((status, data["id"], data["pattern"]), (200, "spot:srp:KsKd4c", "rainbow"))
+        for bad in ({"family": "5bet", "board": ["Ks", "Kd", "4c"]}, {"family": "srp", "board": ["Ks", "Ks", "4c"]},
+                    {"family": "srp", "board": ["Ks", "Kd"]}, {"family": "srp", "board": "KsKd4c"}):
+            self.assertEqual(self.request("POST", "/api/explorateur/flop", json.dumps(bad))[0], 400, bad)
+
     def test_studies_sections(self):
         status, body = self.request("GET", "/etudes/srp")
         self.assertEqual(status, 200)

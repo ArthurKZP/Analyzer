@@ -213,7 +213,16 @@ class Library:
             if not solver["ready"]:
                 return {"hand": hand_id, "state": "unavailable", "message": solver["message"],
                         "install": solver["install"]}
-            view = self.solves.start(spot, force=reopen)
+            board = "".join(getattr(spot, "board", []))
+            if (isinstance(spot, studyspots.StudySpot) and not spot.plan and board in studyspots.flop_set(spot.family)
+                    and not postflop.study_path(spot.request()).is_file()):
+                # flop de la série sans tailles choisies : le choix d'abord, comme pour la série entière
+                family = spot.family
+                view = self.solves.choose_and_solve(
+                    spot.ident, lambda job: self._choose(family, board, job),
+                    lambda: studyspots.StudySpot(family, studyspots.cards_of(board)))
+            else:
+                view = self.solves.start(spot, force=reopen)
         if view["state"] == "absent":
             solver = postflop.status()
             view["solver"] = {k: solver[k] for k in ("ready", "message", "install")}

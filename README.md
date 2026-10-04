@@ -264,8 +264,14 @@ texture dans la page.
 part de l'open du bouton. Le déroulé montre les actions préflop de la solution (fold, open 2,5, call, 3bet
 11,5, 4bet 26, tapis) et la grille leurs fréquences main par main, pour le joueur qui agit ou la range de
 l'autre. Au call, on choisit le flop : SRP après le call de l'open, pot 3bet après le call du 3bet, pot 4bet
-après le call du 4bet. La liste montre les 24 flops de la série par texture (surlignés quand ils sont
-résolus), et *Autre flop* ouvre n'importe lequel. Le spot s'ouvre alors avec ses actions préflop en tête
+après le call du 4bet. On choisit ses trois cartes parmi les 52 : Analyzer propose alors les flops déjà
+résolus qui s'en approchent, à ouvrir tout de suite (le même flop aux couleurs près, qui a la même stratégie ;
+les mêmes hauteurs avec la même structure de couleurs, rainbow, deux couleurs ou monotone ; la même texture),
+ou résout ce flop (*Résoudre ce flop* : une dizaine de minutes en SRP, 2 à 3 en pot 3bet, moins d'une en pot
+4bet sur 4 cœurs ; l'étude est gardée). Un flop hors série prend les tailles du flop le plus proche dont les
+tailles sont choisies (même texture et même structure de couleurs d'abord) ; un flop de la série jamais
+résolu passe d'abord par son propre choix des tailles. La liste des flops de la série (surlignés quand ils sont
+résolus) reste en dessous. Le spot s'ouvre alors avec ses actions préflop en tête
 du déroulé : un clic y revient au préflop, *changer* sous le flop ramène au choix du flop, et *◀ Retour*
 au début du spot aussi. Les autres onglets de *Études du solveur* séparent les séries (SRP, pots 3bet,
 pots 4bet) et les coups joués résolus : plus besoin de dérouler toute la page.
