@@ -30,6 +30,7 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
 - **Mon jeu** : ton bilan contre tous tes adversaires (résultats, courbe, écarts aux repères, stats,
   pertes sans abattage, résultats par adversaire), *Mon préflop* face au solveur sur toutes tes mains,
   *Mes spots* et *Face au solveur* (tes erreurs postflop, voir plus bas).
+- **Entraîneur** : joue des mains sur les spots résolus, le solveur juge chaque décision (voir plus bas).
 - **Importer des mains** : glisse tes historiques ou choisis-les ; ils sont copiés dans le dossier des
   mains (`hands/` par défaut), les doublons et les formats non reconnus sont signalés.
 
@@ -384,6 +385,31 @@ par pot 4bet sur 4 cœurs : une vingtaine d'heures pour 430 mains, à étaler su
   écarts-types), « indicatif » sinon, avec la façon d'en profiter (il folde trop face à la c-bet : bluffe
   plus…). **Ses erreurs connues** : l'EV qu'il a laissée quand ses cartes ont été montrées.
 
+## Entraîneur
+
+Menu **Entraîneur** de l'application : tu joues des mains sur les spots d'étude résolus (SRP, pots 3bet et
+4bet), le solveur juge chaque décision.
+
+- **Réglages** : type de pot ; flop précis, texture ou flop au hasard parmi ceux résolus (avec le nombre de
+  mains avant de changer : changer de flop rouvre une étude, quelques secondes) ; ton côté (BB, BTN ou les
+  deux) ; le départ : tout le coup dès le flop, la turn, la river, ou **une situation précise** (face à la
+  c-bet, 2e barrel, probe river…, mêmes situations que pour le choix des tailles).
+- **Une main** : on tire une ligne jusqu'au départ selon les fréquences du solveur (en grisé dans le
+  déroulé), puis les deux mains ensemble dans les ranges du solveur à ce moment du coup. Tu joues ; l'adversaire
+  joue la stratégie du solveur *pour sa main* ; turn et river tombent au hasard. Touches : 1, 2, 3… pour les
+  actions, Espace ou Entrée pour continuer, R pour les réglages.
+- **Après chaque décision** : ce que le solveur fait avec ta main (fréquences et EV de chaque action), la
+  stratégie de toute la range, l'EV perdue, et un lien vers l'explorateur à ce nœud. Mêmes règles que
+  « Face au solveur » : une action jouée au moins 10 % du temps avec ta main ne coûte rien ; une erreur, c'est
+  plus de 0,25 bb d'EV perdue. Par défaut, on enchaîne sans attendre quand l'action est juste.
+- **Tes progrès** : chaque décision est gardée (`~/.analyzer/entrainement/journal.jsonl`) ; la page de
+  réglages montre, situation par situation, ton taux de décisions justes et l'EV perdue (en tout et sur
+  7 jours), les plus coûteuses en tête, avec **S'entraîner** pour les retravailler.
+
+Deux raccourcis : **S'entraîner ici** dans l'explorateur rejoue des mains à partir du nœud affiché (aussi sur
+une main jouée recalculée), et **S'entraîner** dans « Les erreurs récurrentes » de *Face au solveur* lance la
+situation où tu perds de l'EV.
+
 ## Contenu du rapport
 
 | Section | Ce qu'on y trouve |
@@ -438,7 +464,8 @@ analyzer/
                        commande `gtopen` (solve_cli.py), mains jouées face au solveur (review.py)
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
-                       solveur » (review_page.py), interface (static/, dont l'explorateur explorer.*)
+                       solveur » (review_page.py), entraîneur (trainer.py, static/trainer.*), interface
+                       (static/, dont l'explorateur explorer.*)
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)
 hands/                 tes historiques (ignorés par git)

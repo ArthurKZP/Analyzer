@@ -122,8 +122,24 @@ def _costly_table(digests: list[dict], who: str, show_villain: bool) -> str:
             f'<tbody>{"".join(rows)}</tbody></table></div>')
 
 
+def _drills() -> dict[str, set]:
+    """Situations qu'on peut travailler dans l'entraîneur : familles qui ont au moins un spot résolu."""
+    from ..theory import studyspots
+    from .trainer import situation_labels
+    families = {m.get("family") for m in studyspots.spot_studies().values()}
+    return {f: set(situation_labels(f)) for f in studyspots.FAMILIES if f in families}
+
+
+def _drill_link(group: dict, drills: dict[str, set]) -> str:
+    if group["key"] not in drills.get(group["family"], ()):
+        return ""
+    href = f'/entraineur?famille={quote(group["family"])}&situation={quote(group["key"], safe="")}'
+    return f'<a class="open" href="{escape(href)}" title="Travailler cette situation dans l\'entraîneur">S\'entraîner</a>'
+
+
 def _situations_table(digests: list[dict], who: str, villain: bool) -> str:
     rows = []
+    drills = {} if villain else _drills()
     for group in review.by_situation(digests, who)[:20]:
         devs = review.deviations(group)
         advice = "<br>".join(
@@ -135,12 +151,13 @@ def _situations_table(digests: list[dict], who: str, villain: bool) -> str:
             f'<tr><td>{escape(group["label"])}<span class="fam">{FAMILY_NAME[group["family"]]}</span></td>'
             f'<td class="num">{group["n"]}</td>'
             + ("" if villain else f'<td class="num">{group["errors"]}</td>{lost}{mean}')
-            + f'<td>{_freqs(group)}</td><td class="small">{advice}</td></tr>')
+            + f'<td>{_freqs(group)}</td><td class="small">{advice}</td>'
+            + ("" if villain else f"<td>{_drill_link(group, drills)}</td>") + "</tr>")
     if not rows:
         return '<p class="muted">Pas encore de main analysée.</p>'
     head = ("<th>Situation</th><th class=\"num\">Fois</th>"
             + ("" if villain else '<th class="num">Erreurs</th><th class="num">EV perdue</th><th class="num">Par fois</th>')
-            + "<th>Fold / passif / agressif (%)</th><th>À retenir</th>")
+            + "<th>Fold / passif / agressif (%)</th><th>À retenir</th>" + ("" if villain else "<th></th>"))
     return (f'<div class="scroll"><table class="stats review"><thead><tr>{head}</tr></thead>'
             f'<tbody>{"".join(rows)}</tbody></table></div>')
 

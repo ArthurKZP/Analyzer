@@ -18,13 +18,15 @@ from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..theory import postflop, studyspots
+from . import trainer
 from .library import Library, UnknownPlayer
 from .solves import NeedSession
 from .studies import build_studies_page
 
 STATIC = Path(__file__).parent / "static"
 STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8",
-                "explorer.js": "text/javascript; charset=utf-8", "explorer.css": "text/css; charset=utf-8"}
+                "explorer.js": "text/javascript; charset=utf-8", "explorer.css": "text/css; charset=utf-8",
+                "trainer.js": "text/javascript; charset=utf-8", "trainer.css": "text/css; charset=utf-8"}
 MAX_PATH = 40  # étapes d'un chemin dans l'arbre (bien plus qu'un coup réel)
 MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
 MAX_SMALL_BODY = 64 * 1024
@@ -115,6 +117,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.player_page(parts[1], parts[2]))
             if parts == ["etudes"]:
                 return self._html(build_studies_page(embed=True))
+            if parts == ["entraineur"]:
+                return self._html((STATIC / "trainer.html").read_text(encoding="utf-8"))
+            if parts == ["api", "entraineur"]:
+                return self._json(trainer.overview())
             if parts == ["api", "revue"]:
                 villain = parse_qs(urlsplit(self.path).query).get("adversaire", [None])[0]
                 return self._json(library.review_state(villain))
@@ -178,6 +184,22 @@ class Handler(BaseHTTPRequestHandler):
                                    "state": "session"}, 409)
             except postflop.SolverError as exc:
                 return self._json({"error": str(exc), "state": "session"}, 409)
+        if parts == ["api", "entraineur", "mains"]:
+            payload = self._small_json()
+            board = payload.get("board") if isinstance(payload, dict) else None
+            holes = payload.get("holes") if isinstance(payload, dict) else None
+            if not (trainer.valid_cards(board) and 3 <= len(board) <= 5 and isinstance(holes, list) and len(holes) == 2
+                    and all(trainer.valid_cards(h, 2) for h in holes)
+                    and trainer.valid_cards(board + holes[0] + holes[1])):
+                return self._error(400, "Requête invalide.")
+            return self._json(trainer.hands_info(board, holes))
+        if parts == ["api", "entraineur", "resultat"]:
+            payload = self._small_json()
+            if not isinstance(payload, dict):
+                return self._error(400, "Requête invalide.")
+            return self._json(trainer.record(payload.get("entries")))
+        if parts == ["api", "entraineur", "effacer"]:
+            return self._json(trainer.clear())
         if len(parts) == 3 and parts[:2] == ["api", "revue"] and parts[2] in ("lancer", "arreter"):
             payload = self._small_json()
             villain = payload.get("adversaire") if isinstance(payload, dict) else None

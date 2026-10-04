@@ -709,11 +709,21 @@
     renderFilters();
     renderTabs();
     $('b-back').disabled = !path.some((s) => s.type === 'action');
+    // L'entraîneur rejoue depuis ce nœud : il faut l'étude ouverte et une vraie décision.
+    $('b-train').disabled = !live || node.type !== 'action' || node.actions.length < 2;
   }
 
   function initialPath() {
     const decisions = state.result ? state.result.decisions : [];
-    const k = Number(new URLSearchParams(location.hash.slice(1)).get('d'));
+    const hash = new URLSearchParams(location.hash.slice(1));
+    // #chemin=[…] : un moment précis du coup (lien de l'entraîneur)
+    if (hash.has('chemin') && live) {
+      try {
+        const p = JSON.parse(hash.get('chemin'));
+        if (Array.isArray(p) && p.every((s) => s && (s.type === 'action' || s.type === 'card'))) return p;
+      } catch (e) { /* chemin illisible : départ habituel */ }
+    }
+    const k = Number(hash.get('d'));
     return (decisions[k] || decisions[0] || { path: [] }).path;
   }
 
@@ -725,6 +735,8 @@
   $('tab-combos').onclick = () => { rightTab = 'combos'; renderTabs(); };
   $('tab-filters').onclick = () => { rightTab = 'filters'; renderTabs(); };
   $('b-line').onclick = () => state && state.result && goTo(state.result.decisions[0].path);
+  $('b-train').onclick = () => window.open('/entraineur?spot=' + encodeURIComponent(HAND) + '&chemin='
+    + encodeURIComponent(JSON.stringify(path)), '_blank', 'noopener');
   if (SPOT) {  // pas de ligne jouée ni de main adverse à dévoiler
     $('b-line').hidden = true;
     $('reveal').closest('label').hidden = true;
