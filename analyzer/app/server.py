@@ -117,6 +117,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.player_page(parts[1], parts[2]))
             if parts == ["etudes"]:
                 return self._html(build_studies_page(embed=True))
+            if parts == ["etudes", "plan"]:
+                return self._html(library.plan_page())
+            if parts == ["api", "plan"]:
+                return self._json(library.plan_state())
             if len(parts) == 2 and parts[0] == "etudes":
                 return self._html(build_studies_page(embed=True, section=parts[1]))
             if parts == ["entraineur"]:
@@ -233,6 +237,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(trainer.record(payload.get("entries")))
         if parts == ["api", "entraineur", "effacer"]:
             return self._json(trainer.clear())
+        if parts == ["api", "plan", "preparer"]:
+            return self._json(library.plan_state(start=True))
+        if parts == ["api", "plan", "arreter"]:
+            return self._json(library.plan_cancel())
         if parts == ["api", "sauvegarde", "reglages"]:
             payload = self._small_json()
             if not (isinstance(payload, dict) and isinstance(payload.get("dest"), str) and len(payload["dest"]) <= 500

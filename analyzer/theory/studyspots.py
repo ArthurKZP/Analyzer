@@ -179,6 +179,11 @@ class StudySpot(postflop.SpotTree):
                 "seconds": raw.get("seconds"), "tree_nodes": raw.get("tree_nodes"), "stopped": None,
                 "decisions": []}
 
+    def after_solve(self, session: postflop.Session) -> None:
+        """Juste après la résolution, l'étude encore ouverte : son plan de jeu (quelques secondes)."""
+        from . import coach
+        coach.extract_and_save(session, self)
+
     def write_meta(self, request: dict, raw: dict, session: Optional[postflop.Session] = None) -> None:
         meta = {
             "kind": "spot", "key": postflop.study_key(request), "id": self.ident, "family": self.family,

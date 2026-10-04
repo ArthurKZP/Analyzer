@@ -27,7 +27,7 @@ from typing import Callable, Optional
 
 from .theory import postflop
 
-FOLDERS = ("tailles", "resolutions", "revue", "entrainement")  # recopiés en entier dans l'archive
+FOLDERS = ("tailles", "resolutions", "revue", "entrainement", "plans")  # recopiés en entier dans l'archive
 FILES = ("joueurs.json",)  # type des adversaires (régulier / récréatif)
 JOURNAL = "entrainement/journal.jsonl"
 KEEP = 10      # archives gardées à destination

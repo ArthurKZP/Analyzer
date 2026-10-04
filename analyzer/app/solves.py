@@ -32,6 +32,7 @@ class Job:
     target: float
     state: str = "waiting"  # waiting | running | done | error | cancelled
     mode: str = "solve"  # solve | load (étude enregistrée) | choose (choix des tailles) | analyse (main jouée)
+    #                      | plan (extraction du plan de jeu d'une étude)
     progress: dict = field(default_factory=dict)
     result: Optional[dict] = None
     error: Optional[str] = None
@@ -60,6 +61,7 @@ class SolveQueue:
         self._loader = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gtopen-etude")
         self._jobs: dict[str, Job] = {}
         self._series: dict[str, str] = {}  # spot -> tâche « choisir les tailles puis résoudre »
+        self._plans: dict[str, str] = {}  # spot -> tâche « extraire le plan de jeu »
         self._lock = threading.Lock()
         self._live: Optional[tuple[str, postflop.Session]] = None  # (main, session navigable)
         self._stop = threading.Event()
@@ -226,6 +228,12 @@ class SolveQueue:
             raw = session.start(on_progress=job.progress.update, on_start=on_start)
             if session.study.is_file() and (not session.loading or not session.study.with_suffix(".json").is_file()):
                 spot.write_meta(request, raw, session)
+            after = getattr(spot, "after_solve", None)
+            if after is not None and not session.loading:  # ex. le plan de jeu d'un spot d'étude
+                try:
+                    after(session)
+                except Exception:  # noqa: BLE001 — la résolution reste bonne sans son plan
+                    traceback.print_exc()
             job.result = spot.interpret(raw)
             if keep_live:
                 self._set_live(spot.ident, session)
@@ -243,6 +251,54 @@ class SolveQueue:
             traceback.print_exc()
             job.state, job.error = "error", "Erreur inattendue pendant la résolution (détails dans le terminal)."
         finally:
+            job.process = None
+
+    def plan_view(self, spot) -> Optional[dict]:
+        with self._lock:
+            job = self._jobs.get(self._plans.get(spot.ident, ""))
+        return job.view() if job else None
+
+    def prepare_plan(self, spot, extract: Callable[[postflop.Session, object], None]) -> dict:
+        """Ouvre l'étude enregistrée d'un spot et en tire son plan de jeu (extract), sans garder la session."""
+        request = self._request(spot)
+        with self._lock:
+            current = self._jobs.get(self._plans.get(spot.ident, ""))
+            if current and current.state in ("waiting", "running"):
+                return current.view()
+            job = Job("plan-" + postflop.study_key(request), spot.ident, self.iterations, self.target, mode="plan")
+            self._jobs[job.key] = job
+            self._plans[spot.ident] = job.key
+        self._executor.submit(self._run_plan, job, spot, request, extract)
+        return job.view()
+
+    def _run_plan(self, job: Job, spot, request: dict, extract: Callable[[postflop.Session, object], None]) -> None:
+        if job.cancelled:
+            return
+        if not postflop.study_path(request).is_file():
+            job.state, job.error = "error", "Étude introuvable."
+            return
+        self._set_live("", None)  # une étude à la fois en mémoire
+        job.state, job.started = "running", time.time()
+        job.progress["stage"] = "ouverture de l'étude"
+        session = postflop.Session(request)
+
+        def on_start(proc) -> None:
+            job.process = proc
+            if job.cancelled:
+                proc.terminate()
+        try:
+            session.start(on_progress=job.progress.update, on_start=on_start)
+            job.progress["stage"] = "lecture des stratégies"
+            extract(session, spot)
+            job.state = "done"
+        except postflop.SolverError as exc:
+            job.state = "cancelled" if job.cancelled else "error"
+            job.error = None if job.cancelled else str(exc)
+        except Exception:  # noqa: BLE001 — l'erreur est montrée dans l'interface
+            traceback.print_exc()
+            job.state, job.error = "error", "Erreur inattendue pendant la préparation du plan (détails dans le terminal)."
+        finally:
+            session.close()
             job.process = None
 
     def node(self, spot, path: list) -> dict:

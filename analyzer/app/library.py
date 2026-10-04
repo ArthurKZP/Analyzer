@@ -14,9 +14,10 @@ from ..parsers import load_hands, parse_text
 from ..report import build_plan_page, build_report
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
-from ..theory import handclass, postflop, review, studyspots
+from ..theory import coach, handclass, postflop, review, studyspots
 from ..theory.page import build_preflop_page
 from ..viewer import build_viewer
+from .plan_page import build_coach_page
 from .review_page import build_review_page
 from .backups import Backups
 from .solves import SolveQueue
@@ -307,6 +308,36 @@ class Library:
             if row.get("state") in ("waiting", "running"):
                 self.solves.cancel(row["job"])
         return self.spot_set(family)
+
+    # --- plan de jeu suggéré -----------------------------------------------------------
+    def plan_state(self, start: bool = False) -> dict:
+        """Études sans plan de jeu lu ; start=True les met en file (une étude ouverte à la fois)."""
+        todo = coach.missing()
+        ready = postflop.status()["ready"]
+        busy, current = 0, None
+        for ident in todo:
+            spot = studyspots.parse_ident(ident)
+            if spot is None:
+                continue
+            view = self.solves.plan_view(spot)
+            if start and ready and (view is None or view["state"] not in ("waiting", "running")):
+                view = self.solves.prepare_plan(spot, studyspots.StudySpot.after_solve)
+            if view and view["state"] in ("waiting", "running"):
+                busy += 1
+                if view["state"] == "running":
+                    current = {"spot": ident, "stage": view["progress"].get("stage")}
+        return {"ready": ready, "missing": len(todo), "busy": busy, "current": current}
+
+    def plan_cancel(self) -> dict:
+        for ident in coach.missing():
+            spot = studyspots.parse_ident(ident)
+            view = self.solves.plan_view(spot) if spot else None
+            if view and view["state"] in ("waiting", "running"):
+                self.solves.cancel(view["job"])
+        return self.plan_state()
+
+    def plan_page(self) -> str:
+        return build_coach_page(self.plan_state())
 
     # --- analyse des mains jouées ---------------------------------------------------
     def review_state(self, villain: Optional[str] = None, start: bool = False) -> dict:

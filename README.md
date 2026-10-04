@@ -413,6 +413,28 @@ par pot 4bet sur 4 cœurs : une vingtaine d'heures pour 430 mains, à étaler su
   écarts-types), « indicatif » sinon, avec la façon d'en profiter (il folde trop face à la c-bet : bluffe
   plus…). **Ses erreurs connues** : l'EV qu'il a laissée quand ses cartes ont été montrées.
 
+## Plan de jeu suggéré
+
+Onglet *Plan de jeu suggéré* de *Études du solveur* : les études résolues réduites à des règles simples, du
+flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de flops résolus, plus il est précis.
+
+- **Lecture des études** : chaque étude est ouverte une fois pour lire ses stratégies aux nœuds clés : c-bet,
+  réponse à la c-bet et au check-raise, 2e barrel à chaque turn, 3e barrel sur un échantillon de rivers (13
+  turns, toutes leurs rivers), c-bet retardée et probe après un flop checké. Les mains y sont regroupées par
+  famille (deux paires et mieux, overpair, top pair bon ou petit kicker, paire moyenne, petite paire, tirage
+  couleur, tirage quinte, gutshot ou backdoor, hauteur As ou Roi, rien), les turns et rivers par effet sur le
+  board (overcard, brique, board pairé, couleur possible, quinte possible). Une étude résolue est lue tout de
+  suite ; les anciennes, avec **Préparer le plan** (quelques secondes en pot 4bet, une minute environ en SRP).
+  Résultats dans `~/.analyzer/plans/` (sauvegardés).
+- **Schémas** : les flops se regroupent selon la c-bet de celui qui a l'initiative : *range bet* (75 % et plus),
+  *c-bet fréquente* (55 à 75 %), *mixte* (30 à 55 %), *check fréquent* (moins de 30 %). Pour chaque schéma :
+  ses flops, le **pourquoi** (avantage d'équité et avantage de nuts au flop), la règle au flop par famille de
+  mains (mise, check ou mélange), la suite à la turn et à la river selon le type de carte (continuer,
+  ralentir ; à la river, valeur et bluffs), la c-bet retardée, et le jeu de l'autre joueur (face à la c-bet, au
+  2e et au 3e barrel ; probe ou stab).
+- **Les flops** : chaque flop résolu avec son schéma, sa c-bet, sa taille et les deux avantages ; un clic
+  l'ouvre dans l'explorateur.
+
 ## Entraîneur
 
 Menu **Entraîneur** de l'application : tu joues des mains sur les spots d'étude résolus (SRP, pots 3bet et
@@ -517,14 +539,16 @@ analyzer/
   viewer.py            visualiseur de spots (HTML + JavaScript, sans dépendance)
   selfreport.py        « Mon jeu » : ton bilan contre tous tes adversaires
   theory/              préflop vs solveur : solution (data/), comparaison (preflop.py), page (page.py),
-                       arbre préflop pour l'explorateur (preflop_tree.py),
+                       arbre préflop pour l'explorateur (preflop_tree.py), plan de jeu suggéré
+                       (coach.py),
                        catégories de mains pour les filtres (handclass.py),
                        lecture de captures de ranges (extract.py) ; postflop avec GTOpen : spots,
                        installation et lecture des résultats (postflop.py), pont Rust (native/main.rs),
                        commande `gtopen` (solve_cli.py), mains jouées face au solveur (review.py)
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
-                       solveur » (review_page.py), entraîneur (trainer.py, static/trainer.*),
+                       solveur » (review_page.py), entraîneur (trainer.py, static/trainer.*), plan de
+                       jeu suggéré (plan_page.py),
                        sauvegardes en arrière-plan (backups.py), interface
                        (static/, dont l'explorateur explorer.*)
   backup.py            sauvegarde et restauration de ~/.analyzer (commande `sauvegarde`)
