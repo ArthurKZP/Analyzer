@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime
+from html import escape
 from pathlib import Path
 from typing import Optional
 
-from .. import players
+from .. import bluffs, players
 from ..cli import detect_hero, slugify
 from ..lines import villain_lines
 from ..models import Hand
@@ -17,14 +18,15 @@ from ..stats import analyze
 from ..theory import coach, handclass, postflop, review, studyspots
 from ..theory.page import build_preflop_page
 from ..viewer import build_viewer
+from .bluffs_page import build_bluffs_page
 from .plan_page import build_coach_page
 from .review_page import build_review_page
 from .backups import Backups
 from .coach_chat import Coach
 from .solves import SolveQueue
 
-PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur")
-SELF_PAGES = ("bilan", "preflop", "spots", "solveur")
+PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur", "bluffs")
+SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs")
 MAX_IMPORT_FILES = 200
 
 
@@ -37,6 +39,10 @@ def _excluded_note(excluded: dict) -> str:
         return ""
     return (f"{excluded['hands']} mains contre des récréatifs ({', '.join(excluded['players'])}) sont exclues : "
             "contre eux, l'exploitation prime sur la théorie.")
+
+
+def _note(text: str) -> str:
+    return f'<p class="note">{escape(text)} Le type de chaque adversaire se règle en haut de sa fiche.</p>'
 
 
 def _kind_note(kind: dict) -> str:
@@ -165,6 +171,9 @@ class Library:
                                           compare_hero=kind["kind"] != "rec", note=_kind_note(kind))
             if page == "rapport":
                 return build_report(hands, stats, self.hero, player, spots_href="spots", embed=True, lines=lines)
+            if page == "bluffs":
+                return build_bluffs_page(bluffs.analyze(hands, [player], self.hero), f"de {player}",
+                                         note=_note(f"{player} : {players.describe(kind)}."))
             return build_viewer(hands, self.hero, player, embed=True, solver=True)
         return self._cached(("player", player, page) + ((kind["kind"],) if page == "preflop" else ()), build)
 
@@ -184,8 +193,28 @@ class Library:
             if page == "preflop":
                 return build_preflop_page(regular, self.hero, embed=True, spots_href="spots",
                                           note=_excluded_note(excluded))
+            if page == "bluffs":
+                return self._population_bluffs()
             return build_viewer(self.hands, self.hero, None, embed=True, solver=True)
-        return self._cached(("self", page) + (self._kinds_key() if page in ("bilan", "preflop") else ()), build)
+        kinds = self._kinds_key() if page in ("bilan", "preflop", "bluffs") else ()
+        return self._cached(("self", page) + kinds, build)
+
+    def _population_bluffs(self) -> str:
+        """Les bluffs des réguliers, ensemble puis un par un."""
+        regs = [n for n, info in self.kinds().items() if info["kind"] == "reg"]
+        recs = sorted(n for n, info in self.kinds().items() if info["kind"] == "rec")
+        rows = []
+        for name in regs:
+            report = bluffs.analyze(self.hands_against(name), [name], self.hero)
+            top = next((p for p in report.patterns if p.confidence == "solide"), None)
+            rows.append({"name": name, "hands": report.hands, "shown": len(report.shown),
+                         "river": sum(1 for s in report.shown if s.street == "river" and s.bluff),
+                         "top": top.title if top else None})
+        note = ("Les réguliers ensemble : " + ", ".join(regs) + "." if regs else "Aucun adversaire classé régulier.")
+        if recs:
+            note += f" Les récréatifs ({', '.join(recs)}) ont chacun leur page, dans leur fiche."
+        return build_bluffs_page(bluffs.analyze(self.hands, regs, self.hero), "des réguliers", note=_note(note),
+                                 players=sorted(rows, key=lambda r: -r["hands"]))
 
     # --- résolution postflop ----------------------------------------------------
     def _spot(self, hand_id: str):

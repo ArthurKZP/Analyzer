@@ -51,6 +51,10 @@ class LibraryTest(unittest.TestCase):
         self.assertIn("Bouton face au 3bet", lib.self_page("preflop"))
         self.assertIn("Résultats par adversaire", lib.self_page("bilan"))
         self.assertIn('id="data"', lib.self_page("spots"))
+        self.assertIn("Les bluffs de Villain", lib.player_page("Villain", "bluffs"))
+        population = lib.self_page("bluffs")
+        self.assertIn("Les bluffs des réguliers", population)
+        self.assertIn("Les réguliers ensemble : Villain.", population)
         with self.assertRaises(UnknownPlayer):
             lib.player_page("Personne", "plan")
         with self.assertRaises(KeyError):

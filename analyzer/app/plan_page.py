@@ -243,7 +243,8 @@ def build_coach_page(state: dict, embed: bool = True, villains: tuple = ()) -> s
     sections = "".join(f'<section class="pl-fam" data-fam="{p["family"]}" hidden>{_family(p)}</section>' for p in plans)
     suggestions = ["Résume-moi le plan de jeu en SRP", "Sur quels flops puis-je c-better toute ma range ?",
                    "Comment continuer à la turn après une c-bet payée ?"]
-    suggestions += [f"Comment exploiter {v} ?" for v in villains[:1]]
+    suggestions += [q.format(v=v) for v in villains[:1] for q in ("Comment exploiter {v} ?",
+                                                                    "Dans quelles lignes {v} bluffe-t-il ?")]
     chat = (f'<details class="card pl-chat" open><summary><b>Discuter avec le coach</b> '
             '<span class="muted">· il lit tes études, ton plan de jeu et les écarts de tes adversaires</span></summary>'
             f'<div id="coach-box" data-suggestions="{escape(json.dumps(suggestions, ensure_ascii=False))}"></div></details>'

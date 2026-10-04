@@ -218,6 +218,25 @@ class CoachChatTest(unittest.TestCase):
         self.assertTrue(error)
         self.assertIn("Adversaires : Villain, Fish", text)
 
+    def test_bluffs_tool(self):
+        from analyzer import bluffs
+        from analyzer.stats import Ratio
+        lib = FakeLibrary()
+        lib.hero = "Hero"
+        freq = bluffs.Freq("srp", bluffs.SPOT["cbet_turn"], "over", Ratio(9, 10), solver=0.5, verdict=("plus", "à confirmer"))
+        pattern = bluffs.Pattern("fréquences", "turn", "plus", "à confirmer", "2e barrel : il mise bien plus", "90 %",
+                                 "Paie plus large.", 1.0)
+        report = bluffs.Report(["Villain", "Fish"], 10, 4, [freq], [], [], [], [pattern])
+        with mock.patch.object(bluffs, "analyze", return_value=report) as built:
+            text, error = Coach(lib)._run_tool("bluffs_adversaire", {"adversaire": "réguliers"})
+        self.assertFalse(error, text)
+        self.assertEqual(built.call_args.args[1:], (["Villain"], "Hero"))  # le groupe des réguliers
+        data = json.loads(text)
+        self.assertEqual((data["adversaire"], data["patterns"][0]["conseil"]), ("les réguliers", "Paie plus large."))
+        self.assertEqual(data["frequences_par_carte"][0], {"situation": "2e barrel", "pot": "SRP", "carte": "Overcard",
+                                                            "lui_pct": 90, "occasions": 10, "solveur_pct": 50,
+                                                            "ecart": "plus", "confiance": "à confirmer"})
+
     def test_refusal_and_setup_errors(self):
         refused = Response([], "refusal")
         client = FakeClient([refused])

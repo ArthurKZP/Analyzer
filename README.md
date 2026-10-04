@@ -413,6 +413,28 @@ par pot 4bet sur 4 cœurs : une vingtaine d'heures pour 430 mains, à étaler su
   écarts-types), « indicatif » sinon, avec la façon d'en profiter (il folde trop face à la c-bet : bluffe
   plus…). **Ses erreurs connues** : l'EV qu'il a laissée quand ses cartes ont été montrées.
 
+## Bluffs des adversaires
+
+L'onglet *Ses bluffs* (fiche d'un adversaire) et *Bluffs des réguliers* (Mon jeu, tous les réguliers ensemble, puis un
+par un) cherchent où un joueur bluffe : dans quelles lignes, sur quelles cartes, avec quelles tailles. Deux sources :
+
+- **Ses fréquences**, sur toutes ses mains : à chaque situation (c-bet, 2e et 3e barrels, c-bet retardée, probe, mise
+  quand l'agresseur checke, autres mises à la river), sa fréquence de mise selon la carte qui vient de tomber
+  (overcard, couleur ou quinte possible, board qui se paire, brique) ou la texture du flop, face à celle du solveur
+  dans les mêmes situations (moyenne des plans de jeu des flops résolus). Une carte ne lui donne pas plus de bonnes
+  mains qu'à la théorie : s'il mise nettement plus que le solveur quand elle tombe, le surplus est fait de bluffs ou de
+  value fine. Sans repère du solveur, on compare à ses autres cartes.
+- **Ses mains montrées** : chaque mise ou relance vue à l'abattage est classée (value, value fine, semi-bluff, bluff)
+  et rangée par ligne, taille et carte. À la river, la part de bluffs est comparée à celle de la théorie pour la
+  taille de mise (l'équité qu'il te faut pour payer) ; au flop et à la turn, à sa propre moyenne. Le timing (temps de
+  réflexion des bluffs et de la value) est regardé aussi.
+
+*Ce qui ressort* liste les patterns, avec leur preuve chiffrée et la façon d'en profiter : « solide » quand le
+hasard l'explique mal (intervalle de confiance à 90 %, au moins 10 occasions), « à confirmer » quand l'écart est net
+sur peu de mains. Exemple sur un régulier : c-bet de 100 % sur les flops As-hauts et 95 % sur les flops pairés
+(65 % et 62 % pour le solveur), mais 33 % sur les flops Dix-hauts (72 %) ; mise river 62 % quand le board se paire
+contre 42 % sur les autres cartes. Le coach a le même outil (« Dans quelles lignes Villain bluffe-t-il ? »).
+
 ## Plan de jeu suggéré
 
 Onglet *Plan de jeu suggéré* de *Études du solveur* : les études résolues réduites à des règles simples, du
@@ -462,7 +484,7 @@ python -m analyzer app
 
 ### Exploiter un adversaire réel (node-lock)
 
-Demande au coach « Comment exploiter _Bërsërk_ sur ce flop ? » (ou, dans l'explorateur, « Comment exploiter mon
+Demande au coach « Comment exploiter Villain sur ce flop ? » (ou, dans l'explorateur, « Comment exploiter mon
 adversaire ici ? ») : il verrouille lui-même le profil de l'adversaire dans l'étude et lit la meilleure réponse.
 
 1. **Son profil**, mesuré sur tes mains contre lui, dans ce type de pot et ce rôle (à l'initiative ou face à
@@ -586,6 +608,7 @@ analyzer/
   cards.py             notation des mains, évaluateur 7 cartes, équité
   insights.py          repères, exploits, duel, tells de sizing
   lines.py             lignes value / bluff, folds forcés, pertes sans abattage
+  bluffs.py            où un adversaire bluffe : fréquences par carte face au solveur, mains montrées, patterns
   plan.py              plan de jeu généré à partir de l'analyse
   spots.py             fiches des mains pour le visualiseur (tags de spot, lignes, équités)
   report.py            rapport HTML
@@ -601,7 +624,8 @@ analyzer/
                        commande `gtopen` (solve_cli.py), mains jouées face au solveur (review.py)
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
-                       solveur » (review_page.py), entraîneur (trainer.py, static/trainer.*), plan de
+                       solveur » (review_page.py), bluffs des adversaires (bluffs_page.py), entraîneur
+                       (trainer.py, static/trainer.*), plan de
                        jeu suggéré (plan_page.py), coach (coach_chat.py, static/coach.*),
                        sauvegardes en arrière-plan (backups.py), interface
                        (static/, dont l'explorateur explorer.*)

@@ -147,7 +147,7 @@ def _hero_reply(hand: Hand, index: int, hero: str) -> Optional[str]:
     return None
 
 
-def _required_equity(hand: Hand, index: int, hero: str) -> float:
+def required_equity(hand: Hand, index: int, hero: str) -> float:
     """Équité dont tu as besoin pour payer cette mise (cotes du pot)."""
     a = hand.actions[index]
     committed = sum(b.amount for b in hand.actions[:index] if b.street == a.street and b.player == hero)
@@ -175,7 +175,7 @@ def villain_lines(hands: list[Hand], villain: str, hero: str) -> list[Line]:
                 line.replies[reply] += 1
             if reply == FOLD and len(h.hole_cards.get(hero, [])) == 2:
                 line.fold_holdings[holding_class(h.hole_cards[hero], h.board[: BOARD_SIZE[a.street]])] += 1
-            line.required.append(_required_equity(h, i, hero))
+            line.required.append(required_equity(h, i, hero))
             if known:
                 board = h.board[: BOARD_SIZE[a.street]]
                 intent, eq, desc = classify(h.hole_cards[villain], h.hole_cards[hero], board)

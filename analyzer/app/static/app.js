@@ -4,9 +4,10 @@
   const $ = (id) => document.getElementById(id);
   const frame = $('frame');
   const TABS = {
-    moi: [['bilan', 'Bilan'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots'], ['solveur', 'Face au solveur']],
+    moi: [['bilan', 'Bilan'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots'], ['solveur', 'Face au solveur'],
+      ['bluffs', 'Bluffs des réguliers']],
     adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
-      ['solveur', 'Face au solveur']],
+      ['solveur', 'Face au solveur'], ['bluffs', 'Ses bluffs']],
     // L'explorateur part du préflop ; les séries de spots et les coups joués ont chacun leur onglet.
     etudes: [['explorateur', 'Explorateur'], ['plan', 'Plan de jeu suggéré'], ['srp', 'SRP'], ['3bet', 'Pots 3bet'],
       ['4bet', 'Pots 4bet'], ['coups', 'Coups joués']],

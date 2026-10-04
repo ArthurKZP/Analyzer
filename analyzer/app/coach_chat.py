@@ -23,6 +23,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from .. import bluffs
 from ..theory import coach, exploit, postflop, review, studyspots
 
 MODEL = os.environ.get("ANALYZER_COACH_MODEL", "")  # vide : choisi dans la liste des modèles de l'API
@@ -47,6 +48,7 @@ Tu consultes ses données avec des outils :
 - strategie_noeud : la stratégie du solveur à un moment précis d'un spot résolu (fréquences de toute la range, par famille de mains, équités, EV, exemples de mains).
 - strategie_main : une main précise à ce moment (sa stratégie, l'EV de chaque action, son équité).
 - ecarts_adversaire : un adversaire réel, son type (régulier ou récréatif) et ses écarts de fréquence face au solveur.
+- bluffs_adversaire : où un adversaire réel (ou la population des réguliers) bluffe : ses fréquences de mise selon la carte et la texture face au solveur, ses mains montrées par ligne, taille et carte, et les patterns qui en ressortent.
 - exploiter : node-lock d'un adversaire réel. Son profil postflop mesuré sur ses mains (c-bet, barrels, fold face aux mises, relances, probes) est verrouillé dans une étude, puis le solveur calcule la meilleure réponse : ce qui change par famille de mains, les mains qui changent d'action, le gain en bb.
 
 Comment répondre :
@@ -99,6 +101,15 @@ TOOLS = [
          "main": {"type": "string", "description": "les deux cartes, ex. AhKd"},
          "joueur": {"type": "string", "enum": ["BB", "BTN"], "description": "joueur qui tient la main (par défaut celui qui agit)"}},
          "required": ["spot", "ligne", "main"]}},
+    {"name": "bluffs_adversaire",
+     "description": ("Les bluffs d'un adversaire réel ou d'un groupe : les patterns qui ressortent (ligne, carte qui tombe, "
+                     "texture du flop, taille, timing) avec leur preuve chiffrée, leur confiance et la façon d'en profiter ; "
+                     "ses fréquences de mise par carte ou texture face au solveur ; ses mises vues à l'abattage (value, "
+                     "value fine, semi-bluff, bluff) par ligne, taille et carte, comparées à la théorie à la river. "
+                     "Consulte-le pour toute question sur ses bluffs ou sur les cartes qui lui font peur."),
+     "input_schema": {"type": "object", "properties": {
+         "adversaire": {"type": "string", "description": ("pseudo de l'adversaire, ou « réguliers » / « récréatifs » pour la "
+                                                          "population d'un type ; par défaut l'adversaire le plus joué")}}}},
     {"name": "exploiter",
      "description": ("Node-lock contre un adversaire réel dans un spot résolu. Son profil postflop dans ce type de pot et ce "
                      "rôle (c-bet, barrels, c-bet retardée, fold face aux mises et aux relances, relances, probes ou stabs), "
@@ -126,7 +137,8 @@ TOOLS = [
 STEP_TEXT = {"plan_de_jeu": "lit le plan de jeu", "liste_etudes": "regarde les études résolues",
              "strategie_noeud": "consulte la stratégie du solveur", "strategie_main": "regarde une main précise",
              "ecarts_adversaire": "examine les écarts de l'adversaire",
-             "exploiter": "verrouille le profil de l'adversaire dans le solveur (node-lock)"}
+             "exploiter": "verrouille le profil de l'adversaire dans le solveur (node-lock)",
+             "bluffs_adversaire": "cherche où l'adversaire bluffe"}
 POOLS = {"recreatifs": "rec", "récréatifs": "rec", "reguliers": "reg", "réguliers": "reg"}
 
 
@@ -359,6 +371,8 @@ class Coach:
                 data = self._villain(args.get("adversaire"))
             elif name == "exploiter":
                 data = self._exploit(args)
+            elif name == "bluffs_adversaire":
+                data = self._bluffs(args.get("adversaire"))
             else:
                 return f"Outil inconnu : {name}.", True
         except CoachError as exc:
@@ -471,6 +485,30 @@ class Coach:
                              "ou « récréatifs », « réguliers ».")
         info = kinds.get(match[0], {})
         return match[0], match, ("récréatif" if info.get("kind") == "rec" else "régulier")
+
+    def _bluffs(self, who) -> dict:
+        label, names, kind = self._targets(who)
+        report = bluffs.analyze(self.library.hands, names, self.library.hero)
+        pct = lambda x: None if x is None else round(100 * x)  # noqa: E731
+        freqs = [{"situation": f.spot.label, "pot": bluffs.FAMILY_NAMES.get(f.family, "autres pots"),
+                  "carte": bluffs.feature_label(f.spot.street, f.feature), "lui_pct": pct(f.ratio.hits / f.ratio.opps),
+                  "occasions": f.ratio.opps, "solveur_pct": pct(f.solver),
+                  "ses_autres_cartes_pct": pct(f.average) if f.solver is None else None,
+                  "ecart": f.verdict[0] if f.verdict else None, "confiance": f.verdict[1] if f.verdict else None}
+                 for f in report.freqs if f.ratio.opps >= bluffs.MIN_FREQ]
+        freqs = [{k: v for k, v in row.items() if v is not None} for row in freqs]
+        shown = [{"street": g.street, "par": dict(bluffs.DIMENSIONS)[g.dimension].lower(),
+                  "valeur": bluffs.feature_label(g.street, g.value) if g.dimension == "feature" else g.value,
+                  "intentions": {k: v for k, v in g.intents.items()}, "part_bluffs_pct": pct(g.ratio.hits / g.ratio.opps),
+                  "reference_pct": pct(g.reference), "reference": "théorie" if g.street == "river" else "sa moyenne",
+                  "ecart": g.verdict[0] if g.verdict else None} for g in report.groups if len(g.items) >= bluffs.MIN_SHOWN]
+        return {"adversaire": label, "type": kind, "mains": report.hands, "mises_postflop": report.bets,
+                "mises_vues_a_l_abattage": len(report.shown),
+                "patterns": [{"titre": p.title, "preuve": p.evidence, "conseil": p.advice, "confiance": p.confidence,
+                              "source": p.source} for p in report.patterns[:15]],
+                "frequences_par_carte": freqs, "mains_montrees": shown,
+                "lecture": ("Intentions : value = top paire ou mieux, thin = value fine (paire moyenne ou faible), semi = "
+                            "semi-bluff, bluff. À la river, la référence est la part de bluffs de la théorie pour la taille.")}
 
     def _exploit(self, args: dict) -> dict:
         spot = self._spot(args.get("spot"))
