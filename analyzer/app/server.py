@@ -26,7 +26,8 @@ from .studies import build_studies_page
 STATIC = Path(__file__).parent / "static"
 STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8",
                 "explorer.js": "text/javascript; charset=utf-8", "explorer.css": "text/css; charset=utf-8",
-                "trainer.js": "text/javascript; charset=utf-8", "trainer.css": "text/css; charset=utf-8"}
+                "trainer.js": "text/javascript; charset=utf-8", "trainer.css": "text/css; charset=utf-8",
+                "coach.js": "text/javascript; charset=utf-8", "coach.css": "text/css; charset=utf-8"}
 MAX_PATH = 40  # étapes d'un chemin dans l'arbre (bien plus qu'un coup réel)
 MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
 MAX_SMALL_BODY = 64 * 1024
@@ -121,6 +122,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.plan_page())
             if parts == ["api", "plan"]:
                 return self._json(library.plan_state())
+            if parts == ["api", "coach"]:
+                return self._json(library.coach.status())
+            if len(parts) == 3 and parts[:2] == ["api", "coach"]:
+                view = library.coach.view(parts[2])
+                return self._json(view) if view else self._error(404, "Conversation inconnue.")
             if len(parts) == 2 and parts[0] == "etudes":
                 return self._html(build_studies_page(embed=True, section=parts[1]))
             if parts == ["entraineur"]:
@@ -237,6 +243,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(trainer.record(payload.get("entries")))
         if parts == ["api", "entraineur", "effacer"]:
             return self._json(trainer.clear())
+        if parts == ["api", "coach", "message"]:
+            payload = self._small_json()
+            if not isinstance(payload, dict):
+                return self._error(400, "Requête invalide.")
+            text, conv, context = payload.get("text"), payload.get("conversation"), payload.get("context")
+            if not (isinstance(text, str) and 0 < len(text.strip()) <= 4000 and (conv is None or isinstance(conv, str))):
+                return self._error(400, "Requête invalide.")
+            if context is not None and not (isinstance(context, dict) and isinstance(context.get("spot"), str)
+                                            and valid_path(context.get("path") or [])
+                                            and (context.get("main") is None or isinstance(context.get("main"), str))):
+                return self._error(400, "Requête invalide.")
+            return self._json(library.coach.ask(conv, text.strip(), context))
         if parts == ["api", "plan", "preparer"]:
             return self._json(library.plan_state(start=True))
         if parts == ["api", "plan", "arreter"]:

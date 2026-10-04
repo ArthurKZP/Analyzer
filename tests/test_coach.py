@@ -58,6 +58,7 @@ def make_query(board=BOARD):
                 if p == player:
                     target = len(opts) - 1 if combo.startswith("A") else (opts.index("call") if "call" in opts else 0)
                     row += [1.0 if i == target else 0.0 for i in range(len(opts))]
+                    row += [2.0 if i == target else 1.0 for i in range(len(opts))]  # EV de chaque action
                 hands[p].append(row)
         return {"type": "action", "board": cards, "pot": pot, "player": player, "actions": actions,
                 "hands": hands, "cards": None}

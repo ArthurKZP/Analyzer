@@ -829,10 +829,26 @@
       + 'L\'équité est celle de la main contre la range adverse à ce moment du coup.'));
   }
 
+  // Le coach sait ce que l'élève regarde : le spot, la ligne jouée jusqu'ici et la case sélectionnée.
+  let coachMounted = false;
+  function mountCoach() {
+    if (coachMounted || !window.AnalyzerCoach) return;
+    coachMounted = true;
+    window.AnalyzerCoach.mount($('coach-box'), {
+      context: () => (PRE ? null : { spot: HAND, path, main: selected || null }),
+      suggestions: PRE ? ['Comment construire ma range de défense de BB ?', 'Pourquoi 3better certaines mains en bluff ?']
+        : ['Pourquoi le solveur joue-t-il ainsi ici ?', 'Quelle stratégie simple retenir ici ?',
+          'Quelles mains mettent la pression ici, et pourquoi ?'],
+    });
+  }
+
   function renderTabs() {
     const n = filters.keys.size;
     $('tab-combos').setAttribute('aria-selected', rightTab === 'combos' ? 'true' : 'false');
     $('tab-filters').setAttribute('aria-selected', rightTab === 'filters' ? 'true' : 'false');
+    $('tab-coach').setAttribute('aria-selected', rightTab === 'coach' ? 'true' : 'false');
+    $('pane-coach').hidden = rightTab !== 'coach';
+    if (rightTab === 'coach') mountCoach();
     $('tab-filters').textContent = 'Filtres';
     if (n) $('tab-filters').append(el('span', { class: 'count' }, n));
     $('pane-combos').hidden = rightTab !== 'combos';
@@ -884,6 +900,7 @@
   $('b-back').onclick = back;
   $('tab-combos').onclick = () => { rightTab = 'combos'; renderTabs(); };
   $('tab-filters').onclick = () => { rightTab = 'filters'; renderTabs(); };
+  $('tab-coach').onclick = () => { rightTab = 'coach'; renderTabs(); };
   $('b-line').onclick = () => state && state.result && goTo(state.result.decisions[0].path);
   $('b-train').onclick = () => window.open('/entraineur?spot=' + encodeURIComponent(HAND) + '&chemin='
     + encodeURIComponent(JSON.stringify(path)), '_blank', 'noopener');

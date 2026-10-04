@@ -222,8 +222,10 @@ def exploit(group: dict, dev: dict, villain: bool = True) -> str:
         if c == "aggressive":
             return ("Il mise trop : ses mises sont plus légères, paie plus large et relance en bluff." if more else
                     "Il mise rarement : ses mises sont fortes ; quand il checke, mise plus souvent.")
-        return ("Il checke trop : quand il checke, attaque le pot plus souvent." if c == "passive" and more else
-                "Écart de fréquence à surveiller.")
+        if c == "passive":
+            return ("Il checke trop : quand il checke, attaque le pot plus souvent." if more else
+                    "Il mise plus que la théorie : ses mises sont plus légères, défends plus large et relance plus.")
+        return "Écart de fréquence à surveiller."
     if facing and c == "fold":
         return "Tu foldes trop ici : défends plus large." if more else "Tu ne foldes pas assez ici : lâche tes mains faibles."
     if c == "aggressive":

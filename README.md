@@ -435,6 +435,29 @@ flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de fl
 - **Les flops** : chaque flop résolu avec son schéma, sa c-bet, sa taille et les deux avantages ; un clic
   l'ouvre dans l'explorateur.
 
+## Coach
+
+Un coach avec qui discuter, dans l'onglet *Plan de jeu suggéré* (« Discuter avec le coach ») et dans
+l'explorateur (onglet *Coach* à droite, qui sait quel spot, quelle ligne et quelle case tu regardes). C'est
+Claude, l'IA d'Anthropic : il consulte tes données avant de répondre (le plan de jeu suggéré, la liste des
+études, la stratégie du solveur à un nœud par famille de mains avec équités et EV, une main précise, les écarts
+d'un adversaire réel) et explique pourquoi le solveur choisit une action, en règles simples.
+
+```bash
+pip install anthropic
+export ANTHROPIC_API_KEY=sk-ant-...      # Windows : setx ANTHROPIC_API_KEY sk-ant-...
+python -m analyzer app
+```
+
+- Clé API à créer sur console.anthropic.com (ou `ant auth login`) ; sans elle, le panneau explique quoi faire.
+- Modèle : Claude Opus 5.5 (`claude-opus-5-5`), effort `high` ; à changer avec `ANALYZER_COACH_MODEL` et
+  `ANALYZER_COACH_EFFORT`. Si le modèle décline une question, l'API la confie à un autre modèle Claude
+  (`fallbacks: "default"`).
+- Coût : facturé par Anthropic à l'usage, de l'ordre de quelques centimes par question (le contexte est mis en
+  cache) ; la page affiche le coût estimé de la discussion.
+- Ouvrir une étude pour répondre prend quelques secondes (une minute en SRP) ; elle reste ouverte pour
+  l'explorateur.
+
 ## Entraîneur
 
 Menu **Entraîneur** de l'application : tu joues des mains sur les spots d'étude résolus (SRP, pots 3bet et
@@ -548,7 +571,7 @@ analyzer/
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
                        solveur » (review_page.py), entraîneur (trainer.py, static/trainer.*), plan de
-                       jeu suggéré (plan_page.py),
+                       jeu suggéré (plan_page.py), coach (coach_chat.py, static/coach.*),
                        sauvegardes en arrière-plan (backups.py), interface
                        (static/, dont l'explorateur explorer.*)
   backup.py            sauvegarde et restauration de ~/.analyzer (commande `sauvegarde`)

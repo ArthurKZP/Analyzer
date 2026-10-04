@@ -603,7 +603,7 @@ def combo_brief(node: dict, combo: str, player: Optional[int] = None) -> Optiona
             labels = postflop.action_labels(node)
             na = len(labels)
             out["strategie"] = {labels[k]: round(row[4 + k], 3) for k in range(na)}
-            out["ev_par_action_bb"] = {labels[k]: (round(row[4 + na + k], 2) if row[4 + na + k] is not None else None)
-                                       for k in range(na)}
+            evs = row[4 + na:4 + 2 * na] if len(row) >= 4 + 2 * na else [None] * na
+            out["ev_par_action_bb"] = {labels[k]: (round(evs[k], 2) if evs[k] is not None else None) for k in range(na)}
         return out
     return None

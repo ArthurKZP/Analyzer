@@ -20,6 +20,7 @@ from ..viewer import build_viewer
 from .plan_page import build_coach_page
 from .review_page import build_review_page
 from .backups import Backups
+from .coach_chat import Coach
 from .solves import SolveQueue
 
 PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur")
@@ -62,6 +63,7 @@ class Library:
         self.known_ids: set[str] = set()
         self.solves = SolveQueue()
         self.backups = Backups()
+        self.coach = Coach(self)
         self.solves.on_done.append(lambda job: self.backups.schedule())
         self.reload()
 
@@ -337,7 +339,7 @@ class Library:
         return self.plan_state()
 
     def plan_page(self) -> str:
-        return build_coach_page(self.plan_state())
+        return build_coach_page(self.plan_state(), villains=tuple(o["name"] for o in self.opponents()))
 
     # --- analyse des mains jouées ---------------------------------------------------
     def review_state(self, villain: Optional[str] = None, start: bool = False) -> dict:

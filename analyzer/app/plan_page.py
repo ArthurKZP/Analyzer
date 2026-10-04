@@ -1,6 +1,7 @@
 """Page « Plan de jeu suggéré » : les études résolues réduites à des règles simples (voir theory/coach.py)."""
 from __future__ import annotations
 
+import json
 from html import escape
 from urllib.parse import quote
 
@@ -21,6 +22,7 @@ STYLE = """
   border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
 .pl-head button.go { background: var(--series-1); border-color: var(--series-1); color: #fff; font-weight: 600; }
 .pl-status { font-size: 12px; color: var(--ink-2); }
+details.pl-chat > summary { cursor: pointer; margin-bottom: 8px; }
 details.pl-group { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); margin: 10px 0; }
 details.pl-group > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; display: flex; gap: 10px;
   align-items: baseline; flex-wrap: wrap; }
@@ -45,6 +47,10 @@ table.pl-cards ul.rules { margin: 0; padding-left: 16px; }
 
 SCRIPT = """
 (function () {
+  var box = document.getElementById('coach-box');
+  if (box && window.AnalyzerCoach) {
+    window.AnalyzerCoach.mount(box, { suggestions: JSON.parse(box.dataset.suggestions || '[]') });
+  }
   var buttons = document.querySelectorAll('.pl-fams button');
   function show(fam) {
     buttons.forEach(function (b) { b.setAttribute('aria-pressed', b.dataset.fam === fam ? 'true' : 'false'); });
@@ -219,8 +225,9 @@ de part de deux paires et mieux. Un clic ouvre le flop dans l'explorateur.</p></
 """
 
 
-def build_coach_page(state: dict, embed: bool = True) -> str:
-    """state : bilan des plans (Library.plan_state) pour le bandeau de préparation."""
+def build_coach_page(state: dict, embed: bool = True, villains: tuple = ()) -> str:
+    """state : bilan des plans (Library.plan_state) pour le bandeau de préparation ; villains : adversaires
+    proposés dans les questions d'exemple du coach."""
     plans = [coach.family_plan(f) for f in studyspots.FAMILIES]
     default = max(plans, key=lambda p: p["count"])["family"] if plans else "srp"
     tabs = "".join(
@@ -234,10 +241,18 @@ def build_coach_page(state: dict, embed: bool = True) -> str:
             '<p class="note">Chaque étude est ouverte une fois pour lire ses stratégies (quelques secondes en pot 4bet, '
             'environ une minute en SRP sur 4 cœurs) ; une étude résolue à partir de maintenant est lue tout de suite.</p></div>')
     sections = "".join(f'<section class="pl-fam" data-fam="{p["family"]}" hidden>{_family(p)}</section>' for p in plans)
+    suggestions = ["Résume-moi le plan de jeu en SRP", "Sur quels flops puis-je c-better toute ma range ?",
+                   "Comment continuer à la turn après une c-bet payée ?"]
+    suggestions += [f"Comment exploiter {v} ?" for v in villains[:1]]
+    chat = (f'<details class="card pl-chat" open><summary><b>Discuter avec le coach</b> '
+            '<span class="muted">· il lit tes études, ton plan de jeu et les écarts de tes adversaires</span></summary>'
+            f'<div id="coach-box" data-suggestions="{escape(json.dumps(suggestions, ensure_ascii=False))}"></div></details>'
+            '<link rel="stylesheet" href="/static/coach.css"><script src="/static/coach.js"></script>')
     body = f"""
 <div class="meta">Un plan de jeu simple, du flop à la river, tiré des études résolues : ce que le solveur fait, regroupé
 en règles qu'un humain peut appliquer.</div>
 {head}
+{chat}
 <div class="pl-fams" role="group" aria-label="Type de pot">{tabs}</div>
 {sections}
 """
