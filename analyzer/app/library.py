@@ -17,6 +17,7 @@ from ..theory import handclass, postflop, review, studyspots
 from ..theory.page import build_preflop_page
 from ..viewer import build_viewer
 from .review_page import build_review_page
+from .backups import Backups
 from .solves import SolveQueue
 
 PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur")
@@ -44,6 +45,8 @@ class Library:
         self.hero: Optional[str] = None
         self.known_ids: set[str] = set()
         self.solves = SolveQueue()
+        self.backups = Backups()
+        self.solves.on_done.append(lambda job: self.backups.schedule())
         self.reload()
 
     # --- chargement -------------------------------------------------------------

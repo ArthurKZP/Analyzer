@@ -63,7 +63,15 @@ class SolveQueue:
         self._lock = threading.Lock()
         self._live: Optional[tuple[str, postflop.Session]] = None  # (main, session navigable)
         self._stop = threading.Event()
+        self.on_done: list[Callable[[Job], None]] = []  # après chaque calcul terminé (pas une étude rouverte)
         threading.Thread(target=self._reap_idle, daemon=True, name="gtopen-idle").start()
+
+    def _finished(self, job: Job) -> None:
+        for callback in self.on_done:
+            try:
+                callback(job)
+            except Exception:  # noqa: BLE001 — un rappel ne doit pas faire échouer la résolution
+                traceback.print_exc()
 
     def _request(self, spot) -> dict:
         """spot : une main jouée (postflop.PostflopSpot) ou un spot d'étude (studyspots.StudySpot)."""
@@ -192,6 +200,7 @@ class SolveQueue:
             on_done(spot, raw)
             job.result = spot.interpret(raw)
             job.state = "done"
+            self._finished(job)
         except postflop.SolverError as exc:
             job.state = "cancelled" if job.cancelled else "error"
             job.error = None if job.cancelled else str(exc)
@@ -223,6 +232,8 @@ class SolveQueue:
             else:
                 session.close()
             job.state = "done"
+            if job.mode != "load":
+                self._finished(job)
         except postflop.SolverError as exc:
             session.close()
             job.state = "cancelled" if job.cancelled else "error"

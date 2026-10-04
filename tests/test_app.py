@@ -223,6 +223,27 @@ class ServerTest(unittest.TestCase):
         body = json.dumps({"hand": "spot:srp:AhAh2c"})
         self.assertEqual(self.request("POST", "/api/explorateur/etat", body, headers)[0], 404)
 
+    def test_backup_endpoints(self):
+        status, _, body = self.request("GET", "/api/sauvegarde")
+        view = json.loads(body)
+        self.assertEqual((status, view["dest"], view["running"]), (200, "", None))
+        headers = {"Content-Type": "application/json"}
+        for bad in ({"dest": 3, "studies": False, "auto": False}, {"dest": "x"}, {"dest": "x" * 600, "studies": False,
+                                                                                    "auto": False}):
+            self.assertEqual(self.request("POST", "/api/sauvegarde/reglages", json.dumps(bad), headers)[0], 400)
+        dest = str(Path(self.tmp.name) / "sauvegardes-test")
+        body = json.dumps({"dest": dest, "studies": True, "auto": False})
+        view = json.loads(self.request("POST", "/api/sauvegarde/reglages", body, headers)[2])
+        self.assertEqual((view["dest"], view["studies"]), (dest, True))
+        self.request("POST", "/api/sauvegarde/lancer", "{}", headers)
+        deadline = time.time() + 20
+        while json.loads(self.request("GET", "/api/sauvegarde")[2])["running"] and time.time() < deadline:
+            time.sleep(0.05)
+        view = json.loads(self.request("GET", "/api/sauvegarde")[2])
+        self.assertEqual((view["error"], view["last"]["dest"]), (None, dest))
+        foreign = {"Origin": "http://evil.example", **headers}
+        self.assertEqual(self.request("POST", "/api/sauvegarde/lancer", "{}", foreign)[0], 403)
+
     def test_not_found(self):
         for path in ("/p/Personne/plan", "/p/Villain/autre", "/static/server.py",
                      "/static/..%2Fserver.py", "/rien"):

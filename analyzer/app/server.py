@@ -121,6 +121,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html((STATIC / "trainer.html").read_text(encoding="utf-8"))
             if parts == ["api", "entraineur"]:
                 return self._json(trainer.overview())
+            if parts == ["api", "sauvegarde"]:
+                return self._json(library.backups.view())
             if parts == ["api", "revue"]:
                 villain = parse_qs(urlsplit(self.path).query).get("adversaire", [None])[0]
                 return self._json(library.review_state(villain))
@@ -200,6 +202,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(trainer.record(payload.get("entries")))
         if parts == ["api", "entraineur", "effacer"]:
             return self._json(trainer.clear())
+        if parts == ["api", "sauvegarde", "reglages"]:
+            payload = self._small_json()
+            if not (isinstance(payload, dict) and isinstance(payload.get("dest"), str) and len(payload["dest"]) <= 500
+                    and isinstance(payload.get("studies"), bool) and isinstance(payload.get("auto"), bool)):
+                return self._error(400, "Requête invalide.")
+            return self._json(library.backups.configure(payload["dest"], payload["studies"], payload["auto"]))
+        if parts == ["api", "sauvegarde", "lancer"]:
+            return self._json(library.backups.start("backup"))
+        if parts == ["api", "sauvegarde", "restaurer"]:
+            return self._json(library.backups.start("restore"))
         if len(parts) == 3 and parts[:2] == ["api", "revue"] and parts[2] in ("lancer", "arreter"):
             payload = self._small_json()
             villain = payload.get("adversaire") if isinstance(payload, dict) else None
@@ -287,6 +299,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("\nArrêt.")
     finally:
         library.solves.shutdown()
+        library.backups.shutdown()
         server.server_close()
     return 0
 

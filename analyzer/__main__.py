@@ -5,6 +5,11 @@ if sys.argv[1:2] == ["app"]:
 
     sys.exit(app_main(sys.argv[2:]))
 
+if sys.argv[1:2] == ["sauvegarde"]:
+    from .backup import main as backup_main
+
+    sys.exit(backup_main(sys.argv[2:]))
+
 if sys.argv[1:2] == ["gtopen"]:
     from .theory.solve_cli import main as gtopen_main
 

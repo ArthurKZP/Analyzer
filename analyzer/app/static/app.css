@@ -96,3 +96,17 @@ a { color: var(--accent); }
   .panel { padding: 16px; }
 }
 @media (max-width: 860px) and (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
+
+/* sauvegarde */
+.backup { max-width: 760px; display: flex; flex-direction: column; gap: 14px; }
+.backup h2 { font-size: 16px; margin: 0; }
+.backup .box { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.backup label.field { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 13px; }
+.backup input[type="text"] { font: inherit; font-weight: 400; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--page); color: var(--ink); width: 100%; }
+.backup .check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.backup .buttons { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.backup .secondary { background: var(--page); color: var(--ink); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; cursor: pointer; }
+.backup button:disabled { opacity: 0.5; cursor: default; }
+.backup .log { font: 12px/1.5 ui-monospace, monospace; color: var(--ink-2); white-space: pre-wrap; margin: 0; }
+.backup .help p { margin: 0 0 6px; font-size: 13px; }
+.backup .help code { font-size: 12px; }

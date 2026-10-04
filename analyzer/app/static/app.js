@@ -43,6 +43,7 @@
     if (parts[0] === 'importer') return { view: 'importer' };
     if (parts[0] === 'etudes') return { view: 'etudes' };
     if (parts[0] === 'entraineur') return { view: 'entraineur' };
+    if (parts[0] === 'sauvegarde') return { view: 'sauvegarde' };
     if (parts[0] === 'adversaire' && parts[1]) return { view: 'adv', player: parts[1], tab: tabOf('adv', parts[2], 'plan') };
     if (parts[0] === 'moi') return { view: 'moi', tab: tabOf('moi', parts[1], 'bilan') };
     return state && state.hands ? { view: 'moi', tab: 'bilan' } : { view: 'importer' };
@@ -53,6 +54,7 @@
     if (r.view === 'moi') return '#/moi/' + r.tab;
     if (r.view === 'etudes') return '#/etudes';
     if (r.view === 'entraineur') return '#/entraineur';
+    if (r.view === 'sauvegarde') return '#/sauvegarde';
     return '#/importer';
   }
 
@@ -71,6 +73,7 @@
     markActive();
     if (route.view === 'importer') return showImport();
     if (route.view === 'entraineur') return showFrame(srcFor(route));  // sans mains : les spots d'étude suffisent
+    if (route.view === 'sauvegarde') return showBackup();
     if (!state.hands) return showWelcome();
     if (route.view === 'adv' && !state.opponents.some((o) => o.name === route.player)) {
       return showPanel(el('div', { class: 'welcome' }, el('h2', {}, 'Joueur introuvable'),
@@ -95,6 +98,9 @@
     } else if (route.view === 'etudes') {
       title.textContent = 'Études du solveur';
       subtitle.textContent = 'Coups résolus avec GTOpen, gardés sur ton ordinateur pour être réexplorés';
+    } else if (route.view === 'sauvegarde') {
+      title.textContent = 'Sauvegarde';
+      subtitle.textContent = 'Tes calculs (tailles, résolutions, mains analysées, études) à l\'abri, en ligne si tu veux';
     } else if (route.view === 'entraineur') {
       title.textContent = 'Entraîneur';
       subtitle.textContent = 'Joue des mains sur les spots résolus : le solveur juge chaque décision';
@@ -238,6 +244,85 @@
     frame.dataset.src = '';
     renderSidebar();
     result.textContent = state.hands + ' mains chargées.';
+  }
+
+  // ---------- sauvegarde ----------
+  const size = (n) => (n >= 1e9 ? num(n / 1e9, 1) + ' Go' : n >= 1e6 ? num(n / 1e6, 1) + ' Mo' : Math.max(1, Math.round(n / 1e3)) + ' Ko');
+  let backupTimer = null;
+
+  async function backupApi(path, body) {
+    const res = await fetch('/api/sauvegarde' + path, body === undefined ? {}
+      : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Erreur ' + res.status);
+    return data;
+  }
+
+  async function showBackup() {
+    clearTimeout(backupTimer);
+    let v;
+    try { v = await backupApi(''); } catch (err) { return showPanel(el('p', { class: 'error' }, err.message)); }
+    if (route.view !== 'sauvegarde') return;
+    const busy = !!v.running;
+    const dest = el('input', { type: 'text', id: 'bk-dest', value: v.dest, spellcheck: 'false', disabled: busy,
+      placeholder: 'C:\\Users\\toi\\OneDrive\\Analyzer   ou   gdrive:Analyzer' });
+    const studies = el('input', { type: 'checkbox', checked: v.studies, disabled: busy });
+    const auto = el('input', { type: 'checkbox', checked: v.auto, disabled: busy });
+    const status = el('div', { 'aria-live': 'polite' });
+    const settings = () => ({ dest: dest.value, studies: studies.checked, auto: auto.checked });
+    const run = async (path) => {
+      try {
+        await backupApi('/reglages', settings());
+        if (path === '/restaurer' && !window.confirm('Restaurer la dernière sauvegarde de ' + dest.value + ' ? '
+          + 'Les fichiers plus récents sur cet ordinateur sont gardés.')) return showBackup();
+        await backupApi(path, {});
+      } catch (err) { status.textContent = err.message; return; }
+      showBackup();
+    };
+    const save = el('button', { type: 'button', class: 'secondary', disabled: busy, onclick: async () => {
+      try { await backupApi('/reglages', settings()); showBackup(); } catch (err) { status.textContent = err.message; }
+    } }, 'Enregistrer les réglages');
+    const now = el('button', { type: 'button', class: 'primary', disabled: busy, onclick: () => run('/lancer') }, 'Sauvegarder maintenant');
+    const back = el('button', { type: 'button', class: 'secondary', disabled: busy, onclick: () => run('/restaurer') }, 'Restaurer');
+    if (v.running) {
+      status.append(el('p', {}, el('span', { class: 'spinner', style: 'display:inline-block;vertical-align:middle;margin-right:8px' }),
+        v.running === 'restore' ? 'Restauration en cours…' : 'Sauvegarde en cours…'));
+    } else if (v.error) status.append(el('p', { class: 'error' }, v.error));
+    else if (v.result && v.result.restored !== undefined) {
+      status.append(el('p', {}, 'Restauré : ' + v.result.restored + ' fichier(s) de ' + v.result.archive
+        + (v.result.studies ? ', ' + v.result.studies + ' étude(s)' : '') + '.'));
+    }
+    if (v.last) {
+      const d = new Date(v.last.t * 1000);
+      status.append(el('p', { class: 'muted small' }, 'Dernière sauvegarde le ' + d.toLocaleDateString('fr-FR') + ' à '
+        + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + ' vers ' + v.last.dest + ' : archive de '
+        + size(v.last.archive_size) + (v.last.with_studies ? ', ' + v.last.studies + ' étude(s) copiée(s)' : '') + '.'));
+    }
+    if (v.log.length) status.append(el('pre', { class: 'log' }, v.log.join('\n')));
+    showPanel(el('div', { class: 'backup' },
+      el('div', { class: 'box' },
+        el('label', { class: 'field', for: 'bk-dest' }, 'Où sauvegarder', dest),
+        el('label', { class: 'check' }, studies, el('span', {}, 'Avec les études (' + v.studies_count + ' sur cet ordinateur, '
+          + size(v.studies_size) + ') : seules les nouvelles sont copiées ensuite. Sans elles, l\'essentiel ne pèse que '
+          + size(v.essentials_size) + '.')),
+        el('label', { class: 'check' }, auto, el('span', {}, 'Sauvegarder automatiquement après chaque calcul '
+          + '(résolution, choix des tailles, main analysée ; au plus une fois par quart d\'heure)')),
+        el('div', { class: 'buttons' }, now, save, back),
+        status),
+      el('div', { class: 'box help' },
+        el('h2', {}, 'Où mettre tes sauvegardes ?'),
+        el('p', {}, el('b', {}, 'Un dossier synchronisé'), ' (le plus simple) : un dossier de OneDrive, Google Drive ou Dropbox '
+          + 'sur ton ordinateur, par exemple ', el('code', {}, 'C:\\Users\\toi\\OneDrive\\Analyzer'),
+        '. Leur application envoie la sauvegarde en ligne toute seule.'),
+        el('p', {}, el('b', {}, 'Un stockage en ligne avec rclone'), ' (Google Drive, OneDrive, Dropbox, un serveur SFTP, S3…) : '
+          + 'installe rclone (rclone.org), configure ton stockage avec ', el('code', {}, 'rclone config'),
+        ', puis indique-le sous la forme ', el('code', {}, 'nom:dossier'), ' (', v.rclone ? 'rclone est installé' : 'rclone n\'est pas installé', ').'),
+        el('p', {}, 'Ce qui est gardé : les tailles de mise choisies (les plus longues à recalculer), les résolutions, '
+          + 'les mains analysées, ton journal d\'entraînement et, en option, les études. Les 10 dernières archives sont '
+          + 'gardées. Sur un autre ordinateur : même destination, puis « Restaurer ».'),
+        el('p', { class: 'muted small' }, 'Dossier de travail d\'Analyzer : ' + v.home
+          + ' (variable ANALYZER_HOME pour en changer).'))));
+    if (v.running) backupTimer = setTimeout(() => { if (route.view === 'sauvegarde') showBackup(); }, 1500);
   }
 
   // ---------- événements ----------

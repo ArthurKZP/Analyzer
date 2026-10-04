@@ -31,6 +31,7 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   pertes sans abattage, résultats par adversaire), *Mon préflop* face au solveur sur toutes tes mains,
   *Mes spots* et *Face au solveur* (tes erreurs postflop, voir plus bas).
 - **Entraîneur** : joue des mains sur les spots résolus, le solveur juge chaque décision (voir plus bas).
+- **Sauvegarde** : tes calculs vers un dossier synchronisé ou un stockage en ligne (voir plus bas).
 - **Importer des mains** : glisse tes historiques ou choisis-les ; ils sont copiés dans le dossier des
   mains (`hands/` par défaut), les doublons et les formats non reconnus sont signalés.
 
@@ -410,6 +411,37 @@ Deux raccourcis : **S'entraîner ici** dans l'explorateur rejoue des mains à pa
 une main jouée recalculée), et **S'entraîner** dans « Les erreurs récurrentes » de *Face au solveur* lance la
 situation où tu perds de l'EV.
 
+## Sauvegarde
+
+Tout ce qu'Analyzer calcule est dans `~/.analyzer` (ou le dossier de `ANALYZER_HOME`). Menu **Sauvegarde** de
+l'application, ou en ligne de commande :
+
+```bash
+python -m analyzer sauvegarde "C:\Users\toi\OneDrive\Analyzer"   # dossier synchronisé ; retenu ensuite
+python -m analyzer sauvegarde gdrive:Analyzer --etudes                # stockage rclone, avec les études
+python -m analyzer sauvegarde                                         # même destination que la dernière fois
+python -m analyzer sauvegarde --auto        # sauvegarde automatique après chaque calcul dans l'application
+python -m analyzer sauvegarde --restaurer   # sur un autre ordinateur : reprend la dernière sauvegarde
+```
+
+- **Destination** : un dossier, de préférence synchronisé en ligne (OneDrive, Google Drive, Dropbox : leur
+  application l'envoie sur leurs serveurs), ou un stockage en ligne configuré avec
+  [rclone](https://rclone.org) (`rclone config` une fois, puis `nom:dossier` : Google Drive, OneDrive, S3,
+  SFTP…). Aucun mot de passe n'est gardé par Analyzer.
+- **L'essentiel** (quelques Mo) : tailles de mise choisies (les plus longues à recalculer : une heure et
+  demie par flop SRP), résolutions en cache, résumés des mains analysées, journal de l'entraîneur, fiches des
+  études. Une archive datée par sauvegarde dans `archives/`, les 10 dernières gardées.
+- **Les études** (`--etudes`, option de la page) : les fichiers des arbres résolus (20 Mo à quelques
+  centaines de Mo chacun) dans `etudes/` ; seules les nouvelles ou modifiées sont copiées ensuite.
+- **Automatique** : après une résolution, un choix de tailles ou une main analysée, au plus une fois par
+  quart d'heure.
+- **Restaurer** : la dernière archive, sans écraser un fichier local plus récent (le journal de l'entraîneur
+  est fusionné), puis les études absentes.
+
+Les tailles choisies et les synthèses de référence peuvent aussi rejoindre le dépôt (fichiers
+`analyzer/theory/data/*_tailles.json` et `*_reference.json`, voir plus haut) : elles sont alors livrées avec
+Analyzer.
+
 ## Contenu du rapport
 
 | Section | Ce qu'on y trouve |
@@ -464,8 +496,10 @@ analyzer/
                        commande `gtopen` (solve_cli.py), mains jouées face au solveur (review.py)
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
-                       solveur » (review_page.py), entraîneur (trainer.py, static/trainer.*), interface
+                       solveur » (review_page.py), entraîneur (trainer.py, static/trainer.*),
+                       sauvegardes en arrière-plan (backups.py), interface
                        (static/, dont l'explorateur explorer.*)
+  backup.py            sauvegarde et restauration de ~/.analyzer (commande `sauvegarde`)
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)
 hands/                 tes historiques (ignorés par git)
