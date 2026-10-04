@@ -166,7 +166,9 @@ s'affiche tout de suite.
   (3bet de la BB / call du bouton), pot 4bet (4bet du bouton / call de la BB) ;
 - board, pot et tapis effectif au flop, en bb, sans rake ;
 - tailles : mise 33 % au flop, 75 % à la turn et à la river, relance 60 % du pot au flop et à la turn,
-  deux relances au plus par street, pas de donk (mise d'ouverture hors de position après avoir payé).
+  deux relances au plus par street, pas de donk (mise d'ouverture hors de position après avoir payé) :
+  en SRP et en pot 4bet, la BB ne mène ni au flop ni après une mise du bouton ; elle mise à la turn après
+  un flop checké. En pot 3bet, la BB a l'initiative et c-bette normalement.
   Les tailles réellement jouées dans la main sont ajoutées (ou remplacent la taille par défaut la plus
   proche) pour que chaque décision tombe sur une branche de l'arbre, y compris un donk joué.
 
@@ -200,21 +202,152 @@ et les mises à venir sont dépensées. Pour une action (au survol), c'est ce qu
 suite jouée par le solveur ; pour une main (dans la grille), c'est l'EV de sa stratégie, la moyenne de ses
 actions pondérée par leurs fréquences. Une main qui folde 100 % vaut donc 0 même si payer coûterait 14 bb.
 
-**Études du solveur** : chaque coup résolu est gardé sur disque (`~/.analyzer/etudes`, environ 170 Mo pour
-un pot simplement relancé) sous une forme compacte : la stratégie de chaque nœud sur 8 bits, compressée.
+**Études du solveur** : chaque coup résolu est gardé sur disque (`~/.analyzer/etudes`, 50 à 170 Mo selon
+l'arbre) sous une forme compacte : la stratégie de chaque nœud sur 8 bits, compressée.
 L'explorateur rouvre une étude en une quinzaine de secondes au lieu de la recalculer (les fréquences
 restent à 1 point près, les EV à quelques centièmes de bb). La page *Études du solveur* de l'application
 liste les études, avec leur précision et leur taille, et permet de les rouvrir ou de les supprimer.
 Une étude ouverte occupe environ 2 Go de mémoire : une seule reste ouverte, fermée après 30 minutes sans
 activité ou quand une autre s'ouvre.
 
-**Durée** : un arbre de flop compte environ 700 000 nœuds et 2 Go de mémoire avec les ranges HU complètes.
-Sur un processeur à 4 cœurs, l'objectif par défaut (1,5 % du pot d'exploitabilité, 120 itérations au plus)
-demande environ 5 minutes ; c'est plus rapide avec plus de cœurs.
+**Durée** : un arbre de flop compte des centaines de milliers de nœuds et jusqu'à 2 Go de mémoire avec les
+ranges HU complètes. Sur un processeur à 4 cœurs, l'objectif par défaut (1,5 % du pot d'exploitabilité,
+120 itérations au plus) demande 30 secondes à 2 minutes pour un SRP, davantage quand des tailles jouées
+s'ajoutent à l'arbre ; c'est plus rapide avec plus de cœurs.
+
+**Spots d'étude** : des spots résolus sans main jouée, pour travailler une situation type. La première
+série est le **SRP** (open du bouton à 2,5 bb, call de la BB, 100 bb, mêmes ranges et même arbre que
+ci-dessus) sur 24 flops : trois par texture (un sec, un connecté, un deux couleurs), dans cet ordre de
+classement :
+
+| Texture | Flops |
+| --- | --- |
+| Pairé | K♠K♦4♣ · 8♥8♣5♠ · J♦3♣3♥ |
+| Monotone | A♠8♠3♠ · J♥9♥5♥ · 7♦5♦2♦ |
+| Ace high | A♠7♥2♦ · A♣K♦9♥ · A♥6♥4♣ |
+| King high | K♠8♦3♥ · K♥Q♣9♦ · K♦7♦5♣ |
+| Queen high | Q♠7♦2♥ · Q♥J♣9♦ · Q♣8♣4♦ |
+| Jack high | J♠6♦3♥ · J♥T♣8♦ · J♣9♣4♦ |
+| Ten high | T♠5♦2♥ · T♥9♣7♦ · T♣8♣3♦ |
+| Low board (9 et moins) | 9♠5♦2♥ · 8♥7♣5♦ · 6♣4♣2♦ |
+
+Un flop pairé ou monotone est classé comme tel ; sinon par sa plus haute carte. Pour les résoudre :
+le bouton **Résoudre les flops manquants** de la page *Études du solveur* (en arrière-plan, l'un après
+l'autre, avec une barre de progression ; *Arrêter* interrompt la série), ou en ligne de commande :
+
+```bash
+python -m analyzer gtopen --spots srp                          # les 24 flops : choix des tailles, puis résolution
+python -m analyzer gtopen --spots 3bet                         # la même chose en pot 3bet
+python -m analyzer gtopen --spots 4bet                         # et en pot 4bet
+python -m analyzer gtopen --spots srp --texture Monotone --texture "Ace high"   # quelques textures
+```
+
+La série alterne les textures (un flop de chaque, puis un deuxième…) : interrompue, elle couvre déjà
+toutes les textures, et une relance reprend où elle s'était arrêtée. Compter 30 secondes à 2 minutes par
+flop sur 4 cœurs (la série : une demi-heure) et 50 à 80 Mo sur le disque (1,6 Go pour les 24 flops).
+Sans attendre, la page montre déjà une synthèse de référence livrée avec Analyzer
+(`analyzer/theory/data/srp_reference.json`, calculée avec le même arbre) pour les flops pas encore
+résolus ; il faut les résoudre sur ton ordinateur pour les explorer. La page *Études du solveur* montre ensuite, texture par texture
+(avec la moyenne de ses flops), la stratégie de toute la range : la c-bet du bouton après le check de la
+BB, la réponse de la BB (fold, call, check-raise), puis celle du bouton face au check-raise. *Explorer ↗*
+ouvre le spot dans l'explorateur (`/explorateur/spot:srp:KsKd4c`), turn et river comprises : l'étude se
+rouvre d'elle-même, le choix de la carte s'ouvre quand on arrive à la turn ou à la river, et les checks
+forcés de la BB (qui ne mène pas) sont passés pour aller droit à la décision suivante.
+*Étudier un autre flop* ouvre n'importe quel flop dans l'explorateur ; une fois résolu, il rejoint sa
+texture dans la page.
+
+**Choix des tailles** (`analyzer/theory/sizing.py`) : chaque flop de la série a ses propres tailles, une par
+situation pour tout le flop (quelles que soient la turn et la river), deux à la river. Pour chaque situation,
+la taille retenue est celle qui donne la meilleure EV à celui qui mise (ou relance) quand c'est sa seule
+option ; si l'écart est minime (moins de 0,4 % du pot au flop, soit 0,02 bb en SRP), la plus petite l'emporte.
+Les candidates :
+
+| Situation | Tailles comparées |
+| --- | --- |
+| C-bet | 33 % · 75 % · géométrique |
+| 2e barrel (c-bet payée) | 50 % · pot · géométrique |
+| C-bet retardée (flop checké) | 33 % · 66 % · géométrique |
+| Probe turn de la BB (flop checké) | 33 % · 75 % · pot · géométrique |
+| Mises de la BB et du bouton après un check-raise payé | 50 % · pot · géo / 33 % · 66 % · géo |
+| River : 3e barrel, bet/check/bet, check/bet/bet, probes river… | deux parmi 50 % · 75 % · pot · 150 % · tapis |
+| Relances et sur-relances (check-raise, relance d'un probe…) | 33 % · 66 % · géométrique (tapis à la river) |
+
+Le géométrique mise la même fraction du pot à chaque street restante pour finir à tapis à la river
+(121 % au flop d'un SRP à 100 bb ; à la turn, selon la ligne). Les relances se comptent en % du pot après
+le call. La BB ne mène toujours pas dans l'agresseur (pas de donk).
+
+Méthode, street par street, chaque situation à son tour (les autres gardent leur choix courant) :
+
+- flop : arbres complets, comparés à 0,4 % du pot près (c-bet, check-raise, relance du bouton) ;
+- turn, puis river : sous-jeux qui partent de la turn avec les ranges du flop résolu, sur 12 cartes turn
+  (`--cartes`), 8 pour la river ; l'écart d'EV se juge quand la situation arrive (l'écart à la racine
+  du sous-jeu, rapporté à sa fréquence) : sous 0,5 % du pot, la plus petite taille l'emporte. Une
+  situation rare se compare sur 4 cartes ; presque jamais atteinte (moins de 0,3 % des coups), elle prend
+  la plus petite taille. À la river, une première résolution propose les cinq tailles à la fois : les
+  trois plus employées restent, et leurs trois paires se comparent.
+
+Mesuré sur K♠K♦4♣ avec 4 cœurs : 35 minutes pour le flop, 5 pour la turn, une demi-heure pour la river,
+puis une dizaine de minutes pour résoudre le flop avec ses tailles (arbre d'environ 1,2 million de nœuds,
+4 Go de mémoire, étude de 430 Mo) : compter une nuit pour une dizaine de flops, moins avec plus de cœurs. Le
+choix est gardé dans `~/.analyzer/tailles` ; ceux calculés à l'avance sont livrés avec Analyzer
+(`analyzer/theory/data/srp_tailles.json`) et ne se refont pas. La page *Études du solveur* montre sous
+chaque flop ses tailles et, en dépliant, l'EV de chaque taille comparée. Le bouton **Résoudre les flops
+manquants** choisit les tailles qui manquent avant de résoudre ; en ligne de commande, `--spots srp` fait
+de même, `--choix-seulement` s'arrête au choix, `--sans-choix` garde les tailles par défaut.
+
+**Pots 3bet** : la deuxième série (`--spots 3bet`, section *Spots d'étude · pot 3bet* de la page) reprend les
+mêmes 24 flops avec le 3bet de la solution préflop : open du bouton à 2,5 bb, 3bet de la BB à 11,5 bb, call
+du bouton ; pot de 23 bb, 88,5 bb derrière. La BB est hors de position et à l'initiative : c-bet, 2e barrel
+et c-bet retardée sont les siens ; le bouton *stabbe* quand elle checke. Pas de donk : la BB ne mène pas
+dans le bouton quand il a misé à la street précédente. Les tailles comparées :
+
+| Situation | Tailles comparées |
+| --- | --- |
+| C-bet de la BB | 33 % · 75 % · géométrique sur deux streets (97 % : tapis à la turn) |
+| 2e barrel | 33 % · 50 % · 75 % · tapis |
+| C-bet retardée (flop checké) | 33 % · 75 % · géométrique (turn et river) |
+| River de la BB : 3e barrel, bet/check/bet, probe… | deux parmi 33 % · 50 % · 75 % · tapis |
+| Stab du bouton (la BB checke), à chaque street | 25 % · 50 % · tapis |
+| Le bouton qui continue après sa mise payée | 33 % · 50 % · 75 % · tapis (deux à la river) |
+| Relances et sur-relances | 33 % · 66 % · tapis |
+
+La synthèse de chaque flop montre la c-bet de la BB, la réponse du bouton, la BB face à sa relance, puis le
+stab du bouton et la réponse de la BB. La méthode est celle du SRP ; au flop, six situations se comparent
+sur arbres complets (c-bet, relance du bouton, stab, check-raise de la BB, sur-relances). Les arbres sont
+plus petits (moins de jetons derrière) : mesuré sur K♠K♦4♣ avec 4 cœurs, 26 minutes pour le choix des
+tailles (21 pour le flop, 1 pour la turn, 4 pour la river) et 2 min 30 pour la résolution (830 000 nœuds,
+1,5 Go de mémoire, étude de 150 Mo), soit une douzaine d'heures pour la série. Les tailles de K♠K♦4♣ sont
+livrées (`analyzer/theory/data/3bet_tailles.json`).
+
+**Pots 4bet** (`--spots 4bet`) : open du bouton à 2,5 bb, 3bet de la BB à 11,5 bb, 4bet du bouton à 26 bb,
+call de la BB ; pot de 52 bb, 74 bb derrière (SPR 1,4). Le bouton est en position et à l'initiative, comme
+en SRP ; la BB ne mène pas. À cette profondeur, 25 % est presque le géométrique sur trois streets (28 %),
+le géométrique sur deux streets fait 48 % et le tapis 142 % du pot. Après le flop, le géométrique retombe
+vers 20-30 % du pot : la turn et la river prennent donc 50 % comme taille intermédiaire.
+
+| Situation | Tailles comparées |
+| --- | --- |
+| C-bet | 25 % · géométrique sur deux streets (48 %) · tapis |
+| Turn : 2e barrel, c-bet retardée, probe | 25 % · 50 % · tapis |
+| River | deux parmi 25 % · 50 % · tapis |
+| Relances | 33 % · tapis (une relance au-delà de 85 % du tapis devient le tapis) |
+
+Les arbres sont petits : sur 4 cœurs, une minute et demie pour choisir les tailles d'un flop et un quart de
+minute pour le résoudre (310 000 nœuds, étude de 20 Mo). Les tailles et la synthèse des 24 flops sont
+livrées (`analyzer/theory/data/4bet_tailles.json`, `4bet_reference.json`).
 
 **Limites** : les tailles et la profondeur de l'arbre simplifient le jeu réel ; une main que la range du
 solveur ne contient pas (par exemple un open que le solveur ne fait jamais) y est ajoutée avec un poids
 infime pour lire sa stratégie, à prendre avec prudence ; les pots limpés et les 5bets ne sont pas couverts.
+
+**Tailles selon la ligne** : GTOpen fixe les tailles par street et par joueur seulement (la même mise du
+bouton à la turn après une c-bet payée ou après un flop checké). `analyzer-solve` sait construire lui-même
+l'arbre (`analyzer/theory/native/arbre.rs`, mêmes règles que GTOpen) quand la requête porte un *plan* :
+une liste de tailles par situation, c-bet, 2e barrel, c-bet retardée, probe, bet/check/bet, check-raise…
+(clés décrites en tête du fichier). Sans plan, l'arbre est celui de GTOpen ; avec un plan vide, celui
+d'Analyzer lui est identique nœud pour nœud (`analyzer-solve --verifier-arbre requete.json`). C'est la
+base du choix des tailles par situation et de la modification des tailles d'un spot.
+Après une mise à jour d'Analyzer qui touche ce pont, relance `python -m analyzer gtopen --installer`.
 
 Variables d'environnement : `ANALYZER_HOME` (dossier de travail, `~/.analyzer` par défaut),
 `GTOPEN_DIR` (copie de GTOpen à utiliser), `ANALYZER_SOLVER` (chemin d'un `analyzer-solve` déjà compilé).

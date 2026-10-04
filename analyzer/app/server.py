@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlsplit
 
-from ..theory import postflop
+from ..theory import postflop, studyspots
 from .library import Library, UnknownPlayer
 from .solves import NeedSession
 from .studies import build_studies_page
@@ -115,7 +115,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.player_page(parts[1], parts[2]))
             if parts == ["etudes"]:
                 return self._html(build_studies_page(embed=True))
-            if len(parts) == 2 and parts[0] == "explorateur" and parts[1] in library.by_id:
+            if len(parts) == 3 and parts[:2] == ["api", "spots"]:
+                return self._json(library.spot_set(parts[2]))
+            if len(parts) == 2 and parts[0] == "explorateur" and (parts[1] in library.by_id
+                                                                   or studyspots.parse_ident(parts[1])):
                 page = (STATIC / "explorer.html").read_text(encoding="utf-8")
                 return self._html(page.replace("__HAND__", html.escape(parts[1], quote=True)))
         except (UnknownPlayer, KeyError):
@@ -172,6 +175,12 @@ class Handler(BaseHTTPRequestHandler):
                                    "state": "session"}, 409)
             except postflop.SolverError as exc:
                 return self._json({"error": str(exc), "state": "session"}, 409)
+        if len(parts) == 4 and parts[:2] == ["api", "spots"] and parts[3] in ("resoudre", "arreter"):
+            if parts[2] not in studyspots.FAMILIES:
+                return self._error(404, "Série inconnue.")
+            if parts[3] == "arreter":
+                return self._json(library.spot_cancel(parts[2]))
+            return self._json(library.spot_set(parts[2], start=True))
         if len(parts) == 4 and parts[:2] == ["api", "resoudre"] and parts[3] == "arreter":
             job = library.solves.cancel(parts[2])
             return self._json(job) if job else self._error(404, "Résolution inconnue.")

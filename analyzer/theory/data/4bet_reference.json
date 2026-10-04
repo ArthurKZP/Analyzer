@@ -1,0 +1,2529 @@
+{
+ "family": "4bet",
+ "label": "Pot 4bet : open du bouton à 2,5 bb, 3bet de la BB à 11,5 bb, 4bet du bouton à 26 bb, call de la BB, 100 bb",
+ "spots": {
+  "spot:4bet:KsKd4c": {
+   "key": "b210c4373d04938c7753",
+   "texture": "Pairé",
+   "iterations": 30,
+   "exploit_pct": 1.395,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.0397,
+      0.9603
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.4321,
+      0.2479,
+      0.32
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3684,
+      0.0706,
+      0.5609
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:As8s3s": {
+   "key": "897c0f582bb89d34aac0",
+   "texture": "Monotone",
+   "iterations": 40,
+   "exploit_pct": 0.95,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.6259,
+      0.3741
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.4199,
+      0.3821,
+      0.1981
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3787,
+      0.0312,
+      0.5897
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:As7h2d": {
+   "key": "a39c43887fdd3122d09e",
+   "texture": "Ace high",
+   "iterations": 30,
+   "exploit_pct": 1.173,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.2647,
+      0.7353
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.5342,
+      0.1938,
+      0.2719
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3774,
+      0.0835,
+      0.539
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:Ks8d3h": {
+   "key": "771baaf81b39e216c559",
+   "texture": "King high",
+   "iterations": 30,
+   "exploit_pct": 1.372,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.0567,
+      0.9433
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.4664,
+      0.2081,
+      0.3255
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3691,
+      0.0863,
+      0.5445
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:Qs7d2h": {
+   "key": "7d31a0846a5ec295378c",
+   "texture": "Queen high",
+   "iterations": 30,
+   "exploit_pct": 0.943,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.0661,
+      0.9339
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.4707,
+      0.219,
+      0.3103
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3732,
+      0.0351,
+      0.5915
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:Js6d3h": {
+   "key": "5225e674307c7888ee0c",
+   "texture": "Jack high",
+   "iterations": 30,
+   "exploit_pct": 1.475,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.4836,
+      0.5164
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.3126,
+      0.2461,
+      0.4412
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3251,
+      0.0772,
+      0.5975
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:Ts5d2h": {
+   "key": "a119ef33da4658e4ba5e",
+   "texture": "Ten high",
+   "iterations": 30,
+   "exploit_pct": 0.823,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.08,
+      0.92
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.471,
+      0.2051,
+      0.3239
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3556,
+      0.0111,
+      0.6332
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:9s5d2h": {
+   "key": "9bda9884708328c9b8b5",
+   "texture": "Low board",
+   "iterations": 30,
+   "exploit_pct": 1.034,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.0772,
+      0.9228
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.3933,
+      0.3469,
+      0.2597
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3283,
+      0.0444,
+      0.6272
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:8h8c5s": {
+   "key": "2f562bded8ab9f9bee14",
+   "texture": "Pairé",
+   "iterations": 30,
+   "exploit_pct": 1.106,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.0267,
+      0.9733
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.4466,
+      0.3076,
+      0.2458
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.351,
+      0.015,
+      0.634
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:Jh9h5h": {
+   "key": "df17a546177625c50e4e",
+   "texture": "Monotone",
+   "iterations": 30,
+   "exploit_pct": 1.316,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.2682,
+      0.7318
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.2821,
+      0.4084,
+      0.3094
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3442,
+      0.0002,
+      0.6556
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:AcKd9h": {
+   "key": "b4828eb07fedecc4f315",
+   "texture": "Ace high",
+   "iterations": 40,
+   "exploit_pct": 0.903,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.4414,
+      0.5586
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.3283,
+      0.5157,
+      0.1559
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3664,
+      0.087,
+      0.5465
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:KhQc9d": {
+   "key": "ac2896331f6b9855a027",
+   "texture": "King high",
+   "iterations": 30,
+   "exploit_pct": 1.263,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.2949,
+      0.7051
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.4625,
+      0.2195,
+      0.318
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3521,
+      0.0151,
+      0.6327
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:QhJc9d": {
+   "key": "0b27c84f235cebf0cb6f",
+   "texture": "Queen high",
+   "iterations": 30,
+   "exploit_pct": 1.445,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.4931,
+      0.5069
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.3492,
+      0.3368,
+      0.314
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3724,
+      0.0369,
+      0.5906
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:JhTc8d": {
+   "key": "840014942b83ff9ad80d",
+   "texture": "Jack high",
+   "iterations": 30,
+   "exploit_pct": 0.913,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.5217,
+      0.4783
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "bet",
+       "allin": true
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.5001,
+      0.4999
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:Th9c7d": {
+   "key": "dc6c400a8e493674d69a",
+   "texture": "Ten high",
+   "iterations": 30,
+   "exploit_pct": 1.198,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.3103,
+      0.6897
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.1665,
+      0.5081,
+      0.3253
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.249,
+      0.1338,
+      0.617
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:8h7c5d": {
+   "key": "2fa4f16bab4a5fe07754",
+   "texture": "Low board",
+   "iterations": 30,
+   "exploit_pct": 1.109,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.3724,
+      0.6276
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.3541,
+      0.2827,
+      0.3631
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3,
+      0.0421,
+      0.6579
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:Jd3c3h": {
+   "key": "a8ab4ec6ca0b9fafb859",
+   "texture": "Pairé",
+   "iterations": 30,
+   "exploit_pct": 1.411,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.1221,
+      0.8779
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.4365,
+      0.2098,
+      0.3536
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3429,
+      0.0618,
+      0.5951
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:7d5d2d": {
+   "key": "15739907c700fb3eec9b",
+   "texture": "Monotone",
+   "iterations": 30,
+   "exploit_pct": 1.376,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.3729,
+      0.6271
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.4106,
+      0.3275,
+      0.2619
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3635,
+      0.0047,
+      0.6315
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:Ah6h4c": {
+   "key": "8d66d8feb85e64bb8c32",
+   "texture": "Ace high",
+   "iterations": 30,
+   "exploit_pct": 1.383,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.4219,
+      0.5781
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.4206,
+      0.3009,
+      0.2785
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3658,
+      0.0167,
+      0.6173
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:Kd7d5c": {
+   "key": "9ad307fcb897c749bc21",
+   "texture": "King high",
+   "iterations": 30,
+   "exploit_pct": 1.343,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.2263,
+      0.7737
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.3342,
+      0.3055,
+      0.3603
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3636,
+      0.0222,
+      0.614
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:Qc8c4d": {
+   "key": "ef852a5aea769d3e3380",
+   "texture": "Queen high",
+   "iterations": 30,
+   "exploit_pct": 1.227,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.2833,
+      0.7167
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.3168,
+      0.3801,
+      0.303
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3515,
+      0.0295,
+      0.6188
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:Jc9c4d": {
+   "key": "2c81aa864d4afa46ef66",
+   "texture": "Jack high",
+   "iterations": 30,
+   "exploit_pct": 1.352,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.459,
+      0.541
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.2186,
+      0.4683,
+      0.313
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.2938,
+      0.0433,
+      0.6628
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:Tc8c3d": {
+   "key": "f0e6926e5706846bd225",
+   "texture": "Ten high",
+   "iterations": 30,
+   "exploit_pct": 0.944,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.207,
+      0.793
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.4009,
+      0.3155,
+      0.2835
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3062,
+      0.0343,
+      0.6593
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  },
+  "spot:4bet:6c4c2d": {
+   "key": "b8bea7298700fb7eb251",
+   "texture": "Low board",
+   "iterations": 30,
+   "exploit_pct": 0.991,
+   "summary": [
+    {
+     "title": "C-bet du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.2193,
+      0.7807
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (13 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.416,
+      0.2609,
+      0.3229
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 38,7 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face au check-raise",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3145,
+      0.0755,
+      0.6098
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "tapis (74 bb)",
+       "kind": "raise",
+       "allin": true
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

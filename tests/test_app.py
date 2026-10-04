@@ -2,6 +2,7 @@ import http.client
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -186,10 +187,41 @@ class ServerTest(unittest.TestCase):
     def test_studies_page(self):
         status, _, body = self.request("GET", "/etudes")
         self.assertEqual(status, 200)
-        self.assertIn("Aucune étude".encode(), body)
+        self.assertIn("Aucun coup résolu".encode(), body)
+        self.assertIn("Spots d'étude · SRP".encode(), body)
+        self.assertIn("0 / 24</b> flops résolus".encode(), body)
+        if shutil.which("node"):  # le script de la page doit au moins être du JavaScript valide
+            script = body.decode().rsplit("<script>", 1)[1].split("</script>")[0]
+            path = Path(self.tmp.name) / "etudes.js"
+            path.write_text(script, encoding="utf-8")
+            check = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True)
+            self.assertEqual(check.returncode, 0, check.stderr)
         headers = {"Content-Type": "application/json"}
         status, _, body = self.request("POST", "/api/etudes/supprimer", json.dumps({"key": "../x"}), headers)
         self.assertEqual((status, json.loads(body)), (200, {"ok": False}))
+
+    def test_study_spots(self):
+        status, _, body = self.request("GET", "/explorateur/spot:srp:KsKd4c")
+        self.assertEqual(status, 200)
+        self.assertIn(b'data-hand="spot:srp:KsKd4c"', body)
+        for bad in ("/explorateur/spot:srp:KsKs4c", "/explorateur/spot:autre:KsKd4c", "/api/spots/autre"):
+            self.assertEqual(self.request("GET", bad)[0], 404, bad)
+        series = json.loads(self.request("GET", "/api/spots/srp")[2])
+        self.assertEqual((series["total"], series["done"], series["ready"]), (24, 0, False))
+        self.assertEqual(series["rows"][0]["id"], "spot:srp:KsKd4c")
+        headers = {"Content-Type": "application/json"}
+        status, _, body = self.request("POST", "/api/spots/srp/resoudre", "{}", headers)
+        self.assertEqual((status, json.loads(body)["busy"]), (200, 0))  # solveur absent : rien n'est lancé
+        self.assertEqual(self.request("POST", "/api/spots/autre/resoudre", "{}", headers)[0], 404)
+        self.assertEqual(self.request("POST", "/api/spots/srp/arreter", "{}", headers)[0], 200)
+        state = json.loads(self.request("POST", "/api/explorateur/etat", json.dumps({"hand": "spot:srp:Ah7d2c"}),
+                                        headers)[2])
+        self.assertEqual((state["state"], state["meta"]["spot"], state["meta"]["texture"]), ("absent", True, "Ace high"))
+        status, _, body = self.request("POST", "/api/explorateur/noeud",
+                                       json.dumps({"hand": "spot:srp:Ah7d2c", "path": []}), headers)
+        self.assertEqual((status, json.loads(body)["state"]), (409, "session"))
+        body = json.dumps({"hand": "spot:srp:AhAh2c"})
+        self.assertEqual(self.request("POST", "/api/explorateur/etat", body, headers)[0], 404)
 
     def test_not_found(self):
         for path in ("/p/Personne/plan", "/p/Villain/autre", "/static/server.py",

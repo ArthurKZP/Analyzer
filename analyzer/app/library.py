@@ -13,7 +13,7 @@ from ..parsers import load_hands, parse_text
 from ..report import build_plan_page, build_report
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
-from ..theory import handclass, postflop
+from ..theory import handclass, postflop, studyspots
 from ..theory.page import build_preflop_page
 from ..viewer import build_viewer
 from .solves import SolveQueue
@@ -134,14 +134,20 @@ class Library:
         return self._cached(("self", page), build)
 
     # --- résolution postflop ----------------------------------------------------
-    def _spot(self, hand_id: str) -> postflop.PostflopSpot:
+    def _spot(self, hand_id: str):
+        """Une main jouée (son numéro), ou un spot d'étude (« spot:srp:KsKd4c »)."""
+        if hand_id.startswith("spot:"):
+            spot = studyspots.parse_ident(hand_id)
+            if spot is None:
+                raise UnknownPlayer(hand_id)
+            return spot
         hand = self.by_id.get(hand_id)
         if hand is None or not self.hero:
             raise UnknownPlayer(hand_id)
         return postflop.build_spot(hand, self.hero)
 
     def solve(self, hand_id: str, start: bool = False, force: bool = False) -> dict:
-        """État de la résolution GTOpen d'une main ; start=True la lance si besoin.
+        """État de la résolution GTOpen d'une main (ou d'un spot d'étude) ; start=True la lance si besoin.
 
         force=True relance une main déjà résolue pour rouvrir une session navigable.
         """
@@ -165,6 +171,15 @@ class Library:
     def explorer_state(self, hand_id: str) -> dict:
         """Ce que l'explorateur affiche d'une main : le coup, et l'état de sa résolution."""
         view = self.solve(hand_id)
+        view["categories"] = handclass.labels()
+        if hand_id.startswith("spot:"):
+            spot = self._spot(hand_id)
+            view["meta"] = {"spot": True, "hand": hand_id, "board": spot.board, "texture": spot.texture,
+                            "pot_type": spot.name, "family_label": spot.label, "pot": spot.pot_bb,
+                            "stack": spot.stack_bb, "sizes": spot.menu_text(), "hero": None, "villain": None,
+                            "hero_cards": [],
+                            "villain_cards": [], "hero_position": None}
+            return view
         hand = self.by_id[hand_id]
         villain = hand.opponent_of(self.hero)
         bb = hand.bb
@@ -175,13 +190,63 @@ class Library:
             "hero_position": "BTN" if hand.button == self.hero else "BB",
             "net": round(hand.net(self.hero) / bb, 2),
         }
-        view["categories"] = handclass.labels()
         return view
 
     def explorer_node(self, hand_id: str, path: list) -> dict:
         reply = self.solves.node(self._spot(hand_id), path)
         handclass.annotate(reply["node"])  # catégories des mains, pour les filtres
         return reply
+
+    def spot_set(self, family: str = "srp", start: bool = False) -> dict:
+        """Série de spots d'étude : état de chaque flop ; start=True met en file ceux qui manquent.
+
+        Un flop de la série sans tailles choisies passe d'abord par le choix des tailles (long)."""
+        if family not in studyspots.FAMILIES:
+            raise KeyError(family)
+        studies = studyspots.spot_studies()
+        rows = []
+        ready = postflop.status()["ready"]
+        series = set(studyspots.flop_set(family))
+        for board in studyspots.family_boards(family):
+            spot = studyspots.StudySpot(family, studyspots.cards_of(board))
+            meta = studies.get(spot.ident)
+            row = {"id": spot.ident, "board": spot.board, "texture": spot.texture, "series": board in series,
+                   "done": bool(meta and meta.get("summary")), "key": meta["key"] if meta else None,
+                   "sizes": bool(spot.plan)}
+            if not row["done"]:
+                view = self.solves.lookup(spot)
+                if start and ready and view["state"] not in ("waiting", "running"):
+                    if board in series and not spot.plan:
+                        view = self.solves.choose_and_solve(
+                            spot.ident, lambda job, b=board: self._choose(family, b, job),
+                            lambda b=board: studyspots.StudySpot(family, studyspots.cards_of(b)))
+                    else:
+                        view = self.solves.start(spot, force=view["state"] == "done", keep_live=False)
+                row.update(state=view["state"], progress=view.get("progress"), job=view.get("job"),
+                           max_iterations=view.get("max_iterations"), mode=view.get("mode"))
+            rows.append(row)
+        return {"family": family, "label": studyspots.FAMILIES[family]["label"], "ready": ready,
+                "total": len(rows), "done": sum(r["done"] for r in rows),
+                "busy": sum(r.get("state") in ("waiting", "running") for r in rows), "rows": rows}
+
+    @staticmethod
+    def _choose(family: str, board: str, job) -> None:
+        """Choix des tailles d'un flop dans une tâche de la file (étape en cours dans job.progress)."""
+        def log(message: str) -> None:
+            job.progress["stage"] = message.strip()
+
+        def started(proc) -> None:
+            job.process = proc
+            if job.cancelled:  # arrêt demandé pendant le lancement
+                proc.terminate()
+        studyspots.choose_sizes(family, board, log, on_start=started, stopped=lambda: job.cancelled)
+
+    def spot_cancel(self, family: str = "srp") -> dict:
+        """Arrête les résolutions en lot de cette série (en attente ou en cours)."""
+        for row in self.spot_set(family)["rows"]:
+            if row.get("state") in ("waiting", "running"):
+                self.solves.cancel(row["job"])
+        return self.spot_set(family)
 
     # --- import -----------------------------------------------------------------
     def import_files(self, files: list[dict]) -> dict:

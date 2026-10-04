@@ -2,6 +2,7 @@
   'use strict';
 
   const HAND = document.body.dataset.hand;
+  const SPOT = HAND.startsWith('spot:');  // spot d'étude : pas de main jouée, les joueurs sont nommés par leur position
   const $ = (id) => document.getElementById(id);
   const RANKS = 'AKQJT98765432';
   const SUITS = { s: '♠', h: '♥', d: '♦', c: '♣' };
@@ -56,6 +57,7 @@
     return p === 0 ? oop : (oop === 'H' ? 'V' : 'H');
   }
   const playerOf = (role) => (roleOf(0) === role ? 0 : 1);
+  const who = (p) => (SPOT ? POS[p] : POS[p] + ' · ' + NAME[roleOf(p)]);
 
   // Libellés des actions d'un nœud. Mise : % du pot ; relance : montant ajouté en % du pot après le
   // call (convention des solveurs : relancer à 4,5 sur une mise de 1,7 dans un pot de 5 = 33 %).
@@ -129,16 +131,26 @@
     return reply.node;
   }
 
-  async function goTo(target) {
+  // Un nœud à une seule action (la BB qui ne peut que checker, sans donk).
+  const forced = (n) => n.type === 'action' && n.actions.length === 1;
+
+  // forward=true (on avance dans le coup) : dans un spot d'étude, les nœuds forcés sont passés.
+  async function goTo(target, forward = false) {
     let p = target.slice();
     document.body.classList.add('busy');  // un nœud proche du flop peut prendre une ou deux secondes
     try {
       // Sans session, seules les décisions de la ligne jouée sont connues : on passe les cartes jouées.
       if (!live) while (prefixOf(p, played) && p.length < played.length && played[p.length].type === 'card') p.push(played[p.length]);
       let n = await fetchNode(p);
-      while (n.type === 'chance') {
-        const real = meta.board[n.board.length];
-        p = p.concat([{ type: 'card', card: n.cards.includes(real) ? real : n.cards[0] }]);
+      let pick = null;  // carte posée d'office (pas de carte réelle) : on propose de la choisir
+      for (;;) {
+        if (n.type === 'chance') {
+          const real = meta.board[n.board.length];
+          if (!n.cards.includes(real) && pick === null) pick = p.length;
+          p = p.concat([{ type: 'card', card: n.cards.includes(real) ? real : n.cards[0] }]);
+        } else if (forward && SPOT && forced(n)) {
+          p = p.concat([{ type: 'action', index: 0 }]);
+        } else break;
         n = await fetchNode(p);
       }
       path = p;
@@ -147,6 +159,10 @@
       selected = null;
       notice = '';
       render();
+      if (pick !== null) {
+        const btn = document.querySelector('#ribbon [data-k="' + pick + '"]');
+        if (btn) setTimeout(() => openPicker(pick, btn), 0);
+      }
     } catch (e) {
       notice = e.message;
       if (e.status === 409 && live) {  // session fermée entre-temps (inactivité) : on propose de recalculer
@@ -159,10 +175,18 @@
     }
   }
 
-  function back() {
+  async function back() {
     const p = path.slice();
-    while (p.length && p[p.length - 1].type === 'card') p.pop();
-    if (p.length) { p.pop(); goTo(p); }
+    for (;;) {
+      while (p.length && p[p.length - 1].type === 'card') p.pop();
+      if (!p.length) return;
+      p.pop();
+      if (!SPOT || !p.length) break;
+      // dans un spot, on remonte aussi au-delà d'un nœud forcé (sauf la racine)
+      const n = nodes.get(JSON.stringify(p));
+      if (!n || !forced(n)) break;
+    }
+    goTo(p);
   }
 
   async function loadState() {
@@ -196,7 +220,7 @@
           nodes.clear();
           await loadState();
           renderMeta();
-          await goTo(node ? path : initialPath());
+          await (node ? goTo(path) : goStart());
           renderStatus();
           return;
         }
@@ -212,6 +236,14 @@
 
   // ---------- rendu ----------
   function renderMeta() {
+    if (SPOT) {
+      const box = $('meta');
+      box.textContent = '';
+      box.title = meta.family_label + (meta.sizes ? '\nTailles : ' + meta.sizes : '');
+      box.append('Spot d\'étude · ' + meta.pot_type + ' · BTN contre BB · flop ', cards(meta.board), ' · ' + meta.texture
+        + ' · pot ' + num(meta.pot) + ' bb, tapis ' + num(meta.stack) + ' bb');
+      return;
+    }
     const parts = ['Main ' + meta.hand, meta.date];
     if (state.result) parts.push(state.result.pot_type);
     parts.push('toi ' + (meta.hero_position === 'BTN' ? 'au bouton' : 'en BB'));
@@ -246,6 +278,12 @@
       const r = state.result;
       box.append(el('span', {}, 'Session active : toutes les branches et toutes les cartes sont explorables (fermée après 30 min sans activité). '
         + r.iterations + ' itérations, exploitabilité ' + num(r.exploit_pct, 2) + ' % du pot.'));
+    } else if (s === 'done' && state.study && SPOT) {
+      box.append(el('span', {}, 'Étude enregistrée.'),
+        el('button', { type: 'button', class: 'go', onclick: solve }, 'Ouvrir l\'étude (quelques secondes)'));
+    } else if (s === 'done' && SPOT) {
+      box.append(el('span', {}, 'L\'étude de ce spot a été supprimée : recalcule-le pour l\'explorer.'),
+        el('button', { type: 'button', class: 'go', onclick: solve }, 'Recalculer (quelques minutes)'));
     } else if (s === 'done' && state.study) {
       box.append(el('span', {}, 'Étude enregistrée : ligne jouée affichée.'),
         el('button', { type: 'button', class: 'go', onclick: solve }, 'Ouvrir l\'étude complète (quelques secondes)'));
@@ -254,8 +292,9 @@
         el('button', { type: 'button', class: 'go', onclick: solve }, 'Recalculer (quelques minutes)'));
     } else {
       if (state.error) box.append(el('span', { class: 'err' }, state.error));
-      box.append(el('span', {}, 'Ce coup n\'est pas encore résolu.'),
-        el('button', { type: 'button', class: 'go', onclick: solve }, 'Résoudre ce coup'));
+      box.append(el('span', {}, SPOT ? 'Ce spot n\'est pas encore résolu (quelques minutes ; il sera gardé dans les études).'
+        : 'Ce coup n\'est pas encore résolu.'),
+        el('button', { type: 'button', class: 'go', onclick: solve }, SPOT ? 'Résoudre ce spot' : 'Résoudre ce coup'));
     }
     if (notice) box.append(el('span', { class: 'err' }, notice));
   }
@@ -275,7 +314,7 @@
   function actionStep(h, k, current) {
     const role = roleOf(h.player);
     const step = el('div', { class: 'step' + (current ? ' current' : '') },
-      el('div', { class: 'head' }, el('span', { class: role }, POS[h.player] + ' · ' + NAME[role]),
+      el('div', { class: 'head' }, el('span', { class: role }, who(h.player)),
         el('span', { title: 'tapis ' + num(h.stack) + ' bb' }, 'pot ' + num(h.pot))));
     const prefix = path.slice(0, k);
     navStep(step, prefix, current);
@@ -287,7 +326,7 @@
       step.append(el('button', {
         type: 'button', class: 'act' + (h.chosen === j ? ' on' : ''), disabled: !allowed,
         title: allowed ? null : 'Hors de la ligne jouée : recalcule pour explorer cette branche',
-        onclick: () => goTo(prefix.concat([{ type: 'action', index: j }])),
+        onclick: () => goTo(prefix.concat([{ type: 'action', index: j }]), true),
       }, el('span', {}, labels[j]), isPlayed ? el('span', { class: 'dot', title: 'Joué dans la main' }, '●') : ''));
     });
     return step;
@@ -295,7 +334,7 @@
 
   function cardStep(h, k) {
     const btn = el('button', {
-      type: 'button', disabled: !live, title: live ? 'Changer de carte' : 'Recalcule pour changer de carte',
+      type: 'button', disabled: !live, title: live ? 'Changer de carte' : 'Recalcule pour changer de carte', 'data-k': k,
       onclick: (e) => openPicker(k, e.currentTarget),
     }, h.card ? card(h.card) : '?');
     const step = el('div', { class: 'step cards' }, el('div', { class: 'head' }, el('span', {}, STREET[h.street] || 'Carte'), el('span', {}, 'pot ' + num(h.pot))), btn);
@@ -330,7 +369,7 @@
       const c = r + s;
       rows.append(el('button', {
         type: 'button', class: 'pc s' + s + (c === current ? ' on' : ''), disabled: !chance.cards.includes(c),
-        onclick: () => { closePicker(); goTo(path.slice(0, k).concat([{ type: 'card', card: c }])); },
+        onclick: () => { closePicker(); goTo(path.slice(0, k).concat([{ type: 'card', card: c }]), true); },
       }, r + SUITS[s]));
     }
     picker.append(rows);
@@ -405,7 +444,7 @@
     [0, 1].forEach((p) => players.append(el('button', {
       type: 'button', 'aria-pressed': viewPlayer === p ? 'true' : 'false',
       onclick: () => { viewPlayer = p; viewAuto = actor && p === node.player; selected = null; render(); },
-    }, POS[p] + ' · ' + NAME[roleOf(p)] + (actor && node.player === p ? ' (agit)' : ''))));
+    }, who(p) + (actor && node.player === p ? ' (agit)' : ''))));
   }
 
   function renderGrid() {
@@ -481,7 +520,7 @@
       const full = filterActive() && p === viewPlayer ? node.hands[p].reduce((s, r) => s + r[1], 0) : 0;
       const freqs = node.actions.map((_, k) => Object.values(agg).reduce((s, a) => s + a.w * a.s[k], 0));
       const cols = colors(node.actions);
-      panel.append(el('div', { class: 'ttl' }, el('h2', {}, STREET[node.street] + ' · ' + POS[p] + ' · ' + NAME[role] + ' agit'),
+      panel.append(el('div', { class: 'ttl' }, el('h2', {}, STREET[node.street] + ' · ' + who(p) + ' agit'),
         el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb · tapis ' + num(node.stacks[p]) + ' bb')));
       const tiles = el('div', { class: 'tiles' });
       node.actions.forEach((a, k) => tiles.append(el('div', { class: 'tile', style: 'background:' + cols[k] },
@@ -503,7 +542,7 @@
       return w ? rows.reduce((s, r) => s + r[1] * r[2], 0) / w : null;
     });
     panel.append(el('div', { class: 'muted small', style: 'margin-top:6px' },
-      'Équité des ranges : ' + [0, 1].map((p) => POS[p] + ' (' + NAME[roleOf(p)] + ') ' + (eqs[p] === null ? '—' : pct(eqs[p]))).join(' · ')));
+      'Équité des ranges : ' + [0, 1].map((p) => (SPOT ? POS[p] : POS[p] + ' (' + NAME[roleOf(p)] + ')') + ' ' + (eqs[p] === null ? '—' : pct(eqs[p]))).join(' · ')));
     box.append(panel);
   }
 
@@ -558,7 +597,7 @@
     const hand = hovered || selected;
     const box = $('combos');
     box.textContent = '';
-    $('combos-title').textContent = hand ? 'Mains ' + hand + ' — ' + POS[viewPlayer] + ' · ' + NAME[roleOf(viewPlayer)] : 'Mains';
+    $('combos-title').textContent = hand ? 'Mains ' + hand + ' — ' + who(viewPlayer) : 'Mains';
     $('combos-hint').hidden = !!hand;
     if (!hand) return;
     const a = aggregate(viewPlayer)[hand];
@@ -599,7 +638,7 @@
     [['include', 'Inclure'], ['exclude', 'Exclure']].forEach(([id, label]) => seg.append(el('button', {
       type: 'button', 'aria-pressed': filters.mode === id ? 'true' : 'false', onclick: () => { filters.mode = id; render(); },
     }, label)));
-    head.append(seg, el('span', { class: 'muted small' }, 'Range : ' + POS[p] + ' · ' + NAME[roleOf(p)]));
+    head.append(seg, el('span', { class: 'muted small' }, 'Range : ' + who(p)));
     if (filterActive()) head.append(el('button', { type: 'button', class: 'clear', onclick: clearFilters }, 'Effacer les filtres'));
     box.append(head);
 
@@ -678,11 +717,20 @@
     return (decisions[k] || decisions[0] || { path: [] }).path;
   }
 
+  // Premier nœud affiché ; dans un spot d'étude, on passe le check forcé de la BB (qui ne mène pas).
+  const goStart = () => goTo(initialPath(), true);
+
   // ---------- démarrage ----------
   $('b-back').onclick = back;
   $('tab-combos').onclick = () => { rightTab = 'combos'; renderTabs(); };
   $('tab-filters').onclick = () => { rightTab = 'filters'; renderTabs(); };
   $('b-line').onclick = () => state && state.result && goTo(state.result.decisions[0].path);
+  if (SPOT) {  // pas de ligne jouée ni de main adverse à dévoiler
+    $('b-line').hidden = true;
+    $('reveal').closest('label').hidden = true;
+    const ident = HAND.split(':');
+    document.title = 'Explorateur — ' + ident[1].toUpperCase() + ' ' + ident[2];
+  }
   $('reveal').onchange = render;
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { closePicker(); if (selected) { selected = null; renderGridSelection(); renderCombos(); } }
@@ -702,9 +750,14 @@
     }
     renderMeta();
     renderStatus();
-    if (state.result) await goTo(initialPath());
-    else $('grid').append(el('div', { class: 'empty', style: 'grid-column: 1 / -1' }, 'Résous ce coup pour voir la stratégie du solveur.'));
-    if (state.state === 'done' && !live && state.study) solve();  // l'étude se rouvre seule, en quelques secondes
+    // Un spot d'étude n'a pas de ligne jouée en cache : il s'affiche une fois l'étude ouverte.
+    if (state.result && (live || !SPOT)) await goStart();
+    else $('grid').append(el('div', { class: 'empty', style: 'grid-column: 1 / -1' },
+      state.study ? 'Ouverture de l\'étude…' : SPOT ? 'Résous ce spot pour voir la stratégie du solveur.'
+        : 'Résous ce coup pour voir la stratégie du solveur.'));
+    // L'étude se rouvre seule, en quelques secondes (aussi quand le résultat en cache manque, par exemple
+    // après une mise à jour du solveur).
+    if (['done', 'absent'].includes(state.state) && !live && state.study) solve();
     else poll();
   })();
 })();

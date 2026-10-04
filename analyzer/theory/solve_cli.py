@@ -19,6 +19,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--gpu", action="store_true",
                         help="avec --installer : compile aussi le moteur CUDA (carte NVIDIA, expérimental)")
     parser.add_argument("-m", "--main", help="numéro de la main à résoudre (ou sa fin)")
+    parser.add_argument("--spots", choices=["srp", "3bet", "4bet"],
+                        help="résout une série de spots d'étude (24 flops) : srp, 3bet ou 4bet")
+    parser.add_argument("--texture", action="append", help="avec --spots : seulement cette texture (répétable)")
+    parser.add_argument("--choix-seulement", action="store_true",
+                        help="avec --spots : choisit les tailles de mise des flops, sans les résoudre ensuite")
+    parser.add_argument("--sans-choix", action="store_true",
+                        help="avec --spots : ne choisit pas les tailles (tailles par défaut si aucun choix n'existe)")
+    parser.add_argument("--cartes", type=int, default=12,
+                        help="avec --spots : cartes turn comparées pour choisir les tailles (défaut : %(default)s)")
     parser.add_argument("--hero", help="ton pseudo (détecté automatiquement)")
     parser.add_argument("--iterations", type=int, default=postflop.DEFAULT_ITERATIONS, help="itérations maximum")
     parser.add_argument("--precision", type=float, default=postflop.DEFAULT_TARGET,
@@ -34,6 +43,23 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(exc, file=sys.stderr)
             return 1
         print(f"Solveur prêt : {binary}")
+        return 0
+
+    if args.spots:
+        from .studyspots import TEXTURES, find_texture, solve_set
+        textures = [find_texture(t) for t in args.texture or []]
+        unknown = [t for t, found in zip(args.texture or [], textures) if found is None]
+        if unknown:
+            print(f"Texture inconnue : {', '.join(unknown)} (choix : {', '.join(TEXTURES)})", file=sys.stderr)
+            return 1
+        try:
+            n = solve_set(args.spots, textures or None, iterations=args.iterations, target=args.precision,
+                          threads=args.threads, choose=not args.sans_choix, solve=not args.choix_seulement,
+                          cards=args.cartes)
+        except postflop.SolverError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print(f"{n} spot(s) résolu(s) ; ils sont dans « Études du solveur ».")
         return 0
 
     if not args.main:

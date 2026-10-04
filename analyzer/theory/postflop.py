@@ -35,7 +35,7 @@ GTOPEN_URL = "https://github.com/MatthewPDingle/GTOpen"
 GTOPEN_COMMIT = "b69ea07c79884fc598757dc45c712e73976db810"  # version de GTOpen testée avec analyzer-solve
 GTOPEN_PATHS = ("/crates/solver/", "/cache/contextual/")  # le moteur ; les fichiers qu'il lit sont ajoutés
 INCLUDE_RE = re.compile(r'include_(?:str|bytes)!\(\s*"([^"]+)"\s*\)')
-NATIVE_SOURCE = Path(__file__).parent / "native" / "main.rs"
+NATIVE_DIR = Path(__file__).parent / "native"  # sources du pont analyzer-solve (main.rs, arbre.rs)
 EXE = "analyzer-solve" + (".exe" if os.name == "nt" else "")
 INSTALL_COMMAND = "python -m analyzer gtopen --installer"
 
@@ -111,7 +111,10 @@ def binary_path() -> Path:
 
 
 def _native_hash() -> str:
-    return hashlib.sha256(NATIVE_SOURCE.read_bytes()).hexdigest()[:16]
+    digest = hashlib.sha256()
+    for path in sorted(NATIVE_DIR.glob("*.rs")):
+        digest.update(path.name.encode() + b"\0" + path.read_bytes())
+    return digest.hexdigest()[:16]
 
 
 def _valid_source(path: Path) -> bool:
@@ -238,7 +241,8 @@ def install(source: Optional[str] = None, log: Callable[[str], None] = print, gp
         prepare(src, log)
     root = build_dir()
     root.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(NATIVE_SOURCE, root / "main.rs")
+    for path in NATIVE_DIR.glob("*.rs"):
+        shutil.copyfile(path, root / path.name)
     (root / "Cargo.toml").write_text(CARGO_TOML.format(solver=(src / "crates" / "solver").as_posix()),
                                      encoding="utf-8")
     (root / "source.txt").write_text(str(src), encoding="utf-8")
@@ -285,6 +289,13 @@ def _merge_sizes(defaults: list, played: list) -> list:
     return sizes
 
 
+def default_sizes(oop: str, ip: str, oop_initiative: bool) -> dict[str, list[dict[str, list]]]:
+    """Tailles par défaut. Sans l'initiative préflop (SRP, pot 4bet), la BB ne mène pas au flop :
+    c'est un donk, écarté comme aux streets suivantes (seuls les donks joués entrent dans l'arbre)."""
+    return {p: [{"bet": [] if s == 0 and p == oop and not oop_initiative else [DEFAULT_BETS[s]],
+                 "raise": list(DEFAULT_RAISES[s]), "donk": []} for s in range(3)] for p in (oop, ip)}
+
+
 def _size_order(size) -> float:
     return float("inf") if size == "a" else size
 
@@ -293,8 +304,51 @@ def _size_json(sizes: list) -> list:
     return ["AllIn" if s == "a" else {"PotPct": s} for s in sizes]
 
 
+class SpotTree:
+    """Arbre et requête d'un spot : attend board, ranges, sizes, oop, ip, pot_bb, stack_bb et line."""
+
+    def tree(self) -> dict:
+        def streets(player: str) -> list[dict]:
+            return [{k: _size_json(v) for k, v in s.items()} for s in self.sizes[player]]
+        return {"starting_pot": self.pot_bb, "effective_stack": self.stack_bb, "rake_pct": 0.0, "rake_cap": 0.0,
+                "oop": streets(self.oop), "ip": streets(self.ip), "allin_threshold": 0.85,
+                "add_allin": False, "max_raises": MAX_RAISES}
+
+    def request(self, iterations: int = DEFAULT_ITERATIONS, target: float = DEFAULT_TARGET,
+                threads: int = 0) -> dict:
+        out = {
+            "spot": {"board": "".join(self.board), "range_oop": range_text(self.ranges[self.oop]),
+                     "range_ip": range_text(self.ranges[self.ip]), "tree": self.tree()},
+            "line": self.line,
+            "max_iterations": iterations, "target_exploit_pct": target, "threads": threads,
+            "gpu": gpu_enabled(),
+        }
+        # Tailles par situation de la ligne (c-bet, 2e barrel, probe…) : % du pot, "geo" ou "a" (tapis),
+        # voir native/arbre.rs. Sans plan,
+        # la requête (et donc la clé des études déjà enregistrées) ne change pas.
+        plan = getattr(self, "plan", None)
+        if plan:
+            out["plan"] = {key: [s if isinstance(s, str) else float(s) for s in sizes]
+                           for key, sizes in sorted(plan.items())}
+        return out
+
+    def menu_text(self) -> str:
+        def fmt(values: list) -> str:
+            return " / ".join("tapis" if v == "a" else f"{_num(v)} %" for v in values)
+        parts = []
+        for s, street in enumerate(("flop", "turn", "river")):
+            bets = sorted({v for p in (self.oop, self.ip) for v in self.sizes[p][s]["bet"]}, key=_size_order)
+            raises = sorted({v for p in (self.oop, self.ip) for v in self.sizes[p][s]["raise"]}, key=_size_order)
+            text = f"{street} : mise {fmt(bets)}" + (f", relance {fmt(raises)}" if raises else "")
+            donks = self.sizes[self.oop][s]["donk"]
+            if donks:
+                text += f", donk {fmt(donks)}"
+            parts.append(text)
+        return " · ".join(parts)
+
+
 @dataclass
-class PostflopSpot:
+class PostflopSpot(SpotTree):
     hand: Hand
     hero: str
     villain: str
@@ -318,36 +372,15 @@ class PostflopSpot:
         return {"".join(self.hand.hole_cards[p]): 0 if p == self.oop else 1 for p in (self.hero, self.villain)
                 if len(self.hand.hole_cards.get(p, [])) == 2}
 
-    def tree(self) -> dict:
-        def streets(player: str) -> list[dict]:
-            return [{k: _size_json(v) for k, v in s.items()} for s in self.sizes[player]]
-        return {"starting_pot": self.pot_bb, "effective_stack": self.stack_bb, "rake_pct": 0.0, "rake_cap": 0.0,
-                "oop": streets(self.oop), "ip": streets(self.ip), "allin_threshold": 0.85,
-                "add_allin": False, "max_raises": MAX_RAISES}
+    @property
+    def ident(self) -> str:
+        return self.hand.hand_id
 
-    def request(self, iterations: int = DEFAULT_ITERATIONS, target: float = DEFAULT_TARGET,
-                threads: int = 0) -> dict:
-        return {
-            "spot": {"board": "".join(self.board), "range_oop": range_text(self.ranges[self.oop]),
-                     "range_ip": range_text(self.ranges[self.ip]), "tree": self.tree()},
-            "line": self.line,
-            "max_iterations": iterations, "target_exploit_pct": target, "threads": threads,
-            "gpu": gpu_enabled(),
-        }
+    def interpret(self, raw: dict) -> dict:
+        return interpret(self, raw)
 
-    def menu_text(self) -> str:
-        def fmt(values: list) -> str:
-            return " / ".join("tapis" if v == "a" else f"{_num(v)} %" for v in values)
-        parts = []
-        for s, street in enumerate(("flop", "turn", "river")):
-            bets = sorted({v for p in (self.oop, self.ip) for v in self.sizes[p][s]["bet"]}, key=_size_order)
-            raises = sorted({v for p in (self.oop, self.ip) for v in self.sizes[p][s]["raise"]}, key=_size_order)
-            text = f"{street} : mise {fmt(bets)}" + (f", relance {fmt(raises)}" if raises else "")
-            donks = self.sizes[self.oop][s]["donk"]
-            if donks:
-                text += f", donk {fmt(donks)}"
-            parts.append(text)
-        return " · ".join(parts)
+    def write_meta(self, request: dict, raw: dict, session: "Optional[Session]" = None) -> None:
+        write_study_meta(self, request, raw)
 
 
 def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> PostflopSpot:
@@ -417,9 +450,9 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> Po
         line.append(step)
         index.append(i)
 
-    sizes = {p: [{"bet": _merge_sizes([DEFAULT_BETS[s]], played[p][s]["bet"]),
-                  "raise": _merge_sizes(list(DEFAULT_RAISES[s]), played[p][s]["raise"]),
-                  "donk": _merge_sizes([], played[p][s]["donk"]) if p == oop else []}
+    initiative = [a.player for a in pre if a.kind == RAISE][-1] == oop
+    defaults = default_sizes(oop, ip, initiative)
+    sizes = {p: [{k: _merge_sizes(defaults[p][s][k], played[p][s][k]) for k in ("bet", "raise", "donk")}
                  for s in range(3)] for p in (oop, ip)}
     return PostflopSpot(hand, hero, villain, pot_type, oop, ip, round(pot / bb, 4), round(stack / bb, 4),
                         ranges, line, index, sizes, added)
@@ -427,9 +460,21 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> Po
 
 # --- Exécution et cache --------------------------------------------------------------------
 
+RUNTIME_FIELDS = ("threads", "gpu", "max_nodes")  # réglages d'exécution : ne changent pas la solution
+
+
+def _identity(request: dict) -> str:
+    return json.dumps({k: v for k, v in request.items() if k not in RUNTIME_FIELDS}, sort_keys=True, ensure_ascii=False)
+
+
 def cache_key(request: dict) -> str:
-    text = json.dumps(request, sort_keys=True, ensure_ascii=False) + _native_hash()
-    return hashlib.sha256(text.encode()).hexdigest()[:20]
+    """Clé du résultat de la ligne jouée (dépend aussi du programme, dont le format de sortie peut changer)."""
+    return hashlib.sha256((_identity(request) + _native_hash()).encode()).hexdigest()[:20]
+
+
+def study_key(request: dict) -> str:
+    """Clé d'une étude : le spot seul. Le fichier d'étude a son propre format versionné (en-tête)."""
+    return hashlib.sha256(_identity(request).encode()).hexdigest()[:20]
 
 
 def cache_path(request: dict) -> Path:
@@ -512,14 +557,14 @@ def studies_dir() -> Path:
 
 
 def study_path(request: dict) -> Path:
-    return studies_dir() / f"{cache_key(request)}.etude"
+    return studies_dir() / f"{study_key(request)}.etude"
 
 
 def write_study_meta(spot: PostflopSpot, request: dict, raw: dict) -> None:
     """Fiche de l'étude (pour la bibliothèque), à côté du fichier de l'arbre."""
     hand = spot.hand
     meta = {
-        "key": cache_key(request), "hand": hand.hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"),
+        "kind": "hand", "key": study_key(request), "hand": hand.hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"),
         "hero": spot.hero, "villain": spot.villain, "hero_cards": hand.hole_cards.get(spot.hero, []),
         "board": hand.board, "pot_type": spot.pot_type, "hero_position": "BB" if spot.oop == spot.hero else "BTN",
         "pot": spot.pot_bb, "stack": spot.stack_bb, "net": round(hand.net(spot.hero) / hand.bb, 2),
@@ -566,12 +611,14 @@ class Session:
     """Résolution gardée en mémoire (analyzer-solve --serve) pour naviguer dans tout l'arbre.
 
     Sans étude enregistrée, résout puis enregistre l'étude ; sinon la recharge (quelques secondes).
+    save=False : résolution de travail (choix des tailles), ni étude ni cache.
     """
 
-    def __init__(self, request: dict):
+    def __init__(self, request: dict, save: bool = True):
         self.request = request
+        self.save = save
         self.study = study_path(request)
-        self.loading = self.study.is_file()
+        self.loading = save and self.study.is_file()
         self.result: Optional[dict] = None
         self.proc: Optional[subprocess.Popen] = None
         self.last_used = time.time()
@@ -590,8 +637,10 @@ class Session:
         else:
             req_path = Path(self._tmp.name) / "requete.json"
             req_path.write_text(json.dumps(self.request), encoding="utf-8")
-            self.study.parent.mkdir(parents=True, exist_ok=True)
-            cmd = [str(exe), str(req_path), "--save", str(self.study), "--serve"]
+            cmd = [str(exe), str(req_path), "--serve"]
+            if self.save:
+                self.study.parent.mkdir(parents=True, exist_ok=True)
+                cmd[2:2] = ["--save", str(self.study)]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      **PIPE_TEXT)
         if on_start:
@@ -607,7 +656,8 @@ class Session:
             raise SolverError(self._errors[-1] if self._errors
                               else f"analyzer-solve s'est arrêté (code {self.proc.returncode}).")
         self.result = json.loads(line)
-        _save_cache(self.request, self.result)
+        if self.save:
+            _save_cache(self.request, self.result)
         self.last_used = time.time()
         return self.result
 

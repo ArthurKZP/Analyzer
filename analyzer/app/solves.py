@@ -1,4 +1,5 @@
-"""Résolutions postflop lancées depuis l'application : une à la fois, en arrière-plan.
+"""Résolutions postflop lancées depuis l'application : une à la fois, en arrière-plan (une étude
+enregistrée se rouvre à part, sans attendre la fin des résolutions en file).
 
 La dernière résolution reste en mémoire (session) pour que l'explorateur puisse naviguer dans
 tout l'arbre ; elle est fermée après IDLE_TIMEOUT sans requête, ou quand une autre commence.
@@ -6,12 +7,13 @@ Sans session, l'explorateur se limite aux nœuds de la ligne jouée, enregistré
 """
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from ..theory import postflop
 
@@ -29,7 +31,7 @@ class Job:
     max_iterations: int
     target: float
     state: str = "waiting"  # waiting | running | done | error | cancelled
-    mode: str = "solve"  # solve (résolution) | load (étude enregistrée)
+    mode: str = "solve"  # solve (résolution) | load (étude enregistrée) | choose (choix des tailles)
     progress: dict = field(default_factory=dict)
     result: Optional[dict] = None
     error: Optional[str] = None
@@ -54,13 +56,17 @@ class SolveQueue:
                  idle_timeout: float = IDLE_TIMEOUT):
         self.iterations, self.target, self.idle_timeout = iterations, target, idle_timeout
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gtopen")
+        # Rouvrir une étude (quelques secondes) ne fait pas la queue derrière une série de résolutions.
+        self._loader = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gtopen-etude")
         self._jobs: dict[str, Job] = {}
+        self._series: dict[str, str] = {}  # spot -> tâche « choisir les tailles puis résoudre »
         self._lock = threading.Lock()
         self._live: Optional[tuple[str, postflop.Session]] = None  # (main, session navigable)
         self._stop = threading.Event()
         threading.Thread(target=self._reap_idle, daemon=True, name="gtopen-idle").start()
 
-    def _request(self, spot: postflop.PostflopSpot) -> dict:
+    def _request(self, spot) -> dict:
+        """spot : une main jouée (postflop.PostflopSpot) ou un spot d'étude (studyspots.StudySpot)."""
         return spot.request(self.iterations, self.target)
 
     # --- session navigable ------------------------------------------------------
@@ -85,50 +91,101 @@ class SolveQueue:
                 self._set_live(live[0], None)
 
     # --- résolutions ------------------------------------------------------------
-    def lookup(self, spot: postflop.PostflopSpot) -> dict:
+    def lookup(self, spot) -> dict:
         """Résultat en cache ou résolution en cours pour ce spot, sans rien lancer."""
         request = self._request(spot)
         key = postflop.cache_key(request)
-        hand_id = spot.hand.hand_id
+        hand_id = spot.ident
         live = self.live_session(hand_id) is not None
         study = postflop.study_path(request).is_file()
         with self._lock:
             job = self._jobs.get(key)
+            series = self._jobs.get(self._series.get(hand_id, ""))
+        if series and series.state in ("waiting", "running"):
+            return dict(series.view(), live=False, study=study)
         if job and job.state in ("waiting", "running"):
             return dict(job.view(), live=False, study=study)
         raw = postflop.cached(request)
         if raw is not None:
             return {"job": key, "hand": hand_id, "state": "done", "live": live, "study": study,
-                    "result": postflop.interpret(spot, raw)}
+                    "result": spot.interpret(raw)}
         if job and job.state == "error":
             return dict(job.view(), live=False, study=study)
         return {"job": key, "hand": hand_id, "state": "absent", "live": False, "study": study}
 
-    def start(self, spot: postflop.PostflopSpot, force: bool = False) -> dict:
-        """Lance la résolution ; force=True la relance même en cache, pour rouvrir une session."""
+    def start(self, spot, force: bool = False, keep_live: bool = True) -> dict:
+        """Lance la résolution ; force=True la relance même en cache, pour rouvrir une session.
+
+        keep_live=False (résolutions en lot) : la session est fermée dès l'étude enregistrée."""
         view = self.lookup(spot)
         if view["state"] in ("waiting", "running") or view["state"] == "done" and (view["live"] or not force):
             return view
         request = self._request(spot)
-        job = Job(view["job"], spot.hand.hand_id, self.iterations, self.target,
+        job = Job(view["job"], spot.ident, self.iterations, self.target,
                   mode="load" if postflop.study_path(request).is_file() else "solve")
         with self._lock:
             self._jobs[job.key] = job
-        self._executor.submit(self._run, job, spot, request)
+        (self._loader if job.mode == "load" else self._executor).submit(self._run, job, spot, request, keep_live)
         return dict(job.view(), live=False, study=job.mode == "load")
 
-    def _run(self, job: Job, spot: postflop.PostflopSpot, request: dict) -> None:
+    def choose_and_solve(self, ident: str, choose: Callable[[Job], None], make_spot: Callable[[], object]) -> dict:
+        """Choisit d'abord les tailles du spot (long), puis le résout sans garder de session.
+
+        choose(job) fait le choix (job.progress["stage"] : l'étape en cours ; job.process : le programme
+        lancé ; job.cancelled : l'arrêt demandé) ; make_spot() rend ensuite le spot avec ses tailles."""
+        with self._lock:
+            current = self._jobs.get(self._series.get(ident, ""))
+            if current and current.state in ("waiting", "running"):
+                return current.view()
+            key = "choix-" + hashlib.sha256(ident.encode()).hexdigest()[:14]
+            job = Job(key, ident, self.iterations, self.target, mode="choose")
+            self._jobs[key] = job
+            self._series[ident] = key
+        self._executor.submit(self._run_series, job, choose, make_spot)
+        return job.view()
+
+    def _run_series(self, job: Job, choose: Callable[[Job], None], make_spot: Callable[[], object]) -> None:
         if job.cancelled:
             return
-        self._set_live("", None)  # libère la mémoire de la session précédente
+        job.state, job.started = "running", time.time()
+        try:
+            choose(job)
+        except postflop.SolverError as exc:
+            job.state = "cancelled" if job.cancelled else "error"
+            job.error = None if job.cancelled else str(exc)
+            return
+        except Exception:  # noqa: BLE001 — l'erreur est montrée dans l'interface
+            traceback.print_exc()
+            job.state, job.error = "error", "Erreur inattendue pendant le choix des tailles (détails dans le terminal)."
+            return
+        finally:
+            job.process = None
+        spot = make_spot()
+        job.mode = "solve"
+        job.progress.clear()
+        self._run(job, spot, self._request(spot), keep_live=False)
+
+    def _run(self, job: Job, spot, request: dict, keep_live: bool = True) -> None:
+        if job.cancelled:
+            return
+        if keep_live:
+            self._set_live("", None)  # libère la mémoire de la session précédente
         job.state, job.started = "running", time.time()
         session = postflop.Session(request)
+
+        def on_start(proc) -> None:
+            job.process = proc
+            if job.cancelled:  # arrêt demandé pendant le lancement du programme
+                proc.terminate()
         try:
-            raw = session.start(on_progress=job.progress.update, on_start=lambda proc: setattr(job, "process", proc))
-            if not session.loading and session.study.is_file():
-                postflop.write_study_meta(spot, request, raw)
-            job.result = postflop.interpret(spot, raw)
-            self._set_live(spot.hand.hand_id, session)
+            raw = session.start(on_progress=job.progress.update, on_start=on_start)
+            if session.study.is_file() and (not session.loading or not session.study.with_suffix(".json").is_file()):
+                spot.write_meta(request, raw, session)
+            job.result = spot.interpret(raw)
+            if keep_live:
+                self._set_live(spot.ident, session)
+            else:
+                session.close()
             job.state = "done"
         except postflop.SolverError as exc:
             session.close()
@@ -141,15 +198,15 @@ class SolveQueue:
         finally:
             job.process = None
 
-    def node(self, spot: postflop.PostflopSpot, path: list) -> dict:
+    def node(self, spot, path: list) -> dict:
         """Nœud au bout du chemin : depuis la session si elle est ouverte, sinon depuis le cache."""
-        session = self.live_session(spot.hand.hand_id)
+        session = self.live_session(spot.ident)
         if session is not None:
             return {"node": session.node(path), "live": True}
         raw = postflop.cached(self._request(spot))
         node = postflop.cached_node(raw, path) if raw else None
         if node is None:
-            raise NeedSession(spot.hand.hand_id)
+            raise NeedSession(spot.ident)
         return {"node": node, "live": False}
 
     def get(self, key: str) -> Optional[dict]:
@@ -179,3 +236,4 @@ class SolveQueue:
                 self.cancel(job.key)
         self._set_live("", None)
         self._executor.shutdown(wait=False, cancel_futures=True)
+        self._loader.shutdown(wait=False, cancel_futures=True)

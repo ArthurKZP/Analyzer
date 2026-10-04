@@ -1,0 +1,160 @@
+{
+ "family": "3bet",
+ "label": "Pot 3bet : open du bouton à 2,5 bb, 3bet de la BB à 11,5 bb, call du bouton, 100 bb",
+ "spots": {
+  "spot:3bet:KsKd4c": {
+   "key": "18b592b6c04060ca4159",
+   "texture": "Pairé",
+   "iterations": 50,
+   "exploit_pct": 1.416,
+   "summary": [
+    {
+     "title": "C-bet de la BB",
+     "path": [],
+     "freqs": [
+      0.3536,
+      0.6464
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 33 % (7,6 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BTN face à la c-bet",
+     "path": [
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.2084,
+      0.7678,
+      0.0238
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 20,2 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face à la relance",
+     "path": [
+      {
+       "type": "action",
+       "index": 1
+      },
+      {
+       "type": "action",
+       "index": 2
+      }
+     ],
+     "freqs": [
+      0.3553,
+      0.1938,
+      0.4508
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 41,1 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "Stab du BTN",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      }
+     ],
+     "freqs": [
+      0.6198,
+      0.3802
+     ],
+     "actions": [
+      {
+       "label": "check",
+       "kind": "check",
+       "allin": false
+      },
+      {
+       "label": "mise 25 % (5,8 bb)",
+       "kind": "bet",
+       "allin": false
+      }
+     ]
+    },
+    {
+     "title": "BB face au stab",
+     "path": [
+      {
+       "type": "action",
+       "index": 0
+      },
+      {
+       "type": "action",
+       "index": 1
+      }
+     ],
+     "freqs": [
+      0.2778,
+      0.3708,
+      0.3514
+     ],
+     "actions": [
+      {
+       "label": "fold",
+       "kind": "fold",
+       "allin": false
+      },
+      {
+       "label": "call",
+       "kind": "call",
+       "allin": false
+      },
+      {
+       "label": "relance à 17,1 bb (33 %)",
+       "kind": "raise",
+       "allin": false
+      }
+     ]
+    }
+   ]
+  }
+ }
+}
