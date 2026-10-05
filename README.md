@@ -448,14 +448,20 @@ flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de fl
   board (overcard, brique, board pairé, couleur possible, quinte possible). Une étude résolue est lue tout de
   suite ; les anciennes, avec **Préparer le plan** (quelques secondes en pot 4bet, une minute environ en SRP).
   Résultats dans `~/.analyzer/plans/` (sauvegardés).
-- **Schémas** : les flops se regroupent selon la c-bet de celui qui a l'initiative : *range bet* (75 % et plus),
-  *c-bet fréquente* (55 à 75 %), *mixte* (30 à 55 %), *check fréquent* (moins de 30 %). Pour chaque schéma :
-  ses flops, le **pourquoi** (avantage d'équité et avantage de nuts au flop), la règle au flop par famille de
-  mains (mise, check ou mélange), la suite à la turn et à la river selon le type de carte (continuer,
-  ralentir ; à la river, valeur et bluffs), la c-bet retardée, et le jeu de l'autre joueur (face à la c-bet, au
-  2e et au 3e barrel ; probe ou stab).
-- **Les flops** : chaque flop résolu avec son schéma, sa c-bet, sa taille et les deux avantages ; un clic
-  l'ouvre dans l'explorateur.
+- **Selon le flop** : une grille par catégorie de flop, la hauteur (haut : As ou Roi ; moyen : Dame à Dix ;
+  bas : 9 ou moins) en lignes et la structure (sec ; deux couleurs ; connecté, quintes possibles) en colonnes,
+  plus les flops pairés et monotones. Chaque case donne le niveau de c-bet de celui qui a l'initiative
+  (*mise presque tout* : 75 % et plus, en général petite ; *mise souvent* : 50 à 75 % ; *checke souvent* :
+  moins de 50 %), la c-bet et des flops résolus en exemple.
+- **Catégorie par catégorie** : ses flops, le pourquoi (avantage d'équité et de nuts), puis la stratégie pour
+  quatre familles de mains, *fortes* (deux paires et mieux, overpair, top pair bon kicker), *moyennes* (top
+  pair petit kicker, paires moyennes et petites), *tirages* (couleur, quinte) et *rien* (hauteur, gutshots,
+  backdoors) : au flop, à la turn et à la river selon la carte (overcard, brique, board pairé, couleur ou
+  quinte possible, chacune expliquée), avec la fréquence de mise. Le jeu de l'autre joueur (face à la c-bet
+  et aux barrels), les autres lignes (c-bet retardée, probe) et le détail en onze familles de mains sont
+  repliés.
+- **Les flops résolus** : chacun avec sa catégorie, son niveau, sa c-bet, sa taille et les deux avantages ; un
+  clic l'ouvre dans l'explorateur.
 
 ## Coach
 

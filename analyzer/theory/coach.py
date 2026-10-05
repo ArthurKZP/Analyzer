@@ -5,9 +5,11 @@
    c-bet retardée, probe…), la stratégie de toute la range regroupée par famille de mains (deux paires et
    mieux, overpair, top pair…, tirage couleur, air) et, à la turn et à la river, par type de carte
    (overcard, brique, board pairé, couleur ou quinte possible). Gardée dans ~/.analyzer/plans.
-2. Synthèse, à l'affichage : les flops regroupés par schéma de c-bet (range bet, c-bet fréquente, mixte,
-   check), et pour chaque groupe des règles par famille de mains, la suite selon la turn et la river, et le
-   pourquoi (avantage d'équité, avantage de nuts). Plus il y a de flops résolus, plus le plan est précis.
+2. Synthèse, à l'affichage : les flops regroupés par catégorie (hauteur haut, moyen ou bas ; structure
+   sèche, deux couleurs ou connectée ; pairé ; monotone), chacune avec son niveau de c-bet (mise presque
+   tout, mise souvent, checke souvent), des règles pour quatre familles de mains (fortes, moyennes, tirages,
+   rien), la suite selon la carte de turn et de river, et le pourquoi (avantage d'équité, avantage de nuts).
+   Plus il y a de flops résolus, plus le plan est précis.
 """
 from __future__ import annotations
 
@@ -304,10 +306,46 @@ def plans(family: str) -> list[dict]:
 
 # --- Synthèse ----------------------------------------------------------------------------------------
 
-PATTERNS = (("range", "Range bet"), ("frequent", "C-bet fréquente"), ("mixed", "Stratégie mixte"),
-            ("check", "Check fréquent"))
+# Trois niveaux de c-bet, du plus simple à jouer au plus délicat.
+LEVELS = (("range", "Mise presque tout", 0.75), ("often", "Mise souvent", 0.5), ("check", "Checke souvent", 0.0))
+PATTERNS = tuple((key, label) for key, label, _ in LEVELS)
 PATTERN_LABEL = dict(PATTERNS)
 MIN_SHARE = 0.02  # une famille de mains sous 2 % de la range n'apparaît pas dans les règles
+
+# Catégories de flop : hauteur (carte la plus haute) et structure, plus les flops pairés et monotones.
+HEIGHTS = (("haut", "Haut", "As ou Roi"), ("moyen", "Moyen", "Dame, Valet ou Dix"), ("bas", "Bas", "9 ou moins"))
+SHAPES = (("sec", "Sec", "trois couleurs, pas de quinte"), ("couleur", "Deux couleurs", "tirage couleur possible"),
+          ("connecte", "Connecté", "cartes proches, quintes possibles"))
+SPECIALS = (("paire", "Pairé", "une paire au board"), ("monotone", "Monotone", "trois cartes d'une couleur"))
+CATEGORIES = tuple((f"{h}-{s}", f"{hl} · {sl.lower()}") for h, hl, _ in HEIGHTS for s, sl, _ in SHAPES) + tuple(
+    (k, label) for k, label, _ in SPECIALS)
+CATEGORY_LABEL = dict(CATEGORIES)
+
+# Quatre familles de mains pour les règles simples (les onze de BUCKETS restent dans le détail).
+GROUPS = (("fortes", "Fortes", ("nuts", "overpair", "tp_good"), "deux paires et mieux, overpair, top pair bon kicker"),
+          ("moyennes", "Moyennes", ("tp_weak", "midpair", "weakpair"), "top pair petit kicker, paires moyennes et petites"),
+          ("tirages", "Tirages", ("fd", "sd"), "tirages couleur et quinte"),
+          ("rien", "Rien", ("weakdraw", "high", "air"), "hauteur, gutshots, backdoors"))
+CARD_TEXT = {"over": "plus haute que les cartes du flop", "brick": "petite carte qui ne change rien",
+             "paired": "la carte paire le board", "flush": "troisième carte d'une couleur",
+             "straight": "ouvre ou complète une quinte"}
+
+
+def board_category(board: list[str]) -> str:
+    ranks = [RANK_VALUE[c[0]] for c in board[:3]]
+    suits = {c[1] for c in board[:3]}
+    if len(set(ranks)) < 3:
+        return "paire"
+    if len(suits) == 1:
+        return "monotone"
+    top = max(ranks)
+    height = "haut" if top >= 13 else "moyen" if top >= 10 else "bas"
+    low = [1 if r == 14 else r for r in ranks]
+    if max(ranks) - min(ranks) <= 4 or max(low) - min(low) <= 4:
+        shape = "connecte"
+    else:
+        shape = "couleur" if len(suits) == 2 else "sec"
+    return f"{height}-{shape}"
 
 
 def aggression(freqs: dict) -> float:
@@ -320,7 +358,7 @@ def main_size(freqs: dict) -> Optional[str]:
 
 
 def pattern_of(share: float) -> str:
-    return "range" if share >= 0.75 else "frequent" if share >= 0.55 else "mixed" if share >= 0.30 else "check"
+    return next(key for key, _, low in LEVELS if share >= low)
 
 
 def aggressor_of(family: str) -> int:
@@ -329,14 +367,14 @@ def aggressor_of(family: str) -> int:
 
 
 def flop_row(data: dict) -> dict:
-    """Une ligne du tableau des flops : c-bet, taille, avantages, schéma."""
+    """Une ligne du tableau des flops : catégorie, c-bet, taille, avantages, niveau."""
     cbet = data["nodes"].get("cbet", {}).get("groups", {}).get("flop", {"f": {}})
     share = aggression(cbet["f"])
     adv = data.get("advantages") or {"eq": [0.5, 0.5], "nuts": [0.0, 0.0]}
     a = aggressor_of(data["family"])
     return {"id": data["id"], "board": data["board"], "texture": data["texture"], "pattern": pattern_of(share),
-            "suit_pattern": data["pattern"], "cbet": share, "size": main_size(cbet["f"]),
-            "sizes": data["nodes"].get("cbet", {}).get("sizes", []),
+            "category": board_category(data["board"]), "suit_pattern": data["pattern"], "cbet": share,
+            "size": main_size(cbet["f"]), "sizes": data["nodes"].get("cbet", {}).get("sizes", []),
             "eq_adv": adv["eq"][a] - adv["eq"][1 - a], "nut_adv": adv["nuts"][a] - adv["nuts"][1 - a]}
 
 
@@ -366,8 +404,8 @@ def _labels(keys: list[str]) -> str:
 
 
 def bettor_rules(merged: dict, river: bool = False) -> list[tuple[str, str]]:
-    """Règles de celui qui peut miser : mise / check / mélange, par famille de mains (de la plus forte à la
-    plus faible). À la river, la mise se lit en valeur ou en bluff."""
+    """Détail : mise / check / mélange, par famille fine de mains. À la river, la mise se lit en valeur ou en
+    bluff."""
     out: dict[str, list[str]] = {}
     for key, _ in BUCKETS:
         bk = merged["b"].get(key)
@@ -385,29 +423,60 @@ def bettor_rules(merged: dict, river: bool = False) -> list[tuple[str, str]]:
     return [(what, _labels(out[what])) for what in order if what in out]
 
 
+def _defend_verdict(fold: float, call: float, raise_: float) -> str:
+    if raise_ >= 0.5:
+        return "Relance"
+    if fold >= 0.7:
+        return "Folde"
+    if call >= 0.7 or (call >= 0.5 and fold < 0.3):
+        return "Paie"
+    return "Paie ou relance" if raise_ >= 0.25 else "Paie ou folde"
+
+
 def defender_rules(merged: dict) -> list[tuple[str, str]]:
-    """Règles face à une mise : relance / paie / folde / mélange."""
+    """Détail face à une mise : relance / paie / folde / mélange, par famille fine de mains."""
     out: dict[str, list[str]] = {}
     for key, _ in BUCKETS:
         bk = merged["b"].get(key)
         if not bk or bk["w"] < MIN_SHARE:
             continue
-        fold = bk["f"].get("fold", 0.0)
-        call = bk["f"].get("call", 0.0)
-        raise_ = aggression(bk["f"])
-        if raise_ >= 0.5:
-            what = "Relance"
-        elif fold >= 0.7:
-            what = "Folde"
-        elif call >= 0.7 or (call >= 0.5 and fold < 0.3):
-            what = "Paie"
-        elif raise_ >= 0.25:
-            what = "Paie ou relance"
-        else:
-            what = "Paie ou folde"
-        out.setdefault(what, []).append(key)
+        out.setdefault(_defend_verdict(bk["f"].get("fold", 0.0), bk["f"].get("call", 0.0), aggression(bk["f"])),
+                       []).append(key)
     order = ("Relance", "Paie ou relance", "Paie", "Paie ou folde", "Folde")
     return [(what, _labels(out[what])) for what in order if what in out]
+
+
+def simple_rules(merged: dict, defender: bool = False, river: bool = False) -> list[dict]:
+    """Les quatre familles de mains (fortes, moyennes, tirages, rien) : part de la range, ce qu'elles font et
+    à quelle fréquence. kind : mise, mélange, check (ou relance, paie, folde face à une mise)."""
+    out = []
+    for key, label, members, _ in GROUPS:
+        if river and key == "tirages":
+            continue  # plus de tirage à la river : les tirages ratés sont dans « rien »
+        w = sum(merged["b"][m]["w"] for m in members if m in merged["b"])
+        if w < MIN_SHARE:
+            continue
+        freqs: dict = {}
+        for m in members:
+            bk = merged["b"].get(m)
+            if bk:
+                for c, v in bk["f"].items():
+                    freqs[c] = freqs.get(c, 0.0) + bk["w"] * v / w
+        if defender:
+            fold, call, raise_ = freqs.get("fold", 0.0), freqs.get("call", 0.0), aggression(freqs)
+            verdict = _defend_verdict(fold, call, raise_)
+            kind = {"Relance": "raise", "Folde": "fold", "Paie": "call"}.get(verdict, "mix")
+            pct = {"raise": raise_, "fold": fold, "call": call}.get(kind, call)
+        else:
+            bet = aggression(freqs)
+            kind = "bet" if bet >= 0.65 else "check" if bet <= 0.35 else "mix"
+            verdict = {"bet": "Mise", "check": "Checke", "mix": "Mélange"}[kind]
+            if river and kind == "bet":
+                verdict = "Bluffe" if key == "rien" else "Mise (valeur)"
+            pct = bet
+        out.append({"key": key, "label": label, "share": w, "kind": kind, "verdict": verdict, "pct": pct,
+                    "size": None if defender else main_size(freqs)})
+    return out
 
 
 def _pts(x: float) -> str:
@@ -415,36 +484,27 @@ def _pts(x: float) -> str:
 
 
 def why(pattern: str, eq_adv: float, nut_adv: float, who: str, other: str) -> str:
-    """Pourquoi ce schéma, d'après l'avantage d'équité et l'avantage de nuts de celui qui a l'initiative."""
+    """Pourquoi ce niveau de c-bet, en deux phrases, d'après l'avantage d'équité et de nuts de celui qui a
+    l'initiative."""
     cap = lambda text: text[0].upper() + text[1:]  # noqa: E731
     equity = ("un avantage d'équité" if eq_adv >= 0.05 else "moins d'équité" if eq_adv <= -0.05
               else "à peu près autant d'équité")
     nuts = ("plus de mains très fortes" if nut_adv >= 0.02 else "moins de mains très fortes" if nut_adv <= -0.02
             else "autant de mains très fortes")
-    facts = (f"{cap(who)} a {equity} ({_pts(eq_adv)}) et {nuts} (deux paires et mieux, {_pts(nut_adv)}) "
-             f"que {other}.")
+    facts = f"{cap(who)} a {equity} ({_pts(eq_adv)}) et {nuts} ({_pts(nut_adv)}) que {other}."
     if pattern == "range":
-        reason = (f"Sa range domine : {other} a peu de mains qui supportent une mise. Une petite mise avec toute la "
-                  "range fait folder ses mains faibles ou les fait payer avec peu d'équité, et ne coûte presque rien "
-                  "avec les mains moyennes. C'est aussi le plus simple.")
-    elif pattern == "frequent":
-        reason = ("L'avantage permet de miser souvent ; les checks gardent des mains moyennes qui gagnent souvent à "
-                  "l'abattage sans avoir besoin de protection, pour que la range de check ne soit pas sans défense.")
+        reason = f"{cap(other)} a peu de mains qui supportent une mise : une petite mise avec tout coûte peu et rapporte."
     elif nut_adv <= -0.02:
-        reason = (f"{cap(other)} a plus de mains très fortes : miser souvent exposerait aux relances et aux calls qui "
-                  "battent les mains moyennes. On mise une partie de la range et on garde des mains fortes dans les "
-                  "checks.")
-    elif eq_adv < 0.05:
-        reason = ("Sans avantage d'équité, miser souvent serait cher : on mise surtout les mains qui veulent de la "
-                  "valeur ou de la protection, et on checke le milieu de range qui préfère l'abattage.")
+        reason = f"{cap(other)} a plus de mains très fortes : on mise moins et on garde des mains fortes dans les checks."
+    elif pattern == "often":
+        reason = "On mise souvent, mais on checke une partie des mains moyennes qui préfèrent aller à l'abattage."
     else:
-        reason = ("L'avantage ne suffit pas à miser toute la range : on mise les mains fortes et des tirages qui "
-                  "profitent de la fold equity, et on checke le milieu de range qui préfère l'abattage.")
+        reason = "Sans avantage net, on mise surtout les mains fortes et des tirages, et on checke le reste."
     return facts + " " + reason
 
 
 def card_rules(node: Optional[dict], defender: bool = False, river: bool = False) -> list[dict]:
-    """Par type de carte (turn ou river) : fréquence d'agression (ou de fold) et règles."""
+    """Par type de carte (turn ou river) : fréquence de mise (ou de fold), règles simples et détail."""
     if not node:
         return []
     out = []
@@ -453,14 +513,23 @@ def card_rules(node: Optional[dict], defender: bool = False, river: bool = False
         if not entries:
             continue
         merged = merge(entries)
-        out.append({"key": key, "label": label, "n": merged["n"], "aggr": aggression(merged["f"]),
+        out.append({"key": key, "label": label, "text": CARD_TEXT[key], "aggr": aggression(merged["f"]),
                     "fold": merged["f"].get("fold", 0.0), "size": main_size(merged["f"]),
-                    "rules": defender_rules(merged) if defender else bettor_rules(merged, river)})
+                    "rules": simple_rules(merged, defender, river),
+                    "detail": defender_rules(merged) if defender else bettor_rules(merged, river)})
     return out
 
 
+def _facing(merged: dict) -> Optional[dict]:
+    if not merged["flops"]:
+        return None
+    return {"fold": merged["f"].get("fold", 0.0), "raise": aggression(merged["f"]),
+            "rules": simple_rules(merged, defender=True), "detail": defender_rules(merged)}
+
+
 def family_plan(family: str) -> dict:
-    """Le plan d'une famille de pots, à partir des plans extraits de ses flops résolus."""
+    """Le plan d'une famille de pots, à partir des plans extraits de ses flops résolus : une entrée par catégorie
+    de flop (hauteur et structure, pairé, monotone)."""
     data = plans(family)
     info = studyspots.FAMILIES[family]
     a = aggressor_of(family)
@@ -469,8 +538,8 @@ def family_plan(family: str) -> dict:
            "missing": len(missing(family)), "who": who, "other": other, "groups": []}
     rows = [flop_row(d) for d in data]
     out["flops"] = rows
-    for pattern, label in PATTERNS:
-        members = [(d, r) for d, r in zip(data, rows) if r["pattern"] == pattern]
+    for category, label in CATEGORIES:
+        members = [(d, r) for d, r in zip(data, rows) if r["category"] == category]
         if not members:
             continue
 
@@ -483,34 +552,29 @@ def family_plan(family: str) -> dict:
             return by_card
 
         cbet = merge(gather("cbet").get("flop", []))
+        share = aggression(cbet["f"])
+        pattern = pattern_of(share)
         eq_adv = sum(r["eq_adv"] for _, r in members) / len(members)
         nut_adv = sum(r["nut_adv"] for _, r in members) / len(members)
-        sizes = sorted({s for _, r in members for s in r["sizes"]})
-        textures: dict[str, int] = {}
-        for _, r in members:
-            textures[r["texture"]] = textures.get(r["texture"], 0) + 1
-        vs_cbet = merge(gather("vs_cbet").get("flop", []))
-        vs_xr = merge(gather("vs_xr").get("flop", []))
         group = {
-            "pattern": pattern, "label": label, "flops": [r for _, r in members], "textures": textures,
-            "cbet": aggression(cbet["f"]), "size": main_size(cbet["f"]), "sizes": sizes,
+            "category": category, "label": label, "pattern": pattern, "level": PATTERN_LABEL[pattern],
+            "flops": [r for _, r in members], "cbet": share, "size": main_size(cbet["f"]),
+            "sizes": sorted({s for _, r in members for s in r["sizes"]}),
             "eq_adv": eq_adv, "nut_adv": nut_adv, "why": why(pattern, eq_adv, nut_adv, who, other),
-            "flop_rules": bettor_rules(cbet),
+            "flop": simple_rules(cbet), "flop_detail": bettor_rules(cbet),
             "turn": card_rules(gather("barrel")), "river": card_rules(gather("barrel3"), river=True),
             "delayed": card_rules(gather("delayed")),
             "defense": {
-                "vs_cbet": {"fold": vs_cbet["f"].get("fold", 0.0), "raise": aggression(vs_cbet["f"]),
-                            "rules": defender_rules(vs_cbet)} if vs_cbet["flops"] else None,
-                "vs_xr": {"fold": vs_xr["f"].get("fold", 0.0), "raise": aggression(vs_xr["f"]),
-                          "rules": defender_rules(vs_xr)} if vs_xr["flops"] else None,
+                "vs_cbet": _facing(merge(gather("vs_cbet").get("flop", []))),
+                "vs_xr": _facing(merge(gather("vs_xr").get("flop", []))),
                 "vs_barrel": card_rules(gather("vs_barrel"), defender=True),
-                "vs_barrel3": card_rules(gather("vs_barrel3"), defender=True),
+                "vs_barrel3": card_rules(gather("vs_barrel3"), defender=True, river=True),
                 "probe": card_rules(gather("probe")), "stab": None,
             },
         }
         stab = merge(gather("stab").get("flop", []))
         if stab["flops"]:
-            group["defense"]["stab"] = {"aggr": aggression(stab["f"]), "rules": bettor_rules(stab)}
+            group["defense"]["stab"] = {"aggr": aggression(stab["f"]), "rules": simple_rules(stab)}
         out["groups"].append(group)
     return out
 

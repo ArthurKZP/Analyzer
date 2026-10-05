@@ -151,7 +151,7 @@ class CoachChatTest(unittest.TestCase):
         self.assertEqual(second[1]["content"][0]["type"], "thinking")  # réflexion renvoyée telle quelle
         result = second[2]["content"][0]
         self.assertEqual(result["tool_use_id"], "t1")
-        self.assertIn("schemas", json.loads(result["content"]))
+        self.assertIn("categories", json.loads(result["content"]))
         self.assertGreater(view["cost"], 0)
 
     def test_node_and_hand_tools(self):

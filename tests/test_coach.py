@@ -127,7 +127,12 @@ class ExtractTest(unittest.TestCase):
 
 class SynthesisTest(unittest.TestCase):
     def test_rules_and_patterns(self):
-        self.assertEqual([coach.pattern_of(x) for x in (0.9, 0.6, 0.4, 0.1)], ["range", "frequent", "mixed", "check"])
+        self.assertEqual([coach.pattern_of(x) for x in (0.9, 0.6, 0.4, 0.1)], ["range", "often", "check", "check"])
+        cases = {"KsKd4c": "paire", "As8s3s": "monotone", "Ks8d3h": "haut-sec", "Kd7d5c": "haut-couleur",
+                 "KhQc9d": "haut-connecte", "Qs7d2h": "moyen-sec", "JhTc8d": "moyen-connecte", "9s5d2h": "bas-sec",
+                 "6c4c2d": "bas-connecte", "Ah4c2d": "haut-connecte"}  # A42 : roue possible
+        for board, expected in cases.items():
+            self.assertEqual(coach.board_category([board[i:i + 2] for i in (0, 2, 4)]), expected, board)
         merged = coach.merge([
             {"n": 1, "f": {"small": 0.8, "check": 0.2},
              "b": {"nuts": {"w": 0.2, "f": {"small": 1.0}}, "midpair": {"w": 0.5, "f": {"check": 0.6, "small": 0.4}},
@@ -139,6 +144,10 @@ class SynthesisTest(unittest.TestCase):
         self.assertAlmostEqual(merged["f"]["small"], 0.7)
         self.assertAlmostEqual(merged["b"]["midpair"]["f"]["check"], 0.8)
         self.assertEqual(coach.bettor_rules(merged), [("Mise", "Deux paires et mieux · Rien"), ("Check", "Paire moyenne")])
+        simple = coach.simple_rules(merged)
+        self.assertEqual([(r["label"], r["kind"], round(r["pct"], 2)) for r in simple],
+                         [("Fortes", "bet", 1.0), ("Moyennes", "check", 0.2), ("Rien", "bet", 0.7)])
+        self.assertEqual(coach.simple_rules(merged, river=True)[2]["verdict"], "Bluffe")
         river = coach.bettor_rules(merged, river=True)
         self.assertEqual(river[:2], [("Mise pour la valeur", "Deux paires et mieux"), ("Bluffe", "Rien")])
         facing = {"n": 1, "f": {}, "b": {"nuts": {"w": 0.3, "f": {"raise": 0.8, "call": 0.2}},
@@ -146,6 +155,8 @@ class SynthesisTest(unittest.TestCase):
                                          "air": {"w": 0.4, "f": {"fold": 0.95, "call": 0.05}}}}
         self.assertEqual(coach.defender_rules(facing),
                          [("Relance", "Deux paires et mieux"), ("Paie", "Top pair, bon kicker"), ("Folde", "Rien")])
+        self.assertEqual([(r["label"], r["verdict"]) for r in coach.simple_rules(facing, defender=True)],
+                         [("Fortes", "Paie"), ("Rien", "Folde")])  # relance 40 %, paie 55 %
         text = coach.why("mixed", 0.16, -0.06, "le bouton", "la BB")
         self.assertIn("La BB a plus de mains très fortes", text)
         self.assertIn("+16 pts", coach.why("range", 0.16, 0.02, "le bouton", "la BB"))
@@ -172,11 +183,14 @@ class PlanPageTest(unittest.TestCase):
             plan = coach.family_plan("srp")
             self.assertEqual((plan["count"], plan["missing"], plan["who"]), (1, 0, "le bouton"))
             group = plan["groups"][0]
-            self.assertEqual(group["pattern"], "check")  # 2 mains sur 7 misent
+            self.assertEqual((group["category"], group["pattern"]), ("haut-sec", "check"))  # 2 mains sur 7 misent
             self.assertTrue(group["turn"] and group["river"] and group["defense"]["vs_cbet"])
+            self.assertEqual(group["turn"][0]["text"], "plus haute que les cartes du flop")
             page = build_coach_page({"missing": 0, "busy": 0})
-            for text in ("Plan de jeu suggéré", "Check fréquent", "Pourquoi ?", "2e barrel", "En face : la BB"):
+            for text in ("Plan de jeu suggéré", "Selon le flop", "Checke souvent", "Haut · sec", "Moyen · connecté",
+                         "À la turn, si la c-bet est payée", "En face : la BB", 'href="#cat-srp-haut-sec"'):
                 self.assertIn(text, page)
+            self.assertNotIn(">Cartes<", page)
             self.assertEqual(coach.missing(), [])
 
 

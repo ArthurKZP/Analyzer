@@ -45,7 +45,7 @@ SETUP = ("Le coach utilise Claude, l'IA d'Anthropic, par son API : installe le m
 SYSTEM = """Tu es le coach de poker intégré à Analyzer, un outil d'étude du heads-up No Limit Hold'em (100 bb, salle Betclic). Ton élève est un joueur régulier qui étudie la théorie pour simplifier son jeu et mieux exploiter ses adversaires.
 
 Tu consultes ses données avec des outils :
-- plan_de_jeu : la synthèse de ses études résolues pour un type de pot (schémas de flop, règles par famille de mains, suite à la turn et à la river selon la carte, jeu de l'autre joueur).
+- plan_de_jeu : la synthèse de ses études résolues pour un type de pot (catégories de flop : haut, moyen ou bas, sec, deux couleurs ou connecté, pairé, monotone ; niveau de c-bet ; règles pour quatre familles de mains : fortes, moyennes, tirages, rien ; suite à la turn et à la river selon la carte ; jeu de l'autre joueur).
 - liste_etudes : les flops résolus disponibles, avec leur schéma de c-bet.
 - strategie_noeud : la stratégie du solveur à un moment précis d'un spot résolu (fréquences de toute la range, par famille de mains, équités, EV, exemples de mains).
 - strategie_main : une main précise à ce moment (sa stratégie, l'EV de chaque action, son équité).
@@ -71,10 +71,12 @@ LINE_HELP = ("actions déjà jouées depuis le début du flop, dans l'ordre : \"
              "(la c-bet du bouton en SRP et en pot 4bet, celle de la BB en pot 3bet)")
 TOOLS = [
     {"name": "plan_de_jeu",
-     "description": ("Plan de jeu suggéré d'un type de pot, tiré des études résolues : les flops regroupés par schéma de "
-                     "c-bet (range bet, c-bet fréquente, mixte, check fréquent) avec, pour chaque schéma, le pourquoi, la "
-                     "règle au flop par famille de mains, la suite à la turn et à la river selon le type de carte, et le "
-                     "jeu de l'autre joueur. Consulte-le pour toute question générale de stratégie."),
+     "description": ("Plan de jeu suggéré d'un type de pot, tiré des études résolues : les flops regroupés par catégorie "
+                     "(haut, moyen ou bas ; sec, deux couleurs ou connecté ; pairé ; monotone) avec, pour chacune, son "
+                     "niveau de c-bet (mise presque tout, mise souvent, checke souvent), le pourquoi, la règle au flop "
+                     "pour quatre familles de mains (fortes, moyennes, tirages, rien) et le détail en onze familles, la "
+                     "suite à la turn et à la river selon le type de carte, et le jeu de l'autre joueur. Consulte-le pour "
+                     "toute question générale de stratégie."),
      "input_schema": {"type": "object", "properties": {
          "famille": {"type": "string", "enum": ["srp", "3bet", "4bet"],
                      "description": "srp (pot simple), 3bet (pot 3bet) ou 4bet (pot 4bet)"}},
@@ -394,29 +396,37 @@ class Coach:
                              "(onglet « Plan de jeu suggéré », bouton « Préparer le plan »).")
         pct = lambda x: round(100 * x)  # noqa: E731
 
+        def rules(items: list[dict], defender: bool = False) -> dict:
+            if defender:
+                return {r["label"]: f"{r['verdict'].lower()} ({pct(r['pct'])} %)" for r in items}
+            return {r["label"]: f"{r['verdict'].lower()} (mise {pct(r['pct'])} %)" for r in items}
+
         def cards(rows: list[dict], defender: bool = False) -> list[dict]:
             key = "fold_pct" if defender else "mise_pct"
-            return [{"carte": r["label"], key: pct(r["fold"] if defender else r["aggr"]), "regles": dict(r["rules"])}
-                    for r in rows]
+            return [{"carte": r["label"], key: pct(r["fold"] if defender else r["aggr"]),
+                     "regles": rules(r["rules"], defender)} for r in rows]
         groups = []
         for g in plan["groups"]:
             d = g["defense"]
             groups.append({
-                "schema": g["label"], "flops": [studyspots.board_text(r["board"]) for r in g["flops"]],
-                "textures": g["textures"], "cbet_pct": pct(g["cbet"]), "taille": g.get("size"), "tailles_pct": g["sizes"],
+                "categorie": g["label"], "niveau": g["level"], "flops": [studyspots.board_text(r["board"]) for r in g["flops"]],
+                "cbet_pct": pct(g["cbet"]), "taille": g.get("size"), "tailles_pct": g["sizes"],
                 "avantage_equite_pts": round(100 * g["eq_adv"]), "avantage_nuts_pts": round(100 * g["nut_adv"]),
-                "pourquoi": g["why"], "flop": dict(g["flop_rules"]), "turn_2e_barrel": cards(g["turn"]),
-                "river_3e_barrel": cards(g["river"]), "cbet_retardee": cards(g["delayed"]),
+                "pourquoi": g["why"], "flop": rules(g["flop"]), "flop_detail": dict(g["flop_detail"]),
+                "turn_2e_barrel": cards(g["turn"]), "river_3e_barrel": cards(g["river"]),
+                "cbet_retardee": cards(g["delayed"]),
                 "defense": {
                     "face_cbet": ({"fold_pct": pct(d["vs_cbet"]["fold"]), "relance_pct": pct(d["vs_cbet"]["raise"]),
-                                   "regles": dict(d["vs_cbet"]["rules"])} if d["vs_cbet"] else None),
-                    "face_relance": ({"fold_pct": pct(d["vs_xr"]["fold"]), "regles": dict(d["vs_xr"]["rules"])}
+                                   "regles": rules(d["vs_cbet"]["rules"], True)} if d["vs_cbet"] else None),
+                    "face_relance": ({"fold_pct": pct(d["vs_xr"]["fold"]), "regles": rules(d["vs_xr"]["rules"], True)}
                                      if d["vs_xr"] else None),
-                    "stab": {"mise_pct": pct(d["stab"]["aggr"]), "regles": dict(d["stab"]["rules"])} if d["stab"] else None,
+                    "stab": {"mise_pct": pct(d["stab"]["aggr"]), "regles": rules(d["stab"]["rules"])} if d["stab"] else None,
                     "face_2e_barrel": cards(d["vs_barrel"], True), "face_3e_barrel": cards(d["vs_barrel3"], True),
                     "probe": cards(d["probe"])}})
         return {"famille": plan["name"], "description": plan["label"], "flops_lus": plan["count"],
-                "initiative": plan["who"], "adversaire": plan["other"], "schemas": groups}
+                "initiative": plan["who"], "adversaire": plan["other"],
+                "familles_de_mains": {label: text for _, label, _, text in coach.GROUPS},
+                "categories": groups}
 
     @staticmethod
     def _studies(family) -> dict:

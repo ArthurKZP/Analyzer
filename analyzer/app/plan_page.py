@@ -42,7 +42,30 @@ ul.rules b { font-weight: 600; }
 table.pl-cards td { vertical-align: top; font-size: 13px; }
 table.pl-cards td.rules-cell { min-width: 280px; }
 table.pl-cards ul.rules { margin: 0; padding-left: 16px; }
-.pl-summary li { margin: 4px 0; }
+.pl-grid { display: grid; grid-template-columns: minmax(90px, auto) repeat(3, minmax(170px, 1fr)); gap: 6px; min-width: 640px; }
+.pl-gh, .pl-rh { font-weight: 600; font-size: 14px; display: flex; flex-direction: column; justify-content: center; }
+.pl-gh small, .pl-rh small { font-weight: 400; font-size: 11px; color: var(--muted); }
+.pl-gh { padding: 2px 4px; }
+.pl-cell { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 8px; text-decoration: none;
+  color: var(--ink); border: 1px solid var(--border); min-height: 74px; }
+a.pl-cell:hover { border-color: var(--series-1); }
+.pl-cell .lvl { font-weight: 700; font-size: 14px; }
+.pl-cell.empty { background: var(--page); justify-content: center; font-size: 12px; }
+.lvl-range { background: var(--hi-bg); }
+.lvl-often { background: color-mix(in srgb, var(--hi-bg) 45%, transparent); }
+.lvl-check { background: var(--lo-bg); }
+.pl-ex .cards { margin-right: 6px; }
+.pl-specials { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.pl-special { flex: 1 1 260px; display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 6px; }
+.pl-lvl { font-size: 12px; font-weight: 600; border-radius: 6px; padding: 1px 8px; }
+.pl-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.pl-chip { font-size: 13px; border-radius: 999px; padding: 3px 10px; border: 1px solid var(--border); white-space: nowrap; }
+.pl-chip b { font-weight: 600; margin-right: 4px; }
+.pl-chip.up { background: var(--hi-bg); border-color: transparent; }
+.pl-chip.down { background: var(--lo-bg); border-color: transparent; }
+.pl-chip.mix { border-style: dashed; }
+table.pl-matrix td { vertical-align: middle; }
+table.pl-matrix .pl-chip { font-size: 12px; padding: 2px 8px; }
 """
 
 SCRIPT = """
@@ -103,102 +126,152 @@ def _pct(x: float) -> str:
 
 
 def _size(group: dict) -> str:
-    text = SIZE_TEXT.get(group.get("size") or "", "")
-    sizes = group.get("sizes") or []
-    if sizes:
-        text += " (" + " / ".join(f"{s} %" for s in sizes) + " du pot)"
-    return text
+    return SIZE_TEXT.get(group.get("size") or "", "")
 
 
-def _rules(rules: list[tuple[str, str]]) -> str:
+def _chip(rule: dict, defender: bool = False, label: bool = True) -> str:
+    """Une famille de mains et ce qu'elle fait : « Fortes · mise 92 % »."""
+    kind, pct = rule["kind"], _pct(rule["pct"])
+    if defender:
+        text = {"raise": f"relance {pct}", "call": f"paie {pct}", "fold": f"folde {pct}"}.get(
+            kind, f"{rule['verdict'].lower()} (paie {pct})")
+        cls = {"raise": "up", "fold": "down", "call": "flat"}.get(kind, "mix")
+    else:
+        verdict = rule["verdict"]
+        if kind == "bet":
+            text = ("bluff " if verdict == "Bluffe" else "valeur " if verdict.startswith("Mise (") else "mise ") + pct
+        elif kind == "check":
+            text = f"checke (mise {pct})"
+        else:
+            text = f"mélange (mise {pct})"
+        cls = {"bet": "up", "check": "down"}.get(kind, "mix")
+    name = f'<b>{escape(rule["label"])}</b> ' if label else ""
+    return (f'<span class="pl-chip {cls}" title="{escape(rule["label"])} : {_pct(rule["share"])} de la range">'
+            f'{name}{escape(text)}</span>')
+
+
+def _chips(rules: list[dict], defender: bool = False) -> str:
+    if not rules:
+        return '<p class="muted">Pas assez de données.</p>'
+    return '<div class="pl-chips">' + "".join(_chip(r, defender) for r in rules) + "</div>"
+
+
+def _matrix(rows: list[dict], street: str, measure: str, defender: bool = False) -> str:
+    """Selon la carte de turn ou de river : la fréquence de mise (ou de fold) et ce que fait chaque famille."""
+    if not rows:
+        return '<p class="muted">Pas encore de données.</p>'
+    groups = [(k, label) for k, label, _, _ in coach.GROUPS if any(r["key"] == k for row in rows for r in row["rules"])]
+    head = "".join(f"<th>{escape(label)}</th>" for _, label in groups)
+    body = []
+    for row in rows:
+        by = {r["key"]: r for r in row["rules"]}
+        cells = "".join(f"<td>{_chip(by[k], defender, label=False) if k in by else ''}</td>" for k, _ in groups)
+        value = row["fold"] if defender else row["aggr"]
+        body.append(f'<tr><td><b>{escape(row["label"])}</b><div class="small muted">{escape(row["text"])}</div></td>'
+                    f'<td class="num">{_pct(value)}</td>{cells}</tr>')
+    return (f'<div class="scroll"><table class="stats pl-matrix"><thead><tr><th>{escape(street)}</th>'
+            f'<th class="num">{escape(measure)}</th>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>')
+
+
+def _details_rules(rules: list[tuple[str, str]]) -> str:
     if not rules:
         return '<p class="muted">Pas assez de données.</p>'
     return '<ul class="rules">' + "".join(f"<li><b>{escape(what)}</b> : {escape(who)}</li>" for what, who in rules) + "</ul>"
 
 
-def _flops(rows: list[dict]) -> str:
+def _boards(rows: list[dict], links: bool = True) -> str:
+    if not links:
+        return '<span class="pl-ex">' + "".join(cards_html(r["board"]) for r in rows[:3]) + "</span>"
     return '<div class="pl-flops">' + "".join(
         f'<a href="/explorateur/{quote(r["id"], safe="")}" target="_blank" rel="noopener" '
-        f'title="{escape(r["texture"])} · {escape(r["suit_pattern"])} · c-bet {_pct(r["cbet"])}">{cards_html(r["board"])}</a>'
-        for r in rows) + "</div>"
+        f'title="c-bet {_pct(r["cbet"])} · ouvrir dans l\'explorateur">{cards_html(r["board"])}</a>' for r in rows) + "</div>"
 
 
-def _cards_table(rows: list[dict], first: str, measure: str, defender: bool = False) -> str:
-    if not rows:
-        return '<p class="muted">Pas encore de données.</p>'
-    body = "".join(
-        f'<tr><td>{escape(r["label"])}</td><td class="num">{r["n"]}</td>'
-        f'<td class="num">{_pct(r["fold"] if defender else r["aggr"])}</td>'
-        f'<td class="rules-cell">{_rules(r["rules"])}</td></tr>' for r in rows)
-    return (f'<div class="scroll"><table class="stats pl-cards"><thead><tr><th>{escape(first)}</th>'
-            f'<th class="num">Cartes</th><th class="num">{escape(measure)}</th><th>Comment</th></tr></thead>'
-            f'<tbody>{body}</tbody></table></div>')
+def _cell(plan: dict, category: str) -> str:
+    g = next((g for g in plan["groups"] if g["category"] == category), None)
+    label = coach.CATEGORY_LABEL[category]
+    if g is None:
+        return f'<div class="pl-cell empty"><span class="muted">{escape(label)} : pas encore de flop résolu</span></div>'
+    size = f" · {escape(_size(g))}" if g.get("size") else ""
+    return (f'<a class="pl-cell lvl-{g["pattern"]} pl-jump" href="#cat-{plan["family"]}-{category}">'
+            f'<span class="lvl">{escape(g["level"])}</span><span class="small">c-bet {_pct(g["cbet"])}{size}</span>'
+            f'{_boards(g["flops"], links=False)}</a>')
+
+
+def _grid(plan: dict) -> str:
+    head = '<div></div>' + "".join(f'<div class="pl-gh">{escape(label)}<small>{escape(text)}</small></div>'
+                                   for _, label, text in coach.SHAPES)
+    rows = "".join(f'<div class="pl-rh">{escape(label)}<small>{escape(text)}</small></div>'
+                   + "".join(_cell(plan, f"{h}-{s}") for s, _, _ in coach.SHAPES) for h, label, text in coach.HEIGHTS)
+    specials = "".join(f'<div class="pl-special"><div class="pl-gh">{escape(label)}<small>{escape(text)}</small></div>'
+                       f'{_cell(plan, key)}</div>' for key, label, text in coach.SPECIALS)
+    return f'<div class="scroll"><div class="pl-grid">{head}{rows}</div></div><div class="pl-specials">{specials}</div>'
 
 
 def _group(plan: dict, g: dict) -> str:
     who, other = plan["who"], plan["other"]
-    textures = ", ".join(f"{t} ({n})" if n > 1 else t for t, n in g["textures"].items())
     d = g["defense"]
     defense = []
     if d["vs_cbet"]:
-        defense.append(f'<h3>{escape(_cap(other))} face à '
-                       f'la c-bet : folde {_pct(d["vs_cbet"]["fold"])}, relance {_pct(d["vs_cbet"]["raise"])}</h3>'
-                       + _rules(d["vs_cbet"]["rules"]))
-    if d["vs_xr"]:
-        defense.append(f'<h3>{escape(_cap(who))} face à la relance : folde {_pct(d["vs_xr"]["fold"])}, '
-                       f'sur-relance {_pct(d["vs_xr"]["raise"])}</h3>' + _rules(d["vs_xr"]["rules"]))
-    if d["stab"]:
-        defense.append(f'<h3>Quand {escape(who)} checke : {escape(other)} mise {_pct(d["stab"]["aggr"])}</h3>'
-                       + _rules(d["stab"]["rules"]))
+        defense.append(f'<h3>Face à la c-bet : {escape(other)} folde {_pct(d["vs_cbet"]["fold"])}, '
+                       f'relance {_pct(d["vs_cbet"]["raise"])}</h3>' + _chips(d["vs_cbet"]["rules"], defender=True))
     if d["vs_barrel"]:
-        defense.append("<h3>Face au 2e barrel, selon la turn</h3>"
-                       + _cards_table(d["vs_barrel"], "Turn", "Fold", defender=True))
+        defense.append("<h3>Face au 2e barrel, selon la turn</h3>" + _matrix(d["vs_barrel"], "Turn", "Folde", True))
     if d["vs_barrel3"]:
-        defense.append("<h3>Face au 3e barrel, selon la river</h3>"
-                       + _cards_table(d["vs_barrel3"], "River", "Fold", defender=True))
+        defense.append("<h3>Face au 3e barrel, selon la river</h3>" + _matrix(d["vs_barrel3"], "River", "Folde", True))
+    others = []
+    if g["delayed"]:
+        others.append(f"<h3>Flop checké par {escape(who)} : c-bet retardée à la turn</h3>"
+                      + _matrix(g["delayed"], "Turn", "Mise"))
     if d["probe"]:
-        defense.append(f"<h3>Après un flop checké : {escape(other)} mène (probe) à la turn</h3>"
-                       + _cards_table(d["probe"], "Turn", "Mise"))
-    summary = (f'{escape(g["label"])} <span class="sub">· {len(g["flops"])} flop(s) · c-bet {_pct(g["cbet"])}'
-               f'{" · " + escape(_size(g)) if g.get("size") else ""} · {escape(textures)}</span>')
+        others.append(f"<h3>Flop checké : {escape(other)} mène à la turn (probe)</h3>" + _matrix(d["probe"], "Turn", "Mise"))
+    if d["stab"]:
+        others.append(f'<h3>Quand {escape(who)} checke : {escape(other)} mise {_pct(d["stab"]["aggr"])}</h3>'
+                      + _chips(d["stab"]["rules"]))
+    if d["vs_xr"]:
+        others.append(f'<h3>{escape(_cap(who))} face à la relance : folde {_pct(d["vs_xr"]["fold"])}, '
+                      f'sur-relance {_pct(d["vs_xr"]["raise"])}</h3>' + _chips(d["vs_xr"]["rules"], defender=True))
 
     def sub(title: str, content: str) -> str:
         return f'<details class="pl-sub"><summary>{escape(title)}</summary><div>{content}</div></details>'
 
+    size = f" en {escape(_size(g))}" if g.get("size") else ""
+    summary = (f'{escape(g["label"])} <span class="pl-lvl lvl-{g["pattern"]}">{escape(g["level"])}</span>'
+               f'<span class="sub">c-bet {_pct(g["cbet"])}{size} · {len(g["flops"])} flop(s)</span>')
     return f"""
-<details class="pl-group" id="schema-{g["pattern"]}"><summary>{summary}</summary><div class="pl-body">
-{_flops(g["flops"])}
-<div class="pl-why"><b>Pourquoi ?</b> {escape(g["why"])}</div>
-<h3>Au flop : {escape(who)} c-bette {_pct(g["cbet"])}{(" en " + escape(_size(g))) if g.get("size") else ""}</h3>
-{_rules(g["flop_rules"])}
-{sub("À la turn, après la c-bet payée (2e barrel)", _cards_table(g["turn"], "Turn", "Continue"))}
-{sub("À la river, après deux mises payées (3e barrel)", _cards_table(g["river"], "River", "Mise"))}
-{sub("Après un flop checké (c-bet retardée à la turn)", _cards_table(g["delayed"], "Turn", "Mise"))}
+<details class="pl-group" id="cat-{plan["family"]}-{g["category"]}"><summary>{summary}</summary><div class="pl-body">
+{_boards(g["flops"])}
+<div class="pl-why">{escape(g["why"])}</div>
+<h3>Au flop, {escape(who)} c-bette {_pct(g["cbet"])}{size}</h3>
+{_chips(g["flop"])}
+<h3>À la turn, si la c-bet est payée</h3>
+{_matrix(g["turn"], "Turn", "Continue")}
+<h3>À la river, après deux mises payées</h3>
+{_matrix(g["river"], "River", "Mise")}
 {sub("En face : " + other, "".join(defense) or '<p class="muted">Pas encore de données.</p>')}
+{sub("Autres lignes", "".join(others) or '<p class="muted">Pas encore de données.</p>')}
+{sub("Détail par famille de mains (onze familles)", _details_rules(g["flop_detail"]))}
 </div></details>"""
-
-
-def _summary(plan: dict) -> str:
-    items = []
-    for g in plan["groups"]:
-        textures = ", ".join(g["textures"])
-        items.append(f'<li><a href="#schema-{g["pattern"]}" class="pl-jump"><b>{escape(g["label"])}</b></a> '
-                     f'({len(g["flops"])} flop(s) : {escape(textures)}) : '
-                     f'c-bet {_pct(g["cbet"])}{(" en " + escape(_size(g))) if g.get("size") else ""}.</li>')
-    return '<ul class="pl-summary">' + "".join(items) + "</ul>"
 
 
 def _table(plan: dict) -> str:
     rows = "".join(
         f'<tr><td><a href="/explorateur/{quote(r["id"], safe="")}" target="_blank" rel="noopener">{cards_html(r["board"])}</a></td>'
-        f'<td>{escape(r["texture"])}</td><td>{escape(r["suit_pattern"])}</td>'
+        f'<td>{escape(coach.CATEGORY_LABEL[r["category"]])}</td>'
         f'<td>{escape(coach.PATTERN_LABEL[r["pattern"]])}</td><td class="num">{_pct(r["cbet"])}</td>'
         f'<td>{escape(SIZE_TEXT.get(r["size"] or "", "–"))}</td>'
         f'<td class="num">{coach._pts(r["eq_adv"])}</td><td class="num">{coach._pts(r["nut_adv"])}</td></tr>'
-        for r in plan["flops"])
-    return ('<div class="scroll"><table class="stats"><thead><tr><th>Flop</th><th>Texture</th><th>Couleurs</th>'
-            '<th>Schéma</th><th class="num">C-bet</th><th>Taille</th><th class="num">Équité</th>'
+        for r in sorted(plan["flops"], key=lambda r: [c for c, _ in coach.CATEGORIES].index(r["category"])))
+    return ('<div class="scroll"><table class="stats"><thead><tr><th>Flop</th><th>Catégorie</th><th>Niveau</th>'
+            '<th class="num">C-bet</th><th>Taille</th><th class="num">Équité</th>'
             f'<th class="num">Nuts</th></tr></thead><tbody>{rows}</tbody></table></div>')
+
+
+def _legend() -> str:
+    groups = " ; ".join(f"<b>{escape(label)}</b> : {escape(text)}" for _, label, _, text in coach.GROUPS)
+    return (f'<p class="note">Niveaux : <b>mise presque tout</b> (c-bet d\'au moins 75 %, en général petite), '
+            f'<b>mise souvent</b> (50 à 75 %), <b>checke souvent</b> (moins de 50 %). Les mains en quatre familles : {groups}. '
+            '« Mélange » : le solveur joue les deux selon la main exacte ; le pourcentage est sa fréquence de mise.</p>')
 
 
 def _family(plan: dict) -> str:
@@ -209,16 +282,13 @@ def _family(plan: dict) -> str:
         return f'<div class="card"><p class="muted">Pas encore de plan pour les {escape(plan["name"])}. {hint}</p></div>'
     total = len(studyspots.flop_set(plan["family"]))
     return f"""
-<p class="note">{escape(plan["label"])}. D'après <b>{plan["count"]}</b> flop(s) résolu(s) (la série en compte {total}) ;
-plus il y en a, plus le plan est précis. Les mains sont regroupées par famille (deux paires et mieux, overpair, top pair,
-tirages…), les turns et rivers par effet sur le board (overcard, brique, board pairé, couleur ou quinte possible).</p>
-<h2>En bref</h2>
-<div class="card">{_summary(plan)}
-<p class="note">Range bet : c-bet d'au moins 75 % de la range ; c-bet fréquente : 55 à 75 % ; mixte : 30 à 55 % ;
-check fréquent : moins de 30 %. « Mélange » : le solveur joue les deux, selon la main exacte.</p></div>
-<h2>Par schéma de flop</h2>
+<p class="note">{escape(plan["label"])}. D'après <b>{plan["count"]}</b> flop(s) résolu(s) sur {total} dans la série ; plus
+il y en a, plus le plan est précis. {escape(_cap(plan["who"]))} a l'initiative.</p>
+<h2>Selon le flop</h2>
+<div class="card">{_grid(plan)}{_legend()}</div>
+<h2>Catégorie par catégorie</h2>
 {"".join(_group(plan, g) for g in plan["groups"])}
-<h2>Les flops</h2>
+<h2>Les flops résolus</h2>
 <div class="card">{_table(plan)}
 <p class="note">Équité : écart d'équité moyenne entre les deux ranges au flop, pour celui qui a l'initiative ; nuts : écart
 de part de deux paires et mieux. Un clic ouvre le flop dans l'explorateur.</p></div>
