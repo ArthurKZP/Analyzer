@@ -22,12 +22,13 @@ SITE = "Betclic"
 HAND_SEPARATOR = "*** HEADER ***"
 
 _MONEY = r"[€$£]?\s?([\d,]+(?:\.\d+)?)"
-_SEAT_RE = re.compile(r"^Seat (\d+): (.+) \(" + _MONEY + r"\) \[([^\]]*)\]$")
+_SEAT_RE = re.compile(r"^Seat (\d+): (.+) \(" + _MONEY + r"\)(?: \[([^\]]*)\])?$")  # étiquettes : BTN, SB, BB, Hero
 _ACTION_RE = re.compile(r"^(\d{2}:\d{2}:\d{2}) - (.+)$")
 _STREET_RE = re.compile(r"^\*\*\* (FLOP|TURN|RIVER) \*\*\* \[([^\]]*)\]")
 _SHOWS_RE = re.compile(r"^(.+?) shows \[([^\]]*)\](?: \(([^)]*)\))?")
 _WINS_RE = re.compile(r"^(.+?) wins (?:the )?(?:main |side )?pot(?: \d+)? of " + _MONEY)
 _BLINDS_RE = re.compile(_MONEY + r"\s*/\s*" + _MONEY)
+_MAX_RE = re.compile(r"\b(\d+)[ -]?max\b", re.IGNORECASE)
 
 _ACTION_PATTERNS = [
     (POST_SB, re.compile(r"^Posts SB " + _MONEY)),
@@ -85,6 +86,7 @@ def parse_hand(chunk: str) -> Hand | None:
             bb=bb,
             total_pot=_money(header.get("Total Pot", "0").lstrip("€$£")),
             rake=_money(header.get("Rake", "0").lstrip("€$£")),
+            max_seats=_max_seats(header.get("Game Name", "")),
         )
 
     for line in lines:
@@ -119,12 +121,12 @@ def parse_hand(chunk: str) -> Hand | None:
         elif section == "players":
             m = _SEAT_RE.match(line)
             if m:
-                tags = m.group(4).split()
+                tags = (m.group(4) or "").split()
                 seats[m.group(2)] = Seat(
                     name=m.group(2),
                     seat=int(m.group(1)),
                     stack=_money(m.group(3)),
-                    is_button="BTN" in tags or "SB" in tags,
+                    is_button="BTN" in tags,
                     is_hero="Hero" in tags,
                 )
         elif section == "hole":
@@ -183,10 +185,22 @@ def parse_hand(chunk: str) -> Hand | None:
                 name = m.group(1)
                 hand.winnings[name] = round(hand.winnings.get(name, 0.0) + _money(m.group(2)), 2)
 
-    if hand is None or len(hand.seats) != 2:
+    if hand is None or len(hand.seats) < 2:
         return None
+    if hand.button is None and len(hand.seats) == 2:  # en HU, le bouton est la petite blinde
+        sb = hand.small_blind or next((s for s in hand.seats if s != hand.big_blind), None)
+        if sb in hand.seats:
+            hand.seats[sb].is_button = True
     hand.finalize()
     return hand
+
+
+def _max_seats(game_name: str) -> int:
+    """« NLHE 1/2 6 max Deep » -> 6 ; « NLHE 2.5/5 HU Deep » -> 2."""
+    m = _MAX_RE.search(game_name)
+    if m:
+        return int(m.group(1))
+    return 2 if re.search(r"\bHU\b", game_name) else 0
 
 
 def _parse_action(text: str) -> tuple[str, float] | None:

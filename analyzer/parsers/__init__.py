@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Iterable
 
 from ..models import Hand
-from . import betclic
+from . import betclic, unibet, winamax
 
-PARSERS = [betclic]
+PARSERS = [betclic, winamax, unibet]
 EXTENSIONS = {".txt", ".log", ".hh"}
 
 
@@ -15,7 +15,7 @@ def parse_text(text: str) -> list[Hand]:
     for parser in PARSERS:
         if parser.looks_like(text):
             return list(parser.parse(text))
-    raise ValueError("Format d'historique non reconnu (sites supportés : Betclic).")
+    raise ValueError("Format d'historique non reconnu (sites supportés : Betclic, Winamax, Unibet).")
 
 
 def _iter_files(paths: Iterable[str | Path]) -> Iterable[Path]:

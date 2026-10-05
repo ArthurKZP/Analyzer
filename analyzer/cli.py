@@ -42,6 +42,16 @@ def detect_hero(hands: list[Hand]) -> str | None:
     return players.most_common(1)[0][0] if players else None
 
 
+def unify_hero(hands: list[Hand], hero: str | None) -> None:
+    """Le héros de chaque site (repéré dans l'historique) prend le pseudo principal : un seul « toi » sur tous les
+    sites (ex. son pseudo Unibet ramené à celui de Betclic)."""
+    if not hero:
+        return
+    for h in hands:
+        if h.hero and h.hero != hero:
+            h.rename(h.hero, hero)
+
+
 def find_player(query: str, names: list[str]) -> str | None:
     exact = [n for n in names if n == query]
     if exact:
@@ -118,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Aucune main reconnue dans : " + ", ".join(args.paths), file=sys.stderr)
         return 1
     hero = args.hero or detect_hero(hands)
+    unify_hero(hands, hero)
     hands = [h for h in hands if hero in h.seats and len(h.seats) == 2]
     opponents = Counter(h.opponent_of(hero) for h in hands)
 

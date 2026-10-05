@@ -68,11 +68,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     if args.analyser:
-        from ..cli import detect_hero
+        from ..cli import detect_hero, unify_hero
         from ..parsers import load_hands
         from .review import analyze
         hands = load_hands(args.paths)
         hero = args.hero or detect_hero(hands)
+        unify_hero(hands, hero)
         if not hero:
             print("Pseudo introuvable : précise --hero.", file=sys.stderr)
             return 1
@@ -100,7 +101,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"  GTOpen    : {state['source'] or 'introuvable'}")
         return 0 if state["ready"] else 1
 
-    from ..cli import detect_hero
+    from ..cli import detect_hero, unify_hero
     from ..parsers import load_hands
 
     hands = load_hands(args.paths)
@@ -110,6 +111,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 1
     hand = match[0]
     hero = args.hero or detect_hero(hands)
+    unify_hero(hands, hero)
     try:
         spot = postflop.build_spot(hand, hero)
     except postflop.Unsupported as exc:

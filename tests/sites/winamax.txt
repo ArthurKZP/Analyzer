@@ -1,0 +1,56 @@
+Winamax Poker - CashGame - HandId: #10000001-001-1000000001 - Holdem no limit (2€/4€) - 2026/10/04 08:54:28 UTC
+Table: 'Table A' 3-max (real money) Seat #2 is the button
+Seat 1: Hero (501.49€)
+Seat 2: Incognito 2 (426.50€)
+Seat 3: Incognito 3 (439.85€)
+Player Info: Seat2: P2-a1b2c3d4e5f60718293a4b5c6d7e8f90, Seat3: P3-0f9e8d7c6b5a49382716051f2e3d4c5b
+*** ANTE/BLINDS ***
+Incognito 3 posts small blind 2€
+Hero posts big blind 4€
+Dealt to Hero [Kd Kh]
+*** PRE-FLOP ***
+Incognito 2 raises 6€ to 10€
+Incognito 3 folds
+Hero raises 40€ to 50€
+Incognito 2 calls 40€
+*** FLOP *** [2c 8d 7d]
+Hero bets 67.32€
+Incognito 2 calls 67.32€
+*** TURN *** [2c 8d 7d][4h]
+Hero bets 118.32€
+Incognito 2 calls 118.32€
+*** RIVER *** [2c 8d 7d 4h][2d]
+Hero bets 265.85€ and is all-in
+Incognito 2 calls 190.86€ and is all-in
+*** SHOW DOWN ***
+Hero shows [Kd Kh] (Two pairs : Kings and 2)
+Incognito 2 shows [9d Ad] (Flush Ace high)
+Incognito 2 collected 853€ from main pot
+Hero collected 74.99€ from side pot 1
+*** SUMMARY ***
+Total pot 927.99€ | Rake 2€
+Board: [2c 8d 7d 4h 2d]
+Seat 1: Hero (big blind) showed [Kd Kh] and won 74.99€ with Two pairs : Kings and 2
+Seat 2: Incognito 2 (button) showed [9d Ad] and won 853€ with Flush Ace high
+
+
+Winamax Poker - CashGame - HandId: #10000002-002-1000000002 - Holdem no limit (2€/4€) - 2026/10/04 09:02:11 UTC
+Table: 'Oslo' 2-max (real money) Seat #1 is the button
+Seat 1: Hero (420.50€)
+Seat 2: Villain (853€)
+*** ANTE/BLINDS ***
+Hero posts small blind 2€
+Villain posts big blind 4€
+Dealt to Hero [As Qd]
+*** PRE-FLOP ***
+Hero raises 6€ to 10€
+Villain calls 6€
+*** FLOP *** [Kc 7s 2h]
+Villain checks
+Hero bets 7€
+Villain folds
+Hero collected 20€ from pot
+*** SUMMARY ***
+Total pot 20€ | No rake
+Board: [Kc 7s 2h]
+Seat 1: Hero (small blind) won 20€

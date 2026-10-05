@@ -9,7 +9,10 @@ moteur de [GTOpen](https://github.com/MatthewPDingle/GTOpen).
 
 - Python 3.10+, **aucune dépendance** à installer (Pillow seulement pour lire de nouvelles captures de ranges ;
   Rust et git seulement pour installer le solveur postflop).
-- Sites supportés : **Betclic.fr** (cash game HU). D'autres formats peuvent être ajoutés (voir plus bas).
+- Sites supportés : **Betclic.fr**, **Winamax** et **Unibet** (cash game NLHE). Toute l'analyse porte sur les
+  mains **heads-up** ; les mains des tables à 3 joueurs et plus (3-max, 6-max) sont lues, avec la position de
+  chacun, pour l'analyse par position (voir *Sites et formats de table*). D'autres sites peuvent être ajoutés
+  (voir plus bas).
 
 ## Application
 
@@ -53,7 +56,8 @@ python -m analyzer ~/Downloads/Hand.txt -a "peste noire" -o rapports/
 python -m analyzer -a berserk --sans-spots   # rapport seul, plus rapide
 ```
 
-Ton pseudo est détecté automatiquement (tag `Hero` de Betclic) ; sinon passe `--hero TonPseudo`.
+Ton pseudo est détecté automatiquement (tag `Hero` de Betclic, « Dealt to » de Winamax, compte entre crochets
+d'Unibet) ; sinon passe `--hero TonPseudo`.
 Le terminal affiche un résumé ; le rapport complet est écrit dans `reports/<adversaire>.html`, la page
 préflop dans `reports/<adversaire>-preflop.html` et le visualiseur dans `reports/<adversaire>-spots.html`
 (ouvre-les dans ton navigateur, ils fonctionnent hors ligne).
@@ -429,7 +433,7 @@ par pot 4bet sur 4 cœurs : une vingtaine d'heures pour 430 mains, à étaler su
 
 Le rapport de ce qu'un joueur doit travailler en priorité : onglet *Leakfinding* de *Mon jeu* pour toi, et menu
 *Élèves* pour tes élèves. Chaque élève a son dossier de mains (`~/.analyzer/eleves/<élève>/`, sauvegardé) : ajoute-le
-(nom, et son pseudo à la table si tu le connais), importe les historiques qu'il t'envoie (Betclic, heads-up), et son
+(nom, et son pseudo à la table si tu le connais), importe les historiques qu'il t'envoie (Betclic, Winamax ou Unibet), et son
 rapport se construit.
 
 - **Les leaks à travailler** : les cinq plus importants, avec leur preuve chiffrée, leur confiance et la façon de les
@@ -684,7 +688,7 @@ Analyzer.
 
 ```
 analyzer/
-  parsers/betclic.py   lecture des historiques Betclic
+  parsers/             lecture des historiques : betclic.py, winamax.py, unibet.py
   models.py            modèle commun (Hand, Action, Seat)
   stats.py             lecture des situations HU et agrégation des stats
   cards.py             notation des mains, évaluateur 7 cartes, équité
@@ -721,6 +725,20 @@ tests/                 tests unitaires (python -m unittest)
 hands/                 tes historiques (ignorés par git)
 reports/               rapports générés (ignorés par git)
 ```
+
+### Sites et formats de table
+
+| Site | Héros | Particularités |
+|---|---|---|
+| Betclic | étiquette `[Hero]` | heure de chaque action (temps de réflexion) |
+| Winamax | ligne « Dealt to » | pot du résumé net du rake ; aux tables anonymes, « Incognito 2 » devient « Incognito-<identifiant> » (ligne *Player Info*) pour ne pas mélanger deux joueurs assis à la même place |
+| Unibet | compte entre crochets (`Pseudo[Unibet_…]`) | joueurs « sitting out » écartés (pas servis) |
+
+Ton pseudo peut changer d'un site à l'autre : le héros de chaque main prend le pseudo principal (celui qui revient
+le plus souvent), pour que *Mon jeu* réunisse tous les sites. Chaque joueur reçoit sa position (BTN, SB, BB, CO,
+HJ, UTG…) d'après le bouton et les blindes postées. L'import indique, par fichier, le site et le nombre de mains
+en HU, 3-max et 6-max. Les mains heads-up (deux joueurs servis) alimentent toute l'analyse ; les autres sont
+gardées pour l'analyse par position.
 
 ### Ajouter un site
 

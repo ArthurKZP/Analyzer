@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from .. import bluffs, leaks, players, students
-from ..cli import detect_hero, slugify
+from ..cli import detect_hero, slugify, unify_hero
 from ..lines import villain_lines
 from ..models import Hand
 from ..parsers import load_hands, parse_text
@@ -53,6 +53,14 @@ def _kind_note(kind: dict) -> str:
             "ses fréquences ci-dessous servent à l'exploiter.")
 
 
+
+def _formats(hands: list[Hand]) -> dict[str, int]:
+    """Mains par format de table (HU, 3-max, 6-max…), dans cet ordre."""
+    counts: dict[str, int] = {}
+    for h in sorted(hands, key=lambda h: h.size):
+        counts[h.table_format] = counts.get(h.table_format, 0) + 1
+    return counts
+
 class Library:
     """Les mains d'un dossier et les pages d'analyse, calculées à la demande puis gardées en cache."""
 
@@ -68,6 +76,7 @@ class Library:
         self._key_locks: dict[tuple, threading.Lock] = {}
         self._cache: dict[tuple, object] = {}
         self.hands: list[Hand] = []
+        self.ring: list[Hand] = []
         self.by_id: dict[str, Hand] = {}
         self.hero: Optional[str] = None
         self.known_ids: set[str] = set()
@@ -85,10 +94,13 @@ class Library:
     def reload(self) -> None:
         hands = load_hands([self.folder])
         hero = self.hero_override or detect_hero(hands)
+        unify_hero(hands, hero)
         heads_up = [h for h in hands if hero and hero in h.seats and len(h.seats) == 2 and h.button and h.bb]
+        ring = [h for h in hands if hero and hero in h.seats and len(h.seats) > 2 and h.button and h.bb]
         with self._lock:
             self.known_ids = {f"{h.site}:{h.hand_id}" for h in hands}
             self.hands = heads_up
+            self.ring = ring  # tes mains aux tables à plusieurs (3-max, 6-max)
             self.by_id = {h.hand_id: h for h in heads_up}
             self.hero = hero
             self.version += 1
@@ -510,13 +522,14 @@ class Library:
                 results.append({"name": name, "status": "format non reconnu", "hands": 0, "new": 0})
                 continue
             new = [h for h in hands if f"{h.site}:{h.hand_id}" not in known]
+            detail = {"sites": sorted({h.site for h in hands}), "formats": _formats(hands)}
             if not new:
-                results.append({"name": name, "status": "déjà importé", "hands": len(hands), "new": 0})
+                results.append(dict(detail, name=name, status="déjà importé", hands=len(hands), new=0))
                 continue
             self._save(name, content)
             known |= {f"{h.site}:{h.hand_id}" for h in new}
             added += len(new)
-            results.append({"name": name, "status": "importé", "hands": len(hands), "new": len(new)})
+            results.append(dict(detail, name=name, status="importé", hands=len(hands), new=len(new)))
         if added:
             self.reload()
         return {"files": results, "added": added, "state": self.summary()}

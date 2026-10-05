@@ -1,0 +1,47 @@
+Unibet Hand #1000000001 - 2.50/5.00 - No Limit Hold'Em - UTC 10:10:26 2026/10/02
+Table "10000001" 6-max
+*** Seated players ***
+Seat 1: Hero[Unibet_0123456789abcdef] (€500)
+Seat 2: Villain (€737.07)
+Seat 3: Joueur3 (€500)
+Seat 4: Absent (€500) (sitting out)
+Seat 5: Joueur5 (€500)
+Seat 6: Joueur6 (€500)
+*** Blinds and button ***
+Joueur5 has the button
+Joueur6 posts small blind €2.50
+Hero[Unibet_0123456789abcdef] posts big blind €5
+*** Hole cards ***
+Dealt in Joueur6
+Dealt to Hero[Unibet_0123456789abcdef] [Th Qh]
+Dealt to Villain [Td Js]
+Dealt in Joueur3
+Dealt in Joueur5
+*** Preflop ***
+Villain calls €5
+Joueur3 folds
+Joueur5 folds
+Joueur6 raises €27.50 to €30
+Hero[Unibet_0123456789abcdef] calls €25
+Villain calls €25
+*** Flop *** [Kh Tc 4c]
+Joueur6 checks
+Hero[Unibet_0123456789abcdef] checks
+Villain bets €20
+Joueur6 folds
+Hero[Unibet_0123456789abcdef] calls €20
+*** Turn *** [Kh Tc 4c] [Qc]
+Hero[Unibet_0123456789abcdef] checks
+Villain checks
+*** River *** [Kh Tc 4c] [Qc] [5c]
+Hero[Unibet_0123456789abcdef] bets €12.50
+Villain calls €12.50
+*** Showdown ***
+Hero[Unibet_0123456789abcdef] shows [Th Qh], Two pairs, Queens up
+Villain shows [Td Js], A Pair of Tens
+Hero[Unibet_0123456789abcdef] wins €151
+*** Summary ***
+Total pot €155 Rake €4
+Seat 1: Hero[Unibet_0123456789abcdef]: bet €62.50 and won €151, net result: €88.50
+Seat 2: Villain: bet €62.50 and won €0, net result: €-62.50
+Seat 6: Joueur6: bet €30 and won €0, net result: €-30

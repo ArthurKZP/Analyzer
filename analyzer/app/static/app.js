@@ -305,12 +305,19 @@
     data.added ? next : ''));
     const rows = data.files.map((f) => el('tr', {},
       el('td', {}, f.name),
+      el('td', {}, (f.sites || []).join(', ')),
       el('td', { class: f.status === 'importé' ? 'ok' : f.status === 'déjà importé' ? '' : 'ko' }, f.status),
       el('td', { class: 'num' }, String(f.hands)),
+      el('td', {}, Object.entries(f.formats || {}).map(([k, n]) => n + ' ' + k).join(' · ')),
       el('td', { class: 'num' }, String(f.new))));
     result.append(el('table', {},
-      el('thead', {}, el('tr', {}, el('th', {}, 'Fichier'), el('th', {}, 'Statut'), el('th', { class: 'num' }, 'Mains'), el('th', { class: 'num' }, 'Nouvelles'))),
+      el('thead', {}, el('tr', {}, el('th', {}, 'Fichier'), el('th', {}, 'Site'), el('th', {}, 'Statut'), el('th', { class: 'num' }, 'Mains'),
+        el('th', {}, 'Tables'), el('th', { class: 'num' }, 'Nouvelles'))),
       el('tbody', {}, rows)));
+    if (data.files.some((f) => f.formats && Object.keys(f.formats).some((k) => k !== 'HU'))) {
+      result.append(el('p', { class: 'small' }, 'Les mains heads-up vont dans toute l\'analyse (adversaires, solveur, '
+        + 'leakfinding) ; celles des tables à 3 joueurs et plus sont gardées pour l\'analyse par position.'));
+    }
   }
 
   async function reload(result) {
