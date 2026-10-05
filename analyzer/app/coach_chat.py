@@ -40,8 +40,9 @@ PRICES = {"input": 4.0, "output": 20.0, "cache_read": 0.2, "cache_write": 5.0}  
 SETUP = ("Le coach utilise Claude, l'IA d'Anthropic, par son API : installe le module (pip install anthropic) "
          "puis donne ta clé API (créée sur console.anthropic.com) dans la variable d'environnement "
          "ANTHROPIC_API_KEY avant de lancer l'application (ou connecte-toi avec « ant auth login »). Sans clé API, "
-         "le même coach tourne dans ton abonnement Claude (application Claude ou Claude Code) : lance "
-         "« python -m analyzer mcp --config » et suis les indications.")
+         "le même coach tourne dans ton abonnement Claude (application Claude ou Claude Code) : lance une fois "
+         "« python -m analyzer mcp --config » et suis les indications, puis pose tes questions dans Claude "
+         "(« Copier pour Claude » ici reprend ce que tu regardes dans l'explorateur).")
 
 SYSTEM = """Tu es le coach de poker intégré à Analyzer, un outil d'étude du heads-up No Limit Hold'em (100 bb, salle Betclic). Ton élève est un joueur régulier qui étudie la théorie pour simplifier son jeu et mieux exploiter ses adversaires.
 
@@ -293,6 +294,11 @@ class Coach:
         finally:
             conv.updated = time.time()
 
+    def prompt(self, text: str, context: Optional[dict] = None) -> str:
+        """La question telle que le coach la reçoit (avec ce que l'élève regarde dans l'explorateur), à coller dans
+        Claude quand le coach y est branché par MCP (abonnement Claude, sans clé API)."""
+        return self._question(text, context)
+
     def _question(self, text: str, context: Optional[dict]) -> str:
         if not context or not isinstance(context, dict) or not context.get("spot"):
             return text
@@ -386,8 +392,9 @@ class Coach:
                 return f"Le service est momentanément indisponible ({status}) : réessaie dans quelques minutes."
             if "credit balance" in message.lower():
                 return ("Ton compte API Anthropic n'a plus de crédit : l'API est facturée à part de l'abonnement Claude. "
-                        "Ajoute du crédit sur console.anthropic.com (rubrique Billing), ou utilise le coach dans ton "
-                        "abonnement Claude, sans clé API : lance « python -m analyzer mcp --config » et suis les indications.")
+                        "Ajoute du crédit sur console.anthropic.com (rubrique Billing), ou pose ta question dans "
+                        "Claude, où le coach tourne sur ton abonnement : « Copier pour Claude » ci-dessous, puis colle-la "
+                        "dans l'application Claude ou Claude Code (une fois branché avec « python -m analyzer mcp --config »).")
             return f"Le service a refusé la demande ({status}) : {message}"
         try:
             import anthropic
@@ -750,14 +757,12 @@ class Coach:
         """La ligne de l'explorateur en mots que le coach peut reprendre dans ses appels d'outil."""
         try:
             spot = self._spot(ident)
-            if self.library.solves.live_session(spot.ident) is None:
-                return None
-            tokens, prefix = [], []
+            tokens, prefix = [], []  # sans session, les nœuds de la ligne jouée viennent du cache
             for step in path:
-                node = self.library.solves.node(spot, prefix)["node"]
                 if step.get("type") == "card":
                     tokens.append(step["card"])
                 else:
+                    node = self.library.solves.node(spot, prefix)["node"]
                     action = node["actions"][step["index"]]
                     if action.get("allin"):
                         tokens.append("allin")

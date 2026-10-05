@@ -74,12 +74,19 @@
     const input = el('textarea', { rows: '2', placeholder: 'Pose ta question au coach…', 'aria-label': 'Question au coach' });
     const send = el('button', { type: 'submit', class: 'cc-send' }, 'Envoyer');
     const foot = el('div', { class: 'cc-foot' });
+    // Sans crédit API : la même question (avec ce que tu regardes) se pose dans Claude, où Analyzer est branché par MCP.
+    const note = el('span', { class: 'cc-hint', 'aria-live': 'polite' });
+    const alt = el('div', { class: 'cc-alt' }, el('button', {
+      type: 'button', class: 'cc-new', title: 'À coller dans l\'application Claude ou Claude Code, où le coach est branché sur ton abonnement (MCP)',
+      onclick: () => copyForClaude(),
+    }, 'Copier pour Claude (abonnement)'), note);
+    let lastQuestion = '';
     const form = el('form', { class: 'cc-form', onsubmit: (e) => { e.preventDefault(); ask(input.value); } }, input, send);
     const chips = el('div', { class: 'cc-chips' }, (options.suggestions || []).map((q) => el('button', {
       type: 'button', class: 'cc-chip', onclick: () => ask(q),
     }, q)));
     root.classList.add('cc');
-    root.append(log, steps, chips, form, foot);
+    root.append(log, steps, chips, form, alt, foot);
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(input.value); } });
 
     function render(view) {
@@ -87,6 +94,7 @@
       steps.textContent = '';
       foot.textContent = '';
       for (const m of (view ? view.messages : [])) {
+        if (m.role === 'user') lastQuestion = m.text;
         if (m.role === 'user') log.append(el('div', { class: 'cc-msg cc-user' }, m.text));
         else {
           const body = el('div', { class: 'cc-msg cc-coach' });
@@ -114,6 +122,36 @@
       log.scrollTop = log.scrollHeight;
     }
 
+    async function copyText(text) {
+      try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* repli ci-dessous */ }
+      const area = el('textarea', { style: 'position:fixed;opacity:0', 'aria-hidden': 'true' });
+      area.value = text;
+      document.body.append(area);
+      area.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      area.remove();
+      return ok;
+    }
+
+    async function copyForClaude(asked) {
+      const text = (asked || input.value).trim() || lastQuestion;
+      if (!text) { note.textContent = 'Écris d\'abord ta question.'; return; }
+      let context = null;
+      try { context = options.context ? options.context() : null; } catch (e) { context = null; }
+      try {
+        const out = await api('/api/coach/texte', { text, context });
+        if (await copyText(out.text)) {
+          note.textContent = 'Copié : colle-la dans Claude (application ou Claude Code), où Analyzer est branché.';
+        } else {
+          note.textContent = '';
+          note.append('Copie impossible : sélectionne le texte ci-dessous.', el('textarea', { class: 'cc-manual', readonly: true, rows: '3' }, out.text));
+        }
+      } catch (e) {
+        note.textContent = e.message;
+      }
+    }
+
     function reset() {
       conv = null;
       try { sessionStorage.removeItem(STORE); } catch (e) { /* rien à oublier */ }
@@ -134,6 +172,7 @@
 
     async function ask(text) {
       text = (text || '').trim();
+      if (status && !status.sdk) { copyForClaude(text); return; }  // pas d'API ici : la question part dans Claude
       if (!text || send.disabled) return;
       input.value = '';
       let context = null;
@@ -152,9 +191,9 @@
 
     api('/api/coach').then((s) => {
       status = s;
-      if (!s.sdk) {
-        form.hidden = true;
-        chips.hidden = true;
+      if (!s.sdk) {  // sans module ni clé : la question se copie pour Claude (abonnement, coach branché par MCP)
+        send.hidden = true;
+        alt.querySelector('button').textContent = 'Copier ma question pour Claude';
         log.append(el('div', { class: 'cc-setup' }, s.setup));
         return;
       }

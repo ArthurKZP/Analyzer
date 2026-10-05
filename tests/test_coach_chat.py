@@ -341,6 +341,14 @@ class CoachRoutesTest(unittest.TestCase):
                 for bad in ({"text": ""}, {"text": "x" * 5000}, {"text": "ok", "context": {"spot": 3}},
                             {"text": "ok", "context": {"spot": "spot:srp:KsKd4c", "path": "x"}}, ["texte"]):
                     self.assertEqual(request("POST", "/api/coach/message", bad)[0], 400, bad)
+                    self.assertEqual(request("POST", "/api/coach/texte", bad)[0], 400, bad)
+                # la question à coller dans Claude (coach branché par MCP), avec ce que l'élève regarde
+                status, data = request("POST", "/api/coach/texte", {"text": "Que faire ici ?", "context": {
+                    "spot": "spot:srp:KsKd4c", "path": [], "main": "AhAd"}})
+                self.assertEqual(status, 200)
+                self.assertTrue(data["text"].startswith("[L'élève regarde dans l'explorateur : spot spot:srp:KsKd4c"))
+                self.assertIn("main sélectionnée AhAd", data["text"])
+                self.assertTrue(data["text"].endswith("Que faire ici ?"))
                 for name in ("coach.js", "coach.css"):
                     conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=30)
                     conn.request("GET", "/static/" + name)

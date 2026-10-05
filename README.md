@@ -527,7 +527,14 @@ affiche, avec les chemins de ta machine :
   Modifier la configuration), puis redémarre l'application ;
 - pour **Claude Code** : la commande `claude mcp add …` à lancer une fois.
 
-Ensuite, demande simplement « Résume-moi le plan de jeu en SRP » ou « Dans quelles lignes Villain bluffe-t-il ? ».
+Ensuite, pose tes questions **dans Claude** (pas dans le panneau du coach d'Analyzer, qui passe toujours par
+l'API et sa facturation à part) : « Résume-moi le plan de jeu en SRP » ou « Dans quelles lignes Villain
+bluffe-t-il ? ». Depuis l'explorateur, *Copier pour Claude* (onglet Coach) copie ta question avec ce que tu
+regardes (spot ou main, ligne, case sélectionnée) : colle-la dans Claude, qui ouvre le même moment du coup.
+
+Pour vérifier le branchement : dans Claude Code, `claude mcp list` doit montrer `analyzer` connecté (et `/mcp`
+dans une session) ; dans Claude Desktop, le serveur apparaît dans Réglages > Développeur après un redémarrage
+complet de l'application.
 Le prompt *coach* du serveur (menu des prompts de l'application) donne au modèle la façon de répondre du coach.
 Le serveur (`python -m analyzer mcp`) est lancé par l'application Claude : il charge tes mains au premier outil
 appelé et ouvre les études comme l'application d'Analyzer (les deux peuvent tourner en même temps, chacune avec sa

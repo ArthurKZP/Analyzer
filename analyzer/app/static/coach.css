@@ -33,3 +33,5 @@
 .cc-foot:empty { display: none; }
 .cc-new { font: inherit; font-size: 12px; background: none; border: 0; color: var(--accent, var(--series-1, #2a78d6)); cursor: pointer; font-weight: 600; padding: 0; }
 .cc-hint { color: var(--muted); }
+.cc-alt { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 11px; }
+.cc-manual { display: block; width: 100%; margin-top: 4px; font: inherit; font-size: 12px; }

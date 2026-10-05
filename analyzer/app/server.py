@@ -287,7 +287,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(trainer.record(payload.get("entries")))
         if parts == ["api", "entraineur", "effacer"]:
             return self._json(trainer.clear())
-        if parts == ["api", "coach", "message"]:
+        if parts[:2] == ["api", "coach"] and parts[2:] in (["message"], ["texte"]):
             payload = self._small_json()
             if not isinstance(payload, dict):
                 return self._error(400, "Requête invalide.")
@@ -298,6 +298,8 @@ class Handler(BaseHTTPRequestHandler):
                                             and valid_path(context.get("path") or [])
                                             and (context.get("main") is None or isinstance(context.get("main"), str))):
                 return self._error(400, "Requête invalide.")
+            if parts[2] == "texte":  # à coller dans Claude (coach branché par MCP sur l'abonnement)
+                return self._json({"text": library.coach.prompt(text.strip(), context)})
             return self._json(library.coach.ask(conv, text.strip(), context))
         if parts == ["api", "plan", "preparer"]:
             return self._json(library.plan_state(start=True))
