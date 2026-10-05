@@ -550,7 +550,10 @@ python -m analyzer app
   `ANALYZER_COACH_EFFORT`. Si le modèle décline une question, l'API la confie à un autre modèle Claude
   (`fallbacks: "default"`).
 - Coût : facturé par Anthropic à l'usage (API séparée de l'abonnement), de 5 à 20 centimes par question environ
-  selon les outils consultés ; la page affiche le coût estimé de la discussion.
+  selon les outils consultés ; la page affiche le coût estimé de la discussion. Le compte API doit avoir du
+  crédit (console.anthropic.com, rubrique Billing) : sans crédit, le service refuse les questions (erreur 400).
+- En cas d'erreur, le panneau donne la raison renvoyée par le service (et le terminal, le numéro de la requête).
+  Si le relais vers un autre modèle n'est pas ouvert à ton compte, le coach s'en passe.
 - Ouvrir une étude pour répondre prend quelques secondes (une minute en SRP) ; elle reste ouverte pour
   l'explorateur.
 

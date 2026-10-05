@@ -42,7 +42,19 @@ class FakeClient:
 
     def create(self, **kwargs):
         self.calls.append(json.loads(json.dumps(kwargs, default=str)))
-        return self.script.pop(0)
+        item = self.script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+class APIError(Exception):
+    """Erreur du service au format du SDK : code HTTP et corps JSON."""
+
+    def __init__(self, status, message):
+        super().__init__(f"Error code: {status}")
+        self.status_code = status
+        self.body = {"type": "error", "error": {"type": "invalid_request_error", "message": message}}
 
 
 def tool_use(name, args, ident="t1"):
@@ -253,6 +265,31 @@ class CoachChatTest(unittest.TestCase):
         view = wait(c2, c2.ask(None, "Question", None)["id"])
         self.assertIn("ANTHROPIC_API_KEY", view["error"])
         self.assertIn("ANTHROPIC_API_KEY", Coach._explain(TypeError("Could not resolve authentication method.")))
+
+    def test_service_errors_say_why(self):
+        credit = APIError(400, "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing.")
+        with mock.patch("sys.stderr"):
+            self.assertIn("n'a plus de crédit", Coach._explain(credit))
+            self.assertEqual(Coach._explain(APIError(400, "messages.0: bad")),
+                             "Le service a refusé la demande (400) : messages.0: bad")
+            self.assertIn("momentanément indisponible (529)", Coach._explain(APIError(529, "Overloaded")))
+            self.assertIn("ANALYZER_COACH_MODEL", Coach._explain(APIError(404, "model: not found")))
+            client = FakeClient([credit])
+            c = Coach(FakeLibrary(), client_factory=lambda: client)
+            view = wait(c, c.ask(None, "Question", None)["id"])
+        self.assertIn("console.anthropic.com", view["error"])
+
+    def test_without_fallbacks_when_refused(self):
+        # Le relais de modèle n'est pas ouvert à ce compte : la question repart sans, et la suite aussi.
+        client = FakeClient([APIError(400, "fallbacks: not available for this organization"), answer("Réponse."),
+                             answer("Deuxième.")])
+        c = Coach(FakeLibrary(), client_factory=lambda: client)
+        with mock.patch("sys.stderr"):
+            conv = c.ask(None, "Question", None)["id"]
+            self.assertEqual(wait(c, conv)["messages"][-1]["text"], "Réponse.")
+        self.assertEqual(("fallbacks" in client.calls[0], "fallbacks" in client.calls[1]), (True, False))
+        wait(c, c.ask(conv, "Encore", None)["id"])
+        self.assertNotIn("fallbacks", client.calls[2])
 
     def test_line_parsing_and_context(self):
         c = Coach(FakeLibrary())

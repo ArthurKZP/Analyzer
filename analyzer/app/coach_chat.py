@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import threading
 import time
 import traceback
@@ -207,6 +208,21 @@ def _blocks(response) -> list[dict]:
     return [b for i, b in enumerate(content) if i > last or b.get("type") not in drop]
 
 
+def _status(exc: Exception) -> Optional[int]:
+    """Code HTTP d'une erreur du service (APIStatusError du SDK), sinon None."""
+    status = getattr(exc, "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def _api_message(exc: Exception) -> str:
+    """Le message d'erreur renvoyé par l'API (corps {"error": {"message": …}}), sinon celui de l'exception."""
+    body = getattr(exc, "body", None)
+    error = body.get("error") if isinstance(body, dict) else None
+    if isinstance(error, dict) and error.get("message"):
+        return str(error["message"])
+    return str(getattr(exc, "message", "") or exc)
+
+
 def _text(response) -> str:
     return "\n\n".join(b.text for b in response.content if b.type == "text" and b.text.strip())
 
@@ -218,6 +234,7 @@ class Coach:
         self._conversations: dict[str, Conversation] = {}
         self._lock = threading.Lock()
         self._model = MODEL
+        self._fallbacks = True  # relais vers une autre version du modèle en cas de refus, si le compte l'accepte
 
     # --- interface de l'application ---------------------------------------------------------------
     def status(self) -> dict:
@@ -287,13 +304,23 @@ class Coach:
             parts.append(f"main sélectionnée {context['main']}")
         return f"[L'élève regarde dans l'explorateur : {' · '.join(parts)}]\n\n{text}"
 
+    def _create(self, client, conv: Conversation):
+        request = dict(model=conv.model, max_tokens=MAX_TOKENS, system=SYSTEM, tools=TOOLS, messages=conv.transcript,
+                       output_config={"effort": EFFORT}, cache_control={"type": "ephemeral"})
+        if self._fallbacks:
+            try:
+                return client.beta.messages.create(**request, betas=[FALLBACK_BETA], fallbacks="default")
+            except Exception as exc:
+                if _status(exc) != 400 or "fallback" not in _api_message(exc).lower():
+                    raise
+                # le relais n'est pas ouvert à ce compte (ou à ce modèle) : le coach s'en passe
+                print(f"Coach : relais de modèle refusé ({_api_message(exc)}) ; on continue sans.", file=sys.stderr)
+                self._fallbacks = False
+        return client.beta.messages.create(**request)
+
     def _loop(self, client, conv: Conversation) -> str:
         for _ in range(MAX_ROUNDS):
-            response = client.beta.messages.create(
-                model=conv.model, max_tokens=MAX_TOKENS, system=SYSTEM, tools=TOOLS, messages=conv.transcript,
-                output_config={"effort": EFFORT}, cache_control={"type": "ephemeral"},
-                betas=[FALLBACK_BETA], fallbacks="default",
-            )
+            response = self._create(client, conv)
             self._count(conv, response)
             if response.stop_reason == "refusal":
                 raise CoachError("Le coach a décliné cette question. Reformule-la autrement.")
@@ -340,22 +367,33 @@ class Coach:
     def _explain(exc: Exception) -> str:
         if isinstance(exc, TypeError) and "authentication" in str(exc):
             return SETUP
+        status = _status(exc)
+        if status is not None:
+            message = _api_message(exc)
+            request_id = getattr(exc, "request_id", None)
+            print(f"Coach : erreur {status} du service : {message}" + (f" (requête {request_id})" if request_id else ""),
+                  file=sys.stderr)
+            if status == 401:
+                return "Clé API refusée : vérifie ANTHROPIC_API_KEY. " + SETUP
+            if status == 403:
+                return "Cette clé API n'a pas accès au modèle du coach."
+            if status == 404:
+                return ("Modèle du coach introuvable : vérifie ANALYZER_COACH_MODEL (vide, le coach prend le plus récent "
+                        "des modèles accessibles à ta clé).")
+            if status == 429:
+                return "Trop de demandes pour le moment : réessaie dans une minute."
+            if status >= 500:
+                return f"Le service est momentanément indisponible ({status}) : réessaie dans quelques minutes."
+            if "credit balance" in message.lower():
+                return ("Ton compte API Anthropic n'a plus de crédit : l'API est facturée à part de l'abonnement Claude. "
+                        "Ajoute du crédit sur console.anthropic.com (rubrique Billing), ou utilise le coach dans ton "
+                        "abonnement Claude, sans clé API : lance « python -m analyzer mcp --config » et suis les indications.")
+            return f"Le service a refusé la demande ({status}) : {message}"
         try:
             import anthropic
         except ImportError:
             traceback.print_exc()
             return "Erreur inattendue du coach (détails dans le terminal)."
-        if isinstance(exc, anthropic.AuthenticationError):
-            return "Clé API refusée : vérifie ANTHROPIC_API_KEY. " + SETUP
-        if isinstance(exc, anthropic.PermissionDeniedError):
-            return "Cette clé API n'a pas accès au modèle du coach."
-        if isinstance(exc, anthropic.NotFoundError):
-            return ("Modèle du coach introuvable : vérifie ANALYZER_COACH_MODEL (vide, le coach prend le plus récent "
-                    "des modèles accessibles à ta clé).")
-        if isinstance(exc, anthropic.RateLimitError):
-            return "Trop de demandes pour le moment : réessaie dans une minute."
-        if isinstance(exc, anthropic.APIStatusError):
-            return f"Le service a répondu par une erreur ({exc.status_code}) : réessaie plus tard."
         if isinstance(exc, anthropic.APIConnectionError):
             return "Pas de connexion au service : vérifie ta connexion internet."
         traceback.print_exc()
