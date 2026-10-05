@@ -97,7 +97,7 @@ class FakeSolves:
         self.query = make_query()
         self.session = FakeSession(self.query)
 
-    def live_session(self, ident):
+    def live_for(self, spot):
         return self.session
 
     def node(self, spot, path):

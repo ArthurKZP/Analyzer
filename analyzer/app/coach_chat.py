@@ -597,9 +597,9 @@ class Coach:
         spot = self._spot(args.get("spot"))
         label, names, kind = self._targets(args.get("adversaire"))
         solves = self.library.solves
-        if solves.live_session(spot.ident) is None:
+        if solves.live_for(spot) is None:
             self._node(spot, [])  # ouvre l'étude
-        session = solves.live_session(spot.ident)
+        session = solves.live_for(spot)
         if session is None:
             raise CoachError("L'étude n'a pas pu être ouverte.")
         # suivre la ligne ne dépend pas des stratégies : on garde le verrou en place, s'il y en a un
@@ -644,7 +644,7 @@ class Coach:
     # --- études : ouvrir, suivre une ligne -----------------------------------------------------------
     def _node(self, spot, path: list) -> dict:
         solves = self.library.solves
-        if solves.live_session(spot.ident) is None:
+        if solves.live_for(spot) is None:
             view = solves.lookup(spot)
             if view["state"] in ("waiting", "running"):
                 raise CoachError("Ce spot est en cours de résolution : réessaie quand il sera prêt.")
@@ -653,7 +653,7 @@ class Coach:
                                  "ou demande à l'élève de le résoudre dans l'explorateur.")
             job = solves.start(spot, force=True)
             deadline = time.time() + LOAD_TIMEOUT
-            while solves.live_session(spot.ident) is None:
+            while solves.live_for(spot) is None:
                 state = (solves.get(job["job"]) or {}).get("state")
                 if state in ("error", "cancelled") or time.time() > deadline:
                     raise CoachError("L'étude n'a pas pu être ouverte.")

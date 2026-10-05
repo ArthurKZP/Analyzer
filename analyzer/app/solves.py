@@ -80,12 +80,18 @@ class SolveQueue:
         return spot.request(self.iterations, self.target)
 
     # --- session navigable ------------------------------------------------------
-    def live_session(self, hand_id: str) -> Optional[postflop.Session]:
+    def live_session(self, hand_id: str, request: Optional[dict] = None) -> Optional[postflop.Session]:
+        """La session ouverte de ce coup ; avec request, seulement si elle a été résolue avec ces ranges et cet
+        arbre (un coup se résout aussi avec tes ranges ajustées, dans une étude à part)."""
         with self._lock:
             live = self._live
-        if live and live[0] == hand_id and live[1].alive:
+        if live and live[0] == hand_id and live[1].alive and (
+                request is None or postflop.study_key(live[1].request) == postflop.study_key(request)):
             return live[1]
         return None
+
+    def live_for(self, spot) -> Optional[postflop.Session]:
+        return self.live_session(spot.ident, self._request(spot))
 
     def _set_live(self, hand_id: str, session: Optional[postflop.Session]) -> None:
         with self._lock:
@@ -106,7 +112,7 @@ class SolveQueue:
         request = self._request(spot)
         key = postflop.cache_key(request)
         hand_id = spot.ident
-        live = self.live_session(hand_id) is not None
+        live = self.live_session(hand_id, request) is not None
         study = postflop.study_path(request).is_file()
         with self._lock:
             job = self._jobs.get(key)
@@ -304,7 +310,7 @@ class SolveQueue:
     def node(self, spot, path: list) -> dict:
         """Nœud au bout du chemin : depuis la session si elle est ouverte, sinon depuis le cache. Les mains
         que le solveur ne joue presque jamais là y prennent leur meilleure action selon l'EV (postflop.settle)."""
-        session = self.live_session(spot.ident)
+        session = self.live_for(spot)
         if session is not None:
             return {"node": postflop.settle(session.node(path), postflop.weights_of(spot)), "live": True}
         raw = postflop.cached(self._request(spot))

@@ -280,6 +280,7 @@
       box.title = meta.family_label + (meta.sizes ? '\nTailles : ' + meta.sizes : '');
       box.append('Spot d\'étude · ' + meta.pot_type + ' · BTN contre BB · flop ', cards(meta.board), ' · ' + meta.texture
         + ' · pot ' + num(meta.pot) + ' bb, tapis ' + num(meta.stack) + ' bb');
+      box.append(adjustedBadge());
       return;
     }
     const parts = ['Main ' + meta.hand, meta.date];
@@ -291,7 +292,16 @@
     box.append(parts.join(' · ') + ' · ', cards(meta.hero_cards), ' vs ',
       revealed() && meta.villain_cards.length ? cards(meta.villain_cards) : '??',
       ' · ' + meta.villain + (meta.stack ? ' · tapis effectif ' + num(meta.stack) + ' bb' : '')
-      + ' · résultat ' + (meta.net > 0 ? '+' : '') + num(meta.net) + ' bb');
+      + ' · résultat ' + (meta.net > 0 ? '+' : '') + num(meta.net) + ' bb', adjustedBadge());
+  }
+
+  // Ranges préflop ajustées en jeu : un rappel, qui ouvre l'onglet Ranges.
+  function adjustedBadge() {
+    if (!state || !state.adjusted) return '';
+    return el('button', {
+      type: 'button', class: 'rg-badge', title: 'Le solveur joue avec tes ranges préflop, pas celles de la référence',
+      onclick: () => { rightTab = 'ranges'; renderTabs(); },
+    }, 'tes ranges' + (state.adjusted === 'ligne' ? ' (ligne)' : ''));
   }
 
   function renderStatus() {
@@ -877,13 +887,262 @@
     });
   }
 
+  // ---------- ranges préflop ajustées (onglet Ranges) ----------
+  // Tes ranges à la place de celles de la référence, pour ce coup ou par défaut pour toute sa ligne : le coup
+  // se résout à nouveau, dans une étude à part (celle de la référence reste et se rouvre en quelques secondes).
+  const BRUSHES = [[1, '100 %'], [0.75, '75 %'], [0.5, '50 %'], [0.25, '25 %'], [0, 'Retirer']];
+  const HAND_RE = /^(?:([2-9TJQKA])\1|[2-9TJQKA]{2}[so])$/;
+  const RESIZE = 0.10;  // « plus serré » / « plus large » : environ 10 % des combos de la range
+  const ALL_HANDS = [];
+  for (let i = 0; i < 13; i++) for (let j = 0; j < 13; j++) ALL_HANDS.push(handAt(i, j));
+  const rg = { data: null, edit: null, player: 0, brush: 1, scope: 'coup', painting: false, busy: false, msg: '', ui: null };
+
+  const comboCount = (h) => (h.length === 2 ? 6 : h[2] === 's' ? 4 : 12);
+  const combosOf = (w) => Object.entries(w).reduce((t, [h, x]) => t + x * comboCount(h), 0);
+  const validHand = (h) => HAND_RE.test(h) && (h.length === 2 || RANKS.indexOf(h[0]) < RANKS.indexOf(h[1]));
+  const sameRange = (a, b) => [...new Set(Object.keys(a).concat(Object.keys(b)))].every((h) => Math.abs((a[h] || 0) - (b[h] || 0)) <= 0.002);
+  const rangeText = (w) => ALL_HANDS.filter((h) => (w[h] || 0) >= 0.001)
+    .map((h) => (w[h] >= 0.999 ? h : h + ':' + Math.round(w[h] * 1000) / 1000)).join(',');
+
+  function parseRange(text) {
+    const out = {};
+    for (const item of text.replace(/\s+/g, '').split(',')) {
+      if (!item) continue;
+      const [h, weight] = item.split(':');
+      const v = weight === undefined || weight === '' ? 1 : Number(weight);
+      if (!validHand(h) || !Number.isFinite(v) || v < 0) throw new Error('Illisible : « ' + item + ' ». Écris AA, AKs, AKo…, avec un poids éventuel (AKo:0.5).');
+      if (v > 0) out[h] = Math.min(1, v);
+    }
+    if (!Object.keys(out).length) throw new Error('Range vide : garde au moins une main.');
+    return out;
+  }
+
+  // Plus serré : retire environ 10 % des combos, en partant des mains les plus faibles de la range (équité contre
+  // une main au hasard) ; plus large : en ajoute autant, en partant des plus fortes qui n'y sont pas en entier.
+  function resize(w, sign) {
+    const out = { ...w };
+    let left = RESIZE * combosOf(w);
+    if (sign > 0) left = Math.max(left, 0.01 * 1326);
+    for (const h of sign < 0 ? rg.data.order.slice().reverse() : rg.data.order) {
+      if (left <= 0.01) break;
+      const x = out[h] || 0;
+      const room = sign < 0 ? x : 1 - x;
+      if (room <= 0) continue;
+      const d = Math.min(room, left / comboCount(h));
+      const v = Math.round((x + sign * d) * 1000) / 1000;
+      if (v >= 0.001) out[h] = v; else delete out[h];
+      left -= d * comboCount(h);
+    }
+    return Object.keys(out).length ? out : w;
+  }
+
+  function setRanges(data) {
+    rg.data = data;
+    rg.edit = data.supported ? data.players.map((p) => ({ ...p.current })) : null;
+    const line = data.supported && data.players.some((p) => p.source === 'ligne') && !data.players.some((p) => p.source === 'coup');
+    rg.scope = data.can_line && line ? 'ligne' : 'coup';
+  }
+
+  async function mountRanges() {
+    if (!rg.data) {
+      $('ranges-box').textContent = 'Chargement…';
+      try {
+        setRanges(await api('/api/explorateur/ranges', { hand: HAND }));
+      } catch (e) {
+        $('ranges-box').textContent = e.message;
+        return;
+      }
+    }
+    renderRanges();
+  }
+
+  const cellTitle = (h, x, r) => h + ' · ' + pct(x) + (Math.abs(x - r) > 0.002 ? ' (référence ' + pct(r) + ')' : '');
+  function paintCell(cell) {
+    const h = cell.dataset.h;
+    const w = rg.edit[rg.player];
+    if ((w[h] || 0) === rg.brush) return;
+    if (rg.brush > 0) w[h] = rg.brush; else delete w[h];
+    refreshRanges();
+  }
+
+  function rangeGrid() {
+    const grid = el('div', { class: 'rgrid', 'aria-label': 'Range : clique ou glisse sur les mains pour les peindre' });
+    rg.ui.cells = ALL_HANDS.map((h) => grid.appendChild(el('div', { class: 'rcell', 'data-h': h }, el('span', { class: 'h' }, h))));
+    // souris et doigt : on peint les cases survolées tant que le bouton (ou le doigt) reste appuyé
+    grid.addEventListener('pointerdown', (e) => {
+      const cell = e.target.closest('.rcell');
+      if (!cell || rg.busy) return;
+      rg.painting = true;
+      paintCell(cell);
+      e.preventDefault();
+    });
+    grid.addEventListener('pointermove', (e) => {
+      if (!rg.painting) return;
+      const target = document.elementFromPoint(e.clientX, e.clientY);
+      const cell = target && target.closest('.rcell');
+      if (cell && grid.contains(cell)) paintCell(cell);
+    });
+    return grid;
+  }
+
+  const playerLabel = (q) => q.position + (q.role ? ' · ' + NAME[q.role] : '');
+
+  // Le panneau ; ce qui dépend des ranges en cours d'édition se met à jour à part (refreshRanges), sans
+  // reconstruire les boutons : un clic juste après avoir tapé une range ne se perd pas.
+  function renderRanges() {
+    const box = $('ranges-box');
+    box.textContent = '';
+    rg.ui = null;
+    const d = rg.data;
+    if (!d) return;
+    if (!d.supported) { box.append(el('p', { class: 'empty' }, d.message)); return; }
+    const p = d.players[rg.player];
+    const ui = rg.ui = {};
+    const wrap = el('div', { class: 'rg' });
+    box.append(wrap);
+    const what = SPOT ? 'ce spot' : 'ce coup';
+    wrap.append(el('p', { class: 'small muted' }, 'Ligne préflop : ' + d.line + (d.format !== 'HU' ? ' en ' + d.format : '')
+      + ' · référence : ' + d.reference + '. Ajuste les ranges, puis résous ' + what + ' avec elles.'));
+
+    const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Range modifiée' });
+    ui.players = d.players.map((q, k) => seg.appendChild(el('button', {
+      type: 'button', 'aria-pressed': String(k === rg.player), onclick: () => { rg.player = k; renderRanges(); },
+    }, playerLabel(q))));
+    const source = { coup: 'ta range pour ' + what, ligne: 'ta range par défaut de la ligne', reference: 'range de la référence' }[p.source];
+    wrap.append(el('div', { class: 'rg-row' }, seg, el('span', { class: 'small muted' }, 'En jeu : ' + source)));
+    ui.count = wrap.appendChild(el('div', { class: 'small' }));
+
+    const brushes = el('div', { class: 'seg', role: 'group', 'aria-label': 'Pinceau' });
+    const brushButtons = BRUSHES.map(([v, label]) => brushes.appendChild(el('button', {
+      type: 'button', 'aria-pressed': String(rg.brush === v), title: v ? 'Peindre les mains à ' + label : 'Retirer les mains de la range',
+      onclick: () => { rg.brush = v; brushButtons.forEach((b, k) => b.setAttribute('aria-pressed', String(BRUSHES[k][0] === v))); },
+    }, label)));
+    const change = (next) => { rg.edit[rg.player] = next; rg.msg = ''; refreshRanges(); };
+    const current = () => rg.edit[rg.player];
+    wrap.append(el('div', { class: 'rg-row' }, brushes,
+      el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, title: 'Retire environ 10 % des combos, en commençant par les mains les plus faibles', onclick: () => change(resize(current(), -1)) }, 'Plus serré'),
+      el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, title: 'Ajoute environ 10 % de combos, en commençant par les mains les plus fortes', onclick: () => change(resize(current(), 1)) }, 'Plus large')));
+
+    wrap.append(rangeGrid());
+    wrap.append(el('div', { class: 'small muted' }, 'Clique ou glisse sur les mains avec le pinceau choisi. Contour orange : différent de la référence.'));
+
+    ui.text = el('textarea', { class: 'rg-text', rows: 4, spellcheck: 'false', 'aria-label': 'Range de ' + p.position + ' en texte' });
+    ui.text.addEventListener('input', () => {  // la grille suit la saisie dès qu'elle se lit
+      try { rg.edit[rg.player] = parseRange(ui.text.value); rg.msg = ''; refreshRanges(); } catch (e) { /* avis au change */ }
+    });
+    ui.text.addEventListener('change', () => {
+      const typed = ui.text.value;
+      try { change(parseRange(typed)); } catch (e) { rg.msg = e.message; refreshRanges(); ui.text.value = typed; }  // à corriger
+    });
+    wrap.append(ui.text);
+
+    ui.toRef = el('button', { type: 'button', class: 'rg-btn', onclick: () => change({ ...p.reference }) }, 'Range de la référence');
+    const resets = el('div', { class: 'rg-row' }, ui.toRef);
+    if (p.line && p.source === 'coup') resets.append(el('button', { type: 'button', class: 'rg-btn', onclick: () => change({ ...p.line }) }, 'Ta range de la ligne'));
+    ui.undo = resets.appendChild(el('button', { type: 'button', class: 'rg-btn', onclick: () => change({ ...p.current }) }, 'Annuler mes changements'));
+    wrap.append(resets);
+
+    if (d.can_line) {
+      const scope = el('div', { class: 'rg-scope', role: 'radiogroup', 'aria-label': 'Portée' });
+      [['coup', 'Pour ce coup seulement'],
+        ['ligne', 'Par défaut pour « ' + d.line + ' » en ' + d.format + ' : tes autres coups de cette ligne, leur analyse et le leakfinding']]
+        .forEach(([v, label]) => {
+          const input = el('input', { type: 'radio', name: 'rg-scope', value: v, checked: rg.scope === v, onchange: () => { rg.scope = v; refreshRanges(); } });
+          scope.append(el('label', {}, input, el('span', {}, label)));
+        });
+      wrap.append(scope);
+    }
+
+    ui.solve = el('button', { type: 'button', class: 'rg-btn go', onclick: saveRanges }, 'Résoudre avec ces ranges');
+    const actions = el('div', { class: 'rg-row' }, ui.solve);
+    if (d.adjusted) actions.append(el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, onclick: resetRanges }, 'Revenir à la référence'));
+    wrap.append(actions);
+    ui.msg = wrap.appendChild(el('p', { class: 'err', role: 'alert' }));
+    wrap.append(el('p', { class: 'small muted' }, 'Une autre range change la solution : ' + what + ' se résout à nouveau, dans une étude à part. '
+      + 'Celle de la référence reste : « Revenir à la référence » la rouvre en quelques secondes.'));
+    refreshRanges();
+  }
+
+  function refreshRanges() {
+    const ui = rg.ui, d = rg.data;
+    if (!ui) return;
+    const p = d.players[rg.player];
+    const w = rg.edit[rg.player];
+    ui.cells.forEach((cell) => {
+      const h = cell.dataset.h, x = w[h] || 0, r = p.reference[h] || 0;
+      cell.style.setProperty('--w', Math.round(100 * x) + '%');
+      cell.classList.toggle('diff', Math.abs(x - r) > 0.002);
+      cell.title = cellTitle(h, x, r);
+    });
+    const n = combosOf(w), ref = combosOf(p.reference);
+    ui.count.textContent = num(n, 0) + ' combos (' + num(100 * n / 1326, 1) + ' % des mains) · référence '
+      + num(ref, 0) + ' (' + num(100 * ref / 1326, 1) + ' %)';
+    ui.players.forEach((b, k) => { b.textContent = playerLabel(d.players[k]) + (sameRange(rg.edit[k], d.players[k].current) ? '' : ' •'); });
+    if (document.activeElement !== ui.text) ui.text.value = rangeText(w);
+    ui.toRef.disabled = rg.busy || sameRange(w, p.reference);
+    ui.undo.disabled = rg.busy || sameRange(w, p.current);
+    const dirty = rg.edit.some((x, k) => !sameRange(x, d.players[k].current))
+      || (rg.scope === 'ligne' && d.players.some((q) => q.source === 'coup'));
+    ui.solve.disabled = !dirty || rg.busy;
+    ui.msg.textContent = rg.msg;
+    ui.msg.hidden = !rg.msg;
+  }
+
+  async function saveRanges() {
+    if (rg.ui && rg.ui.text.value !== rangeText(rg.edit[rg.player])) {  // texte tapé sans quitter la zone
+      try { rg.edit[rg.player] = parseRange(rg.ui.text.value); } catch (e) { rg.msg = e.message; refreshRanges(); return; }
+    }
+    const ranges = {};
+    rg.data.players.forEach((p, k) => { ranges[p.position] = rangeText(rg.edit[k]); });
+    if (Object.values(ranges).some((t) => !t)) { rg.msg = 'Range vide : garde au moins une main.'; refreshRanges(); return; }
+    await rangesCall('/api/explorateur/ranges/enregistrer', { hand: HAND, scope: rg.scope, ranges }, true);
+  }
+
+  async function resetRanges() {
+    const d = rg.data;
+    const scope = d.players.some((p) => p.source === 'coup') ? 'coup' : 'ligne';
+    if (scope === 'ligne' && !window.confirm('Effacer ta range par défaut pour « ' + d.line + ' » en ' + d.format
+      + ' ? Elle ne s\'appliquera plus à aucun coup de cette ligne.')) return;
+    await rangesCall('/api/explorateur/ranges/effacer', { hand: HAND, scope }, false);
+  }
+
+  async function rangesCall(url, body, solveNow) {
+    rg.busy = true;
+    rg.msg = '';
+    renderRanges();
+    try {
+      setRanges(await api(url, body));
+      await reopen(solveNow);
+    } catch (e) {
+      rg.msg = e.message;
+    }
+    rg.busy = false;
+    renderRanges();
+  }
+
+  // Les ranges ont changé : un autre coup pour le solveur (ou celui de la référence, souvent déjà résolu).
+  async function reopen(solveNow) {
+    clearTimeout(pollTimer);
+    nodes.clear();
+    node = null;
+    path = [];
+    selected = null;
+    hovered = null;
+    for (const id of ['ribbon', 'overview', 'mine', 'combos', 'grid', 'legend']) $(id).textContent = '';
+    await loadState();
+    await showSpot(solveNow);
+  }
+
   function renderTabs() {
     const n = filters.keys.size;
     $('tab-combos').setAttribute('aria-selected', rightTab === 'combos' ? 'true' : 'false');
     $('tab-filters').setAttribute('aria-selected', rightTab === 'filters' ? 'true' : 'false');
     $('tab-coach').setAttribute('aria-selected', rightTab === 'coach' ? 'true' : 'false');
+    $('tab-ranges').setAttribute('aria-selected', rightTab === 'ranges' ? 'true' : 'false');
     $('pane-coach').hidden = rightTab !== 'coach';
+    $('pane-ranges').hidden = rightTab !== 'ranges';
     if (rightTab === 'coach') mountCoach();
+    if (rightTab === 'ranges') mountRanges();
     $('tab-filters').textContent = 'Filtres';
     if (n) $('tab-filters').append(el('span', { class: 'count' }, n));
     $('pane-combos').hidden = rightTab !== 'combos';
@@ -931,11 +1190,31 @@
   // Premier nœud affiché ; dans un spot d'étude, on passe le check forcé de la BB (qui ne mène pas).
   const goStart = () => goTo(initialPath(), true);
 
+  // Le coup tel que l'état le donne ; solveNow : le résoudre s'il ne l'est pas encore (nouvelles ranges).
+  async function showSpot(solveNow) {
+    renderMeta();
+    renderStatus();
+    // Un spot d'étude n'a pas de ligne jouée en cache : il s'affiche une fois l'étude ouverte.
+    if (state.result && (live || !SPOT)) await goStart();
+    else $('grid').append(el('div', { class: 'empty', style: 'grid-column: 1 / -1' },
+      state.study ? 'Ouverture de l\'étude…' : SPOT ? 'Résous ce spot pour voir la stratégie du solveur.'
+        : 'Résous ce coup pour voir la stratégie du solveur.'));
+    // L'étude se rouvre seule, en quelques secondes (aussi quand le résultat en cache manque, par exemple
+    // après une mise à jour du solveur).
+    if (['done', 'absent'].includes(state.state) && !live && state.study) solve();
+    else if (state.state === 'absent' && (solveNow || (SPOT && /resoudre/.test(location.hash)))) {
+      if (!solveNow) history.replaceState(null, '', location.pathname);  // choisi dans le sélecteur de flop
+      solve();
+    } else poll();
+  }
+
   // ---------- démarrage ----------
   $('b-back').onclick = back;
   $('tab-combos').onclick = () => { rightTab = 'combos'; renderTabs(); };
   $('tab-filters').onclick = () => { rightTab = 'filters'; renderTabs(); };
   $('tab-coach').onclick = () => { rightTab = 'coach'; renderTabs(); };
+  $('tab-ranges').onclick = () => { rightTab = 'ranges'; renderTabs(); };
+  document.addEventListener('pointerup', () => { rg.painting = false; });
   $('b-line').onclick = () => state && state.result && goTo(state.result.decisions[0].path);
   $('b-train').onclick = () => window.open('/entraineur?spot=' + encodeURIComponent(HAND) + '&chemin='
     + encodeURIComponent(JSON.stringify(path)), '_blank', 'noopener');
@@ -964,6 +1243,7 @@
     $('reveal').closest('label').hidden = true;
     $('b-train').hidden = true;
     $('tab-filters').hidden = true;  // les filtres (mains faites, tirages, équité) n'ont de sens qu'au postflop
+    $('tab-ranges').hidden = true;
     document.title = 'Explorateur — préflop';
   }
   if (SPOT) {  // ligne préflop du spot, en tête du déroulé
@@ -983,19 +1263,6 @@
       $('status').textContent = e.message;
       return;
     }
-    renderMeta();
-    renderStatus();
-    // Un spot d'étude n'a pas de ligne jouée en cache : il s'affiche une fois l'étude ouverte.
-    if (state.result && (live || !SPOT)) await goStart();
-    else $('grid').append(el('div', { class: 'empty', style: 'grid-column: 1 / -1' },
-      state.study ? 'Ouverture de l\'étude…' : SPOT ? 'Résous ce spot pour voir la stratégie du solveur.'
-        : 'Résous ce coup pour voir la stratégie du solveur.'));
-    // L'étude se rouvre seule, en quelques secondes (aussi quand le résultat en cache manque, par exemple
-    // après une mise à jour du solveur).
-    if (['done', 'absent'].includes(state.state) && !live && state.study) solve();
-    else if (state.state === 'absent' && SPOT && /resoudre/.test(location.hash)) {  // choisi dans le sélecteur de flop
-      history.replaceState(null, '', location.pathname);
-      solve();
-    } else poll();
+    await showSpot(false);
   })();
 })();

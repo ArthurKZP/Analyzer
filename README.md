@@ -206,6 +206,21 @@ s'ouvre dans une nouvelle fenêtre, comme un solveur :
 Les mises sont en % du pot ; les relances aussi, selon la convention des solveurs : le montant ajouté
 rapporté au pot après le call (relancer à 4,5 sur une mise de 1,7 dans un pot de 5 = 2,8 / 8,4 = 33 %).
 
+**Tes ranges préflop** (onglet *Ranges* de l'explorateur) : le solveur part des ranges de la référence (solution
+préflop heads-up, ou ta solution du format à une table à plusieurs). Pour voir ce que change une autre range — un
+adversaire qui défend plus large, un open plus serré, une réponse au 4bet qui dépend de l'adversaire —, ajuste
+celle de chaque joueur : grille 13 × 13 à peindre au clic ou en glissant (100, 75, 50, 25 % ou retirer), texte à
+coller (« AA,AKs,KQo:0.5,… »), *Plus serré* / *Plus large* (environ 10 % des combos retirés en partant des mains
+les plus faibles de la range, ou ajoutés en partant des plus fortes ; force = équité contre une main au hasard).
+Contour orange : différent de la référence. Deux portées : **pour ce coup seulement** (ou ce spot d'étude), ou
+**par défaut pour la ligne** et le format (« BTN open, BB call » en HU, « CO open, BB 3bet, CO call » en 6-max…) :
+elle s'applique alors à tes autres coups de cette ligne, à leur analyse et au leakfinding ; le réglage d'un coup
+passe avant celui de sa ligne. *Résoudre avec ces ranges* relance le solveur sur une étude à part : celle de la
+référence reste, et *Revenir à la référence* la rouvre en quelques secondes. Un badge *tes ranges* le rappelle en
+haut de l'explorateur, et la page *Études du solveur* marque ces études. Les séries de spots d'étude, leurs plans de
+jeu et la référence livrée restent faits avec la théorie. Tes ranges sont gardées dans
+`~/.analyzer/ranges/perso.json` (sauvegardé) ; code : `theory/custom_ranges.py`.
+
 **L'EV** est en bb, à partir du moment du coup affiché : un fold vaut 0, le pot déjà au milieu est à gagner
 et les mises à venir sont dépensées. Pour une action (au survol), c'est ce que rapporte cette action puis la
 suite jouée par le solveur ; pour une main (dans la grille), c'est l'EV de sa stratégie, la moyenne de ses
@@ -708,7 +723,9 @@ analyzer/
                        lecture de captures de ranges (extract.py) ; postflop avec GTOpen : spots,
                        installation et lecture des résultats (postflop.py), pont Rust (native/main.rs ;
                        arbre.rs pour les tailles, profil.rs pour le verrou d'un profil d'adversaire),
-                       commande `gtopen` (solve_cli.py), mains jouées face au solveur (review.py)
+                       commande `gtopen` (solve_cli.py), mains jouées face au solveur (review.py),
+                       ranges des tables à plusieurs (ring_ranges.py), tes ranges ajustées
+                       (custom_ranges.py, ordre des mains dans data/hand_order.json)
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
                        solveur » (review_page.py), leakfinding (leaks_page.py), bluffs des adversaires

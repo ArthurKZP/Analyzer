@@ -255,6 +255,23 @@ class Handler(BaseHTTPRequestHandler):
                     and trainer.valid_cards(board, 3)):
                 return self._error(400, "Requête invalide.")
             return self._json(studyspots.flop_options(payload["family"], board))
+        if parts[:3] == ["api", "explorateur", "ranges"] and len(parts) <= 4:
+            payload = self._small_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
+                return self._error(400, "Requête invalide.")
+            action = parts[3] if len(parts) == 4 else None
+            try:
+                if action is None:
+                    return self._json(library.ranges_state(payload["hand"]))
+                if action == "enregistrer" and isinstance(payload.get("ranges"), dict):
+                    return self._json(library.save_ranges(payload["hand"], payload.get("scope"), payload["ranges"]))
+                if action == "effacer":
+                    return self._json(library.clear_ranges(payload["hand"], payload.get("scope")))
+                return self._error(400, "Requête invalide.")
+            except (UnknownPlayer, KeyError):
+                return self._error(404, "Main introuvable.")
+            except (ValueError, postflop.Unsupported) as exc:
+                return self._error(400, str(exc))
         if parts == ["api", "explorateur", "noeud"]:
             payload = self._small_json()
             path = payload.get("path") if isinstance(payload, dict) else None

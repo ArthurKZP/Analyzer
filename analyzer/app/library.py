@@ -15,7 +15,7 @@ from ..parsers import load_hands, parse_text
 from ..report import build_plan_page, build_report
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
-from ..theory import coach, handclass, postflop, review, ring_ranges, studyspots
+from ..theory import coach, custom_ranges, handclass, postflop, review, ring_ranges, studyspots
 from ..theory.page import build_preflop_page
 from ..viewer import build_viewer
 from .bluffs_page import build_bluffs_page
@@ -357,9 +357,9 @@ class Library:
 
     # --- résolution postflop ----------------------------------------------------
     def _spot(self, hand_id: str):
-        """Une main jouée (son numéro), ou un spot d'étude (« spot:srp:KsKd4c »)."""
+        """Une main jouée (son numéro), ou un spot d'étude (« spot:srp:KsKd4c ») ; avec tes ranges ajustées."""
         if hand_id.startswith("spot:"):
-            spot = studyspots.parse_ident(hand_id)
+            spot = studyspots.parse_ident(hand_id, custom=True)
             if spot is None:
                 raise UnknownPlayer(hand_id)
             return spot
@@ -385,8 +385,8 @@ class Library:
                 return {"hand": hand_id, "state": "unavailable", "message": solver["message"],
                         "install": solver["install"]}
             board = "".join(getattr(spot, "board", []))
-            if (isinstance(spot, studyspots.StudySpot) and not spot.plan and board in studyspots.flop_set(spot.family)
-                    and not postflop.study_path(spot.request()).is_file()):
+            if (isinstance(spot, studyspots.StudySpot) and not spot.plan and not spot.adjusted
+                    and board in studyspots.flop_set(spot.family) and not postflop.study_path(spot.request()).is_file()):
                 # flop de la série sans tailles choisies : le choix d'abord, comme pour la série entière
                 family = spot.family
                 view = self.solves.choose_and_solve(
@@ -397,7 +397,84 @@ class Library:
         if view["state"] == "absent":
             solver = postflop.status()
             view["solver"] = {k: solver[k] for k in ("ready", "message", "install")}
+        view["adjusted"] = spot.adjusted
         return view
+
+    # --- ranges préflop ajustées (panneau Ranges de l'explorateur) ------------------------
+    @staticmethod
+    def _range_players(spot) -> list[tuple[str, str, Optional[str]]]:
+        """(clé de la range dans le spot, position, H/V) du joueur hors de position, puis de celui en position."""
+        if isinstance(spot, studyspots.StudySpot):
+            return [(spot.oop, spot.oop, None), (spot.ip, spot.ip, None)]
+        return [(p, spot.hand.position(p), "H" if p == spot.hero else "V") for p in (spot.oop, spot.ip)]
+
+    def ranges_state(self, hand_id: str) -> dict:
+        """Les ranges préflop du coup : celles de la référence, celles en jeu, et d'où elles viennent."""
+        try:
+            spot = self._spot(hand_id)
+        except postflop.Unsupported as exc:
+            return {"hand": hand_id, "supported": False, "message": str(exc)}
+        study = isinstance(spot, studyspots.StudySpot)
+        data = custom_ranges.load()
+        by_hand = data["coups"].get(spot.ident, {})
+        by_line = {} if study else data["lignes"].get(spot.context, {})
+        table_format, key = spot.context.split("|", 1)
+        steps = [tuple(step.split(":", 1)) for step in key.split()]
+        if table_format == "HU":
+            reference = "solution préflop heads-up"
+        else:
+            source = (ring_ranges.solution(table_format) or {}).get("source") or ""
+            reference = (source.split(" — ")[0] or "ta solution") + f" ({table_format})"
+        players = []
+        for name, pos, role in self._range_players(spot):
+            source = "coup" if pos in by_hand else "ligne" if pos in by_line else "reference"
+            current = (ring_ranges.parse_range(by_hand.get(pos) or by_line[pos]) if source != "reference"
+                       else spot.reference[name])
+            players.append({"position": pos, "role": role, "source": source, "reference": spot.reference[name],
+                            "line": ring_ranges.parse_range(by_line[pos]) if pos in by_line else None,
+                            "current": current})
+        return {"hand": hand_id, "supported": True, "spot": study, "format": table_format,
+                "line": ring_ranges.describe(steps), "can_line": not study, "adjusted": spot.adjusted,
+                "reference": reference, "players": players, "order": custom_ranges.hand_order()}
+
+    def save_ranges(self, hand_id: str, scope: str, ranges: dict) -> dict:
+        """Enregistre tes ranges pour ce coup (scope « coup ») ou pour sa ligne (« ligne ») ; seules celles qui
+        diffèrent de ce qui s'appliquerait sans ce réglage sont gardées. ValueError si la demande ne va pas."""
+        spot = self._spot(hand_id)
+        study = isinstance(spot, studyspots.StudySpot)
+        if scope not in custom_ranges.SCOPES or (study and scope != "coup"):
+            raise ValueError("Portée inconnue.")
+        names = {pos: name for name, pos, _ in self._range_players(spot)}
+        if not ranges or set(ranges) - set(names) or not all(isinstance(t, str) for t in ranges.values()):
+            raise ValueError("Positions inconnues pour ce coup.")
+        weights = {pos: custom_ranges.check(text) for pos, text in ranges.items()}
+        data = custom_ranges.load()
+        by_line = data["lignes"].get(spot.context, {}) if scope == "coup" and not study else {}
+        keep = {}
+        for pos, w in weights.items():
+            base = ring_ranges.parse_range(by_line[pos]) if pos in by_line else spot.reference[names[pos]]
+            if not custom_ranges.same(w, base):
+                keep[pos] = postflop.range_text(w)
+        key = spot.ident if scope == "coup" else spot.context
+        if keep:
+            custom_ranges.save(scope, key, keep)
+        else:
+            custom_ranges.clear(scope, key)
+        if scope == "ligne":  # la range de la ligne s'applique à ce coup : son réglage à lui s'efface
+            custom_ranges.clear("coup", spot.ident)
+        with self._lock:
+            self._cache.clear()
+        return self.ranges_state(hand_id)
+
+    def clear_ranges(self, hand_id: str, scope: str) -> dict:
+        """Revient à la référence : efface tes ranges de ce coup, ou celles de sa ligne."""
+        spot = self._spot(hand_id)
+        if scope not in custom_ranges.SCOPES:
+            raise ValueError("Portée inconnue.")
+        custom_ranges.clear(scope, spot.ident if scope == "coup" else spot.context)
+        with self._lock:
+            self._cache.clear()
+        return self.ranges_state(hand_id)
 
     def explorer_state(self, hand_id: str) -> dict:
         """Ce que l'explorateur affiche d'une main : le coup, et l'état de sa résolution."""

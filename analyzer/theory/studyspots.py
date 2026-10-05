@@ -28,18 +28,19 @@ HIGH_CARD = {14: "Ace high", 13: "King high", 12: "Queen high", 11: "Jack high",
 FAMILIES = {
     "srp": {"name": "SRP", "label": "Pot relancé simple : open du bouton à 2,5 bb, call de la BB, 100 bb",
             "ip": ("sb_open", "raise"), "oop": ("bb_vs_open", "call"), "pot": 5.0, "stack": 97.5,
-            "oop_initiative": False},
+            "oop_initiative": False, "steps": (("BTN", "raise"), ("BB", "call"))},
     # La solution préflop 3bette à 11,5 bb (bb_vs_open) : pot de 23 bb, 88,5 bb derrière.
     "3bet": {"name": "pot 3bet",
              "label": "Pot 3bet : open du bouton à 2,5 bb, 3bet de la BB à 11,5 bb, call du bouton, 100 bb",
              "ip": ("sb_vs_3bet", "call"), "oop": ("bb_vs_open", "raise"), "pot": 23.0, "stack": 88.5,
-             "oop_initiative": True},
+             "oop_initiative": True, "steps": (("BTN", "raise"), ("BB", "raise"), ("BTN", "call"))},
     # 4bet du bouton à 26 bb (sb_vs_3bet), payé par la BB : pot de 52 bb, 74 bb derrière.
     "4bet": {"name": "pot 4bet",
              "label": "Pot 4bet : open du bouton à 2,5 bb, 3bet de la BB à 11,5 bb, 4bet du bouton à 26 bb, "
                       "call de la BB, 100 bb",
              "ip": ("sb_vs_3bet", "raise"), "oop": ("bb_vs_4bet", "call"), "pot": 52.0, "stack": 74.0,
-             "oop_initiative": False},
+             "oop_initiative": False,
+             "steps": (("BTN", "raise"), ("BB", "raise"), ("BTN", "raise"), ("BB", "call"))},
 }
 
 # Trois flops par texture : sec, connecté, deux couleurs (ou leurs équivalents pour pairé et monotone).
@@ -138,14 +139,26 @@ class StudySpot(postflop.SpotTree):
     # {} : toujours l'arbre par défaut.
     plan: Optional[dict] = None
     sizes_from: Optional[str] = field(default=None, repr=False)  # flop dont les tailles sont empruntées
+    # True : tes ranges ajustées pour ce spot (custom_ranges, portée « coup ») ; les séries, plans et références
+    # restent faits avec les ranges de la solution.
+    custom: bool = field(default=False, repr=False)
 
     def __post_init__(self):
+        from . import custom_ranges
         info = FAMILIES[self.family]
         solution = self.solution or load_solution()
         self.name, self.label = info["name"], info["label"]
         self.pot_bb, self.stack_bb = info["pot"], info["stack"]
         self.ranges = {self.oop: postflop.range_weights(solution, *info["oop"]),
                        self.ip: postflop.range_weights(solution, *info["ip"])}
+        self.context = custom_ranges.context("HU", info["steps"])
+        self.reference = {p: dict(r) for p, r in self.ranges.items()}
+        self.adjusted = None
+        if self.custom:
+            scope, mine = custom_ranges.lookup(self.ident, None)
+            for p in (self.oop, self.ip):
+                if p in mine:
+                    self.ranges[p], self.adjusted = dict(mine[p]), scope
         self.sizes = postflop.default_sizes(self.oop, self.ip, info["oop_initiative"])
         if self.plan is None:
             board = "".join(self.board)
@@ -175,6 +188,7 @@ class StudySpot(postflop.SpotTree):
     def interpret(self, raw: dict) -> dict:
         return {"spot": True, "pot_type": self.name, "pot": self.pot_bb, "stack": self.stack_bb,
                 "board": self.board, "texture": self.texture, "oop": None, "menu": self.menu_text(), "added": [],
+                "adjusted": self.adjusted,
                 "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"),
                 "seconds": raw.get("seconds"), "tree_nodes": raw.get("tree_nodes"), "stopped": None,
                 "decisions": []}
@@ -182,9 +196,22 @@ class StudySpot(postflop.SpotTree):
     def after_solve(self, session: postflop.Session) -> None:
         """Juste après la résolution, l'étude encore ouverte : son plan de jeu (quelques secondes)."""
         from . import coach
-        coach.extract_and_save(session, self)
+        if not self.adjusted:  # les plans de jeu suivent la théorie
+            coach.extract_and_save(session, self)
 
     def write_meta(self, request: dict, raw: dict, session: Optional[postflop.Session] = None) -> None:
+        if self.adjusted:  # étude à part, avec les coups joués : hors des séries et des plans
+            meta = {
+                "kind": "spot-ajuste", "key": postflop.study_key(request), "hand": self.ident, "id": self.ident,
+                "date": "Spot " + self.name, "villain": "–", "hero_cards": [], "board": self.board,
+                "pot_type": self.name, "hero_position": None, "pot": self.pot_bb, "stack": self.stack_bb,
+                "net": None, "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"),
+                "seconds": raw.get("seconds"), "menu": self.menu_text(), "created": time.strftime("%d/%m/%Y %H:%M"),
+                "adjusted": self.adjusted,
+            }
+            postflop.study_path(request).with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False),
+                                                                         encoding="utf-8")
+            return
         meta = {
             "kind": "spot", "key": postflop.study_key(request), "id": self.ident, "family": self.family,
             "family_label": self.label, "pot_type": self.name, "texture": self.texture, "board": self.board,
@@ -384,14 +411,15 @@ def export_selections(family: str = "srp", path: Optional[Path] = None) -> Path:
     return path
 
 
-def parse_ident(ident: str) -> Optional[StudySpot]:
-    """« spot:srp:KsKd4c » -> le spot, si la famille existe et que le flop est valide ; sinon None."""
+def parse_ident(ident: str, custom: bool = False) -> Optional[StudySpot]:
+    """« spot:srp:KsKd4c » -> le spot, si la famille existe et que le flop est valide ; sinon None.
+    custom=True : avec tes ranges ajustées pour ce spot, s'il y en a (l'explorateur)."""
     parts = ident.split(":")
     if len(parts) != 3 or parts[0] != "spot" or parts[1] not in FAMILIES:
         return None
     if not re.fullmatch(r"(?:[2-9TJQKA][cdhs]){3}", parts[2]) or len(set(cards_of(parts[2]))) != 3:
         return None
-    return StudySpot(parts[1], cards_of(parts[2]))
+    return StudySpot(parts[1], cards_of(parts[2]), custom=custom)
 
 
 def family_boards(family: str = "srp") -> list[str]:

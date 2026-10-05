@@ -307,6 +307,9 @@ traitent l'un après l'autre en arrière-plan, tant que l'application reste ouve
 """
 
 
+ADJUSTED = ' <span class="muted small" title="Résolu avec tes ranges préflop ajustées">· tes ranges</span>'
+
+
 def _hand_section() -> str:
     studies = [s for s in postflop.list_studies() if s.get("kind") != "spot"]
     rows = []
@@ -316,7 +319,8 @@ def _hand_section() -> str:
             "<tr>"
             f"<td>{escape(s['date'])}</td><td>{escape(s['villain'])}</td>"
             f"<td>{cards_html(s.get('hero_cards', []))}</td><td>{cards_html(s['board'])}</td>"
-            f"<td>{escape(s['pot_type'])}</td><td>{escape(POSITION_NAMES.get(s['hero_position'], s['hero_position'] or ''))}</td>"
+            f"<td>{escape(s['pot_type'])}{ADJUSTED if s.get('adjusted') else ''}</td>"
+            f"<td>{escape(POSITION_NAMES.get(s['hero_position'], s['hero_position'] or ''))}</td>"
             f'<td class="num">{num(s["net"], 1, sign=True)} bb</td>'
             f'<td class="num">{num(exploit, 2) + " %" if exploit is not None else "–"}</td>'
             f'<td class="num">{_size(s["size"])}</td>'

@@ -255,6 +255,28 @@ class ServerTest(unittest.TestCase):
         body = json.dumps({"hand": "HAND03", "path": []})
         self.assertEqual(self.request("POST", "/api/explorateur/noeud", body, headers)[0], 404)
 
+    def test_ranges(self):
+        headers = {"Content-Type": "application/json"}
+        status, _, body = self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "HAND01"}), headers)
+        state = json.loads(body)
+        self.assertEqual((status, state["supported"], state["line"]), (200, True, "BTN open, BB call"))
+        save = json.dumps({"hand": "HAND01", "scope": "coup", "ranges": {"BB": "AA,KK"}})
+        status, _, body = self.request("POST", "/api/explorateur/ranges/enregistrer", save, headers)
+        self.assertEqual((status, json.loads(body)["adjusted"]), (200, "coup"))
+        state = json.loads(self.request("POST", "/api/explorateur/etat", json.dumps({"hand": "HAND01"}), headers)[2])
+        self.assertEqual(state["adjusted"], "coup")
+        for bad in ({"hand": "HAND01", "scope": "coup", "ranges": {"BB": "AXo"}},
+                    {"hand": "HAND01", "scope": "partout", "ranges": {"BB": "AA"}},
+                    {"hand": "HAND01", "scope": "coup", "ranges": "AA"}):
+            status, _, body = self.request("POST", "/api/explorateur/ranges/enregistrer", json.dumps(bad), headers)
+            self.assertEqual(status, 400, bad)
+        self.assertEqual(self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "NOPE"}), headers)[0], 404)
+        self.assertEqual(self.request("POST", "/api/explorateur/ranges/autre", json.dumps({"hand": "HAND01"}),
+                                      headers)[0], 400)
+        clear = json.dumps({"hand": "HAND01", "scope": "coup"})
+        status, _, body = self.request("POST", "/api/explorateur/ranges/effacer", clear, headers)
+        self.assertEqual((status, json.loads(body)["adjusted"]), (200, None))
+
     def test_studies_page(self):
         status, _, body = self.request("GET", "/etudes")
         self.assertEqual(status, 200)

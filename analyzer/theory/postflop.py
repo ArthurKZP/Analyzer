@@ -362,6 +362,9 @@ class PostflopSpot(SpotTree):
     action_index: list[int]  # indice dans hand.actions de chaque étape de la ligne (-1 : carte)
     sizes: dict[str, list[dict[str, list]]]  # joueur -> street -> {"bet", "raise", "donk"}
     added: list[str] = field(default_factory=list)  # joueurs dont la main a été ajoutée à la range
+    context: str = ""  # la ligne préflop et son format, pour tes ranges ajustées (custom_ranges.context)
+    adjusted: Optional[str] = None  # tes ranges ajustées en jeu : « coup », « ligne », ou None (référence)
+    reference: dict[str, dict[str, float]] = field(default_factory=dict, repr=False)  # ranges de la référence
 
     @property
     def board(self) -> list[str]:
@@ -386,9 +389,11 @@ class PostflopSpot(SpotTree):
 POSTFLOP_ORDER = ("SB", "BB", "UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN")  # ordre de parole après le flop
 
 
-def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> PostflopSpot:
+def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custom: bool = True) -> PostflopSpot:
     """Le spot postflop d'une main : heads-up (ranges de la solution HU), ou table à plusieurs quand il ne reste que
-    deux joueurs au flop (ranges de ta solution du format, voir ring_ranges)."""
+    deux joueurs au flop (ranges de ta solution du format, voir ring_ranges). Tes ranges ajustées pour ce coup ou
+    pour sa ligne (custom_ranges) remplacent celles de la référence, sauf avec custom=False."""
+    from . import custom_ranges
     if len(hand.seats) == 2 and (not hand.button or not hand.big_blind or hand.opponent_of(hero) is None):
         raise Unsupported("Seules les mains heads-up se résolvent.")
     pre = [a for a in hand.actions if a.street == "preflop" and a.kind in VOLUNTARY]
@@ -401,6 +406,15 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> Po
     else:
         oop, ip, pot_type, ranges = _ring_ranges(hand, hero, pre)
     villain = ip if hero == oop else oop
+    context = custom_ranges.context(hand.table_format, [(hand.position(a.player), a.kind) for a in pre
+                                                        if a.kind != FOLD])
+    reference = {p: dict(r) for p, r in ranges.items()}
+    adjusted = None
+    if custom:
+        scope, mine = custom_ranges.lookup(hand.hand_id, context)
+        for p in (oop, ip):
+            if hand.position(p) in mine:
+                ranges[p], adjusted = dict(mine[hand.position(p)]), scope
 
     added = []
     for player in (hero, villain):
@@ -454,7 +468,7 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> Po
     sizes = {p: [{k: _merge_sizes(defaults[p][s][k], played[p][s][k]) for k in ("bet", "raise", "donk")}
                  for s in range(3)] for p in (oop, ip)}
     return PostflopSpot(hand, hero, villain, pot_type, oop, ip, round(pot / bb, 4), round(stack / bb, 4),
-                        ranges, line, index, sizes, added)
+                        ranges, line, index, sizes, added, context, adjusted, reference)
 
 
 
@@ -659,7 +673,7 @@ def write_study_meta(spot: PostflopSpot, request: dict, raw: dict) -> None:
         "hero_position": ("BB" if spot.oop == spot.hero else "BTN") if len(hand.seats) == 2 else hand.position(spot.hero),
         "pot": spot.pot_bb, "stack": spot.stack_bb, "net": round(hand.net(spot.hero) / hand.bb, 2),
         "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"), "seconds": raw.get("seconds"),
-        "menu": spot.menu_text(), "created": time.strftime("%d/%m/%Y %H:%M"),
+        "menu": spot.menu_text(), "created": time.strftime("%d/%m/%Y %H:%M"), "adjusted": spot.adjusted,
     }
     path = study_path(request).with_suffix(".json")
     path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
@@ -1008,7 +1022,7 @@ def interpret(spot: PostflopSpot, raw: dict) -> dict:
     return {
         "hand": hand.hand_id, "pot_type": spot.pot_type, "pot": spot.pot_bb, "stack": spot.stack_bb,
         "table_format": hand.table_format, "positions": {"H": hand.position(spot.hero), "V": hand.position(spot.villain)},
-        "board": spot.board, "oop": who[spot.oop], "menu": spot.menu_text(),
+        "board": spot.board, "oop": who[spot.oop], "menu": spot.menu_text(), "adjusted": spot.adjusted,
         "added": [who[p] for p in spot.added],
         "iterations": raw["iterations"], "exploit_pct": raw["exploit_pct"], "seconds": raw["seconds"],
         "tree_nodes": raw["tree_nodes"], "stopped": raw.get("stopped"), "decisions": decisions,
@@ -1039,6 +1053,9 @@ def result_text(result: dict, hero: str) -> str:
              f"GTOpen : {result['iterations']} itérations, exploitabilité {_num(result['exploit_pct'], 2)} % du pot, "
              f"{_num(result['seconds'], 0)} s · {result['tree_nodes']:_} nœuds".replace("_", " "),
              f"Tailles de l'arbre — {result['menu']}"]
+    if result.get("adjusted"):
+        lines.append("Ranges préflop : les tiennes, ajustées " + ("pour ce coup" if result["adjusted"] == "coup"
+                                                                  else "pour cette ligne") + " (pas la référence).")
     if result["added"]:
         lines.append("Note : " + " et ".join("ta main" if w == "H" else "sa main" for w in result["added"])
                      + " n'était pas dans la range du solveur ; elle y a été ajoutée avec un poids infime.")
