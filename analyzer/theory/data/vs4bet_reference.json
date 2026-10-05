@@ -1,0 +1,177 @@
+{
+ "name": "Réponse du 3bettor au 4bet (6-max 100 bb)",
+ "description": "La SB face au 4bet à 24 bb du bouton après son 3bet à 11,5 bb : tapis, relance (non-tapis), call ou fold, main par main. Sert de réponse type au 4bet pour toutes les positions (le call donne la range du 3bettor dans les pots 4bet).",
+ "source": "Capture d'un solveur fournie par l'utilisateur ; fréquences mesurées sur l'image (précision d'environ 2 %). Totaux du solveur : tapis 21,7 %, relance 0,2 %, call 49,9 %, fold 28,3 %.",
+ "measured": {
+  "combos": 164.1,
+  "allin": 22.3,
+  "raise": 0.1,
+  "call": 50.4,
+  "fold": 27.3
+ },
+ "hands": {
+  "AA": {
+   "raise": 0.012,
+   "call": 0.988
+  },
+  "AKs": {
+   "allin": 1.0
+  },
+  "AQs": {
+   "call": 1.0
+  },
+  "AJs": {
+   "call": 1.0
+  },
+  "ATs": {
+   "allin": 0.012,
+   "call": 0.988
+  },
+  "A9s": {
+   "call": 1.0
+  },
+  "A8s": {
+   "call": 1.0
+  },
+  "A7s": {
+   "call": 0.329,
+   "fold": 0.671
+  },
+  "A6s": {
+   "fold": 1.0
+  },
+  "A5s": {
+   "allin": 0.679,
+   "raise": 0.012,
+   "call": 0.309
+  },
+  "A4s": {
+   "allin": 0.395,
+   "call": 0.605
+  },
+  "A3s": {
+   "allin": 0.16,
+   "call": 0.827,
+   "fold": 0.012
+  },
+  "A2s": {
+   "fold": 1.0
+  },
+  "AKo": {
+   "allin": 1.0
+  },
+  "KK": {
+   "allin": 1.0
+  },
+  "KQs": {
+   "call": 1.0
+  },
+  "KJs": {
+   "call": 1.0
+  },
+  "KTs": {
+   "call": 0.642,
+   "fold": 0.358
+  },
+  "K9s": {
+   "fold": 1.0
+  },
+  "K8s": {
+   "fold": 1.0
+  },
+  "K7s": {
+   "fold": 1.0
+  },
+  "K6s": {
+   "fold": 1.0
+  },
+  "AQo": {
+   "call": 1.0
+  },
+  "KQo": {
+   "fold": 1.0
+  },
+  "QQ": {
+   "allin": 0.85,
+   "call": 0.15
+  },
+  "QJs": {
+   "call": 1.0
+  },
+  "QTs": {
+   "call": 0.926,
+   "fold": 0.074
+  },
+  "Q9s": {
+   "call": 0.148,
+   "fold": 0.852
+  },
+  "AJo": {
+   "fold": 1.0
+  },
+  "KJo": {
+   "fold": 1.0
+  },
+  "QJo": {
+   "fold": 1.0
+  },
+  "JJ": {
+   "allin": 0.605,
+   "call": 0.395
+  },
+  "JTs": {
+   "call": 0.728,
+   "fold": 0.272
+  },
+  "J9s": {
+   "fold": 1.0
+  },
+  "J8s": {
+   "fold": 1.0
+  },
+  "ATo": {
+   "fold": 1.0
+  },
+  "TT": {
+   "allin": 0.5,
+   "call": 0.5
+  },
+  "T9s": {
+   "call": 1.0
+  },
+  "T8s": {
+   "call": 0.012,
+   "fold": 0.988
+  },
+  "99": {
+   "call": 1.0
+  },
+  "98s": {
+   "call": 1.0
+  },
+  "88": {
+   "call": 1.0
+  },
+  "87s": {
+   "call": 1.0
+  },
+  "77": {
+   "call": 1.0
+  },
+  "76s": {
+   "call": 1.0
+  },
+  "66": {
+   "call": 1.0
+  },
+  "65s": {
+   "call": 1.0
+  },
+  "55": {
+   "call": 1.0
+  },
+  "54s": {
+   "call": 1.0
+  }
+ }
+}

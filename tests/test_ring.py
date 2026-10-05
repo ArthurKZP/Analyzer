@@ -65,7 +65,7 @@ class AnalyzeTest(unittest.TestCase):
                "line": "CO open, BB call", "pot_type": None, "cards": ["Ah", "Kd"], "board": ["2c", "7d", "9s"],
                "total_bb": 12.0, "net_bb": 5.5, "status": "Pas de range préflop pour « CO open, BB call » en 6-max"}
         page = build_ring_page(stats, "Hero", spots=[row], ranges={})
-        self.assertIn("Charger les charts 6-max 100 bb de Hand2Note Guide", page)
+        self.assertIn("Charger les charts 100 bb de Hand2Note Guide (6-max et 3-max)", page)
         self.assertIn("pas de range préflop", page)
         ready = build_ring_page(stats, "Hero", spots=[dict(row, status=None, pot_type="SRP")], ranges={"6-max": 23})
         self.assertNotIn("Charger les charts", ready)
@@ -185,11 +185,18 @@ class Hand2NoteTest(unittest.TestCase):
         # pot 3bet : l'ouvreur garde ce qu'il ouvre ET paie le 3bet ; le 3bettor, sa range de 3bet
         self.assertEqual(lines["CO:raise BB:raise CO:call"]["ranges"],
                          {"CO": "KK:0.5,AQs,KJs:0.25", "BB": "AA,KK:0.75,KJs:0.25"})
+        self.assertNotIn("CO:raise BB:raise CO:raise BB:call", lines)  # sans réponse au 4bet
+        # pot 4bet : le 4bet hors tapis de l'ouvreur, payé par le 3bettor selon la réponse type
+        four = ring_ranges.lines_from_charts(charts, vs4bet={"KK": {"C": 0.5}, "KJs": {"C": 1.0}})
+        self.assertEqual(four["CO:raise BB:raise CO:raise BB:call"],
+                         {"pot_type": "pot 4bet", "ranges": {"CO": "AA,KK:0.5", "BB": "KK:0.375,KJs:0.25"}})
+        reference = ring_ranges.vs4bet_reference()  # la capture mesurée : AQs paie, AKs part à tapis
+        self.assertEqual((reference["AQs"], "AKs" in reference), ({"C": 1.0}, False))
 
     def test_install_and_solve_a_six_max_pot(self):
-        path = ring_ranges.install_hand2note(log=lambda message: None, js=H2N_SAMPLE)
-        self.assertEqual(path.name, "6-max.json")
-        self.assertEqual(ring_ranges.available(), {"6-max": 2})
+        paths = ring_ranges.install_hand2note(log=lambda message: None, js=H2N_SAMPLE)
+        self.assertEqual([p.name for p in paths], ["6-max.json"])  # pas de chart BTN/SB/BB : pas de 3-max
+        self.assertEqual(ring_ranges.available(), {"6-max": 3})  # pot simple, pot 3bet, pot 4bet
         six = hand("betclic_6max.txt")  # le CO ouvre, la BB 3bet, le CO paie
         spot = postflop.build_spot(six, "Joueur6")
         self.assertEqual((spot.oop, spot.ip, spot.pot_type), ("Joueur6", "Joueur3", "pot 3bet"))

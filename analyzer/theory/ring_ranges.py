@@ -101,7 +101,12 @@ def available() -> dict[str, int]:
 # Le site publie ses charts dans un fichier de données (open de chaque position, réponse à un open, réponse au 3bet
 # de l'ouvreur ; fréquences en %, arrondies à 25 %). Ses conditions d'utilisation les réservent à un usage
 # personnel : on les télécharge sur ta machine, dans ~/.analyzer/ranges, jamais dans le dépôt.
-# Pots couverts : pots simples (open, call) et pots 3bet (open, 3bet, call) ; pas de réponse au 4bet publiée.
+# Pots couverts : pots simples (open, call), pots 3bet (open, 3bet, call) et pots 4bet (open, 3bet, 4bet, call) :
+# le site ne publiant pas la réponse au 4bet, celle du 3bettor vient d'une réponse type (data/vs4bet_reference.json,
+# la SB face au 4bet du bouton) appliquée à toutes les positions. Le 3-max reprend les charts du BTN, de la SB et
+# de la BB.
+VS4BET_REFERENCE = Path(__file__).parent / "data" / "vs4bet_reference.json"
+THREE_MAX = ("BTN", "SB", "BB")
 HAND2NOTE_URL = "https://hand2noteguide.com/wp-content/themes/sequential/js/preflop-gto-data.js"
 HAND2NOTE_PAGE = "https://hand2noteguide.com/fr/poker/free-poker-tools/preflop-gto-charts/"
 SIX_MAX = ("UTG", "HJ", "CO", "BTN", "SB", "BB")
@@ -155,14 +160,22 @@ def _times(a: dict[str, dict], key_a: str, b: Optional[dict[str, dict]] = None, 
     return out
 
 
-def lines_from_charts(charts: dict[str, dict[str, dict]]) -> dict[str, dict]:
-    """Les lignes à deux joueurs du 6-max : pots simples et pots 3bet, avec la range de chacun au flop."""
+def vs4bet_reference() -> dict[str, dict[str, float]]:
+    """Réponse type du 3bettor au 4bet, main par main : {"AKs": {"allin": 1.0}, "AQs": {"C": 1.0}, …}."""
+    hands = json.loads(VS4BET_REFERENCE.read_text(encoding="utf-8"))["hands"]
+    return {h: {"C": f["call"]} for h, f in hands.items() if f.get("call")}
+
+
+def lines_from_charts(charts: dict[str, dict[str, dict]], positions: tuple[str, ...] = SIX_MAX,
+                      vs4bet: Optional[dict[str, dict]] = None) -> dict[str, dict]:
+    """Les lignes à deux joueurs entre ces positions (de la première à parler à la BB) : pots simples, pots 3bet et,
+    avec une réponse au 4bet, pots 4bet ; la range de chacun au flop."""
     lines = {}
-    for k, opener in enumerate(SIX_MAX[:-1]):
+    for k, opener in enumerate(positions[:-1]):
         opens = charts["rfi"].get(opener)
         if not opens:
             continue
-        for caller in SIX_MAX[k + 1:]:
+        for caller in positions[k + 1:]:
             facing = charts["vs_rfi"].get(f"{caller}_vs_{opener}")
             if not facing:
                 continue
@@ -173,29 +186,44 @@ def lines_from_charts(charts: dict[str, dict[str, dict]]) -> dict[str, dict]:
                 lines[line_key([(opener, "raise"), (caller, "raise"), (opener, "call")])] = {
                     "pot_type": "pot 3bet",
                     "ranges": {opener: _text(_times(opens, "R", versus, "C")), caller: _text(_times(facing, "R"))}}
+                if vs4bet:  # 4bet hors tapis (R ; B = tapis), payé par le 3bettor selon la réponse type
+                    fourbets = _times(opens, "R", versus, "R")
+                    callers = {h: w * vs4bet.get(h, {}).get("C", 0.0) for h, w in _times(facing, "R").items()}
+                    lines[line_key([(opener, "raise"), (caller, "raise"), (opener, "raise"), (caller, "call")])] = {
+                        "pot_type": "pot 4bet",
+                        "ranges": {opener: _text(fourbets), caller: _text({h: w for h, w in callers.items() if w > 0})}}
     return {key: entry for key, entry in lines.items() if all(entry["ranges"].values())}
 
 
-def install_hand2note(log: Callable[[str], None] = print, js: Optional[str] = None) -> Path:
-    """Télécharge les charts 6-max de Hand2Note Guide et écrit ~/.analyzer/ranges/6-max.json (usage personnel)."""
+def install_hand2note(log: Callable[[str], None] = print, js: Optional[str] = None) -> list[Path]:
+    """Télécharge les charts 6-max de Hand2Note Guide et écrit ~/.analyzer/ranges/6-max.json et 3-max.json (ce
+    dernier : les charts du BTN, de la SB et de la BB), pour ton usage personnel."""
     if js is None:
         log(f"Téléchargement des charts préflop de Hand2Note Guide ({HAND2NOTE_PAGE})…")
         request = urllib.request.Request(HAND2NOTE_URL, headers={"User-Agent": "Mozilla/5.0 (Analyzer)"})
         with urllib.request.urlopen(request, timeout=30) as response:
             js = response.read().decode("utf-8", errors="replace")
     charts = parse_hand2note(js)
-    lines = lines_from_charts(charts)
-    if not lines:
-        raise ValueError("Format des charts de Hand2Note Guide non reconnu : aucune ligne lue.")
-    data = {"format": "6-max", "stack_bb": 100, "source": "Hand2Note Guide — charts préflop GTO 6-max 100 bb "
-            "(PioSolver, fréquences arrondies à 25 %), usage personnel", "url": HAND2NOTE_PAGE, "lines": lines}
+    vs4bet = vs4bet_reference()
+    source = ("Hand2Note Guide — charts préflop GTO 6-max 100 bb (PioSolver, fréquences arrondies à 25 %), usage "
+              "personnel ; réponse au 4bet : capture de solveur (SB face au 4bet du bouton), pour toutes les positions")
+    paths = []
     folder().mkdir(parents=True, exist_ok=True)
-    path = folder() / "6-max.json"
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    log(f"{len(lines)} lignes écrites dans {path} "
-        f"({sum(1 for e in lines.values() if e['pot_type'] == 'SRP')} pots simples, "
-        f"{sum(1 for e in lines.values() if e['pot_type'] == 'pot 3bet')} pots 3bet).")
-    return path
+    for table_format, positions in (("6-max", SIX_MAX), ("3-max", THREE_MAX)):
+        lines = lines_from_charts(charts, positions, vs4bet)
+        if not lines:
+            continue
+        data = {"format": table_format, "stack_bb": 100, "url": HAND2NOTE_PAGE, "lines": lines,
+                "source": source + ("" if table_format == "6-max" else " ; 3-max : charts 6-max du BTN, de la SB et de la BB")}
+        path = folder() / f"{table_format}.json"
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        counts = {t: sum(1 for e in lines.values() if e["pot_type"] == t) for t in ("SRP", "pot 3bet", "pot 4bet")}
+        log(f"{table_format} : {len(lines)} lignes ({counts['SRP']} pots simples, {counts['pot 3bet']} pots 3bet, "
+            f"{counts['pot 4bet']} pots 4bet) dans {path}")
+        paths.append(path)
+    if not paths:
+        raise ValueError("Format des charts de Hand2Note Guide non reconnu : aucune ligne lue.")
+    return paths
 
 
 def main(argv: Optional[list[str]] = None) -> int:

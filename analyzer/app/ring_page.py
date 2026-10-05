@@ -103,10 +103,10 @@ def _spots(rows: list[dict], table_format: str, ready: bool) -> str:
     note = "" if ready else (
         f'<p class="note">Tes ranges préflop du {escape(table_format)} ne sont pas encore là : ces coups s\'ouvriront '
         "au solveur dès qu'elles seront ajoutées.</p>")
-    if not ready and table_format == "6-max":
-        note += ('<p><button type="button" class="rg-load">Charger les charts 6-max 100 bb de Hand2Note Guide</button> '
-                 '<span class="muted small">pots simples et pots 3bet ; téléchargés sur ta machine, pour ton usage '
-                 "personnel (conditions du site)</span> <span class=\"rg-load-msg small\"></span></p>")
+    if not ready and table_format in ("6-max", "3-max"):  # le 3-max reprend les charts BTN, SB et BB
+        note += ('<p><button type="button" class="rg-load">Charger les charts 100 bb de Hand2Note Guide (6-max et 3-max)'
+                 '</button> <span class="muted small">pots simples, 3bet et 4bet ; téléchargés sur ta machine, pour ton '
+                 "usage personnel (conditions du site)</span> <span class=\"rg-load-msg small\"></span></p>")
     more = f" Les {MAX_SPOTS} plus gros pots sur {len(mine)}." if len(mine) > MAX_SPOTS else ""
     return (f"<h2>Coups à deux joueurs au flop</h2>{note}"
             '<div class="card scroll"><table class="stats"><thead><tr><th>Date</th><th>Ligne préflop</th><th>Toi</th>'
