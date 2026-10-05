@@ -760,7 +760,15 @@ préflop** du format, à déposer dans `~/.analyzer/ranges/<format>.json` (`6-ma
 ```
 
 Une ligne = les relances et calls préflop dans l'ordre, avec la position de leur auteur (les folds n'y sont pas) ;
-chaque range est celle du joueur au flop (« main » ou « main:poids »). L'onglet *Tables à plusieurs* liste ces
+chaque range est celle du joueur au flop (« main » ou « main:poids »).
+
+En 6-max, les charts gratuits de [Hand2Note Guide](https://hand2noteguide.com/fr/poker/free-poker-tools/preflop-gto-charts/)
+(100 bb, tirés de PioSolver, fréquences arrondies à 25 %) se chargent d'un clic dans l'onglet *Tables à plusieurs*,
+ou avec `python -m analyzer ranges --hand2note`. Ils donnent l'open de chaque position, la réponse à un open et la
+réponse de l'ouvreur au 3bet : on en tire 8 pots simples (open, call) et 15 pots 3bet (open, 3bet, call ; l'ouvreur
+garde les mains qu'il ouvre *et* paie le 3bet). Pas de pot 4bet (le site ne publie pas la réponse au 4bet), ni de
+3-max. Leurs conditions d'utilisation réservent ces charts à un usage personnel : ils sont téléchargés sur ta machine
+(`~/.analyzer/ranges/6-max.json`), jamais dans le dépôt. `python -m analyzer ranges` liste les solutions présentes. L'onglet *Tables à plusieurs* liste ces
 coups (les plus gros pots d'abord) avec *Ouvrir au solveur ↗*, ou la raison s'ils ne se résolvent pas encore :
 pas de range pour la ligne, troisième joueur qui a mis de l'argent avant de se coucher (call puis fold, squeeze),
 tapis préflop. L'explorateur montre le préflop de toute la table et les vraies positions (`theory/ring_ranges.py`).

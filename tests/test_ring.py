@@ -60,6 +60,16 @@ class AnalyzeTest(unittest.TestCase):
         for text in ("Préflop par position", "Après le flop", "6-max (2)", "3-max (1)", "repère 18–23&nbsp;%"):
             self.assertIn(text, page)
         self.assertIn("Aucune main", build_ring_page([], "Hero"))
+        # un pot à deux au flop en 6-max sans ranges : de quoi charger les charts de Hand2Note Guide
+        row = {"id": "X1", "date": stats[0].first, "format": "6-max", "hero": "CO", "villain": "BB",
+               "line": "CO open, BB call", "pot_type": None, "cards": ["Ah", "Kd"], "board": ["2c", "7d", "9s"],
+               "total_bb": 12.0, "net_bb": 5.5, "status": "Pas de range préflop pour « CO open, BB call » en 6-max"}
+        page = build_ring_page(stats, "Hero", spots=[row], ranges={})
+        self.assertIn("Charger les charts 6-max 100 bb de Hand2Note Guide", page)
+        self.assertIn("pas de range préflop", page)
+        ready = build_ring_page(stats, "Hero", spots=[dict(row, status=None, pot_type="SRP")], ranges={"6-max": 23})
+        self.assertNotIn("Charger les charts", ready)
+        self.assertIn('href="/explorateur/X1"', ready)
 
 
 class HeadsUpPotTest(unittest.TestCase):
@@ -132,6 +142,59 @@ class HeadsUpPotTest(unittest.TestCase):
             self.assertIn("BTN open, BB 3bet, BTN call", page)
         finally:
             lib.solves.shutdown()
+
+
+# Extrait synthétique au format du fichier de données des charts de Hand2Note Guide (pas leurs ranges).
+H2N_SAMPLE = """
+var GTO_RANGES = (function () {
+    function R(v)      { return {R: v}; }
+    function C(v)      { return {C: v}; }
+    function RC(r, c)  { return {R: r, C: c}; }
+    var rfi = {};
+    rfi.CO = { "AA":R(100),"KK":R(100),"AQs":R(100),"KJs":R(50),"76s":R(25) };
+    var vs_rfi = {};
+    vs_rfi.BB_vs_CO = { "AA":R(100),"KK":RC(75,25),"AQs":C(100),"KJs":{R:25, C:75},"T9s":C(50) };
+    var vs_3bet = {};
+    var vs_3bet_base = {};
+    vs_3bet_base.CO = { "AA":R(100),"KK":RC(50,50),"AQs":C(100),"KJs":C(50) };
+    function assignVs3betDefaults(hero, villains) {}
+    assignVs3betDefaults('CO',  ['BTN', 'SB', 'BB']);
+    vs_3bet.CO_vs_BTN = { "AA": {R:50, B:50}, "KK": {C:100} };
+    return { rfi: rfi, vs_rfi: vs_rfi, vs_3bet: vs_3bet };
+})();
+"""
+
+
+class Hand2NoteTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        env = mock.patch.dict(os.environ, {"ANALYZER_HOME": tmp.name})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_charts_to_lines(self):
+        charts = ring_ranges.parse_hand2note(H2N_SAMPLE)
+        self.assertEqual(charts["rfi"]["CO"]["KJs"], {"R": 0.5})
+        self.assertEqual(charts["vs_rfi"]["BB_vs_CO"]["KK"], {"R": 0.75, "C": 0.25})
+        self.assertEqual(charts["vs_3bet"]["CO_vs_BB"]["KK"], {"R": 0.5, "C": 0.5})  # range de base de l'ouvreur
+        self.assertEqual(charts["vs_3bet"]["CO_vs_BTN"]["AA"], {"R": 0.5, "B": 0.5})  # range par adversaire
+        lines = ring_ranges.lines_from_charts(charts)
+        self.assertEqual(lines["CO:raise BB:call"]["ranges"],
+                         {"CO": "AA,KK,AQs,KJs:0.5,76s:0.25", "BB": "KK:0.25,AQs,KJs:0.75,T9s:0.5"})
+        # pot 3bet : l'ouvreur garde ce qu'il ouvre ET paie le 3bet ; le 3bettor, sa range de 3bet
+        self.assertEqual(lines["CO:raise BB:raise CO:call"]["ranges"],
+                         {"CO": "KK:0.5,AQs,KJs:0.25", "BB": "AA,KK:0.75,KJs:0.25"})
+
+    def test_install_and_solve_a_six_max_pot(self):
+        path = ring_ranges.install_hand2note(log=lambda message: None, js=H2N_SAMPLE)
+        self.assertEqual(path.name, "6-max.json")
+        self.assertEqual(ring_ranges.available(), {"6-max": 2})
+        six = hand("betclic_6max.txt")  # le CO ouvre, la BB 3bet, le CO paie
+        spot = postflop.build_spot(six, "Joueur6")
+        self.assertEqual((spot.oop, spot.ip, spot.pot_type), ("Joueur6", "Joueur3", "pot 3bet"))
+        self.assertEqual(spot.ranges["Joueur3"]["KK"], 0.5)
+        self.assertEqual(spot.pot_bb, 15.0)  # 14,5 + 14,5 + la SB morte (1) = 30 € à 2 € la bb
 
 
 if __name__ == "__main__":

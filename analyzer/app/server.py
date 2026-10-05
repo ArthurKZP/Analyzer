@@ -301,6 +301,11 @@ class Handler(BaseHTTPRequestHandler):
             if parts[2] == "texte":  # à coller dans Claude (coach branché par MCP sur l'abonnement)
                 return self._json({"text": library.coach.prompt(text.strip(), context)})
             return self._json(library.coach.ask(conv, text.strip(), context))
+        if parts == ["api", "ranges", "hand2note"]:  # charts 6-max de Hand2Note Guide, sur ta machine
+            try:
+                return self._json(library.load_hand2note())
+            except (OSError, ValueError) as exc:
+                return self._error(502, f"Téléchargement impossible : {exc}")
         if parts == ["api", "plan", "preparer"]:
             return self._json(library.plan_state(start=True))
         if parts == ["api", "plan", "arreter"]:

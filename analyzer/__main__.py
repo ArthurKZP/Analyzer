@@ -15,6 +15,11 @@ if sys.argv[1:2] == ["sauvegarde"]:
 
     sys.exit(backup_main(sys.argv[2:]))
 
+if sys.argv[1:2] == ["ranges"]:
+    from .theory.ring_ranges import main as ranges_main
+
+    sys.exit(ranges_main(sys.argv[2:]))
+
 if sys.argv[1:2] == ["gtopen"]:
     from .theory.solve_cli import main as gtopen_main
 

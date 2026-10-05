@@ -272,6 +272,14 @@ class Library:
         meta = students.create(name, pseudo)
         return dict(self.student(meta["id"]).summary(), id=meta["id"], name=meta["name"], pseudo=meta.get("pseudo"))
 
+    def load_hand2note(self) -> dict:
+        """Télécharge les charts 6-max de Hand2Note Guide (usage personnel) : les pots à deux au flop s'ouvrent au
+        solveur."""
+        ring_ranges.install_hand2note(log=lambda message: None)
+        with self._lock:
+            self._cache.clear()
+        return {"ranges": ring_ranges.available()}
+
     def ring_spots(self) -> list[dict]:
         """Tes coups des tables à plusieurs où il ne reste que deux joueurs au flop, les plus gros pots d'abord :
         de quoi les ouvrir au solveur (ou pourquoi ils ne se résolvent pas encore)."""

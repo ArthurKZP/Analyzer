@@ -20,6 +20,15 @@ a.rg-open { font-weight: 600; text-decoration: none; color: var(--series-1); whi
 </style>"""
 
 SCRIPT = """
+document.querySelectorAll('.rg-load').forEach((b) => b.addEventListener('click', async () => {
+  const msg = b.parentElement.querySelector('.rg-load-msg');
+  b.disabled = true;
+  msg.textContent = 'Téléchargement…';
+  const res = await fetch('/api/ranges/hand2note', { method: 'POST' }).catch(() => null);
+  const data = res ? await res.json().catch(() => ({})) : {};
+  if (res && res.ok) location.reload();
+  else { msg.textContent = data.error || 'Téléchargement impossible.'; b.disabled = false; }
+}));
 document.querySelectorAll('.rg-switch button').forEach((b) => b.addEventListener('click', () => {
   document.querySelectorAll('.rg-fmt').forEach((s) => { s.hidden = s.dataset.fmt !== b.dataset.fmt; });
   document.querySelectorAll('.rg-switch button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
@@ -91,9 +100,13 @@ def _spots(rows: list[dict], table_format: str, ready: bool) -> str:
         + (f'<td><a class="rg-open" href="/explorateur/{quote(r["id"], safe="")}" target="_blank" rel="noopener">'
            f'Ouvrir au solveur ↗</a></td>' if r["status"] is None else f"<td>{_why(r['status'])}</td>")
         + "</tr>" for r in mine[:MAX_SPOTS])
-    note = ("" if ready else
-            f'<p class="note">Tes ranges préflop du {escape(table_format)} ne sont pas encore là : ces coups s\'ouvriront '
-            "au solveur dès qu'elles seront ajoutées.</p>")
+    note = "" if ready else (
+        f'<p class="note">Tes ranges préflop du {escape(table_format)} ne sont pas encore là : ces coups s\'ouvriront '
+        "au solveur dès qu'elles seront ajoutées.</p>")
+    if not ready and table_format == "6-max":
+        note += ('<p><button type="button" class="rg-load">Charger les charts 6-max 100 bb de Hand2Note Guide</button> '
+                 '<span class="muted small">pots simples et pots 3bet ; téléchargés sur ta machine, pour ton usage '
+                 "personnel (conditions du site)</span> <span class=\"rg-load-msg small\"></span></p>")
     more = f" Les {MAX_SPOTS} plus gros pots sur {len(mine)}." if len(mine) > MAX_SPOTS else ""
     return (f"<h2>Coups à deux joueurs au flop</h2>{note}"
             '<div class="card scroll"><table class="stats"><thead><tr><th>Date</th><th>Ligne préflop</th><th>Toi</th>'
