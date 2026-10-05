@@ -118,6 +118,8 @@
       || (row[0].slice(0, 2) === hole[1] && row[0].slice(2) === hole[0])) || null;
   }
   const revealed = () => $('reveal').checked;
+  // Main que le solveur ne joue presque jamais au nœud : le serveur a mis sa meilleure action selon l'EV.
+  const rare = (combo) => !!(node.settled && node.settled.includes(combo));
 
   // ---------- serveur ----------
   async function api(url, body) {
@@ -286,7 +288,8 @@
     box.textContent = '';
     box.append(parts.join(' · ') + ' · ', cards(meta.hero_cards), ' vs ',
       revealed() && meta.villain_cards.length ? cards(meta.villain_cards) : '??',
-      ' · ' + meta.villain + ' · résultat ' + (meta.net > 0 ? '+' : '') + num(meta.net) + ' bb');
+      ' · ' + meta.villain + (meta.stack ? ' · tapis effectif ' + num(meta.stack) + ' bb' : '')
+      + ' · résultat ' + (meta.net > 0 ? '+' : '') + num(meta.net) + ' bb');
   }
 
   function renderStatus() {
@@ -354,11 +357,14 @@
     return step;
   }
 
+  // Comme Wizard : le tapis (effectif) du joueur au-dessus de ses actions, le pot sur chaque street.
+  const stackOf = (x) => el('span', { class: 'stk', title: 'Tapis effectif restant avant d\'agir' }, num(x) + ' bb');
+  const streetHead = (name, pot) => el('div', { class: 'head' }, el('span', { class: 'st' }, name.toUpperCase()), el('span', {}, 'pot ' + num(pot)));
+
   function actionStep(h, k, current) {
     const role = roleOf(h.player);
-    const step = el('div', { class: 'step' + (current ? ' current' : '') },
-      el('div', { class: 'head' }, el('span', { class: role }, who(h.player)),
-        el('span', { title: 'tapis ' + num(h.stack) + ' bb' }, 'pot ' + num(h.pot))));
+    const step = el('div', { class: 'step' + (current ? ' current' : ''), title: 'pot ' + num(h.pot) + ' bb' },
+      el('div', { class: 'head' }, el('span', { class: role }, who(h.player)), stackOf(h.stack)));
     const prefix = path.slice(0, k);
     navStep(step, prefix, current);
     const onLine = prefixOf(prefix, played) && played[k] && played[k].type === 'action';
@@ -380,17 +386,28 @@
       type: 'button', disabled: !live, title: live ? 'Changer de carte' : 'Recalcule pour changer de carte', 'data-k': k,
       onclick: (e) => openPicker(k, e.currentTarget),
     }, h.card ? card(h.card) : '?');
-    const step = el('div', { class: 'step cards' }, el('div', { class: 'head' }, el('span', {}, STREET[h.street] || 'Carte'), el('span', {}, 'pot ' + num(h.pot))), btn);
+    const step = el('div', { class: 'step cards' }, streetHead(STREET[h.street] || 'Carte', h.pot), btn);
     return navStep(step, path.slice(0, k + 1), false);
   }
 
   // Étape préflop : chaque action mène à son nœud (navigate reçoit la ligne jusqu'à cette action).
   function preStep(h, k, line, current, navigate) {
-    const step = el('div', { class: 'step pre' + (current ? ' current' : '') },
-      el('div', { class: 'head' }, el('span', {}, POS[h.player] + ' · préflop'), el('span', {}, 'pot ' + num(h.pot))));
+    const step = el('div', { class: 'step pre' + (current ? ' current' : ''), title: 'Préflop · pot ' + num(h.pot) + ' bb' },
+      el('div', { class: 'head' }, el('span', {}, POS[h.player]), stackOf(h.stack)));
     h.actions.forEach((a, j) => step.append(el('button', {
       type: 'button', class: 'act' + (h.chosen === j ? ' on' : ''), onclick: () => navigate(line.slice(0, k).concat([h.keys[j]])),
     }, el('span', {}, a.name))));
+    return step;
+  }
+
+  // Action préflop d'une main jouée (tailles réelles) : ouvre la solution préflop à ce moment du coup.
+  function playedPreStep(s) {
+    const step = el('div', { class: 'step pre', title: 'Préflop · pot ' + num(s.pot) + ' bb' },
+      el('div', { class: 'head' }, el('span', { class: roleOf(s.player) }, who(s.player)), stackOf(s.stack)));
+    step.append(el('button', {
+      type: 'button', class: 'act on', title: 'Voir la solution préflop à ce moment du coup',
+      onclick: () => window.open(preHref(s.line), '_blank', 'noopener'),
+    }, el('span', {}, s.name), el('span', { class: 'dot', title: 'Joué dans la main' }, '●')));
     return step;
   }
 
@@ -402,7 +419,7 @@
         const current = k === node.history.length - 1;
         if (h.kind === 'action') box.append(preStep(h, k, preLine, current, goLine));
         else if (h.kind === 'flop') box.append(el('div', { class: 'step cards current' },
-          el('div', { class: 'head' }, el('span', {}, 'Flop'), el('span', {}, 'pot ' + num(h.pot))), el('span', { class: 'muted small' }, 'à choisir')));
+          streetHead('Flop', h.pot), el('span', { class: 'muted small' }, 'à choisir')));
         else box.append(el('div', { class: 'step end current' }, h.kind === 'terminal_fold' ? 'Fin : fold' : 'Tapis préflop'));
       });
       box.scrollLeft = box.scrollWidth;
@@ -413,8 +430,9 @@
         if (h.kind === 'action') box.append(preStep(h, k, prefix.preflop.line, false, (line) => { location.href = preHref(line); }));
       });
     }
+    (meta.preflop || []).forEach((s) => box.append(playedPreStep(s)));
     box.append(navStep(el('div', { class: 'step cards' },
-      el('div', { class: 'head' }, el('span', {}, 'Flop'), el('span', {}, 'pot ' + num(state.result.pot))), cards(meta.board.slice(0, 3)),
+      streetHead('Flop', state.result.pot), cards(meta.board.slice(0, 3)),
       prefix ? el('a', { class: 'change', href: preHref(prefix.preflop.line), title: 'Choisir un autre flop' }, 'changer') : ''),
     [], path.length === 0));
     node.history.forEach((h, k) => {
@@ -528,12 +546,16 @@
     const values = Object.values(agg).map((a) => a[key]).filter((x) => x !== null);
     const lo = Math.min(...values), hi = Math.max(...values);
     const heroCls = viewPlayer === playerOf('H') && meta.hero_cards.length === 2 ? classOf(meta.hero_cards.join('')) : null;
+    let anyRare = false;
     const villainCls = revealed() && viewPlayer === playerOf('V') && meta.villain_cards.length === 2 ? classOf(meta.villain_cards.join('')) : null;
     for (let i = 0; i < 13; i++) for (let j = 0; j < 13; j++) {
       const hand = handAt(i, j);
       const a = agg[hand];
-      const cls = 'cell' + (a ? '' : ' out') + (hand === heroCls ? ' me' : '') + (hand === villainCls ? ' him' : '') + (hand === selected ? ' sel' : '');
-      const cell = el('div', { class: cls, 'data-hand': hand }, el('span', { class: 'h' }, hand));
+      const settledCell = strat && a && a.rows.every((r) => rare(r[0]));
+      if (settledCell) anyRare = true;
+      const cls = 'cell' + (a ? '' : ' out') + (settledCell ? ' rare' : '') + (hand === heroCls ? ' me' : '') + (hand === villainCls ? ' him' : '') + (hand === selected ? ' sel' : '');
+      const cell = el('div', { class: cls, 'data-hand': hand, title: settledCell ? 'Presque jamais jouée ici : meilleure action selon l\'EV' : null },
+        el('span', { class: 'h' }, hand));
       if (a) {
         const presence = Math.min(1, a.w / (counts[hand] || 1));
         const height = Math.max(6, Math.round(100 * presence)) + '%';
@@ -564,6 +586,8 @@
     if (strat && (mode === 'strategy' || mode === 'strategy_ev')) {
       nodeLabels().forEach((label, k) => legend.append(el('span', {}, el('i', { style: 'background:' + cols[k] }), label)));
     }
+    if (anyRare && mode !== 'equity') legend.append(el('span', {}, 'Nom en italique : main que le solveur ne joue presque jamais '
+      + 'ici ; on montre sa meilleure action selon l\'EV.'));
     legend.append(el('span', {}, mode === 'equity' ? 'Couleur : équité de la main (plus foncé = plus forte).'
       : mode === 'ev' ? 'Couleur : EV de la main (plus foncé = plus élevée).'
         : 'Hauteur : part de la main encore présente.' + (mode === 'strategy_ev' ? ' Nombre : EV de la main.' : '')));
@@ -602,6 +626,9 @@
       panel.append(stack);
       if (full) panel.append(el('div', { class: 'muted small', style: 'margin-top:6px' },
         'Filtre actif : ' + pct(total / full) + ' de la range (' + num(total, 1) + ' combos) ; fréquences de ces mains seulement.'));
+      if (node.rare && node.rare.length) panel.append(el('div', { class: 'warn' }, 'Ligne que le solveur ne prend presque jamais : '
+        + node.rare.map((q) => who(q) + ' y arrive avec ' + (node.presence[q] < 0.001 ? 'moins de 0,1' : num(100 * node.presence[q], 1)) + ' % de sa range').join(', ')
+        + '. Les stratégies qui suivent n\'y sont pas optimisées : lis les EV plutôt que les fréquences, et avec prudence.'));
     } else if (node.type === 'flop') {
       box.append(flopChooser());
       return;
@@ -703,7 +730,8 @@
     const labels = nodeLabels();
     const head = el('div', { class: 'ch' }, el('span', {}, title ? title + ' ' : '', cards([row[0].slice(0, 2), row[0].slice(2)])),
       el('span', { class: 'muted' }, (row[1] < 0.995 ? 'présence ' + pct(row[1]) + ' · ' : '') + (row[2] === null ? '' : 'éq. ' + pct(row[2]))));
-    const box = el('div', { class: 'combo' }, head);
+    const settled = strat && rare(row[0]);
+    const box = el('div', { class: 'combo' + (settled ? ' settled' : '') }, head);
     if (strat) {
       const s = row.slice(4, 4 + na);
       const evs = row.slice(4 + na, 4 + 2 * na);
@@ -719,6 +747,8 @@
         body.append(el('tr', { class: k === best && mode !== 'strategy' ? 'best' : '' }, tds));
       });
       box.append(el('table', {}, body));
+      if (settled) box.append(el('div', { class: 'note' }, 'Le solveur ne joue presque jamais cette main ici : sa fréquence '
+        + 'n\'y est pas apprise. On montre sa meilleure action selon l\'EV.'));
       if (mode !== 'strategy' && row[3] !== null) {
         box.append(el('div', { class: 'muted evs' }, 'EV de la main avec cette stratégie : ' + num(row[3], 2) + ' bb'));
       }

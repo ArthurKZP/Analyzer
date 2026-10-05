@@ -302,15 +302,16 @@ class SolveQueue:
             job.process = None
 
     def node(self, spot, path: list) -> dict:
-        """Nœud au bout du chemin : depuis la session si elle est ouverte, sinon depuis le cache."""
+        """Nœud au bout du chemin : depuis la session si elle est ouverte, sinon depuis le cache. Les mains
+        que le solveur ne joue presque jamais là y prennent leur meilleure action selon l'EV (postflop.settle)."""
         session = self.live_session(spot.ident)
         if session is not None:
-            return {"node": session.node(path), "live": True}
+            return {"node": postflop.settle(session.node(path), postflop.weights_of(spot)), "live": True}
         raw = postflop.cached(self._request(spot))
         node = postflop.cached_node(raw, path) if raw else None
         if node is None:
             raise NeedSession(spot.ident)
-        return {"node": node, "live": False}
+        return {"node": postflop.settle(node, postflop.weights_of(spot)), "live": False}
 
     def get(self, key: str) -> Optional[dict]:
         with self._lock:

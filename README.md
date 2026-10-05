@@ -183,7 +183,9 @@ replayer la dévoile.
 **L'explorateur** (*Ouvrir l'explorateur ↗* dans le panneau du solveur, ou `/explorateur/<numéro de main>`)
 s'ouvre dans une nouvelle fenêtre, comme un solveur :
 
-- en haut, le déroulé du coup : chaque nœud avec ses actions (● = action jouée dans la main) ; clique sur
+- en haut, le déroulé du coup, comme dans Wizard : l'action préflop jouée (un clic ouvre la solution
+  préflop à ce moment), puis chaque nœud avec ses actions (● = action jouée dans la main), le tapis
+  effectif du joueur au-dessus de ses actions et le pot sur chaque street (FLOP, TURN, RIVER) ; clique sur
   une action pour suivre une autre branche, sur la turn ou la river pour changer de carte, ← pour revenir ;
 - la grille 13 × 13 de la range choisie (celle du joueur qui agit, ou l'autre), en *Stratégie*,
   *Stratégie + EV*, *EV* ou *Équité* ; la hauteur d'une case est la part de la main encore présente ;
@@ -195,7 +197,7 @@ s'ouvre dans une nouvelle fenêtre, comme un solveur :
   quinte flush aux mains non faites ; tirages au flop et à la turn ; équité, en 4 ou 7 tranches ; couleurs
   dépareillées ou assorties). Un clic sur une ou plusieurs lignes ne garde (ou n'écarte) que ces mains dans
   la grille, la synthèse et le détail des combos ; le filtre reste actif d'un nœud à l'autre ;
-- chaque case du déroulé affiche le pot à ce moment ; un clic sur une case ramène à ce moment du coup.
+- un clic sur une case du déroulé ramène à ce moment du coup.
 
 Les mises sont en % du pot ; les relances aussi, selon la convention des solveurs : le montant ajouté
 rapporté au pot après le call (relancer à 4,5 sur une mise de 1,7 dans un pot de 5 = 2,8 / 8,4 = 33 %).
@@ -204,6 +206,16 @@ rapporté au pot après le call (relancer à 4,5 sur une mise de 1,7 dans un pot
 et les mises à venir sont dépensées. Pour une action (au survol), c'est ce que rapporte cette action puis la
 suite jouée par le solveur ; pour une main (dans la grille), c'est l'EV de sa stratégie, la moyenne de ses
 actions pondérée par leurs fréquences. Une main qui folde 100 % vaut donc 0 même si payer coûterait 14 bb.
+
+**Mains que le solveur ne joue presque jamais à un nœud.** La fréquence d'une main est une moyenne sur les
+itérations, pondérée par sa présence au nœud. Une main qui n'y arrive presque jamais (hors de la range, ou
+une ligne que le solveur ne prend pas avec elle : moins d'une fois sur cent, ou mille fois moins présente
+que les autres) n'y apprend rien ; sa fréquence est un reste des premières itérations, arrondi par le
+stockage compressé (ex. : fold 36 % alors que payer rapporte 11 bb). Son EV par action, elle, est calculée
+face à la stratégie finale de l'adversaire. Pour ces mains, l'explorateur montre donc la meilleure action
+selon l'EV (nom de la case en italique, note dans le détail du combo), et la revue des mains juge la décision sur
+l'EV perdue. Quand c'est la range entière qui n'arrive presque jamais à un nœud (moins de 0,5 %), un
+avertissement le signale : la suite du coup n'y est pas optimisée.
 
 **Études du solveur** : chaque coup résolu est gardé sur disque (`~/.analyzer/etudes`, 50 à 170 Mo selon
 l'arbre) sous une forme compacte : la stratégie de chaque nœud sur 8 bits, compressée.

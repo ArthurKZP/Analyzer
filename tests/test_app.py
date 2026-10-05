@@ -130,8 +130,13 @@ class LibraryTest(unittest.TestCase):
             state = lib.explorer_state("HAND02")
             self.assertTrue(state["live"])
             self.assertEqual((state["meta"]["hero_cards"], state["meta"]["hero_position"]), (["Qh", "Jh"], "BB"))
+            # déroulé : l'action préflop jouée et le tapis effectif
+            self.assertEqual([s["name"] for s in state["meta"]["preflop"]], ["Open 2", "3bet 8", "Call"])
+            self.assertEqual(state["meta"]["stack"], 104.0)
             reply = lib.explorer_node("HAND02", [{"type": "action", "index": 1}])
             self.assertEqual((reply["live"], reply["node"]["type"]), (True, "action"))
+            self.assertIn("settled", reply["node"])  # mains quasi absentes : meilleure action selon l'EV
+            self.assertEqual(len(reply["node"]["presence"]), 2)
             # catégories des mains pour les filtres, alignées sur les mains de chaque joueur
             self.assertEqual([len(c) for c in reply["node"]["cats"]], [len(h) for h in reply["node"]["hands"]])
             self.assertEqual(state["categories"]["made"][0], ["sf", "Quinte flush"])

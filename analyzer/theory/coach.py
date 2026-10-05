@@ -590,6 +590,11 @@ def node_brief(node: dict, examples: int = 6) -> dict:
     range, puis par famille de mains (part de la range, fréquences, équité et EV moyennes), et des exemples
     de mains pour chaque action."""
     out = {"type": node["type"], "board": node.get("board"), "pot": node.get("pot")}
+    if node.get("rare"):
+        out["avertissement"] = ("Ligne que le solveur ne prend presque jamais ("
+                                + ", ".join(f"{'BB' if p == 0 else 'BTN'} y arrive avec {round(100 * node['presence'][p], 2)} % "
+                                            "de sa range" for p in node["rare"])
+                                + ") : les stratégies qui suivent n'y sont pas optimisées, lis les EV plutôt que les fréquences.")
     if node["type"] != "action":
         return out
     actor = node["player"]
@@ -669,5 +674,8 @@ def combo_brief(node: dict, combo: str, player: Optional[int] = None) -> Optiona
             out["strategie"] = {labels[k]: round(row[4 + k], 3) for k in range(na)}
             evs = row[4 + na:4 + 2 * na] if len(row) >= 4 + 2 * na else [None] * na
             out["ev_par_action_bb"] = {labels[k]: (round(evs[k], 2) if evs[k] is not None else None) for k in range(na)}
+            if row[0] in node.get("settled", ()):
+                out["note"] = ("Le solveur ne joue presque jamais cette main ici : sa fréquence n'y est pas apprise "
+                               "(reste des premières itérations). La stratégie indiquée est sa meilleure action selon l'EV.")
         return out
     return None

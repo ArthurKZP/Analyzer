@@ -26,6 +26,7 @@ from .preflop import MIXED_THRESHOLD
 
 FAMILY = {"SRP": "srp", "pot 3bet": "3bet", "pot 4bet": "4bet"}
 ERROR = 0.25  # bb : en dessous, l'écart d'EV ne compte pas comme une erreur
+VERSION = 2  # 2 : une main que le solveur ne joue presque jamais sur la ligne est jugée sur l'EV (settle)
 CATEGORIES = (("fold", "fold"), ("passive", "check / call"), ("aggressive", "mise / relance"))
 
 
@@ -88,14 +89,36 @@ def digest(spot: postflop.PostflopSpot, raw: dict) -> dict:
             "actions": d["actions"], "chosen": d["chosen"], "played": d["played"], "approx": d["approx"],
             "range": d["range"], "combo": d["combo"], "strategy": d["strategy"], "evs": d["evs"],
             "ev_loss": d["ev_loss"], "frequency": d["frequency"], "verdict": d["verdict"], "pot": d["pot"],
-            "board": d["board"],
+            "board": d["board"], "settled": d["settled"],
         })
     return {
-        "hand": hand.hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"), "villain": spot.villain,
+        "v": VERSION, "hand": hand.hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"), "villain": spot.villain,
         "hero_position": "BB" if spot.oop == spot.hero else "BTN", "pot_type": spot.pot_type, "family": family,
         "pot": spot.pot_bb, "net": round(hand.net(spot.hero) / hand.bb, 2), "board": hand.board,
         "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"), "decisions": decisions,
     }
+
+
+def upgrade(data: dict) -> dict:
+    """Résumé d'avant la version 2 : la stratégie d'une main que le solveur ne joue presque jamais sur la
+    ligne n'y veut rien dire (voir postflop.settle) ; ces décisions prennent la meilleure action selon l'EV.
+    La présence de la main au nœud est le produit des fréquences de ses actions précédentes sur la ligne."""
+    if data.get("v", 1) >= VERSION:
+        return data
+    path = {"H": 1.0, "V": 1.0}
+    for d in data["decisions"]:
+        strategy, evs, chosen = d.get("strategy"), d.get("evs"), d["chosen"]
+        if strategy is None or not evs or any(e is None for e in evs):
+            continue
+        played = strategy[chosen]
+        if path[d["who"]] < postflop.RARE_PATH:
+            d["strategy"] = postflop.best_response(evs)
+            d["frequency"] = d["strategy"][chosen]
+            d["verdict"] = postflop.verdict(d["frequency"])
+            d["settled"] = True
+        path[d["who"]] *= played
+    data["v"] = VERSION
+    return data
 
 
 def digest_path(spot: postflop.PostflopSpot) -> Path:
@@ -122,7 +145,7 @@ def collect(hands: list[Hand], hero: str) -> tuple[list[dict], list[postflop.Pos
         path = digest_path(spot)
         if path.is_file():
             try:
-                done.append(json.loads(path.read_text(encoding="utf-8")))
+                done.append(upgrade(json.loads(path.read_text(encoding="utf-8"))))
                 continue
             except ValueError:
                 pass

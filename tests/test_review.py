@@ -81,6 +81,20 @@ class AggregateTest(unittest.TestCase):
         groups = {g["key"]: g for g in review.by_situation(digests, "H")}
         self.assertEqual((groups["face:ri:oo:2"]["errors"], groups["face:ri:oo:2"]["lost"]), (0, 0.0))
 
+    def test_upgrade_old_digest(self):
+        # Résumé d'avant la version 2 : J8o mise pot au flop 0,6 % du temps ; au turn, ses « 33 % » sont un reste.
+        flop = dict(decision("H", "bet:fo:", ["check", "bet", "bet"], 2, [0.5, 0.2, 0.3], ev_loss=3.04),
+                    strategy=[0.838, 0.156, 0.006], evs=[13.98, 13.8, 10.94], frequency=0.006, verdict="écart")
+        turn = dict(decision("H", "bet:to:o", ["check", "bet", "bet"], 2, [0.4, 0.2, 0.4], ev_loss=3.19),
+                    strategy=[0.398, 0.272, 0.33], evs=[27.98, 25.62, 24.79], frequency=0.33, verdict="secondaire")
+        self.assertEqual(review.loss(turn), 0.0)
+        data = review.upgrade({"decisions": [flop, turn]})
+        self.assertEqual(data["v"], review.VERSION)
+        self.assertNotIn("settled", flop)  # première décision : la main est là
+        self.assertEqual((turn["strategy"], turn["frequency"], turn["verdict"], turn["settled"]), ([1.0, 0.0, 0.0], 0.0, "écart", True))
+        self.assertEqual(review.loss(turn), 3.19)
+        self.assertIs(review.upgrade(data), data)
+
     def test_villain_deviation_and_exploit(self):
         group = review.by_situation(self.digests, "V")[0]
         devs = {d["category"]: d for d in review.deviations(group)}

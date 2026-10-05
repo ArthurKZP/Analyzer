@@ -11,7 +11,7 @@ from unittest import mock
 
 from analyzer.app.solves import NeedSession, SolveQueue
 from analyzer.parsers import load_hands
-from analyzer.theory import postflop
+from analyzer.theory import coach, postflop
 from analyzer.theory.preflop import load_solution
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -92,6 +92,63 @@ class SpotTest(unittest.TestCase):
         self.assertEqual(postflop._merge_sizes([33.0], [28.0]), [28.0])
         self.assertEqual(postflop._merge_sizes([33.0], [80.0, "a"]), [33.0, 80.0, "a"])
         self.assertEqual(postflop._merge_sizes([], []), [])
+
+
+class SettleTest(unittest.TestCase):
+    """Mains que le solveur ne joue presque jamais à un nœud : leur meilleure action selon l'EV."""
+
+    @staticmethod
+    def river():
+        # La BB face au tapis : QQ arrive là, J8o (poids 0,2) presque jamais ; ses fréquences sont un reste.
+        return {"player": 0, "board": ["Js", "4h", "Td", "3h", "Ts"], "pot": 292.4, "put": [90.0, 202.4],
+                "actions": [{"kind": "fold", "amount": 0.0, "allin": False}, {"kind": "call", "amount": 112.4, "allin": False}],
+                "hands": [[["QsQh", 0.9, 0.8, 50.0, 0.0, 1.0, 0.0, 50.0],
+                           ["Jc8d", 0.0002, 0.3, 7.5, 0.36, 0.64, 0.0, 11.6],
+                           ["Jc8h", 0.0002, 0.27, -2.2, 0.39, 0.61, 0.0, -3.6]],
+                          [["Qh9d", 0.01, 0.2, 0.0]]]}
+
+    def test_rare_hands_take_their_best_action(self):
+        weights = [{"QQ": 1.0, "J8o": 0.2}, {"Q9o": 1.0}]
+        node = postflop.settle(self.river(), weights)
+        self.assertEqual([r[3:6] for r in node["hands"][0]], [[50.0, 0.0, 1.0], [11.6, 0.0, 1.0], [0.0, 1.0, 0.0]])
+        self.assertEqual(node["settled"], ["Jc8d", "Jc8h"])
+        # 6 combos de QQ et 9 de J8o (le Js est au board) ; 12 de Q9o, dont 0,01 arrive là
+        self.assertAlmostEqual(node["presence"][0], 0.9004 / 7.8, places=4)
+        self.assertEqual(node["rare"], [1])
+        brief = coach.combo_brief(dict(node, type="action"), "Jc8d")
+        self.assertEqual((brief["strategie"], "meilleure action selon l'EV" in brief["note"]), ({"fold": 0.0, "call": 1.0}, True))
+        self.assertIn("BTN y arrive avec 0.08 %", coach.node_brief(dict(node, type="action"))["avertissement"])
+        again = postflop.settle(copy.deepcopy(node), weights)
+        self.assertEqual((again["hands"], again["settled"]), (node["hands"], node["settled"]))
+
+    def test_without_weights_and_ties(self):
+        node = postflop.settle(self.river())
+        self.assertEqual(node["settled"], ["Jc8d", "Jc8h"])  # mille fois moins présentes que QQ
+        self.assertNotIn("presence", node)
+        self.assertEqual(postflop.best_response([1.0, 1.005, -2.0]), [0.5, 0.5, 0.0])
+
+    def test_interpret_judges_rare_hands_on_ev(self):
+        hand = {h.hand_id: h for h in load_hands([FIXTURES])}["HAND02"]
+        spot = postflop.build_spot(hand, "Hero")
+        node = {"player": 0, "board": spot.board, "pot": 4.0, "actions": [{"kind": "check", "amount": 0.0, "allin": False},
+                                                                          {"kind": "bet", "amount": 4.0, "allin": False}],
+                "put": [2.0, 2.0], "history": [],
+                "hands": [[["AsAh", 1.0, 0.8, 6.0, 0.1, 0.9, 5.0, 6.1], ["QhJh", 0.001, 0.4, 2.0, 0.3, 0.7, 2.5, 1.0]], []]}
+        raw = {"iterations": 10, "exploit_pct": 1.0, "seconds": 1.0, "tree_nodes": 1,
+               "decisions": [{"step": 0, "path": [], "chosen": 1, "node": node}]}
+        spot.ranges[spot.oop]["QJs"] = 1.0  # QhJh : 0,1 % de présence pour un poids de 1
+        d = postflop.interpret(spot, raw)["decisions"][0]
+        self.assertEqual((d["combo"], d["strategy"], d["frequency"], d["verdict"]), ("QhJh", [1.0, 0.0], 0.0, "écart"))
+        self.assertEqual((d["ev_loss"], d["settled"]), (1.5, True))
+        self.assertIn("meilleure action selon l'EV", postflop.result_text(postflop.interpret(spot, raw), "Hero"))
+
+    def test_preflop_steps(self):
+        hand = {h.hand_id: h for h in load_hands([FIXTURES])}["HAND02"]
+        steps = postflop.preflop_steps(hand)
+        self.assertEqual([s["name"] for s in steps][:2], ["Open 2", "3bet 8"])
+        self.assertEqual([s["line"] for s in steps], [[], ["raise"], ["raise", "raise"]])
+        self.assertEqual([s["player"] for s in steps], [1, 0, 1])
+        self.assertEqual((steps[0]["pot"], steps[0]["stack"], steps[2]["stack"]), (1.5, 103.5, 102.0))  # tapis effectif
 
 
 class InstallTest(unittest.TestCase):

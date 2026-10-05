@@ -458,6 +458,39 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> Po
                         ranges, line, index, sizes, added)
 
 
+PREFLOP_RAISES = ("Open", "3bet", "4bet", "5bet")
+
+
+def preflop_steps(hand: Hand) -> list[dict]:
+    """L'action préflop jouée, pour le déroulé de l'explorateur : joueur de l'arbre (0 = BB), action, tapis
+    effectif restant avant d'agir et pot (en bb), ligne de la solution préflop jusque-là (preflop_tree)."""
+    bb = hand.bb
+    effective = min(seat.stack for seat in hand.seats.values())
+    put = dict.fromkeys(hand.seats, 0.0)
+    steps, line, raises = [], [], 0
+    for a in hand.actions:
+        if a.street != "preflop":
+            continue
+        if a.kind not in VOLUNTARY:  # blindes
+            put[a.player] += a.amount
+            continue
+        if a.kind == RAISE:
+            name = "Tapis" if a.all_in else PREFLOP_RAISES[min(raises, len(PREFLOP_RAISES) - 1)]
+            name, key = f"{name} {_num(a.to / bb, 2)}", "allin" if a.all_in else "raise"
+            raises += 1
+        else:
+            name = {CALL: "Call" if raises else "Limp", FOLD: "Fold", CHECK: "Check"}[a.kind]
+            key = {CALL: "call", FOLD: "fold"}.get(a.kind)
+        steps.append({"player": 0 if a.player == hand.big_blind else 1, "name": name,
+                      "stack": round((effective - put[a.player]) / bb, 2), "pot": round(sum(put.values()) / bb, 2),
+                      "line": list(line)})
+        if a.kind in (RAISE, CALL):
+            put[a.player] = a.to
+        if key:
+            line.append(key)
+    return steps
+
+
 # --- Exécution et cache --------------------------------------------------------------------
 
 RUNTIME_FIELDS = ("threads", "gpu", "max_nodes")  # réglages d'exécution : ne changent pas la solution
@@ -812,6 +845,64 @@ def node_summary(node: dict) -> tuple[list[float], dict[str, list[float]]]:
     return [round(x / total, 4) if total else 0.0 for x in range_], out
 
 
+# --- Mains que le solveur ne joue (presque) jamais à un nœud ------------------------------------------
+#
+# La stratégie d'une main est une moyenne sur les itérations, pondérée par sa présence au nœud. Une main
+# qui n'y arrive presque jamais (hors de la range, ou une ligne que le solveur ne prend pas avec elle) n'y
+# apprend rien : ses fréquences sont un reste des premières itérations, arrondi sur quelques unités du
+# stockage compressé. Son EV par action, elle, est calculée face à la stratégie finale de l'adversaire :
+# pour ces mains, on montre la meilleure action selon l'EV.
+RARE_PATH = 0.01    # la main suit cette ligne moins d'une fois sur cent dans la stratégie du solveur
+RARE_MASS = 1e-3    # ou elle pèse mille fois moins que la main la plus présente du nœud
+RARE_RANGE = 0.005  # part de la range arrivée au nœud sous laquelle la suite n'est pas optimisée
+EV_TIE = 0.01       # bb : deux actions dont l'EV diffère de moins se valent
+
+
+def weights_of(spot) -> list[dict[str, float]]:
+    """Poids de départ des mains, par joueur de l'arbre (0 = hors de position)."""
+    return [spot.ranges[spot.oop], spot.ranges[spot.ip]]
+
+
+def best_response(evs: list[float]) -> list[float]:
+    """La meilleure action selon l'EV (partagée entre les actions qui se valent)."""
+    top = max(evs)
+    best = [e >= top - EV_TIE for e in evs]
+    return [round(1 / sum(best), 3) if b else 0.0 for b in best]
+
+
+def settle(node: dict, weights: Optional[list[dict[str, float]]] = None) -> dict:
+    """Remplace la stratégie des mains quasi absentes du nœud par leur meilleure action selon l'EV.
+
+    node["settled"] : ces mains (du joueur qui agit). Avec les poids de départ, node["presence"] : la part
+    de la range de chaque joueur qui arrive au nœud ; node["rare"] : les joueurs dont la range n'y arrive
+    presque jamais (la suite du coup n'est alors pas optimisée par le solveur)."""
+    if weights:
+        counts = live_combos(node["board"])
+        presence = []
+        for p in (0, 1):
+            start = sum(w * counts.get(cls, 0) for cls, w in weights[p].items())
+            presence.append(round(sum(r[1] for r in node["hands"][p]) / start, 5) if start else None)
+        node["presence"] = presence
+        node["rare"] = [p for p in (0, 1) if presence[p] is not None and presence[p] < RARE_RANGE]
+    actor = node.get("player")
+    node["settled"] = []
+    if actor is None or not node["hands"][actor]:
+        return node
+    na = len(node["actions"])
+    rows = node["hands"][actor]
+    top = max(r[1] for r in rows)
+    for row in rows:
+        evs = row[4 + na:4 + 2 * na]
+        if len(evs) < na or any(e is None for e in evs):
+            continue
+        weight = weights[actor].get(class_of(row[0])) if weights else None
+        if row[1] < RARE_MASS * top or (weight and row[1] / weight < RARE_PATH):
+            row[4:4 + na] = best_response(evs)
+            row[3] = round(max(evs), 3)  # l'EV de la main avec cette action
+            node["settled"].append(row[0])
+    return node
+
+
 def combo_row(node: dict, player: int, cards: list[str]) -> Optional[list]:
     wanted = set(cards)
     for row in node["hands"][player]:
@@ -826,8 +917,9 @@ def interpret(spot: PostflopSpot, raw: dict) -> dict:
     who = {spot.hero: "H", spot.villain: "V"}
     roles = {0: spot.oop, 1: spot.ip}
     decisions = []
+    weights = weights_of(spot)
     for d in raw["decisions"]:
-        node = d["node"]
+        node = settle(dict(d["node"], hands=[[list(r) for r in rows] for rows in d["node"]["hands"]]), weights)
         i = spot.action_index[d["step"]]
         player = roles[node["player"]]
         na = len(node["actions"])
@@ -854,6 +946,7 @@ def interpret(spot: PostflopSpot, raw: dict) -> dict:
             "range": range_, "combo": "".join(cards) if row else None,
             "strategy": strategy, "evs": evs, "eq": row[2] if row else None, "reach": row[1] if row else None,
             "frequency": freq, "verdict": verdict(freq), "ev_loss": ev_loss, "classes": classes,
+            "settled": bool(row and row[0] in node["settled"]),
         })
     return {
         "hand": hand.hand_id, "pot_type": spot.pot_type, "pot": spot.pot_bb, "stack": spot.stack_bb,
@@ -897,7 +990,9 @@ def result_text(result: dict, hero: str) -> str:
         if d["strategy"] is not None:
             what = "ta main" if d["who"] == "H" else "sa main"
             lines.append(f"   {what} : {_strategy_text(d['actions'], d['strategy'])} → {d['verdict']}"
-                         + (f", perte d'EV {_num(d['ev_loss'], 2)} bb" if d["ev_loss"] else ""))
+                         + (f", perte d'EV {_num(d['ev_loss'], 2)} bb" if d["ev_loss"] else "")
+                         + (" (le solveur n'arrive presque jamais ici avec cette main : meilleure action selon l'EV)"
+                            if d.get("settled") else ""))
     if result["stopped"]:
         lines.append(f"\nArrêt du suivi de la ligne : {result['stopped']}")
     return "\n".join(lines)

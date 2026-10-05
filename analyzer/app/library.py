@@ -372,6 +372,8 @@ class Library:
             "villain_cards": hand.hole_cards.get(villain, []),
             "hero_position": "BTN" if hand.button == hero else "BB",
             "net": round(hand.net(hero) / bb, 2),
+            "stack": round(min(seat.stack for seat in hand.seats.values()) / bb, 2),
+            "preflop": postflop.preflop_steps(hand),
         }
         return view
 
