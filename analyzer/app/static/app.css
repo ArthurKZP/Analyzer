@@ -85,6 +85,14 @@ a { color: var(--accent); }
 .result .ok { color: var(--win); font-weight: 600; }
 .result .ko { color: var(--loss); font-weight: 600; }
 .welcome { max-width: 560px; }
+.students { max-width: 760px; }
+.student-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+a.student { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface); text-decoration: none; color: var(--ink); }
+a.student:hover { border-color: var(--series-1); }
+.student-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.student-form input { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--ink); flex: 1 1 200px; }
 .welcome h2 { font-size: 18px; margin: 0 0 8px; }
 .error { color: var(--loss); }
 

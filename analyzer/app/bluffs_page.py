@@ -156,7 +156,7 @@ def players_html(rows: list[dict]) -> str:
 
 def build_bluffs_page(report: bluffs.Report, who: str, embed: bool = True, note: str = "",
                       players: Optional[list[dict]] = None) -> str:
-    """who : « de _Bërsërk_ » ou « des réguliers » ; players : résumé par adversaire (population)."""
+    """who : « de Villain » ou « des réguliers » ; players : résumé par adversaire (population)."""
     river = sum(1 for s in report.shown if s.street == "river")
     tiles = (
         '<div class="tiles">'

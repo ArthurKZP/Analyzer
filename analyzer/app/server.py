@@ -31,6 +31,7 @@ STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css
 MAX_PATH = 40  # étapes d'un chemin dans l'arbre (bien plus qu'un coup réel)
 MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
 MAX_SMALL_BODY = 64 * 1024
+STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "bluffs")
 
 
 class AppServer(ThreadingHTTPServer):
@@ -78,6 +79,20 @@ class Handler(BaseHTTPRequestHandler):
     def _html(self, html: str, status: int = 200) -> None:
         self._send(status, "text/html; charset=utf-8", html.encode())
 
+    def _download(self, html_text: str, filename: str) -> None:
+        """Une page à enregistrer (rapport à envoyer)."""
+        body = html_text.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except ConnectionError:
+            self.close_connection = True
+
     def _error(self, status: int, message: str) -> None:
         if self.path.startswith("/api/"):
             self._json({"error": message}, status)
@@ -121,8 +136,24 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 3 and parts[:2] == ["api", "resoudre"]:
                 job = library.solves.get(parts[2])
                 return self._json(job) if job else self._error(404, "Résolution inconnue.")
+            if parts == ["moi", "rapport"]:
+                return self._download(library.leaks_page(standalone=True), "leakfinding.html")
             if len(parts) == 2 and parts[0] == "moi":
                 return self._html(library.self_page(parts[1]))
+            if parts == ["api", "leaks"]:
+                return self._json(library.leaks_state())
+            if parts == ["api", "eleves"]:
+                return self._json(library.students_summary())
+            if len(parts) == 3 and parts[0] == "eleve":
+                student = library.student(parts[1])
+                if parts[2] == "rapport":
+                    return self._download(student.leaks_page(standalone=True), f"leakfinding-{parts[1]}.html")
+                if parts[2] not in STUDENT_PAGES:
+                    raise KeyError(parts[2])
+                return self._html(student.self_page(parts[2]))
+            if len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] in ("leaks", "revue"):
+                student = library.student(parts[2])
+                return self._json(student.leaks_state() if parts[3] == "leaks" else student.review_state())
             if len(parts) == 3 and parts[0] == "p":
                 return self._html(library.player_page(parts[1], parts[2]))
             if parts == ["etudes"]:
@@ -149,7 +180,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.review_state(villain))
             if len(parts) == 3 and parts[:2] == ["api", "spots"]:
                 return self._json(library.spot_set(parts[2]))
-            if len(parts) == 2 and parts[0] == "explorateur" and (parts[1] in library.by_id or parts[1] == "preflop"
+            if len(parts) == 2 and parts[0] == "explorateur" and (parts[1] == "preflop" or library.find_hand(parts[1])
                                                                    or studyspots.parse_ident(parts[1])):
                 page = (STATIC / "explorer.html").read_text(encoding="utf-8")
                 return self._html(page.replace("__HAND__", html.escape(parts[1], quote=True)))
@@ -303,18 +334,50 @@ class Handler(BaseHTTPRequestHandler):
             job = library.solves.cancel(parts[2])
             return self._json(job) if job else self._error(404, "Résolution inconnue.")
         if parts == ["api", "import"]:
-            length = int(self.headers.get("Content-Length") or 0)
-            if length <= 0 or length > MAX_BODY:
-                return self._error(413, "Import trop volumineux (200 Mo maximum).")
+            files = self._import_files()
+            return files if files is None else self._json(library.import_files(files))
+        if len(parts) == 3 and parts[:2] == ["api", "leaks"] and parts[2] in ("lancer", "arreter"):
+            return self._json(library.leaks_cancel() if parts[2] == "arreter" else library.leaks_state(start=True))
+        if parts == ["api", "eleves"]:
+            payload = self._small_json()
+            name = payload.get("name") if isinstance(payload, dict) else None
+            pseudo = payload.get("pseudo") if isinstance(payload, dict) else None
+            if not (isinstance(name, str) and 0 < len(name.strip()) <= 60
+                    and (pseudo is None or (isinstance(pseudo, str) and len(pseudo) <= 60))):
+                return self._error(400, "Requête invalide.")
             try:
-                payload = json.loads(self.rfile.read(length))
-                files = payload["files"]
-                if not isinstance(files, list):
-                    raise TypeError
-            except (ValueError, KeyError, TypeError):
-                return self._error(400, "Requête d'import invalide.")
-            return self._json(library.import_files([f for f in files if isinstance(f, dict)]))
+                return self._json(library.create_student(name, pseudo))
+            except ValueError as exc:
+                return self._error(400, str(exc))
+        if len(parts) >= 4 and parts[:2] == ["api", "eleves"]:
+            try:
+                student = library.student(parts[2])
+            except UnknownPlayer:
+                return self._error(404, "Élève inconnu.")
+            if parts[3:] == ["import"]:
+                files = self._import_files()
+                return files if files is None else self._json(student.import_files(files))
+            if len(parts) == 5 and parts[3] == "leaks" and parts[4] in ("lancer", "arreter"):
+                return self._json(student.leaks_cancel() if parts[4] == "arreter" else student.leaks_state(start=True))
+            if len(parts) == 5 and parts[3] == "revue" and parts[4] in ("lancer", "arreter"):
+                return self._json(student.review_cancel() if parts[4] == "arreter" else student.review_state(start=True))
         return self._error(404, "Page introuvable.")
+
+    def _import_files(self) -> Optional[list]:
+        """Les fichiers d'un import (ou None, la réponse d'erreur déjà envoyée)."""
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > MAX_BODY:
+            self._error(413, "Import trop volumineux (200 Mo maximum).")
+            return None
+        try:
+            payload = json.loads(self.rfile.read(length))
+            files = payload["files"]
+            if not isinstance(files, list):
+                raise TypeError
+        except (ValueError, KeyError, TypeError):
+            self._error(400, "Requête d'import invalide.")
+            return None
+        return [f for f in files if isinstance(f, dict)]
 
 
 def valid_path(path) -> bool:

@@ -4,8 +4,10 @@
   const $ = (id) => document.getElementById(id);
   const frame = $('frame');
   const TABS = {
-    moi: [['bilan', 'Bilan'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots'], ['solveur', 'Face au solveur'],
-      ['bluffs', 'Bluffs des réguliers']],
+    moi: [['bilan', 'Bilan'], ['leaks', 'Leakfinding'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots'],
+      ['solveur', 'Face au solveur'], ['bluffs', 'Bluffs des réguliers']],
+    eleve: [['leaks', 'Leakfinding'], ['preflop', 'Préflop'], ['solveur', 'Face au solveur'], ['spots', 'Mains'],
+      ['importer', 'Importer']],
     adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
       ['solveur', 'Face au solveur'], ['bluffs', 'Ses bluffs']],
     // L'explorateur part du préflop ; les séries de spots et les coups joués ont chacun leur onglet.
@@ -14,6 +16,7 @@
   };
   let state = null;
   let route = null;
+  let students = [];
 
   // ---------- utilitaires ----------
   function el(tag, attrs, ...children) {
@@ -50,6 +53,8 @@
     if (parts[0] === 'sauvegarde') return { view: 'sauvegarde' };
     if (parts[0] === 'adversaire' && parts[1]) return { view: 'adv', player: parts[1], tab: tabOf('adv', parts[2], 'plan') };
     if (parts[0] === 'moi') return { view: 'moi', tab: tabOf('moi', parts[1], 'bilan') };
+    if (parts[0] === 'eleves') return { view: 'eleves' };
+    if (parts[0] === 'eleve' && parts[1]) return { view: 'eleve', student: parts[1], tab: tabOf('eleve', parts[2], 'leaks') };
     return state && state.hands ? { view: 'moi', tab: 'bilan' } : { view: 'importer' };
   }
 
@@ -59,6 +64,8 @@
     if (r.view === 'etudes') return '#/etudes/' + r.tab;
     if (r.view === 'entraineur') return '#/entraineur';
     if (r.view === 'sauvegarde') return '#/sauvegarde';
+    if (r.view === 'eleves') return '#/eleves';
+    if (r.view === 'eleve') return '#/eleve/' + encodeURIComponent(r.student) + '/' + r.tab;
     return '#/importer';
   }
 
@@ -66,11 +73,20 @@
     if (r.view === 'adv') return '/p/' + encodeURIComponent(r.player) + '/' + r.tab;
     if (r.view === 'etudes') return r.tab === 'explorateur' ? '/explorateur/preflop' : '/etudes/' + r.tab;
     if (r.view === 'entraineur') return '/entraineur';
+    if (r.view === 'eleve') return '/eleve/' + encodeURIComponent(r.student) + '/' + r.tab;
     return '/moi/' + r.tab;
   }
 
-  function render() {
+  async function loadStudents() {
+    try {
+      const res = await fetch('/api/eleves');
+      students = res.ok ? await res.json() : [];
+    } catch (e) { students = []; }
+  }
+
+  async function render() {
     route = parseRoute();
+    if (route.view === 'eleves' || route.view === 'eleve') await loadStudents();
     closeDrawer();
     renderHeader();
     renderTabs();
@@ -79,6 +95,16 @@
     // sans mains : les spots d'étude suffisent à l'entraîneur et à l'explorateur
     if (route.view === 'entraineur' || route.view === 'etudes') return showFrame(srcFor(route));
     if (route.view === 'sauvegarde') return showBackup();
+    if (route.view === 'eleves') return showStudents();
+    if (route.view === 'eleve') {
+      if (!students.some((s) => s.id === route.student)) {
+        return showPanel(el('div', { class: 'welcome' }, el('h2', {}, 'Élève introuvable'), el('a', { href: '#/eleves' }, 'Voir les élèves')));
+      }
+      if (route.tab === 'importer') return showImport(route.student);
+      const s = students.find((x) => x.id === route.student);
+      if (!s.hands) return showImport(route.student);
+      return showFrame(srcFor(route));
+    }
     if (!state.hands) return showWelcome();
     if (route.view === 'adv' && !state.opponents.some((o) => o.name === route.player)) {
       return showPanel(el('div', { class: 'welcome' }, el('h2', {}, 'Joueur introuvable'),
@@ -108,6 +134,14 @@
     } else if (route.view === 'sauvegarde') {
       title.textContent = 'Sauvegarde';
       subtitle.textContent = 'Tes calculs (tailles, résolutions, mains analysées, études) à l\'abri, en ligne si tu veux';
+    } else if (route.view === 'eleves') {
+      title.textContent = 'Élèves';
+      subtitle.textContent = 'Le leakfinding de tes élèves : ils t\'envoient leurs mains, Analyzer trouve ce qu\'ils doivent travailler';
+    } else if (route.view === 'eleve') {
+      const s = students.find((x) => x.id === route.student);
+      title.textContent = s ? s.name : 'Élève';
+      subtitle.textContent = s ? (s.hands ? s.hands + ' mains · ' + (s.hero || '') + ' · ' + s.first + ' → ' + s.last
+        : 'Pas encore de mains : importe ses historiques') : '';
     } else if (route.view === 'entraineur') {
       title.textContent = 'Entraîneur';
       subtitle.textContent = 'Joue des mains sur les spots résolus : le solveur juge chaque décision';
@@ -145,7 +179,7 @@
     const tabs = $('tabs');
     tabs.textContent = '';
     const list = TABS[route.view] || [];
-    tabs.hidden = !list.length || (!state.hands && route.view !== 'etudes');
+    tabs.hidden = !list.length || (!state.hands && route.view !== 'etudes' && route.view !== 'eleve');
     for (const [id, label] of list) {
       const r = Object.assign({}, route, { tab: id });
       tabs.append(el('a', { href: hashFor(r), 'aria-current': id === route.tab ? 'page' : null }, label));
@@ -154,7 +188,8 @@
 
   function markActive() {
     document.querySelectorAll('.nav a').forEach((a) => {
-      a.setAttribute('aria-current', a.dataset.view === route.view ? 'page' : 'false');
+      const view = route.view === 'eleve' ? 'eleves' : route.view;
+      a.setAttribute('aria-current', a.dataset.view === view ? 'page' : 'false');
     });
     document.querySelectorAll('.opps a').forEach((a) => {
       a.setAttribute('aria-current', route.view === 'adv' && a.dataset.name === route.player ? 'page' : 'false');
@@ -209,7 +244,7 @@
       el('a', { class: 'primary', href: '#/importer', style: 'display:inline-block;text-decoration:none' }, 'Importer des mains')));
   }
 
-  function showImport() {
+  function showImport(student) {
     const input = el('input', { type: 'file', multiple: true, accept: '.txt,.log,.hh', hidden: true });
     const result = el('div', { class: 'result', 'aria-live': 'polite' });
     const drop = el('div', { class: 'drop' },
@@ -217,46 +252,57 @@
       el('div', { class: 'muted' }, 'ou'),
       el('button', { type: 'button', class: 'primary', onclick: () => input.click() }, 'Choisir des fichiers'),
       el('div', { class: 'muted small' }, 'Betclic (.txt), plusieurs fichiers à la fois'));
-    input.addEventListener('change', () => upload(input.files, result));
+    input.addEventListener('change', () => upload(input.files, result, student));
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (e) => {
       e.preventDefault();
       drop.classList.remove('over');
-      upload(e.dataTransfer.files, result);
+      upload(e.dataTransfer.files, result, student);
     });
-    const folder = el('p', { class: 'muted small' }, 'Dossier des mains : ' + state.folder + ' · ',
-      el('button', { type: 'button', class: 'link', onclick: () => reload(result) }, 'Recharger le dossier'),
-      ' (si tu y as copié des fichiers à la main)');
+    const who = student && students.find((s) => s.id === student);
+    const folder = who
+      ? el('p', { class: 'muted small' }, 'Les mains de ' + who.name + ' (Betclic, heads-up) : ' + who.folder)
+      : el('p', { class: 'muted small' }, 'Dossier des mains : ' + state.folder + ' · ',
+        el('button', { type: 'button', class: 'link', onclick: () => reload(result) }, 'Recharger le dossier'),
+        ' (si tu y as copié des fichiers à la main)');
     showPanel(el('div', { class: 'import' }, drop, input, result, folder));
   }
 
-  async function upload(fileList, result) {
+  async function upload(fileList, result, student) {
     if (!fileList || !fileList.length) return;
     result.textContent = 'Import en cours…';
     try {
       const files = await Promise.all([...fileList].map(async (f) => ({ name: f.name, content: await f.text() })));
-      const res = await fetch('/api/import', {
+      const url = student ? '/api/eleves/' + encodeURIComponent(student) + '/import' : '/api/import';
+      const res = await fetch(url, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Import impossible.');
-      state = data.state;
       frame.dataset.src = '';
-      renderSidebar();
-      showImportResult(data, result);
+      if (student) {
+        await loadStudents();
+        renderHeader();
+      } else {
+        state = data.state;
+        renderSidebar();
+      }
+      showImportResult(data, result, student);
     } catch (err) {
       result.textContent = '';
       result.append(el('p', { class: 'error' }, err.message || String(err)));
     }
   }
 
-  function showImportResult(data, result) {
+  function showImportResult(data, result, student) {
     result.textContent = '';
+    const next = student ? el('a', { href: '#/eleve/' + encodeURIComponent(student) + '/leaks' }, 'Voir son leakfinding')
+      : el('a', { href: '#/moi' }, 'Voir mon jeu');
     result.append(el('p', {}, data.added
       ? el('b', {}, data.added + ' nouvelle(s) main(s) ajoutée(s).')
       : 'Aucune nouvelle main.', ' ',
-    data.added ? el('a', { href: '#/moi' }, 'Voir mon jeu') : ''));
+    data.added ? next : ''));
     const rows = data.files.map((f) => el('tr', {},
       el('td', {}, f.name),
       el('td', { class: f.status === 'importé' ? 'ok' : f.status === 'déjà importé' ? '' : 'ko' }, f.status),
@@ -274,6 +320,33 @@
     frame.dataset.src = '';
     renderSidebar();
     result.textContent = state.hands + ' mains chargées.';
+  }
+
+  // ---------- élèves ----------
+  function showStudents() {
+    const nameInput = el('input', { type: 'text', maxlength: '60', placeholder: 'Nom de l\'élève', 'aria-label': 'Nom de l\'élève' });
+    const pseudoInput = el('input', { type: 'text', maxlength: '60', placeholder: 'Son pseudo à la table (facultatif)',
+      'aria-label': 'Pseudo à la table' });
+    const message = el('p', { class: 'small', 'aria-live': 'polite' });
+    const form = el('form', { class: 'student-form', onsubmit: async (e) => {
+      e.preventDefault();
+      const name = nameInput.value.trim();
+      if (!name) return;
+      const res = await fetch('/api/eleves', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, pseudo: pseudoInput.value.trim() || null }) });
+      const data = await res.json();
+      if (!res.ok) { message.textContent = data.error || 'Ajout impossible.'; return; }
+      location.hash = '#/eleve/' + encodeURIComponent(data.id) + '/importer';
+    } }, nameInput, pseudoInput, el('button', { type: 'submit', class: 'primary' }, 'Ajouter un élève'));
+    const cards = students.map((s) => el('a', { class: 'student', href: '#/eleve/' + encodeURIComponent(s.id) + '/leaks' },
+      el('b', {}, s.name),
+      el('span', { class: 'muted small' }, s.hands ? s.hands + ' mains · ' + (s.hero || '') + ' · dernière le ' + s.last
+        : 'pas encore de mains')));
+    showPanel(el('div', { class: 'students' },
+      el('p', {}, 'Chaque élève a son dossier de mains et son rapport de leakfinding : ses stats face à la théorie, '
+        + 'contre les réguliers et contre les récréatifs, les mains à revoir avec l\'avis du solveur, et les leaks à travailler.'),
+      cards.length ? el('div', { class: 'student-list' }, cards) : el('p', { class: 'muted' }, 'Aucun élève pour l\'instant.'),
+      el('h3', {}, 'Nouvel élève'), form, message));
   }
 
   // ---------- sauvegarde ----------
@@ -367,6 +440,7 @@
     else if (parts[0] === 'moi' && parts.length === 2) r = { view: 'moi', tab: parts[1] };
     else if (parts[0] === 'etudes' && parts.length <= 2) r = { view: 'etudes', tab: parts[1] || 'srp' };
     else if (parts[0] === 'entraineur' && parts.length === 1) r = { view: 'entraineur' };
+    else if (parts[0] === 'eleve' && parts.length === 3) r = { view: 'eleve', student: parts[1], tab: parts[2] };
     if (!r) return;
     frame.dataset.src = srcFor(r);
     if (route && route.view === r.view && route.player === r.player && route.tab === r.tab) return;

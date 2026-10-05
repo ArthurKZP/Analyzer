@@ -85,6 +85,28 @@ class LibraryTest(unittest.TestCase):
             self.assertIn("cbet", plan["nodes"])
         lib.solves.shutdown()
 
+    def test_students(self):
+        with mock.patch.dict(os.environ, {"ANALYZER_HOME": str(self.folder / "home")}):
+            main = Library(self.folder / "moi")  # aucune main à moi
+            paul = main.create_student("Paul", None)
+            self.assertEqual((paul["id"], paul["hands"]), ("paul", 0))
+            student = main.student("paul")
+            self.assertIs(student.solves, main.solves)  # une seule file de résolution pour tout le monde
+            added = student.import_files([{"name": "s.txt", "content": FIXTURE.read_text(encoding="utf-8")}])["added"]
+            self.assertEqual(added, 4)
+            self.assertEqual([(s["name"], s["hands"], s["hero"]) for s in main.students_summary()], [("Paul", 4, "Hero")])
+            self.assertEqual(main.find_hand("HAND02")[1], "Hero")  # ses mains s'ouvrent dans l'explorateur
+            self.assertIn("Leakfinding de Paul", student.self_page("leaks"))
+            self.assertIn('data-api="/api/eleves/paul/revue"', student.self_page("solveur"))
+            text, error = main.coach._run_tool("leakfinding", {"eleve": "Paul"})
+            self.assertFalse(error, text)
+            self.assertEqual(json.loads(text)["eleve"], "Paul")
+            main.set_kind("Villain", "rec")  # l'adversaire d'un élève se classe comme les tiens
+            self.assertEqual(student.leaks_report().scope_hands["rec"], 4)
+            with self.assertRaises(UnknownPlayer):
+                main.student("inconnu")
+            main.solves.shutdown()
+
     def test_solve_states(self):
         shutil.copy(FIXTURE, self.folder / "sample.txt")
         lib = Library(self.folder)
@@ -287,6 +309,30 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((view["error"], view["last"]["dest"]), (None, dest))
         foreign = {"Origin": "http://evil.example", **headers}
         self.assertEqual(self.request("POST", "/api/sauvegarde/lancer", "{}", foreign)[0], 403)
+
+    def test_student_routes(self):
+        headers = {"Content-Type": "application/json"}
+        status, _, data = self.request("POST", "/api/eleves", json.dumps({"name": "Anna", "pseudo": "Hero"}), headers)
+        self.assertEqual((status, json.loads(data)["id"]), (200, "anna"))
+        body = json.dumps({"files": [{"name": "s.txt", "content": FIXTURE.read_text(encoding="utf-8")}]})
+        status, _, data = self.request("POST", "/api/eleves/anna/import", body, headers)
+        self.assertEqual((status, json.loads(data)["added"]), (200, 4))
+        self.assertEqual([s["id"] for s in json.loads(self.request("GET", "/api/eleves")[2])], ["anna"])
+        for page in ("leaks", "preflop", "solveur", "spots"):
+            self.assertEqual(self.request("GET", f"/eleve/anna/{page}")[0], 200, page)
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+        conn.request("GET", "/eleve/anna/rapport")
+        resp = conn.getresponse()
+        report = resp.read()
+        conn.close()
+        self.assertEqual((resp.status, resp.getheader("Content-Disposition")),
+                         (200, 'attachment; filename="leakfinding-anna.html"'))
+        self.assertIn(b"Leakfinding de Anna", report)
+        self.assertEqual(json.loads(self.request("GET", "/api/eleves/anna/leaks")[2])["ready"], False)
+        self.assertEqual(self.request("GET", "/eleve/inconnu/leaks")[0], 404)
+        self.assertEqual(self.request("POST", "/api/eleves/inconnu/import", body, headers)[0], 404)
+        self.assertEqual(self.request("POST", "/api/eleves", json.dumps({"name": ""}), headers)[0], 400)
+        self.assertEqual(self.request("GET", "/moi/leaks")[0], 200)
 
     def test_not_found(self):
         for path in ("/p/Personne/plan", "/p/Villain/autre", "/static/server.py",

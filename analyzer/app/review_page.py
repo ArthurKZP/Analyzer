@@ -40,7 +40,7 @@ SCRIPT = """
 (function () {
   var box = document.querySelector('.rv-head');
   if (!box) return;
-  var who = box.dataset.villain, done = Number(box.dataset.done), timer = null;
+  var who = box.dataset.villain, done = Number(box.dataset.done), timer = null, api = box.dataset.api || '/api/revue';
   var run = box.querySelector('.rv-run'), stop = box.querySelector('.rv-stop'), status = box.querySelector('.rv-status');
   var query = who ? '?adversaire=' + encodeURIComponent(who) : '';
   function post(url) {
@@ -64,9 +64,9 @@ SCRIPT = """
     clearTimeout(timer);
     if (s.busy) timer = setTimeout(refresh, 3000);
   }
-  function refresh() { fetch('/api/revue' + query).then(function (r) { return r.json(); }).then(show); }
-  run.addEventListener('click', function () { run.disabled = true; post('/api/revue/lancer').then(show); });
-  stop.addEventListener('click', function () { post('/api/revue/arreter').then(show); });
+  function refresh() { fetch(api + query).then(function (r) { return r.json(); }).then(show); }
+  run.addEventListener('click', function () { run.disabled = true; post(api + '/lancer').then(show); });
+  stop.addEventListener('click', function () { post(api + '/arreter').then(show); });
   refresh();
 })();
 """
@@ -184,7 +184,7 @@ def _exploits_table(digests: list[dict]) -> str:
 
 
 def build_review_page(hands: list[Hand], hero: str, villain: Optional[str] = None, embed: bool = True,
-                      excluded: Optional[dict] = None, kind: Optional[dict] = None) -> str:
+                      excluded: Optional[dict] = None, kind: Optional[dict] = None, api: str = "/api/revue") -> str:
     """excluded : mains contre des récréatifs laissées de côté (Mon jeu) ; kind : type de l'adversaire.
     Face à un récréatif, seuls ses écarts comptent : tes décisions ne sont pas comparées à la théorie."""
     rec = bool(kind and kind["kind"] == "rec")
@@ -204,7 +204,8 @@ def build_review_page(hands: list[Hand], hero: str, villain: Optional[str] = Non
         f'<div class="sub">{num(lost / len(digests), 2) if digests else "–"} bb par main analysée</div></div>'
         '</div>')
     eta = sum(MINUTES.get(s.pot_type, 3) for s in todo)
-    head = (f'<div class="rv-head" data-villain="{escape(villain or "")}" data-done="{len(digests)}">'
+    head = (f'<div class="rv-head" data-villain="{escape(villain or "")}" data-done="{len(digests)}" '
+            f'data-api="{escape(api)}">'
             f'<span><b>{len(digests)} / {total}</b> mains analysées</span>'
             f'<button type="button" class="go rv-run"{" hidden" if not todo else ""}>Analyser les {len(todo)} mains '
             'restantes</button><button type="button" class="rv-stop" hidden>Arrêter</button>'

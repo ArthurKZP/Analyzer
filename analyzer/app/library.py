@@ -7,7 +7,7 @@ from html import escape
 from pathlib import Path
 from typing import Optional
 
-from .. import bluffs, players
+from .. import bluffs, leaks, players, students
 from ..cli import detect_hero, slugify
 from ..lines import villain_lines
 from ..models import Hand
@@ -19,6 +19,7 @@ from ..theory import coach, handclass, postflop, review, studyspots
 from ..theory.page import build_preflop_page
 from ..viewer import build_viewer
 from .bluffs_page import build_bluffs_page
+from .leaks_page import build_leaks_page
 from .plan_page import build_coach_page
 from .review_page import build_review_page
 from .backups import Backups
@@ -26,7 +27,7 @@ from .coach_chat import Coach
 from .solves import SolveQueue
 
 PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur", "bluffs")
-SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs")
+SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks")
 MAX_IMPORT_FILES = 200
 
 
@@ -55,7 +56,10 @@ def _kind_note(kind: dict) -> str:
 class Library:
     """Les mains d'un dossier et les pages d'analyse, calculées à la demande puis gardées en cache."""
 
-    def __init__(self, folder: Path | str, hero: Optional[str] = None):
+    def __init__(self, folder: Path | str, hero: Optional[str] = None, solves: Optional[SolveQueue] = None,
+                 backups: Optional[Backups] = None, api: str = "/api", pages: str = "/moi"):
+        """solves, backups : ceux de la bibliothèque principale, partagés par celles des élèves (une résolution à
+        la fois) ; api, pages : préfixes des adresses de ses pages et de leurs actions."""
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
         self.hero_override = hero
@@ -67,10 +71,14 @@ class Library:
         self.by_id: dict[str, Hand] = {}
         self.hero: Optional[str] = None
         self.known_ids: set[str] = set()
-        self.solves = SolveQueue()
-        self.backups = Backups()
+        self.api, self.pages = api, pages
+        self.display_name: Optional[str] = None  # nom de l'élève (rapport)
+        self._students: dict[str, Library] = {}
+        self.solves = solves or SolveQueue()
+        self.backups = backups or Backups()
         self.coach = Coach(self)
-        self.solves.on_done.append(lambda job: self.backups.schedule())
+        if solves is None:
+            self.solves.on_done.append(lambda job: self.backups.schedule())
         self.reload()
 
     # --- chargement -------------------------------------------------------------
@@ -114,7 +122,9 @@ class Library:
         return hands, {"hands": len(self.hands) - len(hands), "players": sorted(recs)}
 
     def set_kind(self, player: str, kind: Optional[str]) -> dict:
-        self.hands_against(player)  # 404 si le joueur est inconnu
+        if not any(h for h in self.hands if player in h.seats) and not any(
+                player in {o["name"] for o in self.student(s["id"]).opponents()} for s in students.all_students()):
+            raise UnknownPlayer(player)  # ni ton adversaire, ni celui d'un élève
         players.set_kind(player, kind)
         return self.summary()
 
@@ -184,7 +194,9 @@ class Library:
             raise UnknownPlayer("moi")
         regular, excluded = self.regular_hands()
         if page == "solveur":
-            return build_review_page(regular, self.hero, excluded=excluded)
+            return build_review_page(regular, self.hero, excluded=excluded, api=f"{self.api}/revue")
+        if page == "leaks":  # change au fil des analyses : le rapport a son propre cache
+            return self.leaks_page()
 
         def build():
             if page == "bilan":
@@ -216,6 +228,85 @@ class Library:
         return build_bluffs_page(bluffs.analyze(self.hands, regs, self.hero), "des réguliers", note=_note(note),
                                  players=sorted(rows, key=lambda r: -r["hands"]))
 
+    # --- élèves -----------------------------------------------------------------------
+    def student(self, ident: str) -> "Library":
+        """La bibliothèque d'un élève (chargée au premier accès), qui partage la file du solveur."""
+        meta = students.get(ident)
+        if meta is None:
+            raise UnknownPlayer(ident)
+        with self._lock:
+            lib = self._students.get(ident)
+        if lib is None:
+            lib = Library(students.folder(ident), meta.get("pseudo"), solves=self.solves, backups=self.backups,
+                          api=f"/api/eleves/{ident}", pages=f"/eleve/{ident}")
+            lib.display_name = meta["name"]
+            with self._lock:
+                lib = self._students.setdefault(ident, lib)
+        return lib
+
+    def students_summary(self) -> list[dict]:
+        out = []
+        for meta in students.all_students():
+            lib = self.student(meta["id"])
+            out.append(dict(lib.summary(), id=meta["id"], name=meta["name"], pseudo=meta.get("pseudo")))
+        return out
+
+    def create_student(self, name: str, pseudo: Optional[str] = None) -> dict:
+        meta = students.create(name, pseudo)
+        return dict(self.student(meta["id"]).summary(), id=meta["id"], name=meta["name"], pseudo=meta.get("pseudo"))
+
+    def find_hand(self, hand_id: str) -> Optional[tuple[Hand, str]]:
+        """Une main et son joueur : parmi les tiennes, puis celles des élèves."""
+        hand = self.by_id.get(hand_id)
+        if hand is not None and self.hero:
+            return hand, self.hero
+        for meta in students.all_students():
+            lib = self.student(meta["id"])
+            if hand_id in lib.by_id and lib.hero:
+                return lib.by_id[hand_id], lib.hero
+        return None
+
+    # --- leakfinding ----------------------------------------------------------------------
+    def leaks_report(self) -> "leaks.Report":
+        """Le rapport, recalculé quand des mains ou des analyses du solveur s'ajoutent."""
+        digests = review.review_dir()
+        count = sum(1 for _ in digests.glob("*.json")) if digests.is_dir() else 0
+        return self._cached(("leaks", count) + self._kinds_key(),
+                            lambda: leaks.build(self.hands, self.hero, self.kinds()))
+
+    def leaks_page(self, standalone: bool = False) -> str:
+        if not self.hands:
+            raise UnknownPlayer("aucune main")
+        return build_leaks_page(self.leaks_report(), api=f"{self.api}/leaks", pages=self.pages,
+                                embed=not standalone, standalone=standalone, name=self.display_name,
+                                opponents=self.summary()["opponents"])
+
+    def leaks_state(self, start: bool = False) -> dict:
+        """Les mains choisies contre les réguliers : analysées, à analyser, en cours ; start=True les met en file."""
+        report = self.leaks_report()
+        picks = report.picks.get("reg", [])
+        ready = postflop.status()["ready"]
+        busy, current = 0, None
+        for spot in leaks.selection_spots(report):
+            view = self.solves.lookup(spot)
+            if start and ready and view["state"] not in ("waiting", "running", "done"):
+                view = self.solves.analyze(spot, review.save_digest)
+            if view["state"] in ("waiting", "running"):
+                busy += 1
+                if view["state"] == "running":
+                    current = {"hand": spot.hand.hand_id, "progress": view.get("progress"),
+                               "max_iterations": view.get("max_iterations")}
+        done = sum(1 for p in picks if p.digest is not None)
+        return {"total": sum(1 for p in picks if p.digest is not None or p.spot is not None), "done": done,
+                "busy": busy, "current": current, "ready": ready}
+
+    def leaks_cancel(self) -> dict:
+        for spot in leaks.selection_spots(self.leaks_report()):
+            view = self.solves.lookup(spot)
+            if view["state"] in ("waiting", "running"):
+                self.solves.cancel(view["job"])
+        return self.leaks_state()
+
     # --- résolution postflop ----------------------------------------------------
     def _spot(self, hand_id: str):
         """Une main jouée (son numéro), ou un spot d'étude (« spot:srp:KsKd4c »)."""
@@ -224,10 +315,10 @@ class Library:
             if spot is None:
                 raise UnknownPlayer(hand_id)
             return spot
-        hand = self.by_id.get(hand_id)
-        if hand is None or not self.hero:
+        found = self.find_hand(hand_id)
+        if found is None:
             raise UnknownPlayer(hand_id)
-        return postflop.build_spot(hand, self.hero)
+        return postflop.build_spot(*found)
 
     def solve(self, hand_id: str, start: bool = False, force: bool = False) -> dict:
         """État de la résolution GTOpen d'une main (ou d'un spot d'étude) ; start=True la lance si besoin.
@@ -272,15 +363,15 @@ class Library:
                             "hero_cards": [],
                             "villain_cards": [], "hero_position": None}
             return view
-        hand = self.by_id[hand_id]
-        villain = hand.opponent_of(self.hero)
+        hand, hero = self.find_hand(hand_id)
+        villain = hand.opponent_of(hero)
         bb = hand.bb
         view["meta"] = {
-            "hand": hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"), "hero": self.hero, "villain": villain,
-            "board": hand.board, "hero_cards": hand.hole_cards.get(self.hero, []),
+            "hand": hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"), "hero": hero, "villain": villain,
+            "board": hand.board, "hero_cards": hand.hole_cards.get(hero, []),
             "villain_cards": hand.hole_cards.get(villain, []),
-            "hero_position": "BTN" if hand.button == self.hero else "BB",
-            "net": round(hand.net(self.hero) / bb, 2),
+            "hero_position": "BTN" if hand.button == hero else "BB",
+            "net": round(hand.net(hero) / bb, 2),
         }
         return view
 

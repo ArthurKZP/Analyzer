@@ -413,6 +413,35 @@ par pot 4bet sur 4 cœurs : une vingtaine d'heures pour 430 mains, à étaler su
   écarts-types), « indicatif » sinon, avec la façon d'en profiter (il folde trop face à la c-bet : bluffe
   plus…). **Ses erreurs connues** : l'EV qu'il a laissée quand ses cartes ont été montrées.
 
+## Leakfinding (toi et tes élèves)
+
+Le rapport de ce qu'un joueur doit travailler en priorité : onglet *Leakfinding* de *Mon jeu* pour toi, et menu
+*Élèves* pour tes élèves. Chaque élève a son dossier de mains (`~/.analyzer/eleves/<élève>/`, sauvegardé) : ajoute-le
+(nom, et son pseudo à la table si tu le connais), importe les historiques qu'il t'envoie (Betclic, heads-up), et son
+rapport se construit.
+
+- **Les leaks à travailler** : les cinq plus importants, avec leur preuve chiffrée, leur confiance et la façon de les
+  travailler (entraîneur sur la situation, onglet Préflop, plan de jeu) ; pour une perte face au solveur, la main la
+  plus chère à revoir. Classés par confiance puis par poids (fréquence de la situation multipliée par l'écart, ou EV
+  perdue). Seules les mains contre les réguliers comptent : contre un récréatif, l'exploitation prime.
+- **Ses stats face à la théorie**, sur toutes ses mains, contre les réguliers et contre les récréatifs : VPIP, PFR,
+  abattage, résultat, puis préflop face à la solution HU 100 bb (open, limp, 3bet, 4bet, folds) et après le flop
+  face aux plans de jeu des flops résolus (c-bet, barrels, c-bet retardée, folds face aux mises, relances, probes),
+  par type de pot et par position. Écart « solide » (le hasard l'explique mal) ou « indicatif ».
+- **Face au solveur** : ses décisions dans les mains choisies contre les réguliers, comparées à la meilleure action
+  pour sa main exacte (EV perdue par situation, décisions les plus chères). Un bouton les fait toutes résoudre
+  (environ 2 à 3 minutes par main).
+- **Mains à revoir** : les plus gros pots de chaque ligne (type de pot, position, dernière street jouée), deux par
+  ligne, contre les réguliers (avec l'avis du solveur) et contre les récréatifs (à revoir à la main).
+- **Ses adversaires** : leur type (régulier ou récréatif), suggéré d'après leurs stats et réglable ; il décide quelles
+  mains comptent pour les leaks.
+- **Télécharger le rapport** : la même page en fichier autonome, sans les boutons de l'application, à envoyer à
+  l'élève. Le coach a l'outil *leakfinding* : « Écris le rapport de coaching de Paul » dans l'application Claude
+  rédige un rapport à partir de ces données.
+
+L'élève a aussi ses onglets *Préflop* (face à la solution, main par main), *Face au solveur* (toutes ses mains
+contre les réguliers) et *Mains* (le visualiseur, d'où chaque main s'ouvre dans l'explorateur).
+
 ## Bluffs des adversaires
 
 L'onglet *Ses bluffs* (fiche d'un adversaire) et *Bluffs des réguliers* (Mon jeu, tous les réguliers ensemble, puis un
@@ -655,13 +684,16 @@ analyzer/
                        commande `gtopen` (solve_cli.py), mains jouées face au solveur (review.py)
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
-                       solveur » (review_page.py), bluffs des adversaires (bluffs_page.py), entraîneur
+                       solveur » (review_page.py), leakfinding (leaks_page.py), bluffs des adversaires
+                       (bluffs_page.py), entraîneur
                        (trainer.py, static/trainer.*), plan de jeu suggéré (plan_page.py), coach
                        (coach_chat.py, static/coach.*) et son serveur MCP pour l'abonnement Claude
                        (mcp_server.py), sauvegardes en arrière-plan (backups.py), interface
                        (static/, dont l'explorateur explorer.*)
   backup.py            sauvegarde et restauration de ~/.analyzer (commande `sauvegarde`)
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
+  leaks.py             leakfinding : stats face à la théorie, revue du solveur, mains à revoir, leaks prioritaires
+  students.py          les élèves : un dossier de mains par élève
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)
 hands/                 tes historiques (ignorés par git)
