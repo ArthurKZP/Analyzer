@@ -94,6 +94,9 @@ class HeroAcrossSitesTest(unittest.TestCase):
             try:
                 self.assertEqual([h.site for h in lib.hands], ["Winamax"])  # le HU va dans l'analyse heads-up
                 self.assertEqual(sorted(h.table_format for h in lib.ring), ["3-max", "6-max", "6-max"])
+                page = lib.self_page("tables")  # Mon jeu > Tables à plusieurs
+                self.assertIn("Préflop par position", page)
+                self.assertIn("6-max (2)", page)
             finally:
                 lib.solves.shutdown()
 

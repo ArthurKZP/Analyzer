@@ -7,7 +7,7 @@ from html import escape
 from pathlib import Path
 from typing import Optional
 
-from .. import bluffs, leaks, players, students
+from .. import bluffs, leaks, players, ring, students
 from ..cli import detect_hero, slugify, unify_hero
 from ..lines import villain_lines
 from ..models import Hand
@@ -20,6 +20,7 @@ from ..theory.page import build_preflop_page
 from ..viewer import build_viewer
 from .bluffs_page import build_bluffs_page
 from .leaks_page import build_leaks_page
+from .ring_page import build_ring_page
 from .plan_page import build_coach_page
 from .review_page import build_review_page
 from .backups import Backups
@@ -27,7 +28,7 @@ from .coach_chat import Coach
 from .solves import SolveQueue
 
 PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur", "bluffs")
-SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks")
+SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks", "tables")
 MAX_IMPORT_FILES = 200
 
 
@@ -202,6 +203,9 @@ class Library:
     def self_page(self, page: str) -> str:
         if page not in SELF_PAGES:
             raise KeyError(page)
+        if page == "tables":  # tables à 3 joueurs et plus : pas besoin de mains heads-up
+            return self._cached(("self", "tables"), lambda: build_ring_page(ring.analyze(self.ring, self.hero or ""),
+                                                                            self.hero or ""))
         if not self.hands:
             raise UnknownPlayer("moi")
         regular, excluded = self.regular_hands()

@@ -689,6 +689,7 @@ Analyzer.
 ```
 analyzer/
   parsers/             lecture des historiques : betclic.py, winamax.py, unibet.py
+  ring.py              tables à 3 joueurs et plus : tes stats par position
   models.py            modèle commun (Hand, Action, Seat)
   stats.py             lecture des situations HU et agrégation des stats
   cards.py             notation des mains, évaluateur 7 cartes, équité
@@ -739,6 +740,13 @@ le plus souvent), pour que *Mon jeu* réunisse tous les sites. Chaque joueur re�
 HJ, UTG…) d'après le bouton et les blindes postées. L'import indique, par fichier, le site et le nombre de mains
 en HU, 3-max et 6-max. Les mains heads-up (deux joueurs servis) alimentent toute l'analyse ; les autres sont
 gardées pour l'analyse par position.
+
+**Tables à plusieurs** (onglet de *Mon jeu*, et de chaque élève) : tes stats par position, en 6-max et en 3-max —
+mains et bb/100, VPIP, PFR, open quand tu parles le premier, limp, 3bet et call face à une ouverture, fold face au
+3bet après ton open, défense des blindes face à un vol (ouverture du CO, du bouton ou de la SB sans caller), c-bet
+au flop en pot à deux ou à plusieurs, fold face à la c-bet, abattage et gain à l'abattage. En 6-max, des repères
+indicatifs (stats de tracker courantes d'un régulier à 100 bb) colorent les écarts, en attendant ceux du solveur ;
+pas encore de repère en 3-max. Code : `analyzer/ring.py` (lecture des mains) et `app/ring_page.py` (la page).
 
 ### Ajouter un site
 
