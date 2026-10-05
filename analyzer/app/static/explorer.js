@@ -9,7 +9,7 @@
   const RANKS = 'AKQJT98765432';
   const SUITS = { s: '♠', h: '♥', d: '♦', c: '♣' };
   const STREET = ['Flop', 'Turn', 'River'];
-  const POS = ['BB', 'BTN'];
+  let POS = ['BB', 'BTN'];  // joueur 0 (hors de position), joueur 1 : à une table à plusieurs, leurs positions
   const NAME = { H: 'Toi', V: 'Lui' };
   const MODES = [['strategy', 'Stratégie'], ['strategy_ev', 'Stratégie + EV'], ['ev', 'EV'], ['equity', 'Équité']];
   const SHADES = ['var(--g-bet1)', 'var(--g-bet2)', 'var(--g-bet3)', 'var(--g-bet4)'];
@@ -59,7 +59,7 @@
   const prefixOf = (p, full) => p.length <= full.length && same(p, full.slice(0, p.length));
 
   function roleOf(p) {
-    const oop = meta.hero_position === 'BB' ? 'H' : 'V';
+    const oop = (meta.hero_oop !== undefined ? meta.hero_oop : meta.hero_position === 'BB') ? 'H' : 'V';
     return p === 0 ? oop : (oop === 'H' ? 'V' : 'H');
   }
   const playerOf = (role) => (roleOf(0) === role ? 0 : 1);
@@ -224,6 +224,7 @@
   async function loadState() {
     state = await api('/api/explorateur/etat', { hand: HAND });
     meta = state.meta;
+    if (meta && meta.positions) POS = meta.positions;
     live = !!state.live;
     const decisions = state.result ? state.result.decisions : [];
     const last = decisions[decisions.length - 1];
@@ -283,7 +284,8 @@
     }
     const parts = ['Main ' + meta.hand, meta.date];
     if (state.result) parts.push(state.result.pot_type);
-    parts.push('toi ' + (meta.hero_position === 'BTN' ? 'au bouton' : 'en BB'));
+    if (meta.table_format && meta.table_format !== 'HU') parts.push(meta.table_format, 'toi ' + meta.hero_position + ' contre ' + POS[meta.hero_oop ? 1 : 0]);
+    else parts.push('toi ' + (meta.hero_position === 'BTN' ? 'au bouton' : 'en BB'));
     const box = $('meta');
     box.textContent = '';
     box.append(parts.join(' · ') + ' · ', cards(meta.hero_cards), ' vs ',
@@ -358,7 +360,7 @@
   }
 
   // Comme Wizard : le tapis (effectif) du joueur au-dessus de ses actions, le pot sur chaque street.
-  const stackOf = (x) => el('span', { class: 'stk', title: 'Tapis effectif restant avant d\'agir' }, num(x) + ' bb');
+  const stackOf = (x, title) => el('span', { class: 'stk', title: title || 'Tapis effectif restant avant d\'agir' }, num(x) + ' bb');
   const streetHead = (name, pot) => el('div', { class: 'head' }, el('span', { class: 'st' }, name.toUpperCase()), el('span', {}, 'pot ' + num(pot)));
 
   function actionStep(h, k, current) {
@@ -402,10 +404,13 @@
 
   // Action préflop d'une main jouée (tailles réelles) : ouvre la solution préflop à ce moment du coup.
   function playedPreStep(s) {
-    const step = el('div', { class: 'step pre', title: 'Préflop · pot ' + num(s.pot) + ' bb' },
-      el('div', { class: 'head' }, el('span', { class: roleOf(s.player) }, who(s.player)), stackOf(s.stack)));
+    // à une table à plusieurs, les joueurs qui ne voient pas le flop n'ont que leur position (player null)
+    const inPot = s.player !== null && s.player !== undefined;
+    const step = el('div', { class: 'step pre' + (inPot ? '' : ' out'), title: 'Préflop · pot ' + num(s.pot) + ' bb' },
+      el('div', { class: 'head' }, el('span', { class: inPot ? roleOf(s.player) : '' }, inPot ? who(s.player) : s.position),
+        stackOf(s.stack, meta.table_format && meta.table_format !== 'HU' ? 'Son tapis restant avant d\'agir' : null)));
     step.append(el('button', {
-      type: 'button', class: 'act on', title: 'Voir la solution préflop à ce moment du coup',
+      type: 'button', class: 'act on', disabled: !s.line, title: s.line ? 'Voir la solution préflop à ce moment du coup' : null,
       onclick: () => window.open(preHref(s.line), '_blank', 'noopener'),
     }, el('span', {}, s.name), el('span', { class: 'dot', title: 'Joué dans la main' }, '●')));
     return step;

@@ -748,6 +748,23 @@ au flop en pot à deux ou à plusieurs, fold face à la c-bet, abattage et gain 
 indicatifs (stats de tracker courantes d'un régulier à 100 bb) colorent les écarts, en attendant ceux du solveur ;
 pas encore de repère en 3-max. Code : `analyzer/ring.py` (lecture des mains) et `app/ring_page.py` (la page).
 
+**Pots à deux joueurs au flop** (3-max, 6-max) : quand il ne reste que deux joueurs au flop, le coup se résout au
+solveur postflop comme un coup heads-up — hors de position celui qui parle le premier après le flop, pot avec
+l'argent mort des joueurs qui ont foldé, tapis effectif des deux joueurs. Leurs ranges viennent de **ta solution
+préflop** du format, à déposer dans `~/.analyzer/ranges/<format>.json` (`6-max.json`, `3-max.json`, sauvegardé) :
+
+```json
+{"format": "6-max", "stack_bb": 100, "source": "…",
+ "lines": {"CO:raise BB:call": {"pot_type": "SRP", "ranges": {"CO": "AA,AKs,KQo:0.5,…", "BB": "…"}},
+           "BTN:raise SB:raise BTN:call": {"pot_type": "pot 3bet", "ranges": {"SB": "…", "BTN": "…"}}}}
+```
+
+Une ligne = les relances et calls préflop dans l'ordre, avec la position de leur auteur (les folds n'y sont pas) ;
+chaque range est celle du joueur au flop (« main » ou « main:poids »). L'onglet *Tables à plusieurs* liste ces
+coups (les plus gros pots d'abord) avec *Ouvrir au solveur ↗*, ou la raison s'ils ne se résolvent pas encore :
+pas de range pour la ligne, troisième joueur qui a mis de l'argent avant de se coucher (call puis fold, squeeze),
+tapis préflop. L'explorateur montre le préflop de toute la table et les vraies positions (`theory/ring_ranges.py`).
+
 ### Ajouter un site
 
 Crée `analyzer/parsers/<site>.py` avec deux fonctions, `looks_like(text) -> bool` et

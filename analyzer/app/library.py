@@ -10,12 +10,12 @@ from typing import Optional
 from .. import bluffs, leaks, players, ring, students
 from ..cli import detect_hero, slugify, unify_hero
 from ..lines import villain_lines
-from ..models import Hand
+from ..models import CALL, RAISE, Hand
 from ..parsers import load_hands, parse_text
 from ..report import build_plan_page, build_report
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
-from ..theory import coach, handclass, postflop, review, studyspots
+from ..theory import coach, handclass, postflop, review, ring_ranges, studyspots
 from ..theory.page import build_preflop_page
 from ..viewer import build_viewer
 from .bluffs_page import build_bluffs_page
@@ -102,7 +102,7 @@ class Library:
             self.known_ids = {f"{h.site}:{h.hand_id}" for h in hands}
             self.hands = heads_up
             self.ring = ring  # tes mains aux tables à plusieurs (3-max, 6-max)
-            self.by_id = {h.hand_id: h for h in heads_up}
+            self.by_id = {h.hand_id: h for h in heads_up + ring}  # le solveur résout aussi leurs pots à deux
             self.hero = hero
             self.version += 1
             self._cache.clear()
@@ -204,8 +204,9 @@ class Library:
         if page not in SELF_PAGES:
             raise KeyError(page)
         if page == "tables":  # tables à 3 joueurs et plus : pas besoin de mains heads-up
-            return self._cached(("self", "tables"), lambda: build_ring_page(ring.analyze(self.ring, self.hero or ""),
-                                                                            self.hero or ""))
+            return self._cached(("self", "tables"), lambda: build_ring_page(
+                ring.analyze(self.ring, self.hero or ""), self.hero or "", spots=self.ring_spots(),
+                ranges=ring_ranges.available()))
         if not self.hands:
             raise UnknownPlayer("moi")
         regular, excluded = self.regular_hands()
@@ -270,6 +271,29 @@ class Library:
     def create_student(self, name: str, pseudo: Optional[str] = None) -> dict:
         meta = students.create(name, pseudo)
         return dict(self.student(meta["id"]).summary(), id=meta["id"], name=meta["name"], pseudo=meta.get("pseudo"))
+
+    def ring_spots(self) -> list[dict]:
+        """Tes coups des tables à plusieurs où il ne reste que deux joueurs au flop, les plus gros pots d'abord :
+        de quoi les ouvrir au solveur (ou pourquoi ils ne se résolvent pas encore)."""
+        rows = []
+        for h in self.ring:
+            pair = postflop.flop_pair(h)
+            if not pair or self.hero not in pair:
+                continue
+            villain = pair[1] if pair[0] == self.hero else pair[0]
+            try:
+                status, pot_type = None, postflop.build_spot(h, self.hero).pot_type
+            except postflop.Unsupported as exc:
+                status, pot_type = str(exc), None
+            pre = [a for a in h.actions if a.street == "preflop" and a.kind in (RAISE, CALL)]
+            rows.append({"id": h.hand_id, "date": h.date, "format": h.table_format, "hero": h.position(self.hero),
+                         "villain": h.position(villain), "line": ring_ranges.describe([(h.position(a.player), a.kind)
+                                                                                      for a in pre]),
+                         "pot_type": pot_type, "cards": h.hole_cards.get(self.hero, []), "board": h.board[:3],
+                         "pot_bb": round(sum(a.amount for a in h.actions if a.street == "preflop") / h.bb, 1),
+                         "total_bb": round(h.total_pot / h.bb, 1), "net_bb": round(h.net(self.hero) / h.bb, 1),
+                         "status": status})
+        return sorted(rows, key=lambda r: -r["total_bb"])
 
     def find_hand(self, hand_id: str) -> Optional[tuple[Hand, str]]:
         """Une main et son joueur : parmi les tiennes, puis celles des élèves."""
@@ -380,16 +404,19 @@ class Library:
                             "villain_cards": [], "hero_position": None}
             return view
         hand, hero = self.find_hand(hand_id)
-        villain = hand.opponent_of(hero)
         bb = hand.bb
+        pair = postflop.flop_pair(hand)  # (hors de position, en position) au flop
+        villain = (pair[1] if pair[0] == hero else pair[0]) if pair and hero in pair else hand.opponent_of(hero)
+        positions = [hand.position(p) for p in pair] if pair else ["BB", "BTN"]
         view["meta"] = {
             "hand": hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"), "hero": hero, "villain": villain,
             "board": hand.board, "hero_cards": hand.hole_cards.get(hero, []),
             "villain_cards": hand.hole_cards.get(villain, []),
-            "hero_position": "BTN" if hand.button == hero else "BB",
+            "hero_position": hand.position(hero), "hero_oop": bool(pair) and pair[0] == hero,
+            "positions": positions, "table_format": hand.table_format,
             "net": round(hand.net(hero) / bb, 2),
-            "stack": round(min(seat.stack for seat in hand.seats.values()) / bb, 2),
-            "preflop": postflop.preflop_steps(hand),
+            "stack": round(min(hand.seats[p].stack for p in (pair or hand.seats)) / bb, 2),
+            "preflop": postflop.preflop_steps(hand, hero),
         }
         return view
 

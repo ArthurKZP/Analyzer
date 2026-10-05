@@ -80,6 +80,8 @@ body.busy .brand::after { content: " · chargement…"; color: var(--muted); fon
 .step.cards button:disabled { cursor: default; }
 .step.end { justify-content: center; color: var(--ink-2); font-size: 12px; }
 .step.pre { background: var(--surface); }
+.step.pre.out { opacity: 0.6; min-width: 84px; }
+.step.pre button.act:disabled { opacity: 1; cursor: default; }
 .step .head .stk { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); }
 .step .head .st { letter-spacing: 0.04em; color: var(--ink); }
 .step .change { font-size: 11px; color: var(--accent); text-decoration: none; font-weight: 600; }

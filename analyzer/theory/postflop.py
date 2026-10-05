@@ -383,24 +383,24 @@ class PostflopSpot(SpotTree):
         write_study_meta(self, request, raw)
 
 
+POSTFLOP_ORDER = ("SB", "BB", "UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN")  # ordre de parole après le flop
+
+
 def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> PostflopSpot:
-    solution = solution or load_solution()
-    sb, bb_player = hand.button, hand.big_blind
-    villain = hand.opponent_of(hero)
-    if len(hand.seats) != 2 or not sb or not bb_player or villain is None:
+    """Le spot postflop d'une main : heads-up (ranges de la solution HU), ou table à plusieurs quand il ne reste que
+    deux joueurs au flop (ranges de ta solution du format, voir ring_ranges)."""
+    if len(hand.seats) == 2 and (not hand.button or not hand.big_blind or hand.opponent_of(hero) is None):
         raise Unsupported("Seules les mains heads-up se résolvent.")
     pre = [a for a in hand.actions if a.street == "preflop" and a.kind in VOLUNTARY]
     if any(a.all_in for a in pre):
         raise Unsupported("Tapis préflop : il n'y a plus de décision après le flop.")
     if len(hand.board) < 3 or not any(a.street == "flop" for a in hand.actions):
         raise Unsupported("La main s'arrête avant le flop : rien à résoudre après le flop.")
-    pattern = tuple(("sb" if a.player == sb else "bb", a.kind) for a in pre)
-    if pattern not in PREFLOP_LINES:
-        if pattern[:1] == (("sb", CALL),):
-            raise Unsupported("Pot limpé : la solution préflop ne donne pas de range pour ce cas.")
-        raise Unsupported("Ligne préflop hors de la solution (seuls SRP, pots 3bet et 4bet sont couverts).")
-    pot_type, sb_source, bb_source = PREFLOP_LINES[pattern]
-    ranges = {sb: range_weights(solution, *sb_source), bb_player: range_weights(solution, *bb_source)}
+    if len(hand.seats) == 2:
+        oop, ip, pot_type, ranges = _heads_up_ranges(hand, pre, solution or load_solution())
+    else:
+        oop, ip, pot_type, ranges = _ring_ranges(hand, hero, pre)
+    villain = ip if hero == oop else oop
 
     added = []
     for player in (hero, villain):
@@ -413,12 +413,11 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> Po
 
     bb = hand.bb
     put = {p: sum(a.amount for a in hand.actions if a.player == p and a.street == "preflop") for p in hand.seats}
-    pot = sum(put.values())
-    stack = min(hand.seats[p].stack - put[p] for p in hand.seats)
+    pot = sum(put.values())  # l'argent mort des joueurs qui ont foldé compris
+    stack = min(hand.seats[p].stack - put[p] for p in (oop, ip))
     if stack <= 0:
         raise Unsupported("Tapis préflop : il n'y a plus de décision après le flop.")
 
-    oop, ip = bb_player, sb
     played = {p: [{"bet": [], "raise": [], "donk": []} for _ in range(3)] for p in (oop, ip)}
     line: list[dict] = []
     index: list[int] = []
@@ -458,14 +457,69 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> Po
                         ranges, line, index, sizes, added)
 
 
+
+def _heads_up_ranges(hand: Hand, pre: list, solution: Solution) -> tuple[str, str, str, dict]:
+    """Heads-up : la ligne préflop dans la solution HU ; la BB est hors de position."""
+    sb, bb_player = hand.button, hand.big_blind
+    pattern = tuple(("sb" if a.player == sb else "bb", a.kind) for a in pre)
+    if pattern not in PREFLOP_LINES:
+        if pattern[:1] == (("sb", CALL),):
+            raise Unsupported("Pot limpé : la solution préflop ne donne pas de range pour ce cas.")
+        raise Unsupported("Ligne préflop hors de la solution (seuls SRP, pots 3bet et 4bet sont couverts).")
+    pot_type, sb_source, bb_source = PREFLOP_LINES[pattern]
+    ranges = {sb: range_weights(solution, *sb_source), bb_player: range_weights(solution, *bb_source)}
+    return bb_player, sb, pot_type, ranges
+
+
+def flop_pair(hand: Hand) -> Optional[tuple[str, str]]:
+    """(hors de position, en position) s'il ne reste que deux joueurs au flop, sinon None."""
+    if len(hand.seats) == 2:
+        return (hand.big_blind, hand.button) if hand.button and hand.big_blind else None
+    folded = {a.player for a in hand.actions if a.street == "preflop" and a.kind == FOLD}
+    players = [p for p in hand.seats if p not in folded]
+    if len(players) != 2 or len(hand.board) < 3 or any(hand.position(p) not in POSTFLOP_ORDER for p in players):
+        return None
+    oop, ip = sorted(players, key=lambda p: POSTFLOP_ORDER.index(hand.position(p)))
+    return oop, ip
+
+
+def _ring_ranges(hand: Hand, hero: str, pre: list) -> tuple[str, str, str, dict]:
+    """Table à plusieurs : les deux joueurs qui voient le flop, leurs ranges d'après ta solution du format."""
+    from . import ring_ranges
+    folded = {a.player for a in pre if a.kind == FOLD}
+    players = [p for p in hand.seats if p not in folded]
+    if hero not in players:
+        raise Unsupported("Tu as foldé avant le flop : rien à résoudre après le flop.")
+    if len(players) != 2:
+        raise Unsupported(f"Pot à {len(players)} joueurs au flop : le solveur ne résout que les pots à deux.")
+    if any(a.player not in players and a.kind != FOLD for a in pre):
+        raise Unsupported("Un troisième joueur a mis de l'argent avant de se coucher (call puis fold, squeeze…) : "
+                          "cette ligne n'est pas encore couverte.")
+    positions = {p: hand.position(p) for p in players}
+    if any(pos not in POSTFLOP_ORDER for pos in positions.values()):
+        raise Unsupported("Positions inconnues : le bouton manque dans l'historique.")
+    steps = [(positions[a.player], a.kind) for a in pre if a.kind != FOLD]
+    found = ring_ranges.lookup(hand.table_format, steps)
+    if found is None:
+        raise Unsupported(f"Pas de range préflop pour « {ring_ranges.describe(steps)} » en {hand.table_format} : "
+                          f"ajoute ta solution ({ring_ranges.folder() / (hand.table_format + '.json')}).")
+    pot_type, by_position = found
+    if any(pos not in by_position for pos in positions.values()):
+        raise Unsupported(f"Ta solution ne donne pas les deux ranges de « {ring_ranges.describe(steps)} ».")
+    oop, ip = sorted(players, key=lambda p: POSTFLOP_ORDER.index(positions[p]))
+    return oop, ip, pot_type, {p: dict(by_position[positions[p]]) for p in players}
+
 PREFLOP_RAISES = ("Open", "3bet", "4bet", "5bet")
 
 
-def preflop_steps(hand: Hand) -> list[dict]:
-    """L'action préflop jouée, pour le déroulé de l'explorateur : joueur de l'arbre (0 = BB), action, tapis
-    effectif restant avant d'agir et pot (en bb), ligne de la solution préflop jusque-là (preflop_tree)."""
+def preflop_steps(hand: Hand, hero: Optional[str] = None) -> list[dict]:
+    """L'action préflop jouée, pour le déroulé de l'explorateur : position et joueur de l'arbre (0 = hors de
+    position, 1 = en position ; None pour un joueur qui n'est plus là au flop), action, tapis restant avant d'agir
+    (effectif en heads-up, le sien à une table à plusieurs) et pot (en bb), ligne de la solution préflop HU."""
     bb = hand.bb
+    heads_up = len(hand.seats) == 2
     effective = min(seat.stack for seat in hand.seats.values())
+    pair = flop_pair(hand)
     put = dict.fromkeys(hand.seats, 0.0)
     steps, line, raises = [], [], 0
     for a in hand.actions:
@@ -481,9 +535,11 @@ def preflop_steps(hand: Hand) -> list[dict]:
         else:
             name = {CALL: "Call" if raises else "Limp", FOLD: "Fold", CHECK: "Check"}[a.kind]
             key = {CALL: "call", FOLD: "fold"}.get(a.kind)
-        steps.append({"player": 0 if a.player == hand.big_blind else 1, "name": name,
-                      "stack": round((effective - put[a.player]) / bb, 2), "pot": round(sum(put.values()) / bb, 2),
-                      "line": list(line)})
+        stack = (effective if heads_up else hand.seats[a.player].stack) - put[a.player]
+        steps.append({"player": pair.index(a.player) if pair and a.player in pair else None,
+                      "position": hand.position(a.player), "hero": a.player == hero, "name": name,
+                      "stack": round(stack / bb, 2), "pot": round(sum(put.values()) / bb, 2),
+                      "line": list(line) if heads_up else None})
         if a.kind in (RAISE, CALL):
             put[a.player] = a.to
         if key:
@@ -599,7 +655,8 @@ def write_study_meta(spot: PostflopSpot, request: dict, raw: dict) -> None:
     meta = {
         "kind": "hand", "key": study_key(request), "hand": hand.hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"),
         "hero": spot.hero, "villain": spot.villain, "hero_cards": hand.hole_cards.get(spot.hero, []),
-        "board": hand.board, "pot_type": spot.pot_type, "hero_position": "BB" if spot.oop == spot.hero else "BTN",
+        "board": hand.board, "pot_type": spot.pot_type, "table_format": hand.table_format,
+        "hero_position": ("BB" if spot.oop == spot.hero else "BTN") if len(hand.seats) == 2 else hand.position(spot.hero),
         "pot": spot.pot_bb, "stack": spot.stack_bb, "net": round(hand.net(spot.hero) / hand.bb, 2),
         "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"), "seconds": raw.get("seconds"),
         "menu": spot.menu_text(), "created": time.strftime("%d/%m/%Y %H:%M"),
@@ -950,6 +1007,7 @@ def interpret(spot: PostflopSpot, raw: dict) -> dict:
         })
     return {
         "hand": hand.hand_id, "pot_type": spot.pot_type, "pot": spot.pot_bb, "stack": spot.stack_bb,
+        "table_format": hand.table_format, "positions": {"H": hand.position(spot.hero), "V": hand.position(spot.villain)},
         "board": spot.board, "oop": who[spot.oop], "menu": spot.menu_text(),
         "added": [who[p] for p in spot.added],
         "iterations": raw["iterations"], "exploit_pct": raw["exploit_pct"], "seconds": raw["seconds"],
@@ -971,8 +1029,12 @@ def _strategy_text(actions: list[dict], freqs: list[float]) -> str:
 
 
 def result_text(result: dict, hero: str) -> str:
-    pos = "en BB (hors position)" if result["oop"] == "H" else "au bouton (en position)"
-    lines = [f"Main {result['hand']} — {result['pot_type']}, toi {pos} · flop {' '.join(result['board'])} · "
+    where = "hors position" if result["oop"] == "H" else "en position"
+    if result.get("table_format", "HU") != "HU":  # pot à deux à une table à plusieurs
+        pos = f"en {result['table_format']}, toi {result['positions']['H']} contre {result['positions']['V']} ({where})"
+    else:
+        pos = "toi " + ("en BB (hors position)" if result["oop"] == "H" else "au bouton (en position)")
+    lines = [f"Main {result['hand']} — {result['pot_type']}, {pos} · flop {' '.join(result['board'])} · "
              f"pot {_num(result['pot'])} bb · tapis {_num(result['stack'])} bb",
              f"GTOpen : {result['iterations']} itérations, exploitabilité {_num(result['exploit_pct'], 2)} % du pot, "
              f"{_num(result['seconds'], 0)} s · {result['tree_nodes']:_} nœuds".replace("_", " "),

@@ -1,9 +1,14 @@
+import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from analyzer import ring
 from analyzer.app.ring_page import build_ring_page
 from analyzer.parsers import load_hands, parse_text
+from analyzer.theory import postflop, ring_ranges
 
 SITES = Path(__file__).parent / "sites"
 
@@ -55,6 +60,78 @@ class AnalyzeTest(unittest.TestCase):
         for text in ("Préflop par position", "Après le flop", "6-max (2)", "3-max (1)", "repère 18–23&nbsp;%"):
             self.assertIn(text, page)
         self.assertIn("Aucune main", build_ring_page([], "Hero"))
+
+
+class HeadsUpPotTest(unittest.TestCase):
+    """Pots à deux joueurs au flop à une table à plusieurs : le solveur postflop, avec les ranges de ta solution."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        env = mock.patch.dict(os.environ, {"ANALYZER_HOME": tmp.name})
+        env.start()
+        self.addCleanup(env.stop)
+        self.home = Path(tmp.name)
+        self.hand = hand("winamax.txt")  # 3-max : toi en BB, 3bet contre l'open du bouton, la SB folde
+
+    def write_ranges(self):
+        folder = ring_ranges.folder()
+        folder.mkdir(parents=True)
+        (folder / "3-max.json").write_text(json.dumps({"format": "3-max", "lines": {
+            "BTN:raise BB:raise BTN:call": {"ranges": {"BTN": "AA,KK:0.5,AQs,A9s", "BB": "AA,KK,QQ,AKs"}}}}),
+            encoding="utf-8")
+
+    def test_line_and_missing_ranges(self):
+        self.assertEqual(postflop.flop_pair(self.hand), ("Hero", "Incognito-a1b2c3d4"))
+        steps = [("BTN", "raise"), ("BB", "raise"), ("BTN", "call")]
+        self.assertEqual((ring_ranges.line_key(steps), ring_ranges.describe(steps)),
+                         ("BTN:raise BB:raise BTN:call", "BTN open, BB 3bet, BTN call"))
+        with self.assertRaises(postflop.Unsupported) as err:
+            postflop.build_spot(self.hand, "Hero")
+        self.assertIn("Pas de range préflop pour « BTN open, BB 3bet, BTN call » en 3-max", str(err.exception))
+        multiway = hand("unibet.txt")  # trois joueurs au flop
+        self.assertIsNone(postflop.flop_pair(multiway))
+        with self.assertRaises(postflop.Unsupported) as err:
+            postflop.build_spot(multiway, "Hero")
+        self.assertIn("Pot à 3 joueurs au flop", str(err.exception))
+
+    def test_spot_with_ranges(self):
+        self.write_ranges()
+        self.assertEqual(ring_ranges.available(), {"3-max": 1})
+        spot = postflop.build_spot(self.hand, "Hero")
+        self.assertEqual((spot.oop, spot.ip, spot.pot_type), ("Hero", "Incognito-a1b2c3d4", "pot 3bet"))
+        self.assertEqual((spot.pot_bb, spot.stack_bb), (25.5, 94.125))  # la SB morte compte dans le pot
+        self.assertEqual(spot.ranges["Incognito-a1b2c3d4"], {"AA": 1.0, "KK": 0.5, "AQs": 1.0, "A9s": 1.0})
+        self.assertEqual(spot.ranges["Hero"]["KK"], 1.0)
+        self.assertEqual([s.get("action") or s.get("card") for s in spot.line][:2], ["bet", "call"])
+        request = spot.request()
+        self.assertEqual(request["spot"]["tree"]["starting_pot"], 25.5)
+        steps = postflop.preflop_steps(self.hand, "Hero")
+        self.assertEqual([(s["position"], s["player"], s["name"]) for s in steps],
+                         [("BTN", 1, "Open 2,5"), ("SB", None, "Fold"), ("BB", 0, "3bet 12,5"), ("BTN", 1, "Call")])
+        self.assertIsNone(steps[0]["line"])  # pas d'arbre préflop HU à ouvrir
+
+    def test_library(self):
+        self.write_ranges()
+        folder = self.home / "mains"
+        folder.mkdir()
+        for name in ("winamax.txt", "unibet.txt", "betclic_6max.txt"):
+            (folder / name).write_text((SITES / name).read_text(encoding="utf-8"), encoding="utf-8")
+        from analyzer.app.library import Library
+        lib = Library(folder)
+        try:
+            rows = lib.ring_spots()
+            self.assertEqual([(r["format"], r["hero"], r["villain"], r["status"]) for r in rows],
+                             [("3-max", "BB", "BTN", None)])
+            state = lib.explorer_state(rows[0]["id"])
+            meta = state["meta"]
+            self.assertEqual((meta["positions"], meta["hero_oop"], meta["table_format"]), (["BB", "BTN"], True, "3-max"))
+            self.assertEqual(state["state"], "absent")  # prêt à résoudre
+            page = lib.self_page("tables")
+            self.assertIn("Ouvrir au solveur", page)
+            self.assertIn("BTN open, BB 3bet, BTN call", page)
+        finally:
+            lib.solves.shutdown()
 
 
 if __name__ == "__main__":

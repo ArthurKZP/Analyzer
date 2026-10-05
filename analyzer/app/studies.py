@@ -118,6 +118,8 @@ KIND_CLASS = {"fold": "k-fold", "check": "k-pass", "call": "k-pass", "bet": "k-b
 SHORT = {"check": "check", "call": "call", "fold": "fold", "bet": "mise", "raise": "relance"}
 
 
+POSITION_NAMES = {"BTN": "Bouton"}  # les autres positions (BB, CO, HJ…) gardent leur sigle
+
 def _size(n: int) -> str:
     return f"{num(n / 1e6, 0)} Mo" if n < 1e9 else f"{num(n / 1e9, 1)} Go"
 
@@ -314,7 +316,7 @@ def _hand_section() -> str:
             "<tr>"
             f"<td>{escape(s['date'])}</td><td>{escape(s['villain'])}</td>"
             f"<td>{cards_html(s.get('hero_cards', []))}</td><td>{cards_html(s['board'])}</td>"
-            f"<td>{escape(s['pot_type'])}</td><td>{'BB' if s['hero_position'] == 'BB' else 'Bouton'}</td>"
+            f"<td>{escape(s['pot_type'])}</td><td>{escape(POSITION_NAMES.get(s['hero_position'], s['hero_position'] or ''))}</td>"
             f'<td class="num">{num(s["net"], 1, sign=True)} bb</td>'
             f'<td class="num">{num(exploit, 2) + " %" if exploit is not None else "–"}</td>'
             f'<td class="num">{_size(s["size"])}</td>'
