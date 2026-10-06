@@ -11,12 +11,12 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 class CliTest(unittest.TestCase):
     def test_slugify(self):
-        self.assertEqual(slugify("_Bërsërk_"), "berserk")
+        self.assertEqual(slugify("_Vïllâïn_"), "villain")
         self.assertEqual(slugify("Peste Noire"), "peste-noire")
 
     def test_find_player_is_accent_and_case_insensitive(self):
-        names = ["_Bërsërk_", "Peste Noire"]
-        self.assertEqual(find_player("berserk", names), "_Bërsërk_")
+        names = ["_Vïllâïn_", "Peste Noire"]
+        self.assertEqual(find_player("villain", names), "_Vïllâïn_")
         self.assertEqual(find_player("peste", names), "Peste Noire")
         self.assertIsNone(find_player("inconnu", names))
 
