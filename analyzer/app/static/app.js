@@ -11,8 +11,8 @@
     adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
       ['solveur', 'Face au solveur'], ['bluffs', 'Ses bluffs']],
     // L'explorateur part du préflop ; les séries de spots et les coups joués ont chacun leur onglet.
-    etudes: [['explorateur', 'Explorateur'], ['plan', 'Plan de jeu suggéré'], ['srp', 'SRP'], ['3bet', 'Pots 3bet'],
-      ['4bet', 'Pots 4bet'], ['coups', 'Coups joués']],
+    etudes: [['explorateur', 'Explorateur'], ['plan', 'Plan de jeu suggéré'], ['srp', 'SRP HU'], ['3bet', '3bet HU'],
+      ['4bet', '4bet HU'], ['6max', '6-max'], ['coups', 'Coups joués']],
   };
   let state = null;
   let route = null;

@@ -181,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 3 and parts[:2] == ["api", "spots"]:
                 return self._json(library.spot_set(parts[2]))
             if len(parts) == 2 and parts[0] == "explorateur" and (parts[1] == "preflop" or library.find_hand(parts[1])
-                                                                   or studyspots.parse_ident(parts[1])):
+                                                                   or studyspots.is_ident(parts[1])):
                 page = (STATIC / "explorer.html").read_text(encoding="utf-8")
                 return self._html(page.replace("__HAND__", html.escape(parts[1], quote=True)))
         except (UnknownPlayer, KeyError):
@@ -359,7 +359,7 @@ class Handler(BaseHTTPRequestHandler):
             except UnknownPlayer:
                 return self._error(404, "Adversaire inconnu.")
         if len(parts) == 4 and parts[:2] == ["api", "spots"] and parts[3] in ("resoudre", "arreter"):
-            if parts[2] not in studyspots.FAMILIES:
+            if not studyspots.known_family(parts[2]):
                 return self._error(404, "Série inconnue.")
             if parts[3] == "arreter":
                 return self._json(library.spot_cancel(parts[2]))

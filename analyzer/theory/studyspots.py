@@ -43,6 +43,100 @@ FAMILIES = {
              "steps": (("BTN", "raise"), ("BB", "raise"), ("BTN", "raise"), ("BB", "call"))},
 }
 
+# Spots d'étude des tables à plusieurs (6-max, 100 bb) : un autre jeu que le heads-up, aux ranges bien plus serrées.
+# Ranges : tes charts 6-max (ring_ranges, ~/.analyzer/ranges/6-max.json). Tailles préflop : open à 2,5 bb (celui des
+# charts), 3bet à 3 fois l'open en position (7,5 bb) et 4 fois hors de position (10 bb), 4bet à 22 bb en position et
+# 20 bb hors de position ; la blinde d'un joueur qui a foldé reste au pot.
+RING_FORMAT = "6-max"
+OPEN, THREEBET, FOURBET = 2.5, {"ip": 7.5, "oop": 10.0}, {"ip": 22.0, "oop": 20.0}
+POT_NAMES = {"srp": "SRP", "3bet": "pot 3bet", "4bet": "pot 4bet"}
+
+
+def _de(pos: str) -> str:
+    return ("de la " if pos in ("SB", "BB") else "du ") + pos
+
+
+def _ring_family(oop: str, ip: str, kind: str, opener: str) -> tuple[str, dict]:
+    other = ip if opener == oop else oop
+    aggressor = opener if kind != "3bet" else other
+    put = {"srp": OPEN, "3bet": THREEBET["ip" if other == ip else "oop"],
+           "4bet": FOURBET["ip" if opener == ip else "oop"]}[kind]
+    dead = (0.5 if "SB" not in (oop, ip) else 0.0) + (1.0 if "BB" not in (oop, ip) else 0.0)
+    steps = ((opener, "raise"), (other, "call")) if kind == "srp" else \
+        ((opener, "raise"), (other, "raise"), (opener, "call")) if kind == "3bet" else \
+        ((opener, "raise"), (other, "raise"), (opener, "raise"), (other, "call"))
+    words = [f"open {_de(opener)} à 2,5 bb"]
+    if kind != "srp":
+        words.append(f"3bet {_de(other)} à {THREEBET['ip' if other == ip else 'oop']:g} bb".replace(".", ","))
+    if kind == "4bet":
+        words.append(f"4bet {_de(opener)} à {put:g} bb")
+    words.append(f"call {_de(steps[-1][0])}")
+    structure = f"{kind}_{'oop' if aggressor == oop else 'ip'}"
+    family = f"6max_{oop.lower()}_{ip.lower()}_{kind}"
+    return family, {
+        "name": POT_NAMES[kind], "pair": f"{oop} contre {ip}", "group": RING_FORMAT, "kind": kind,
+        "label": f"6-max, {oop} contre {ip}, {POT_NAMES[kind]} : " + ", ".join(words) + ", 100 bb",
+        "oop": oop, "ip": ip, "pot": round(2 * put + dead, 2), "stack": round(100 - put, 2),
+        "oop_initiative": aggressor == oop, "steps": steps, "structure": structure,
+    }
+
+
+RING_FAMILIES = dict(_ring_family(*args) for args in (
+    ("SB", "BB", "srp", "SB"), ("SB", "BB", "3bet", "SB"), ("SB", "BB", "4bet", "SB"),
+    ("SB", "BTN", "3bet", "BTN"), ("SB", "BTN", "4bet", "BTN"),
+    ("BB", "BTN", "srp", "BTN"), ("BB", "BTN", "3bet", "BTN"), ("BB", "BTN", "4bet", "BTN"),
+    ("BB", "CO", "3bet", "CO"), ("BB", "CO", "4bet", "CO"),
+))
+for _family, _info in RING_FAMILIES.items():
+    sizing.register(_family, _info["structure"], _info["oop"], _info["ip"])
+
+
+def ring_spot_ranges(family: str) -> dict[str, dict[str, float]]:
+    """Les ranges d'une famille 6-max, tirées de tes charts ; postflop.Unsupported s'ils manquent."""
+    from . import ring_ranges
+    info = RING_FAMILIES[family]
+    found = ring_ranges.lookup(RING_FORMAT, list(info["steps"]))
+    if found is None or any(p not in found[1] for p in (info["oop"], info["ip"])):
+        raise postflop.Unsupported(f"Pas de ranges 6-max pour « {ring_ranges.describe(list(info['steps']))} » : "
+                                   "charge les charts 6-max (onglet Tables à plusieurs de Mon jeu) ou ajoute ta "
+                                   f"solution ({ring_ranges.folder() / (RING_FORMAT + '.json')}).")
+    return {p: dict(found[1][p]) for p in (info["oop"], info["ip"])}
+
+
+HU_STRUCTURES = {"srp": "srp_ip", "3bet": "3bet_oop", "4bet": "4bet_ip"}  # qui a l'initiative, hors de position ou non
+
+
+def size_families(heads_up: bool, oop: str, ip: str, pot_type: str, oop_initiative: bool) -> list[str]:
+    """Les familles dont les tailles choisies servent à l'arbre d'un coup joué, de la plus proche à la moins
+    proche : en heads-up, la famille heads-up de même structure ; à une table à plusieurs, la famille 6-max de ces
+    positions, les autres familles 6-max de même structure, puis la famille heads-up de même structure."""
+    kind = {"SRP": "srp", "pot 3bet": "3bet", "pot 4bet": "4bet"}.get(pot_type)
+    if kind is None:
+        return []
+    structure = f"{kind}_{'oop' if oop_initiative else 'ip'}"
+    hu = [f for f in FAMILIES if HU_STRUCTURES[f] == structure]
+    if heads_up:
+        return hu
+    pair = f"6max_{oop.lower()}_{ip.lower()}_{kind}"
+    ring = [f for f, info in RING_FAMILIES.items() if info["structure"] == structure and f != pair]
+    return ([pair] if pair in RING_FAMILIES else []) + ring + hu
+
+
+def family_title(family: str) -> str:
+    """« heads-up, SRP » ou « 6-max, BB contre BTN, pot 3bet »."""
+    info = family_info(family)
+    return f"6-max, {info['pair']}, {info['name']}" if family in RING_FAMILIES else f"heads-up, {info['name']}"
+
+
+def family_info(family: str) -> dict:
+    """Une famille de spots : heads-up (FAMILIES) ou d'une table à plusieurs (RING_FAMILIES) ; KeyError sinon."""
+    return FAMILIES[family] if family in FAMILIES else RING_FAMILIES[family]
+
+
+def known_family(family: str) -> bool:
+    return family in FAMILIES or family in RING_FAMILIES
+
+
 # Trois flops par texture : sec, connecté, deux couleurs (ou leurs équivalents pour pairé et monotone).
 SRP_FLOPS = {
     "Pairé": ("KsKd4c", "8h8c5s", "Jd3c3h"),
@@ -80,11 +174,15 @@ def flop_texture(board: list[str]) -> str:
 
 
 FLOPS = {"srp": SRP_FLOPS, "3bet": SRP_FLOPS, "4bet": SRP_FLOPS}  # les mêmes flops d'une famille à l'autre
+FLOPS.update({family: SRP_FLOPS for family in RING_FAMILIES})  # et en 6-max, pour comparer au heads-up
 
 # Durée d'une résolution sur 4 cœurs, tailles déjà choisies (mesurée sur K♠K♦4♣).
 SOLVE_TIME = {"srp": "une dizaine de minutes", "3bet": "2 à 3 minutes", "4bet": "moins d'une minute"}
 # Durée du choix des tailles d'un flop sur 4 cœurs (mesurée sur K♠K♦4♣).
 CHOOSE_TIME = {"srp": "1 h 10 environ", "3bet": "25 minutes environ", "4bet": "2 minutes environ"}
+for _family, _info in RING_FAMILIES.items():  # ranges plus serrées qu'en heads-up : au plus aussi long
+    SOLVE_TIME[_family] = "au plus " + SOLVE_TIME[_info["kind"]]
+    CHOOSE_TIME[_family] = "au plus " + CHOOSE_TIME[_info["kind"]].replace(" environ", "")
 
 
 def board_text(board: list[str]) -> str:
@@ -147,13 +245,18 @@ class StudySpot(postflop.SpotTree):
 
     def __post_init__(self):
         from . import custom_ranges
-        info = FAMILIES[self.family]
-        solution = self.solution or load_solution()
+        info = family_info(self.family)
         self.name, self.label = info["name"], info["label"]
         self.pot_bb, self.stack_bb = info["pot"], info["stack"]
-        self.ranges = {self.oop: postflop.range_weights(solution, *info["oop"]),
-                       self.ip: postflop.range_weights(solution, *info["ip"])}
-        self.context = custom_ranges.context("HU", info["steps"])
+        if self.family in RING_FAMILIES:
+            self.oop, self.ip = info["oop"], info["ip"]
+            self.ranges = ring_spot_ranges(self.family)
+            self.context = custom_ranges.context(RING_FORMAT, info["steps"])
+        else:
+            solution = self.solution or load_solution()
+            self.ranges = {self.oop: postflop.range_weights(solution, *info["oop"]),
+                           self.ip: postflop.range_weights(solution, *info["ip"])}
+            self.context = custom_ranges.context("HU", info["steps"])
         self.reference = {p: dict(r) for p, r in self.ranges.items()}
         self.adjusted = None
         if self.custom:
@@ -198,7 +301,7 @@ class StudySpot(postflop.SpotTree):
     def after_solve(self, session: postflop.Session) -> None:
         """Juste après la résolution, l'étude encore ouverte : son plan de jeu (quelques secondes)."""
         from . import coach
-        if not self.adjusted:  # les plans de jeu suivent la théorie
+        if not self.adjusted and self.family in FAMILIES:  # les plans de jeu : la théorie, en heads-up
             coach.extract_and_save(session, self)
 
     def write_meta(self, request: dict, raw: dict, session: Optional[postflop.Session] = None) -> None:
@@ -248,6 +351,9 @@ SUMMARY = {
     "3bet": (("C-bet de la BB", []), ("BTN face à la c-bet", ["bet"]), ("BB face à la relance", ["bet", "raise"]),
              ("Stab du BTN", ["check"]), ("BB face au stab", ["check", "bet"])),
 }
+for _family, _info in RING_FAMILIES.items():  # même synthèse que la famille heads-up de même structure
+    _model = SUMMARY["3bet" if _info["oop_initiative"] else "srp"]
+    SUMMARY[_family] = tuple((sizing.rename_roles(title, _info["oop"], _info["ip"]), kinds) for title, kinds in _model)
 
 
 def flop_summary(session: postflop.Session, family: str = "srp") -> list[dict]:
@@ -275,20 +381,27 @@ def flop_summary(session: postflop.Session, family: str = "srp") -> list[dict]:
     return out
 
 
-def _current(meta: dict) -> bool:
-    """L'étude correspond-elle à l'arbre actuel du spot (tailles choisies ou par défaut) ?"""
-    spot = parse_ident(meta.get("id", ""))
+def _current(meta: dict) -> Optional[bool]:
+    """L'étude correspond-elle à l'arbre actuel du spot (tailles choisies ou par défaut) ? None : on ne peut
+    pas le dire (spot 6-max sans tes charts)."""
+    try:
+        spot = parse_ident(meta.get("id", ""))
+    except postflop.Unsupported:
+        return None
     return spot is not None and meta.get("key") == postflop.study_key(spot.request())
 
 
-def spot_studies() -> dict[str, dict]:
-    """Fiches des spots d'étude enregistrés avec l'arbre actuel de leur spot, par identifiant."""
-    return {m["id"]: m for m in postflop.list_studies() if m.get("kind") == "spot" and _current(m)}
+def spot_studies(families: Optional[tuple[str, ...]] = None) -> dict[str, dict]:
+    """Fiches des spots d'étude enregistrés avec l'arbre actuel de leur spot, par identifiant ; par défaut ceux
+    des familles heads-up (plans de jeu, entraîneur, coach et leakfinding ne connaissent qu'elles)."""
+    wanted = families or tuple(FAMILIES)
+    return {m["id"]: m for m in postflop.list_studies()
+            if m.get("kind") == "spot" and m.get("family") in wanted and _current(m)}
 
 
 def stale_spot_studies() -> list[dict]:
     """Études de spots faites avec un autre arbre (avant le choix des tailles, par exemple)."""
-    return [m for m in postflop.list_studies() if m.get("kind") == "spot" and not _current(m)]
+    return [m for m in postflop.list_studies() if m.get("kind") == "spot" and _current(m) is False]
 
 
 # --- Tailles choisies ------------------------------------------------------------------------
@@ -419,7 +532,7 @@ def flop_options(family: str, board: list[str]) -> dict:
     couleurs près, puis les mêmes hauteurs avec la même structure de couleurs, puis la même texture."""
     board = normalize_board(family, board)
     target = StudySpot(family, board)
-    solved = {i: m for i, m in spot_studies().items() if m.get("family") == family}
+    solved = spot_studies((family,))
     canon, pattern, texture = canonical(board), suit_pattern(board), target.texture
     ranks = sorted(c[0] for c in board)
     suggestions = []
@@ -479,18 +592,23 @@ def export_selections(family: str = "srp", path: Optional[Path] = None) -> Path:
 def parse_ident(ident: str, custom: bool = False) -> Optional[StudySpot]:
     """« spot:srp:KsKd4c » -> le spot, si la famille existe et que le flop est valide ; sinon None.
     custom=True : avec tes ranges ajustées pour ce spot, s'il y en a (l'explorateur)."""
+    if not is_ident(ident):
+        return None
+    _, family, board = ident.split(":")
+    return StudySpot(family, cards_of(board), custom=custom)
+
+
+def is_ident(ident: str) -> bool:
+    """« spot:<famille>:<flop> » bien formé (sans construire le spot : un spot 6-max demande tes charts)."""
     parts = ident.split(":")
-    if len(parts) != 3 or parts[0] != "spot" or parts[1] not in FAMILIES:
-        return None
-    if not re.fullmatch(r"(?:[2-9TJQKA][cdhs]){3}", parts[2]) or len(set(cards_of(parts[2]))) != 3:
-        return None
-    return StudySpot(parts[1], cards_of(parts[2]), custom=custom)
+    return (len(parts) == 3 and parts[0] == "spot" and known_family(parts[1])
+            and bool(re.fullmatch(r"(?:[2-9TJQKA][cdhs]){3}", parts[2])) and len(set(cards_of(parts[2]))) == 3)
 
 
 def family_boards(family: str = "srp") -> list[str]:
     """Flops de la série, puis les autres flops étudiés dans cette famille (ouverts depuis l'explorateur)."""
     boards = flop_set(family)
-    extra = sorted({"".join(m["board"]) for m in spot_studies().values() if m.get("family") == family} - set(boards))
+    extra = sorted({"".join(m["board"]) for m in spot_studies((family,)).values()} - set(boards))
     return boards + extra
 
 
@@ -517,7 +635,7 @@ def reference(family: str = "srp") -> dict[str, dict]:
 
 def export_reference(family: str = "srp", path: Optional[Path] = None) -> Path:
     """Écrit la référence de la série à partir des études de cet ordinateur (synthèses seulement, quelques Ko)."""
-    spots, studies = {}, spot_studies()
+    spots, studies = {}, spot_studies((family,))
     for board in flop_set(family):
         spot = StudySpot(family, cards_of(board))
         meta = studies.get(spot.ident)
@@ -529,7 +647,7 @@ def export_reference(family: str = "srp", path: Optional[Path] = None) -> Path:
             "summary": [dict(e, freqs=[round(f, 4) for f in e["freqs"]]) for e in meta["summary"]],
         }
     path = path or reference_path(family)
-    data = {"family": family, "label": FAMILIES[family]["label"], "spots": spots}
+    data = {"family": family, "label": family_info(family)["label"], "spots": spots}
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     return path
 
@@ -550,7 +668,7 @@ def solve_set(family: str = "srp", textures: Optional[list[str]] = None, log: Ca
 
     choose=True choisit d'abord les tailles des flops qui n'en ont pas (long : de l'ordre de 45 minutes
     par flop sur 4 cœurs) ; solve=False s'arrête au choix des tailles."""
-    done = spot_studies()
+    done = spot_studies((family,))
     boards = flop_set(family, textures)
     solved = 0
     for k, board in enumerate(boards, 1):

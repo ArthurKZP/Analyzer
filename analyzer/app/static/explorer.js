@@ -291,8 +291,9 @@
       const box = $('meta');
       box.textContent = '';
       box.title = meta.family_label + (meta.sizes ? '\nTailles : ' + meta.sizes : '');
-      box.append('Spot d\'étude · ' + meta.pot_type + ' · BTN contre BB · flop ', cards(meta.board), ' · ' + meta.texture
-        + ' · pot ' + num(meta.pot) + ' bb, tapis ' + num(meta.stack) + ' bb');
+      box.append('Spot d\'étude · ' + (meta.format && meta.format !== 'HU' ? meta.format + ' · ' : '') + meta.pot_type
+        + ' · ' + (meta.pair || 'BTN contre BB') + ' · flop ', cards(meta.board),
+        meta.texture ? ' · ' + meta.texture + ' · pot ' + num(meta.pot) + ' bb, tapis ' + num(meta.stack) + ' bb' : '');
       box.append(adjustedBadge());
       return;
     }
@@ -317,14 +318,16 @@
     box.hidden = !info;
     if (!info) return;
     const head = el('div', { title: 'Tailles de l\'arbre : ' + info.plan });
-    if (info.source === 'flop') head.append(el('b', {}, 'Tailles théoriques de ce flop'), ' : choisies comme pour les spots d\'étude.');
-    else if (info.source === 'proche') {
-      head.append(el('b', {}, 'Tailles théoriques empruntées à '), cards(info.board),
-        info.same_texture ? ' (même texture) : ' : ' (autre texture) : ', 'celles de ce flop ne sont pas encore choisies.',
-        el('button', { type: 'button', onclick: chooseSizes, disabled: ['waiting', 'running'].includes(state.state) },
-          'Choisir les tailles de ce flop (' + info.choose_time + ')'));
-    } else head.append(el('b', {}, 'Tailles par défaut'), ' (33 % au flop, 75 % à la turn et à la river, relance 60 %) : '
+    if (info.source === 'flop') head.append(el('b', {}, 'Tailles théoriques de ce flop'), ' (' + info.family_title
+      + ') : choisies comme pour les spots d\'étude.');
+    else if (info.source === 'proche') head.append(el('b', {}, 'Tailles théoriques empruntées à '), cards(info.board),
+      ' (' + info.family_title + (info.same_texture ? ', même texture' : ', autre texture') + ') : '
+      + 'celles de ce flop ne sont pas encore choisies.');
+    else head.append(el('b', {}, 'Tailles par défaut'), ' (33 % au flop, 75 % à la turn et à la river, relance 60 %) : '
       + 'pas encore de tailles théoriques pour ce type de pot.');
+    if (info.choose) head.append(el('button', { type: 'button', onclick: chooseSizes, disabled: ['waiting', 'running'].includes(state.state),
+      title: 'Le choix se fait dans la série ' + info.choose_title + ' (même jeu que ce coup)' },
+      'Choisir les tailles de ce flop (' + info.choose_time + ')'));
     box.append(head);
     const played = info.played.filter((q) => q.how !== 'same');
     played.forEach((q) => box.append(el('div', { class: 'played' },
@@ -1280,7 +1283,7 @@
     $('b-line').hidden = true;
     $('reveal').closest('label').hidden = true;
     const ident = HAND.split(':');
-    document.title = 'Explorateur — ' + ident[1].toUpperCase() + ' ' + ident[2];
+    document.title = 'Explorateur — ' + ident[1].replace(/^6max_/, '6-max ').replace(/_/g, ' ').toUpperCase() + ' ' + ident[2];
   }
   $('reveal').onchange = render;
   document.addEventListener('keydown', (e) => {
@@ -1304,7 +1307,7 @@
     $('tab-ranges').hidden = true;
     document.title = 'Explorateur — préflop';
   }
-  if (SPOT) {  // ligne préflop du spot, en tête du déroulé
+  if (SPOT && !FAMILY.startsWith('6max_')) {  // ligne préflop du spot (solution heads-up), en tête du déroulé
     api('/api/explorateur/preflop', { family: FAMILY }).then((n) => { prefix = n; if (node) render(); }).catch(() => {});
   }
 

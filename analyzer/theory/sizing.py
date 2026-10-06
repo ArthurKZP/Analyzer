@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 import subprocess
 import tempfile
 import time
@@ -193,6 +194,102 @@ PROFILES = {
 }
 
 
+
+def _oop_river(sizes: list, stab: Optional[tuple] = None) -> Callable[[str, str], Optional[tuple]]:
+    """River d'un pot où l'agresseur préflop est hors de position : pas de donk ; le joueur en position mise
+    quand on checke vers lui (stab) ou après sa mise payée."""
+    def river(bettor: str, past: str) -> Optional[tuple]:
+        if bettor == "o":
+            return None if past[-1] == "i" else (sizes, 2)
+        return (sizes, 2) if past[-1] == "i" or stab is None else stab
+    return river
+
+
+def _ip_river(sizes: list) -> Callable[[str, str], Optional[tuple]]:
+    """River d'un pot où l'agresseur préflop est en position : pas de donk de celui hors de position."""
+    def river(bettor: str, past: str) -> Optional[tuple]:
+        return None if bettor == "o" and past[-1] == "i" else (sizes, 2)
+    return river
+
+
+# Structures des tables à plusieurs que les familles heads-up ne couvrent pas. Libellés : BB = le joueur hors de
+# position, BTN = celui en position (renommés selon la famille, voir rename_roles).
+OOP_LINES = {"o": ["bet", "call"], "x": ["check", "check"], "i": ["check", "bet", "call"]}
+IP_LINES = {"i": ["check", "bet", "call"], "x": ["check", "check"], "o": ["check", "bet", "raise", "call"]}
+OOP_NAMES = {k: v for k, v in PROFILES["3bet"].names.items()}
+OOP_MAIN = PROFILES["3bet"].main
+STRUCTURES = {
+    # SRP ouvert hors de position (SB contre BB) : SPR de 20 environ, les tailles d'un SRP.
+    "srp_oop": Profile(
+        flop=(("bet:fo:", [33, 75, "geo"]), ("raise:fi::0", [33, 66, "geo"]), ("bet:fi:", [33, 75, "geo"]),
+              ("raise:fo::0", [33, 66, "geo"]), ("raise:fo::1", [33, 66, "geo"]), ("raise:fi::1", [33, 66, "geo"])),
+        turn_bets={("o", "o"): [50, 100, "geo"], ("o", "x"): [33, 66, "geo"], ("i", "o"): [33, 75, "geo"],
+                   ("i", "x"): [33, 75, "geo"], ("i", "i"): [50, 100, "geo"]},
+        river_bets=_oop_river([50, 75, 100, 150, "a"]),
+        raises={"t": [33, 66, "geo"], "r": [33, 66, "a"]},
+        lines=OOP_LINES, flop_river=[75], names=OOP_NAMES,
+        flop_line={"o": "c-bet payée", "x": "flop checké", "i": "stab payé"}, main=OOP_MAIN,
+        description="c-bet 33 / 75 % / géo, relance face à la c-bet 33 / 66 % / géo, stab 33 / 75 % / géo, 2e barrel "
+                    "50 % / pot / géo, c-bet retardée 33 / 66 % / géo, river deux parmi 50 / 75 % / pot / 150 % / "
+                    "tapis, relances 33 / 66 % / géo (tapis à la river)",
+    ),
+    # Pot 3bet du joueur en position (la BB 3bette l'open de la SB) : SPR de 6 environ.
+    "3bet_ip": Profile(
+        flop=(("bet:fi:", [33, 75, "geo2"]), ("raise:fo::0", [33, 66, "a"]), ("raise:fi::1", [33, 66, "a"])),
+        turn_bets={("i", "i"): [33, 50, 75, "a"], ("i", "x"): [33, 75, "geo"], ("o", "x"): [33, 75, "a"],
+                   ("o", "o"): [33, 66, "a"], ("i", "o"): [33, 66, "a"]},
+        river_bets=_ip_river([33, 50, 75, "a"]),
+        raises={"t": [33, 66, "a"], "r": [33, 66, "a"]},
+        lines=IP_LINES, flop_river=[50], names=PROFILES["srp"].names, flop_line=PROFILES["srp"].flop_line,
+        main=PROFILES["srp"].main,
+        description="c-bet 33 / 75 % / géo sur deux streets, 2e barrel 33 / 50 / 75 % / tapis, c-bet retardée "
+                    "33 / 75 % / géo, probe 33 / 75 % / tapis, river deux parmi 33 / 50 / 75 % / tapis, relances "
+                    "33 / 66 % / tapis",
+    ),
+    # Pot 4bet du joueur hors de position (la SB 4bette le 3bet de la BB) : SPR de 2 environ.
+    "4bet_oop": Profile(
+        flop=(("bet:fo:", [25, "geo2", "a"]), ("raise:fi::0", [33, "a"]), ("bet:fi:", [25, 50, "a"]),
+              ("raise:fo::0", [33, "a"]), ("raise:fo::1", [33, "a"]), ("raise:fi::1", [33, "a"])),
+        turn_bets={key: [25, 50, "a"] for key in (("o", "o"), ("o", "x"), ("i", "o"), ("i", "x"), ("i", "i"))},
+        river_bets=_oop_river([25, 50, "a"]),
+        raises={"t": [33, "a"], "r": [33, "a"]},
+        lines=OOP_LINES, flop_river=[50], names=OOP_NAMES,
+        flop_line={"o": "c-bet payée", "x": "flop checké", "i": "stab payé"}, main=OOP_MAIN,
+        description="c-bet 25 % / géo sur deux streets / tapis, stab 25 / 50 % / tapis, puis 25 / 50 % / tapis à la "
+                    "turn, river deux parmi 25 / 50 % / tapis, relances 33 % / tapis",
+    ),
+}
+STRUCTURES.update({"srp_ip": PROFILES["srp"], "3bet_oop": PROFILES["3bet"], "4bet_ip": PROFILES["4bet"]})
+POSITIONS: dict[str, tuple[str, str]] = {}  # famille d'une table à plusieurs -> (hors de position, en position)
+
+
+def register(family: str, structure: str, oop: str, ip: str) -> None:
+    """Une famille de spots d'une table à plusieurs : ses tailles comparées sont celles de sa structure."""
+    PROFILES[family] = STRUCTURES[structure]
+    POSITIONS[family] = (oop, ip)
+
+
+_FEMININE = ("SB", "BB")
+_ROLE_RE = re.compile(r"\b(?:(du|de la|le|la) )?(BTN|BB|bouton)\b")
+
+
+def rename_roles(text: str, oop: str, ip: str) -> str:
+    """Les libellés nomment BB le joueur hors de position et BTN (ou le bouton) celui en position : avec les vraies
+    positions, articles compris (« du BTN » -> « de la BB », « de la BB » -> « de la SB »)."""
+    if (oop, ip) == ("BB", "BTN"):
+        return text
+
+    def sub(m: re.Match) -> str:
+        pos = oop if m.group(2) == "BB" else ip
+        if not m.group(1):
+            return pos
+        fem = pos in _FEMININE
+        if m.group(1) in ("du", "de la"):
+            return ("de la " if fem else "du ") + pos
+        return ("la " if fem else "le ") + pos
+    return _ROLE_RE.sub(sub, text)
+
+
 def situations(family: str = "srp") -> list[Situation]:
     """Les situations d'une famille de pots : mises et relances, street par street (le flop dans l'ordre du choix)."""
     profile = PROFILES[family]
@@ -232,25 +329,35 @@ def sizes_text(sizes: list) -> str:
     return " / ".join(size_text(s) for s in sizes)
 
 
-def label(key: str, family: str = "srp") -> str:
+def label(key: str, family: str = "srp", positions: Optional[tuple[str, str]] = None) -> str:
+    """Le nom d'une situation ; positions : (hors de position, en position), celles de la famille par défaut."""
     profile = PROFILES[family]
     if key in profile.names:
-        return profile.names[key]
-    kind, where, past, *level = key.split(":")
-    street = {"f": "flop", "t": "turn", "r": "river"}[where[0]]
-    who = "BB" if where[1] == "o" else "BTN"
-    line = [profile.flop_line[past[0]]] if past else []
-    if len(past) > 1:
-        line.append({"i": "mise du BTN payée à la turn", "x": "turn checkée", "o": "mise de la BB payée à la turn"}[past[1]])
-    what = "Mise" if kind == "bet" else "Relance" if level == ["0"] else "Sur-relance"
-    return f"{what} {street} {'de la' if who == 'BB' else 'du'} {who}" + (f" ({', '.join(line)})" if line else "")
+        text = profile.names[key]
+    else:
+        kind, where, past, *level = key.split(":")
+        street = {"f": "flop", "t": "turn", "r": "river"}[where[0]]
+        who = "BB" if where[1] == "o" else "BTN"
+        line = [profile.flop_line[past[0]]] if past else []
+        if len(past) > 1:
+            line.append({"i": "mise du BTN payée à la turn", "x": "turn checkée",
+                         "o": "mise de la BB payée à la turn"}[past[1]])
+        what = "Mise" if kind == "bet" else "Relance" if level == ["0"] else "Sur-relance"
+        text = f"{what} {street} {'de la' if who == 'BB' else 'du'} {who}" + (f" ({', '.join(line)})" if line else "")
+    oop, ip = positions or POSITIONS.get(family, ("BB", "BTN"))
+    return rename_roles(text, oop, ip)
 
 
-def plan_text(plan: dict, family: str = "srp") -> str:
+def description(family: str) -> str:
+    """Les tailles comparées de la famille, avec ses positions."""
+    return rename_roles(PROFILES[family].description, *POSITIONS.get(family, ("BB", "BTN")))
+
+
+def plan_text(plan: dict, family: str = "srp", positions: Optional[tuple[str, str]] = None) -> str:
     """Les tailles des situations principales, pour les menus."""
     profile = PROFILES[family]
     def name(key: str) -> str:
-        text = label(key, family)
+        text = label(key, family, positions)
         return text[0].lower() + text[1:]
     return " · ".join(f"{name(k)} {sizes_text(plan[k])}" for k in profile.main if k in plan)
 

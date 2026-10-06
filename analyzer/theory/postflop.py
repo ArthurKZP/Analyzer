@@ -368,8 +368,9 @@ class PostflopSpot(SpotTree):
     # Tailles théoriques par situation (plan de native/arbre.rs) : celles choisies pour ce flop dans sa famille de
     # pots (srp, 3bet, 4bet), sinon celles du flop choisi le plus proche ; None : tailles par défaut (DEFAULT_BETS).
     plan: Optional[dict] = None
-    family: Optional[str] = None
+    family: Optional[str] = None  # famille dont viennent les tailles (heads-up ou 6-max, voir studyspots)
     sizes_from: Optional[dict] = None  # {"board": flop dont viennent les tailles, "exact": ce flop aux couleurs près}
+    size_target: Optional[str] = None  # famille où choisir les tailles exactes de ce flop (la plus proche du coup)
     played_sizes: list[dict] = field(default_factory=list)  # chaque mise ou relance jouée face aux tailles de l'arbre
 
     @property
@@ -385,18 +386,15 @@ class PostflopSpot(SpotTree):
     def ident(self) -> str:
         return self.hand.hand_id
 
-    def _named(self, text: str) -> str:
-        """Les libellés des familles nomment BTN (en position) et BB : à une table à plusieurs, les vraies positions."""
-        if len(self.hand.seats) == 2:
-            return text
-        names = {"BTN": self.hand.position(self.ip), "BB": self.hand.position(self.oop)}
-        return re.sub(r"\b(BTN|BB)\b", lambda m: names[m.group(1)], text)
+    @property
+    def positions(self) -> tuple[str, str]:
+        return self.hand.position(self.oop), self.hand.position(self.ip)
 
     def menu_text(self) -> str:
         if not self.plan:
             return super().menu_text()
         from . import sizing
-        return self._named(sizing.plan_text(self.plan, self.family))
+        return sizing.plan_text(self.plan, self.family, self.positions)
 
     def sizes_info(self) -> dict:
         """D'où viennent les tailles de l'arbre, et chaque taille jouée face à elles (pour l'explorateur)."""
@@ -406,15 +404,19 @@ class PostflopSpot(SpotTree):
         played = []
         for p in self.played_sizes:
             who = "H" if (self.oop if p["player"] == 0 else self.ip) == self.hero else "V"
-            label = (self._named(sizing.label(p["key"], self.family)) if self.family and self.plan
+            label = (sizing.label(p["key"], self.family, self.positions) if self.family and self.plan
                      and p["key"] in self.plan else _generic_label(p["key"]))
             played.append(dict(p, who=who, label=label, size_text=sizing.size_text(p["size"]),
                                theory_text=sizing.sizes_text(p["theory"])))
+        exact = bool(self.plan and source.get("exact") and self.family == self.size_target)
         return {
             "family": self.family if self.plan else None,
+            "family_title": studyspots.family_title(self.family) if self.plan else None,
             "source": ("flop" if source.get("exact") else "proche") if self.plan else "defaut",
             "board": near, "same_texture": bool(near and studyspots.flop_texture(near) == studyspots.flop_texture(self.board)),
             "plan": self.menu_text(), "played": played,
+            "choose": None if exact or not self.size_target else self.size_target,
+            "choose_title": studyspots.family_title(self.size_target) if self.size_target and not exact else None,
         }
 
     def interpret(self, raw: dict) -> dict:
@@ -427,18 +429,14 @@ class PostflopSpot(SpotTree):
 POSTFLOP_ORDER = ("SB", "BB", "UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN")  # ordre de parole après le flop
 
 
-# (type de pot, l'agresseur préflop est-il hors de position ?) -> famille des spots d'étude de même structure,
-# dont les tailles choisies servent de tailles théoriques (sizing.py).
-SIZE_FAMILIES = {("SRP", False): "srp", ("pot 3bet", True): "3bet", ("pot 4bet", False): "4bet"}
-
-
 def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custom: bool = True,
                theory: bool = True) -> PostflopSpot:
     """Le spot postflop d'une main : heads-up (ranges de la solution HU), ou table à plusieurs quand il ne reste que
     deux joueurs au flop (ranges de ta solution du format, voir ring_ranges). Tes ranges ajustées pour ce coup ou
     pour sa ligne (custom_ranges) remplacent celles de la référence, sauf avec custom=False.
 
-    Tailles : les tailles théoriques du flop (studyspots.hand_sizes_for), une par situation, plus chaque taille jouée
+    Tailles : les tailles théoriques du flop dans la famille de spots la plus proche (studyspots.size_families :
+    heads-up pour un coup heads-up, 6-max d'abord à une table à plusieurs), une par situation, plus chaque taille jouée
     (ajoutée, ou à la place d'une taille théorique à moins de 10 points) ; theory=False : l'arbre d'avant, aux
     tailles fixes (DEFAULT_BETS), pour retrouver les analyses déjà faites."""
     from . import custom_ranges, studyspots
@@ -529,12 +527,15 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
     defaults = default_sizes(oop, ip, initiative)
     sizes = {p: [{k: _merge_sizes(defaults[p][s][k], played[p][s][k]) for k in ("bet", "raise", "donk")}
                  for s in range(3)] for p in (oop, ip)}
-    family = SIZE_FAMILIES.get((pot_type, initiative))
-    plan, sizes_from = None, None
-    found = studyspots.hand_sizes_for(family, hand.board) if family and theory else None
-    if found:
-        plan, near, exact = found
-        sizes_from = {"board": near, "exact": exact}
+    families = studyspots.size_families(len(hand.seats) == 2, hand.position(oop), hand.position(ip), pot_type,
+                                        initiative)
+    plan, sizes_from, family = None, None, None
+    for candidate in families if theory else []:
+        found = studyspots.hand_sizes_for(candidate, hand.board)
+        if found:
+            (plan, near, exact), family = found, candidate
+            sizes_from = {"board": near, "exact": exact}
+            break
     played_sizes = []
     for sit in situations:
         if plan is not None and sit["key"] in plan:
@@ -548,7 +549,8 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
                              "size": sit["size"], "theory": list(theory_sizes), "how": how})
     return PostflopSpot(hand, hero, villain, pot_type, oop, ip, round(pot / bb, 4), round(stack / bb, 4),
                         ranges, line, index, sizes, added, context, adjusted, reference, plan=plan,
-                        family=family if plan else None, sizes_from=sizes_from, played_sizes=played_sizes)
+                        family=family, sizes_from=sizes_from, played_sizes=played_sizes,
+                        size_target=families[0] if families else None)
 
 
 def _symbolic_sizes(pot: float, behind: float, streets: int) -> dict[str, float]:

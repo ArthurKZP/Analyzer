@@ -6,6 +6,7 @@ import sys
 from typing import Optional
 
 from . import postflop
+from .studyspots import RING_FAMILIES
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -19,8 +20,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--gpu", action="store_true",
                         help="avec --installer : compile aussi le moteur CUDA (carte NVIDIA, expérimental)")
     parser.add_argument("-m", "--main", help="numéro de la main à résoudre (ou sa fin)")
-    parser.add_argument("--spots", choices=["srp", "3bet", "4bet"],
-                        help="résout une série de spots d'étude (24 flops) : srp, 3bet ou 4bet")
+    parser.add_argument("--spots", choices=["srp", "3bet", "4bet", *RING_FAMILIES],
+                        help="résout une série de spots d'étude (24 flops) : srp, 3bet ou 4bet en heads-up, ou une "
+                             "série 6-max (6max_bb_btn_srp…, avec tes charts 6-max)")
     parser.add_argument("--texture", action="append", help="avec --spots : seulement cette texture (répétable)")
     parser.add_argument("--choix-seulement", action="store_true",
                         help="avec --spots : choisit les tailles de mise des flops, sans les résoudre ensuite")
@@ -61,7 +63,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             n = solve_set(args.spots, textures or None, iterations=args.iterations, target=args.precision,
                           threads=args.threads, choose=not args.sans_choix, solve=not args.choix_seulement,
                           cards=args.cartes)
-        except postflop.SolverError as exc:
+        except (postflop.SolverError, postflop.Unsupported) as exc:  # solveur absent, charts 6-max manquants
             print(exc, file=sys.stderr)
             return 1
         print(f"{n} spot(s) résolu(s) ; ils sont dans « Études du solveur ».")

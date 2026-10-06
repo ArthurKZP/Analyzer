@@ -177,16 +177,18 @@ s'affiche tout de suite.
   (3bet de la BB / call du bouton), pot 4bet (4bet du bouton / call de la BB) ;
 - board, pot et tapis effectif au flop, en bb, sans rake ;
 - tailles **théoriques**, une par situation (c-bet, 2e barrel, c-bet retardée, probe, check-raise…) : celles
-  choisies pour ce flop comme pour les spots d'étude (voir *Choix des tailles* plus bas), dans la famille de
-  même structure (SRP où l'ouvreur est en position, pot 3bet où le 3bettor est hors de position, pot 4bet où
-  le 4bettor est en position ; à une table à plusieurs aussi, CO contre BB par exemple). Tant que ce flop n'a
-  pas ses propres tailles, celles du flop choisi le plus proche (même texture et mêmes couleurs d'abord). Pour
-  garder l'arbre léger, une seule taille par situation à la river (la plus employée des deux choisies) et pas
-  de relance à la river, sauf jouée : l'arbre d'un SRP compte environ 600 000 nœuds (2 Go, 3 minutes sur 4
-  cœurs) au lieu de 1,7 million avec toutes les tailles de l'étude. Pas de donk (mise d'ouverture hors de
-  position dans l'agresseur de la street précédente), deux relances au plus par street. Les autres structures
-  (SRP ouvert hors de position, 3bet en position, 4bet hors de position) gardent les tailles par défaut : 33 %
-  au flop, 75 % à la turn et à la river, relance 60 % ;
+  choisies pour ce flop comme pour les spots d'étude (voir *Choix des tailles* plus bas), dans la série du même
+  jeu. Un coup heads-up prend la série heads-up de même structure (SRP où l'ouvreur est en position, pot 3bet où
+  le 3bettor est hors de position, pot 4bet où le 4bettor est en position). Un coup d'une table à plusieurs
+  prend d'abord la série 6-max de ses positions (BB contre BTN en pot 3bet…), sinon une série 6-max de même
+  structure (BB contre HJ prend BB contre BTN), et seulement s'il n'y en a pas encore, la série heads-up de même
+  structure. Tant que ce flop n'a pas ses propres tailles, celles du flop choisi le plus proche (même texture et
+  mêmes couleurs d'abord). Pour garder l'arbre léger, une seule taille par situation à la river (la plus
+  employée des deux choisies) et pas de relance à la river, sauf jouée : l'arbre d'un SRP compte environ 600 000
+  nœuds (2 Go, 3 minutes sur 4 cœurs) au lieu de 1,7 million avec toutes les tailles de l'étude. Pas de donk
+  (mise d'ouverture hors de position dans l'agresseur de la street précédente), deux relances au plus par
+  street. Sans série de même structure (3bet du bouton en heads-up…), les tailles par défaut : 33 % au flop,
+  75 % à la turn et à la river, relance 60 % ;
 - **les tailles jouées** dans la main s'ajoutent à la théorie, dans la situation où elles ont été jouées (ou
   la remplacent quand elles en sont à moins de 10 points), pour que chaque décision tombe sur une branche de
   l'arbre et que l'EV de chaque taille juge ton choix de taille. L'explorateur le dit en tête (« Toi ·
@@ -268,7 +270,21 @@ activité ou quand une autre s'ouvre.
 **Durée** : un arbre de flop compte des centaines de milliers de nœuds et jusqu'à 2 Go de mémoire avec les
 ranges HU complètes. Sur un processeur à 4 cœurs, l'objectif par défaut (1,5 % du pot d'exploitabilité,
 120 itérations au plus) demande 30 secondes à 2 minutes pour un SRP, davantage quand des tailles jouées
-s'ajoutent à l'arbre ; c'est plus rapide avec plus de cœurs.
+s'ajoutent à l'arbre ; c'est plus rapide avec plus de cœurs. Ce qui joue sur la durée, mesuré sur 4 cœurs :
+
+- la largeur des ranges : le même arbre de SRP sur K♠K♦4♣ (340 000 nœuds) se résout en 64 s avec les ranges
+  6-max BB contre BTN, 122 s avec les ranges heads-up ;
+- la taille de l'arbre : chaque taille de plus multiplie les branches (d'où une seule taille river dans
+  l'arbre des coups joués) ;
+- la variante de CFR : GTOpen propose aussi CFR+ et CFR+ prédictif ; sur nos spots, DCFR (celle utilisée)
+  atteint l'objectif en moins d'itérations (pot 3bet : 72 s contre 84 s en CFR+ et 124 s en CFR+ prédictif ;
+  SRP : 172 s contre 348 s en CFR+ prédictif) ;
+- une carte NVIDIA (`--gpu`) : selon GTOpen, quelques dizaines de millisecondes par itération sur un arbre de
+  1,35 million de nœuds ;
+- ce qui est déjà réutilisé : un flop identique aux couleurs près (même stratégie, une seule étude), une étude
+  enregistrée qui se rouvre en quelques secondes, les tailles choisies du flop le plus proche. Repartir d'une
+  solution *proche* (autre flop, autres ranges) n'est pas proposé : GTOpen ne reprend que le même arbre, et
+  initialiser un autre jeu à partir d'une stratégie voisine ne garantit pas de gagner du temps.
 
 **Spots d'étude** : des spots résolus sans main jouée, pour travailler une situation type. La première
 série est le **SRP** (open du bouton à 2,5 bb, call de la BB, 100 bb, mêmes ranges et même arbre que
@@ -406,6 +422,29 @@ vers 20-30 % du pot : la turn et la river prennent donc 50 % comme taille interm
 Les arbres sont petits : sur 4 cœurs, une minute et demie pour choisir les tailles d'un flop et un quart de
 minute pour le résoudre (310 000 nœuds, étude de 20 Mo). Les tailles et la synthèse des 24 flops sont
 livrées (`analyzer/theory/data/4bet_tailles.json`, `4bet_reference.json`).
+
+**Spots d'étude 6-max** (onglet *6-max* de *Études du solveur*) : les tables à plusieurs sont un autre jeu que
+le heads-up, aux ranges bien plus serrées (la BB défend environ 350 combos contre l'open du bouton en 6-max, bien
+plus en heads-up). Ces séries reprennent les 24 flops des séries heads-up, pour comparer les deux jeux flop par
+flop, avec les ranges de tes charts 6-max (`~/.analyzer/ranges/6-max.json`, voir *Tables à plusieurs*) :
+
+| Positions | Pots | Structure (qui a l'initiative) |
+| --- | --- | --- |
+| SB contre BB | SRP, 3bet, 4bet | la SB ouvre et 4bette (hors de position) ; la BB 3bette en position |
+| SB contre BTN | 3bet, 4bet | la SB 3bette hors de position, le bouton 4bette en position |
+| BB contre BTN | SRP, 3bet, 4bet | le bouton ouvre et 4bette, la BB 3bette |
+| BB contre CO | 3bet, 4bet | le CO ouvre et 4bette, la BB 3bette |
+
+Tailles préflop (les charts donnent les ranges, pas les tailles) : open à 2,5 bb, 3bet à 3 fois l'open en
+position (7,5 bb) et 4 fois hors de position (10 bb), 4bet à 22 bb en position et 20 bb hors de position,
+100 bb ; la blinde d'un joueur qui a foldé reste au pot. Les tailles postflop se choisissent flop par flop comme
+en heads-up ; trois structures n'existent pas en heads-up et ont leurs propres candidates : SRP ouvert hors de
+position (SB contre BB : celles d'un SRP), pot 3bet du joueur en position (c-bet 33 / 75 % / géo sur deux
+streets) et pot 4bet hors de position (25 % / géo / tapis). Une famille : `6max_<hors de position>_<en
+position>_<pot>` (`python -m analyzer gtopen --spots 6max_bb_btn_srp`, explorateur
+`/explorateur/spot:6max_bb_btn_srp:KsKd4c`). Les séries 6-max restent à part : plans de jeu, entraîneur,
+coach et leakfinding travaillent sur les séries heads-up. Leurs résultats viennent de tes charts et restent sur
+ta machine (rien n'est livré avec Analyzer).
 
 **Limites** : les tailles et la profondeur de l'arbre simplifient le jeu réel ; une main que la range du
 solveur ne contient pas (par exemple un open que le solveur ne fait jamais) y est ajoutée avec un poids

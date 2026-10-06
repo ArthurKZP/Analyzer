@@ -483,11 +483,20 @@ class Library:
         view = self.solve(hand_id)
         view["categories"] = handclass.labels()
         if hand_id.startswith("spot:"):
+            family = hand_id.split(":")[1]
+            info = studyspots.family_info(family)
+            pair = info.get("pair", "BTN contre BB")
+            if view["state"] == "unsupported":  # spot 6-max sans tes charts
+                view["meta"] = {"spot": True, "hand": hand_id, "board": studyspots.cards_of(hand_id.split(":")[2]),
+                                "pot_type": info["name"], "family_label": info["label"], "pair": pair,
+                                "hero_cards": [], "villain_cards": [], "hero_position": None}
+                return view
             spot = self._spot(hand_id)
             view["meta"] = {"spot": True, "hand": hand_id, "board": spot.board, "texture": spot.texture,
                             "pot_type": spot.name, "family_label": spot.label, "pot": spot.pot_bb,
                             "stack": spot.stack_bb, "sizes": spot.menu_text(), "hero": None, "villain": None,
-                            "hero_cards": [],
+                            "hero_cards": [], "positions": [spot.oop, spot.ip], "pair": pair,
+                            "format": info.get("group", "HU"),
                             "villain_cards": [], "hero_position": None}
             return view
         hand, hero = self.find_hand(hand_id)
@@ -500,8 +509,8 @@ class Library:
         except postflop.Unsupported:
             spot = None
         sizes = spot.sizes_info() if spot is not None else None
-        if sizes and sizes["source"] == "proche":
-            sizes["choose_time"] = studyspots.CHOOSE_TIME[sizes["family"]]
+        if sizes and sizes["choose"]:
+            sizes["choose_time"] = studyspots.CHOOSE_TIME[sizes["choose"]]
         view["meta"] = {
             "sizes": sizes,
             "hand": hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"), "hero": hero, "villain": villain,
@@ -527,14 +536,16 @@ class Library:
         """Choisit les tailles théoriques du flop de ce coup (comme pour un spot d'étude, long), puis résout le coup
         avec elles ; ensuite, le spot d'étude de ce flop se résout à son tour et rejoint sa série dans les études."""
         spot = self._spot(hand_id)
-        if not isinstance(spot, postflop.PostflopSpot) or not spot.family:
+        if not isinstance(spot, postflop.PostflopSpot) or not spot.size_target:
             raise ValueError("Pas de tailles théoriques pour ce type de pot.")
-        if spot.sizes_from and spot.sizes_from["exact"]:
+        if not spot.sizes_info()["choose"]:
             return self.solve(hand_id, start=True)  # déjà choisies
         solver = postflop.status()
         if not solver["ready"]:
             return {"hand": hand_id, "state": "unavailable", "message": solver["message"], "install": solver["install"]}
-        family = spot.family
+        family = spot.size_target
+        if family in studyspots.RING_FAMILIES:
+            studyspots.ring_spot_ranges(family)  # tes charts 6-max (Unsupported sinon)
         board = "".join(studyspots.normalize_board(family, spot.board))
         study = lambda: studyspots.StudySpot(family, studyspots.cards_of(board))  # noqa: E731
         return self.solves.choose_and_solve(
@@ -545,9 +556,15 @@ class Library:
         """Série de spots d'étude : état de chaque flop ; start=True met en file ceux qui manquent.
 
         Un flop de la série sans tailles choisies passe d'abord par le choix des tailles (long)."""
-        if family not in studyspots.FAMILIES:
+        if not studyspots.known_family(family):
             raise KeyError(family)
-        studies = studyspots.spot_studies()
+        try:
+            if family in studyspots.RING_FAMILIES:
+                studyspots.ring_spot_ranges(family)  # tes charts 6-max
+        except postflop.Unsupported as exc:
+            return {"family": family, "label": studyspots.family_info(family)["label"], "ready": False,
+                    "error": str(exc), "total": 0, "done": 0, "busy": 0, "rows": []}
+        studies = studyspots.spot_studies((family,))
         rows = []
         ready = postflop.status()["ready"]
         series = set(studyspots.flop_set(family))
@@ -569,7 +586,7 @@ class Library:
                 row.update(state=view["state"], progress=view.get("progress"), job=view.get("job"),
                            max_iterations=view.get("max_iterations"), mode=view.get("mode"))
             rows.append(row)
-        return {"family": family, "label": studyspots.FAMILIES[family]["label"], "ready": ready,
+        return {"family": family, "label": studyspots.family_info(family)["label"], "ready": ready,
                 "total": len(rows), "done": sum(r["done"] for r in rows),
                 "busy": sum(r.get("state") in ("waiting", "running") for r in rows), "rows": rows}
 
