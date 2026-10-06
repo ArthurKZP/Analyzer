@@ -214,9 +214,11 @@ def _sizes_note(solution: Solution, hero_summaries: list[NodeSummary], villain: 
 
 def build_preflop_page(hands: list[Hand], hero: str, villain: Optional[str] = None,
                        stats: Optional[dict[str, PlayerStats]] = None, embed: bool = False,
-                       spots_href: str = "spots", solution: Optional[Solution] = None, report_href: str = "") -> str:
+                       spots_href: str = "spots", solution: Optional[Solution] = None, report_href: str = "",
+                       compare_hero: bool = True, note: str = "") -> str:
+    """compare_hero=False (adversaire récréatif) : seulement ses fréquences, pas tes décisions face au solveur."""
     solution = solution or load_solution()
-    hero_decisions = decisions(hands, hero, solution)
+    hero_decisions = decisions(hands, hero, solution) if compare_hero else []
     summaries = summarize(hero_decisions, solution)
     verdicts = Counter(d.verdict for d in hero_decisions)
     total = len(hero_decisions) or 1
@@ -274,8 +276,17 @@ def build_preflop_page(hands: list[Hand], hero: str, villain: Optional[str] = No
     <h3 style="margin-top:16px">Écarts</h3>{deviations_html(s, spots_href)}</div>
 </div>""")
 
+    note_html = f'<div class="card"><p class="note" style="margin:0">{escape(note)}</p></div>' if note else ""
+    if not compare_hero:
+        body = f"""{heading}
+<div class="meta">{escape(solution.name)} · {escape(solution.description)}{links}</div>
+{note_html}
+{villain_block or '<p class="muted">Pas assez de mains pour lire ses fréquences.</p>'}
+"""
+        return html_page(f"Préflop vs solveur — {villain or hero}", f"<style>{PAGE_STYLE}</style>{body}", embed)
     body = f"""{heading}
 <div class="meta">{escape(solution.name)} · {escape(solution.description)}{links}</div>
+{note_html}
 <div class="tiles">{tiles}</div>
 
 <h2>En bref</h2>

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Explorateur — Analyzer HU</title>
 <link rel="stylesheet" href="/static/explorer.css">
+<link rel="stylesheet" href="/static/coach.css">
 </head>
 <body data-hand="__HAND__">
 <header class="top">
@@ -13,6 +14,7 @@
   <div class="top-actions">
     <button type="button" id="b-back" title="Revenir d'une étape (←)">◀ Retour</button>
     <button type="button" id="b-line" title="Revenir à la ligne jouée">Ligne jouée</button>
+    <button type="button" id="b-train" title="Jouer des mains à partir de ce moment du coup, face au solveur">S'entraîner ici</button>
     <label class="check"><input type="checkbox" id="reveal"> Montrer sa main</label>
   </div>
 </header>
@@ -34,6 +36,8 @@
     <div class="rtabs" role="tablist" aria-label="Panneau">
       <button type="button" role="tab" id="tab-combos" aria-selected="true">Mains</button>
       <button type="button" role="tab" id="tab-filters" aria-selected="false">Filtres</button>
+      <button type="button" role="tab" id="tab-ranges" aria-selected="false">Ranges</button>
+      <button type="button" role="tab" id="tab-coach" aria-selected="false">Coach</button>
     </div>
     <section id="pane-combos" role="tabpanel" aria-labelledby="tab-combos">
       <div class="combos-head"><h2 id="combos-title">Mains</h2><span class="muted small" id="combos-hint">Survole une case pour voir ses combos ; clique pour la garder.</span></div>
@@ -42,9 +46,16 @@
     <section id="pane-filters" role="tabpanel" aria-labelledby="tab-filters" hidden>
       <div id="filters"></div>
     </section>
+    <section id="pane-ranges" role="tabpanel" aria-labelledby="tab-ranges" hidden>
+      <div id="ranges-box"></div>
+    </section>
+    <section id="pane-coach" role="tabpanel" aria-labelledby="tab-coach" hidden>
+      <div id="coach-box"></div>
+    </section>
   </aside>
 </main>
 <div class="picker" id="picker" hidden></div>
+<script src="/static/coach.js"></script>
 <script src="/static/explorer.js"></script>
 </body>
 </html>

@@ -4,11 +4,19 @@
   const $ = (id) => document.getElementById(id);
   const frame = $('frame');
   const TABS = {
-    moi: [['bilan', 'Bilan'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots']],
-    adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots']],
+    moi: [['bilan', 'Bilan'], ['leaks', 'Leakfinding'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots'],
+      ['solveur', 'Face au solveur'], ['bluffs', 'Bluffs des réguliers'], ['tables', 'Tables à plusieurs']],
+    eleve: [['leaks', 'Leakfinding'], ['preflop', 'Préflop'], ['solveur', 'Face au solveur'], ['spots', 'Mains'],
+      ['tables', 'Tables à plusieurs'], ['importer', 'Importer']],
+    adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
+      ['solveur', 'Face au solveur'], ['bluffs', 'Ses bluffs']],
+    // L'explorateur part du préflop ; les séries de spots et les coups joués ont chacun leur onglet.
+    etudes: [['explorateur', 'Explorateur'], ['plan', 'Plan de jeu suggéré'], ['srp', 'SRP'], ['3bet', 'Pots 3bet'],
+      ['4bet', 'Pots 4bet'], ['coups', 'Coups joués']],
   };
   let state = null;
   let route = null;
+  let students = [];
 
   // ---------- utilitaires ----------
   function el(tag, attrs, ...children) {
@@ -40,32 +48,63 @@
     const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
     const tabOf = (view, name, fallback) => (TABS[view].some(([id]) => id === name) ? name : fallback);
     if (parts[0] === 'importer') return { view: 'importer' };
-    if (parts[0] === 'etudes') return { view: 'etudes' };
+    if (parts[0] === 'etudes') return { view: 'etudes', tab: tabOf('etudes', parts[1], 'explorateur') };
+    if (parts[0] === 'entraineur') return { view: 'entraineur' };
+    if (parts[0] === 'sauvegarde') return { view: 'sauvegarde' };
     if (parts[0] === 'adversaire' && parts[1]) return { view: 'adv', player: parts[1], tab: tabOf('adv', parts[2], 'plan') };
     if (parts[0] === 'moi') return { view: 'moi', tab: tabOf('moi', parts[1], 'bilan') };
+    if (parts[0] === 'eleves') return { view: 'eleves' };
+    if (parts[0] === 'eleve' && parts[1]) return { view: 'eleve', student: parts[1], tab: tabOf('eleve', parts[2], 'leaks') };
     return state && state.hands ? { view: 'moi', tab: 'bilan' } : { view: 'importer' };
   }
 
   function hashFor(r) {
     if (r.view === 'adv') return '#/adversaire/' + encodeURIComponent(r.player) + '/' + r.tab;
     if (r.view === 'moi') return '#/moi/' + r.tab;
-    if (r.view === 'etudes') return '#/etudes';
+    if (r.view === 'etudes') return '#/etudes/' + r.tab;
+    if (r.view === 'entraineur') return '#/entraineur';
+    if (r.view === 'sauvegarde') return '#/sauvegarde';
+    if (r.view === 'eleves') return '#/eleves';
+    if (r.view === 'eleve') return '#/eleve/' + encodeURIComponent(r.student) + '/' + r.tab;
     return '#/importer';
   }
 
   function srcFor(r) {
     if (r.view === 'adv') return '/p/' + encodeURIComponent(r.player) + '/' + r.tab;
-    if (r.view === 'etudes') return '/etudes';
+    if (r.view === 'etudes') return r.tab === 'explorateur' ? '/explorateur/preflop' : '/etudes/' + r.tab;
+    if (r.view === 'entraineur') return '/entraineur';
+    if (r.view === 'eleve') return '/eleve/' + encodeURIComponent(r.student) + '/' + r.tab;
     return '/moi/' + r.tab;
   }
 
-  function render() {
+  async function loadStudents() {
+    try {
+      const res = await fetch('/api/eleves');
+      students = res.ok ? await res.json() : [];
+    } catch (e) { students = []; }
+  }
+
+  async function render() {
     route = parseRoute();
+    if (route.view === 'eleves' || route.view === 'eleve') await loadStudents();
     closeDrawer();
     renderHeader();
     renderTabs();
     markActive();
     if (route.view === 'importer') return showImport();
+    // sans mains : les spots d'étude suffisent à l'entraîneur et à l'explorateur
+    if (route.view === 'entraineur' || route.view === 'etudes') return showFrame(srcFor(route));
+    if (route.view === 'sauvegarde') return showBackup();
+    if (route.view === 'eleves') return showStudents();
+    if (route.view === 'eleve') {
+      if (!students.some((s) => s.id === route.student)) {
+        return showPanel(el('div', { class: 'welcome' }, el('h2', {}, 'Élève introuvable'), el('a', { href: '#/eleves' }, 'Voir les élèves')));
+      }
+      if (route.tab === 'importer') return showImport(route.student);
+      const s = students.find((x) => x.id === route.student);
+      if (!s.hands) return showImport(route.student);
+      return showFrame(srcFor(route));
+    }
     if (!state.hands) return showWelcome();
     if (route.view === 'adv' && !state.opponents.some((o) => o.name === route.player)) {
       return showPanel(el('div', { class: 'welcome' }, el('h2', {}, 'Joueur introuvable'),
@@ -76,12 +115,14 @@
 
   function renderHeader() {
     const title = $('title'), subtitle = $('subtitle');
+    renderKind(null);
     if (route.view === 'adv') {
       const o = state.opponents.find((x) => x.name === route.player);
       title.textContent = route.player;
       subtitle.textContent = o
         ? o.hands + ' mains · ton résultat ' + signed(o.net_bb) + ' bb (' + signed(o.bb100) + ' bb/100) · dernière main le ' + o.last
         : '';
+      renderKind(o);
     } else if (route.view === 'moi') {
       title.textContent = 'Mon jeu';
       subtitle.textContent = state.hands
@@ -90,6 +131,20 @@
     } else if (route.view === 'etudes') {
       title.textContent = 'Études du solveur';
       subtitle.textContent = 'Coups résolus avec GTOpen, gardés sur ton ordinateur pour être réexplorés';
+    } else if (route.view === 'sauvegarde') {
+      title.textContent = 'Sauvegarde';
+      subtitle.textContent = 'Tes calculs (tailles, résolutions, mains analysées, études) à l\'abri, en ligne si tu veux';
+    } else if (route.view === 'eleves') {
+      title.textContent = 'Élèves';
+      subtitle.textContent = 'Le leakfinding de tes élèves : ils t\'envoient leurs mains, Analyzer trouve ce qu\'ils doivent travailler';
+    } else if (route.view === 'eleve') {
+      const s = students.find((x) => x.id === route.student);
+      title.textContent = s ? s.name : 'Élève';
+      subtitle.textContent = s ? (s.hands ? s.hands + ' mains · ' + (s.hero || '') + ' · ' + s.first + ' → ' + s.last
+        : 'Pas encore de mains : importe ses historiques') : '';
+    } else if (route.view === 'entraineur') {
+      title.textContent = 'Entraîneur';
+      subtitle.textContent = 'Joue des mains sur les spots résolus : le solveur juge chaque décision';
     } else {
       title.textContent = 'Importer des mains';
       subtitle.textContent = 'Historiques Betclic (.txt) — les mains déjà présentes sont ignorées';
@@ -97,11 +152,34 @@
     document.title = (route.view === 'adv' ? route.player : title.textContent) + ' — Analyzer HU';
   }
 
+  // Type de l'adversaire : contre un récréatif, ses mains sortent des comparaisons à la théorie.
+  const KIND_NAMES = { reg: 'Régulier', rec: 'Récréatif' };
+  function renderKind(o) {
+    const box = $('kind'), select = $('kind-select');
+    box.hidden = !o;
+    if (!o) return;
+    select.textContent = '';
+    const auto = o.suggestion ? 'Auto : ' + KIND_NAMES[o.suggestion] : 'Auto : Régulier (pas de signal net)';
+    select.append(el('option', { value: '' }, auto), el('option', { value: 'reg' }, 'Régulier'), el('option', { value: 'rec' }, 'Récréatif'));
+    select.value = o.source === 'toi' ? o.kind : '';
+    box.title = (o.reasons.length ? 'Signaux : ' + o.reasons.join(', ') + '. ' : '')
+      + 'Contre un récréatif, tes mains ne sont pas comparées à la théorie (Face au solveur, Préflop).';
+    select.onchange = async () => {
+      const res = await fetch('/api/joueurs', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: o.name, kind: select.value || null }) });
+      if (!res.ok) return;
+      state = await res.json();
+      renderSidebar();
+      frame.dataset.src = '';  // les pages qui dépendent du type sont recalculées
+      render();
+    };
+  }
+
   function renderTabs() {
     const tabs = $('tabs');
     tabs.textContent = '';
-    const list = route.view === 'adv' ? TABS.adv : route.view === 'moi' ? TABS.moi : [];
-    tabs.hidden = !list.length || !state.hands;
+    const list = TABS[route.view] || [];
+    tabs.hidden = !list.length || (!state.hands && route.view !== 'etudes' && route.view !== 'eleve');
     for (const [id, label] of list) {
       const r = Object.assign({}, route, { tab: id });
       tabs.append(el('a', { href: hashFor(r), 'aria-current': id === route.tab ? 'page' : null }, label));
@@ -110,7 +188,8 @@
 
   function markActive() {
     document.querySelectorAll('.nav a').forEach((a) => {
-      a.setAttribute('aria-current', a.dataset.view === route.view ? 'page' : 'false');
+      const view = route.view === 'eleve' ? 'eleves' : route.view;
+      a.setAttribute('aria-current', a.dataset.view === view ? 'page' : 'false');
     });
     document.querySelectorAll('.opps a').forEach((a) => {
       a.setAttribute('aria-current', route.view === 'adv' && a.dataset.name === route.player ? 'page' : 'false');
@@ -127,7 +206,7 @@
     const shown = state.opponents.filter((o) => !q || o.name.toLowerCase().includes(q));
     for (const o of shown) {
       list.append(el('li', {}, el('a', { href: '#/adversaire/' + encodeURIComponent(o.name), 'data-name': o.name },
-        el('span', { class: 'n' }, o.name),
+        el('span', { class: 'n' }, o.name, o.kind === 'rec' ? el('span', { class: 'k', title: 'Récréatif' }, 'réc.') : null),
         el('span', { class: 'h' }, o.hands + ' mains'),
         el('span', { class: 'r ' + tone(o.net_bb) }, signed(o.net_bb) + ' bb'))));
     }
@@ -165,7 +244,7 @@
       el('a', { class: 'primary', href: '#/importer', style: 'display:inline-block;text-decoration:none' }, 'Importer des mains')));
   }
 
-  function showImport() {
+  function showImport(student) {
     const input = el('input', { type: 'file', multiple: true, accept: '.txt,.log,.hh', hidden: true });
     const result = el('div', { class: 'result', 'aria-live': 'polite' });
     const drop = el('div', { class: 'drop' },
@@ -173,54 +252,72 @@
       el('div', { class: 'muted' }, 'ou'),
       el('button', { type: 'button', class: 'primary', onclick: () => input.click() }, 'Choisir des fichiers'),
       el('div', { class: 'muted small' }, 'Betclic (.txt), plusieurs fichiers à la fois'));
-    input.addEventListener('change', () => upload(input.files, result));
+    input.addEventListener('change', () => upload(input.files, result, student));
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (e) => {
       e.preventDefault();
       drop.classList.remove('over');
-      upload(e.dataTransfer.files, result);
+      upload(e.dataTransfer.files, result, student);
     });
-    const folder = el('p', { class: 'muted small' }, 'Dossier des mains : ' + state.folder + ' · ',
-      el('button', { type: 'button', class: 'link', onclick: () => reload(result) }, 'Recharger le dossier'),
-      ' (si tu y as copié des fichiers à la main)');
+    const who = student && students.find((s) => s.id === student);
+    const folder = who
+      ? el('p', { class: 'muted small' }, 'Les mains de ' + who.name + ' (Betclic, heads-up) : ' + who.folder)
+      : el('p', { class: 'muted small' }, 'Dossier des mains : ' + state.folder + ' · ',
+        el('button', { type: 'button', class: 'link', onclick: () => reload(result) }, 'Recharger le dossier'),
+        ' (si tu y as copié des fichiers à la main)');
     showPanel(el('div', { class: 'import' }, drop, input, result, folder));
   }
 
-  async function upload(fileList, result) {
+  async function upload(fileList, result, student) {
     if (!fileList || !fileList.length) return;
     result.textContent = 'Import en cours…';
     try {
       const files = await Promise.all([...fileList].map(async (f) => ({ name: f.name, content: await f.text() })));
-      const res = await fetch('/api/import', {
+      const url = student ? '/api/eleves/' + encodeURIComponent(student) + '/import' : '/api/import';
+      const res = await fetch(url, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Import impossible.');
-      state = data.state;
       frame.dataset.src = '';
-      renderSidebar();
-      showImportResult(data, result);
+      if (student) {
+        await loadStudents();
+        renderHeader();
+      } else {
+        state = data.state;
+        renderSidebar();
+      }
+      showImportResult(data, result, student);
     } catch (err) {
       result.textContent = '';
       result.append(el('p', { class: 'error' }, err.message || String(err)));
     }
   }
 
-  function showImportResult(data, result) {
+  function showImportResult(data, result, student) {
     result.textContent = '';
+    const next = student ? el('a', { href: '#/eleve/' + encodeURIComponent(student) + '/leaks' }, 'Voir son leakfinding')
+      : el('a', { href: '#/moi' }, 'Voir mon jeu');
     result.append(el('p', {}, data.added
       ? el('b', {}, data.added + ' nouvelle(s) main(s) ajoutée(s).')
       : 'Aucune nouvelle main.', ' ',
-    data.added ? el('a', { href: '#/moi' }, 'Voir mon jeu') : ''));
+    data.added ? next : ''));
     const rows = data.files.map((f) => el('tr', {},
       el('td', {}, f.name),
+      el('td', {}, (f.sites || []).join(', ')),
       el('td', { class: f.status === 'importé' ? 'ok' : f.status === 'déjà importé' ? '' : 'ko' }, f.status),
       el('td', { class: 'num' }, String(f.hands)),
+      el('td', {}, Object.entries(f.formats || {}).map(([k, n]) => n + ' ' + k).join(' · ')),
       el('td', { class: 'num' }, String(f.new))));
     result.append(el('table', {},
-      el('thead', {}, el('tr', {}, el('th', {}, 'Fichier'), el('th', {}, 'Statut'), el('th', { class: 'num' }, 'Mains'), el('th', { class: 'num' }, 'Nouvelles'))),
+      el('thead', {}, el('tr', {}, el('th', {}, 'Fichier'), el('th', {}, 'Site'), el('th', {}, 'Statut'), el('th', { class: 'num' }, 'Mains'),
+        el('th', {}, 'Tables'), el('th', { class: 'num' }, 'Nouvelles'))),
       el('tbody', {}, rows)));
+    if (data.files.some((f) => f.formats && Object.keys(f.formats).some((k) => k !== 'HU'))) {
+      result.append(el('p', { class: 'small' }, 'Les mains heads-up vont dans toute l\'analyse (adversaires, solveur, '
+        + 'leakfinding) ; celles des tables à 3 joueurs et plus sont gardées pour l\'analyse par position.'));
+    }
   }
 
   async function reload(result) {
@@ -230,6 +327,112 @@
     frame.dataset.src = '';
     renderSidebar();
     result.textContent = state.hands + ' mains chargées.';
+  }
+
+  // ---------- élèves ----------
+  function showStudents() {
+    const nameInput = el('input', { type: 'text', maxlength: '60', placeholder: 'Nom de l\'élève', 'aria-label': 'Nom de l\'élève' });
+    const pseudoInput = el('input', { type: 'text', maxlength: '60', placeholder: 'Son pseudo à la table (facultatif)',
+      'aria-label': 'Pseudo à la table' });
+    const message = el('p', { class: 'small', 'aria-live': 'polite' });
+    const form = el('form', { class: 'student-form', onsubmit: async (e) => {
+      e.preventDefault();
+      const name = nameInput.value.trim();
+      if (!name) return;
+      const res = await fetch('/api/eleves', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, pseudo: pseudoInput.value.trim() || null }) });
+      const data = await res.json();
+      if (!res.ok) { message.textContent = data.error || 'Ajout impossible.'; return; }
+      location.hash = '#/eleve/' + encodeURIComponent(data.id) + '/importer';
+    } }, nameInput, pseudoInput, el('button', { type: 'submit', class: 'primary' }, 'Ajouter un élève'));
+    const cards = students.map((s) => el('a', { class: 'student', href: '#/eleve/' + encodeURIComponent(s.id) + '/leaks' },
+      el('b', {}, s.name),
+      el('span', { class: 'muted small' }, s.hands ? s.hands + ' mains · ' + (s.hero || '') + ' · dernière le ' + s.last
+        : 'pas encore de mains')));
+    showPanel(el('div', { class: 'students' },
+      el('p', {}, 'Chaque élève a son dossier de mains et son rapport de leakfinding : ses stats face à la théorie, '
+        + 'contre les réguliers et contre les récréatifs, les mains à revoir avec l\'avis du solveur, et les leaks à travailler.'),
+      cards.length ? el('div', { class: 'student-list' }, cards) : el('p', { class: 'muted' }, 'Aucun élève pour l\'instant.'),
+      el('h3', {}, 'Nouvel élève'), form, message));
+  }
+
+  // ---------- sauvegarde ----------
+  const size = (n) => (n >= 1e9 ? num(n / 1e9, 1) + ' Go' : n >= 1e6 ? num(n / 1e6, 1) + ' Mo' : Math.max(1, Math.round(n / 1e3)) + ' Ko');
+  let backupTimer = null;
+
+  async function backupApi(path, body) {
+    const res = await fetch('/api/sauvegarde' + path, body === undefined ? {}
+      : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Erreur ' + res.status);
+    return data;
+  }
+
+  async function showBackup() {
+    clearTimeout(backupTimer);
+    let v;
+    try { v = await backupApi(''); } catch (err) { return showPanel(el('p', { class: 'error' }, err.message)); }
+    if (route.view !== 'sauvegarde') return;
+    const busy = !!v.running;
+    const dest = el('input', { type: 'text', id: 'bk-dest', value: v.dest, spellcheck: 'false', disabled: busy,
+      placeholder: 'C:\\Users\\toi\\OneDrive\\Analyzer   ou   gdrive:Analyzer' });
+    const studies = el('input', { type: 'checkbox', checked: v.studies, disabled: busy });
+    const auto = el('input', { type: 'checkbox', checked: v.auto, disabled: busy });
+    const status = el('div', { 'aria-live': 'polite' });
+    const settings = () => ({ dest: dest.value, studies: studies.checked, auto: auto.checked });
+    const run = async (path) => {
+      try {
+        await backupApi('/reglages', settings());
+        if (path === '/restaurer' && !window.confirm('Restaurer la dernière sauvegarde de ' + dest.value + ' ? '
+          + 'Les fichiers plus récents sur cet ordinateur sont gardés.')) return showBackup();
+        await backupApi(path, {});
+      } catch (err) { status.textContent = err.message; return; }
+      showBackup();
+    };
+    const save = el('button', { type: 'button', class: 'secondary', disabled: busy, onclick: async () => {
+      try { await backupApi('/reglages', settings()); showBackup(); } catch (err) { status.textContent = err.message; }
+    } }, 'Enregistrer les réglages');
+    const now = el('button', { type: 'button', class: 'primary', disabled: busy, onclick: () => run('/lancer') }, 'Sauvegarder maintenant');
+    const back = el('button', { type: 'button', class: 'secondary', disabled: busy, onclick: () => run('/restaurer') }, 'Restaurer');
+    if (v.running) {
+      status.append(el('p', {}, el('span', { class: 'spinner', style: 'display:inline-block;vertical-align:middle;margin-right:8px' }),
+        v.running === 'restore' ? 'Restauration en cours…' : 'Sauvegarde en cours…'));
+    } else if (v.error) status.append(el('p', { class: 'error' }, v.error));
+    else if (v.result && v.result.restored !== undefined) {
+      status.append(el('p', {}, 'Restauré : ' + v.result.restored + ' fichier(s) de ' + v.result.archive
+        + (v.result.studies ? ', ' + v.result.studies + ' étude(s)' : '') + '.'));
+    }
+    if (v.last) {
+      const d = new Date(v.last.t * 1000);
+      status.append(el('p', { class: 'muted small' }, 'Dernière sauvegarde le ' + d.toLocaleDateString('fr-FR') + ' à '
+        + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + ' vers ' + v.last.dest + ' : archive de '
+        + size(v.last.archive_size) + (v.last.with_studies ? ', ' + v.last.studies + ' étude(s) copiée(s)' : '') + '.'));
+    }
+    if (v.log.length) status.append(el('pre', { class: 'log' }, v.log.join('\n')));
+    showPanel(el('div', { class: 'backup' },
+      el('div', { class: 'box' },
+        el('label', { class: 'field', for: 'bk-dest' }, 'Où sauvegarder', dest),
+        el('label', { class: 'check' }, studies, el('span', {}, 'Avec les études (' + v.studies_count + ' sur cet ordinateur, '
+          + size(v.studies_size) + ') : seules les nouvelles sont copiées ensuite. Sans elles, l\'essentiel ne pèse que '
+          + size(v.essentials_size) + '.')),
+        el('label', { class: 'check' }, auto, el('span', {}, 'Sauvegarder automatiquement après chaque calcul '
+          + '(résolution, choix des tailles, main analysée ; au plus une fois par quart d\'heure)')),
+        el('div', { class: 'buttons' }, now, save, back),
+        status),
+      el('div', { class: 'box help' },
+        el('h2', {}, 'Où mettre tes sauvegardes ?'),
+        el('p', {}, el('b', {}, 'Un dossier synchronisé'), ' (le plus simple) : un dossier de OneDrive, Google Drive ou Dropbox '
+          + 'sur ton ordinateur, par exemple ', el('code', {}, 'C:\\Users\\toi\\OneDrive\\Analyzer'),
+        '. Leur application envoie la sauvegarde en ligne toute seule.'),
+        el('p', {}, el('b', {}, 'Un stockage en ligne avec rclone'), ' (Google Drive, OneDrive, Dropbox, un serveur SFTP, S3…) : '
+          + 'installe rclone (rclone.org), configure ton stockage avec ', el('code', {}, 'rclone config'),
+        ', puis indique-le sous la forme ', el('code', {}, 'nom:dossier'), ' (', v.rclone ? 'rclone est installé' : 'rclone n\'est pas installé', ').'),
+        el('p', {}, 'Ce qui est gardé : les tailles de mise choisies (les plus longues à recalculer), les résolutions, '
+          + 'les mains analysées, ton journal d\'entraînement et, en option, les études. Les 10 dernières archives sont '
+          + 'gardées. Sur un autre ordinateur : même destination, puis « Restaurer ».'),
+        el('p', { class: 'muted small' }, 'Dossier de travail d\'Analyzer : ' + v.home
+          + ' (variable ANALYZER_HOME pour en changer).'))));
+    if (v.running) backupTimer = setTimeout(() => { if (route.view === 'sauvegarde') showBackup(); }, 1500);
   }
 
   // ---------- événements ----------
@@ -242,7 +445,9 @@
     let r = null;
     if (parts[0] === 'p' && parts.length === 3) r = { view: 'adv', player: parts[1], tab: parts[2] };
     else if (parts[0] === 'moi' && parts.length === 2) r = { view: 'moi', tab: parts[1] };
-    else if (parts[0] === 'etudes' && parts.length === 1) r = { view: 'etudes' };
+    else if (parts[0] === 'etudes' && parts.length <= 2) r = { view: 'etudes', tab: parts[1] || 'srp' };
+    else if (parts[0] === 'entraineur' && parts.length === 1) r = { view: 'entraineur' };
+    else if (parts[0] === 'eleve' && parts.length === 3) r = { view: 'eleve', student: parts[1], tab: parts[2] };
     if (!r) return;
     frame.dataset.src = srcFor(r);
     if (route && route.view === r.view && route.player === r.player && route.tab === r.tab) return;

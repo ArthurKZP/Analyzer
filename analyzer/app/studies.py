@@ -3,6 +3,7 @@ gardés sur disque pour être réexplorés."""
 from __future__ import annotations
 
 from html import escape
+from typing import Optional
 from urllib.parse import quote
 
 from ..report import cards_html, html_page, num
@@ -116,6 +117,8 @@ document.querySelectorAll('.spot-head').forEach(function (box) {
 KIND_CLASS = {"fold": "k-fold", "check": "k-pass", "call": "k-pass", "bet": "k-bet", "raise": "k-raise"}
 SHORT = {"check": "check", "call": "call", "fold": "fold", "bet": "mise", "raise": "relance"}
 
+
+POSITION_NAMES = {"BTN": "Bouton"}  # les autres positions (BB, CO, HJ…) gardent leur sigle
 
 def _size(n: int) -> str:
     return f"{num(n / 1e6, 0)} Mo" if n < 1e9 else f"{num(n / 1e9, 1)} Go"
@@ -304,6 +307,9 @@ traitent l'un après l'autre en arrière-plan, tant que l'application reste ouve
 """
 
 
+ADJUSTED = ' <span class="muted small" title="Résolu avec tes ranges préflop ajustées">· tes ranges</span>'
+
+
 def _hand_section() -> str:
     studies = [s for s in postflop.list_studies() if s.get("kind") != "spot"]
     rows = []
@@ -313,7 +319,8 @@ def _hand_section() -> str:
             "<tr>"
             f"<td>{escape(s['date'])}</td><td>{escape(s['villain'])}</td>"
             f"<td>{cards_html(s.get('hero_cards', []))}</td><td>{cards_html(s['board'])}</td>"
-            f"<td>{escape(s['pot_type'])}</td><td>{'BB' if s['hero_position'] == 'BB' else 'Bouton'}</td>"
+            f"<td>{escape(s['pot_type'])}{ADJUSTED if s.get('adjusted') else ''}</td>"
+            f"<td>{escape(POSITION_NAMES.get(s['hero_position'], s['hero_position'] or ''))}</td>"
             f'<td class="num">{num(s["net"], 1, sign=True)} bb</td>'
             f'<td class="num">{num(exploit, 2) + " %" if exploit is not None else "–"}</td>'
             f'<td class="num">{_size(s["size"])}</td>'
@@ -336,14 +343,23 @@ quelques secondes, sans recalculer.</p>{table}</div>
 """
 
 
-def build_studies_page(embed: bool = True) -> str:
+SECTIONS = tuple(studyspots.FAMILIES) + ("coups",)
+
+
+def build_studies_page(embed: bool = True, section: Optional[str] = None) -> str:
+    """Toutes les études, ou une seule section (onglets de l'application) : srp, 3bet, 4bet ou coups."""
+    if section is not None and section not in SECTIONS:
+        raise KeyError(section)
     studies = postflop.list_studies()
     total = sum(s["size"] for s in studies)
+    if section is None:
+        content = "".join(_spot_section(family) for family in studyspots.FAMILIES) + _hand_section()
+    else:
+        content = _hand_section() if section == "coups" else _spot_section(section)
     body = f"""
 <div class="meta">{len(studies)} étude(s) · {_size(total)} sur le disque · {escape(str(postflop.studies_dir()))}</div>
 <p class="note">Précision : exploitabilité de la solution, en % du pot (plus c'est bas, plus elle est proche de
 l'équilibre).</p>
-{"".join(_spot_section(family) for family in studyspots.FAMILIES)}
-{_hand_section()}
+{content}
 """
     return html_page("Études du solveur", f"<style>{STYLE}</style>{body}", embed, script=SCRIPT)

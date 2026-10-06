@@ -51,10 +51,61 @@ class LibraryTest(unittest.TestCase):
         self.assertIn("Bouton face au 3bet", lib.self_page("preflop"))
         self.assertIn("Résultats par adversaire", lib.self_page("bilan"))
         self.assertIn('id="data"', lib.self_page("spots"))
+        self.assertIn("Les bluffs de Villain", lib.player_page("Villain", "bluffs"))
+        population = lib.self_page("bluffs")
+        self.assertIn("Les bluffs des réguliers", population)
+        self.assertIn("Les réguliers ensemble : Villain.", population)
         with self.assertRaises(UnknownPlayer):
             lib.player_page("Personne", "plan")
         with self.assertRaises(KeyError):
             lib.player_page("Villain", "inconnue")
+
+    @unittest.skipIf(os.name == "nt", "faux solveur : script exécutable POSIX")
+    def test_prepare_plan(self):
+        # « Préparer le plan » : ouvre l'étude enregistrée et en tire le plan de jeu
+        from analyzer.theory import coach, postflop, studyspots
+        shutil.copy(FIXTURE, self.folder / "sample.txt")
+        lib = Library(self.folder)
+        env = {"ANALYZER_HOME": str(self.folder / "home"), "ANALYZER_SOLVER": str(FAKE_SOLVER)}
+        spot = studyspots.StudySpot("srp", ["Ks", "7d", "2c"], plan={})
+        request = spot.request()
+        with mock.patch.dict(os.environ, env), mock.patch.object(coach, "missing", return_value=[spot.ident]), \
+                mock.patch.object(studyspots, "parse_ident", return_value=spot):
+            study = postflop.study_path(request)
+            study.parent.mkdir(parents=True)
+            study.write_text(json.dumps(request), encoding="utf-8")  # le faux solveur recharge la requête
+            state = lib.plan_state(start=True)
+            self.assertEqual((state["missing"], state["busy"]), (1, 1))
+            deadline = time.time() + 30
+            while lib.solves.plan_view(spot)["state"] in ("waiting", "running") and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(lib.solves.plan_view(spot)["state"], "done", lib.solves.plan_view(spot).get("error"))
+            plan = coach.load_plan(postflop.study_key(request))
+            self.assertEqual(plan["id"], spot.ident)
+            self.assertIn("cbet", plan["nodes"])
+        lib.solves.shutdown()
+
+    def test_students(self):
+        with mock.patch.dict(os.environ, {"ANALYZER_HOME": str(self.folder / "home")}):
+            main = Library(self.folder / "moi")  # aucune main à moi
+            paul = main.create_student("Paul", None)
+            self.assertEqual((paul["id"], paul["hands"]), ("paul", 0))
+            student = main.student("paul")
+            self.assertIs(student.solves, main.solves)  # une seule file de résolution pour tout le monde
+            added = student.import_files([{"name": "s.txt", "content": FIXTURE.read_text(encoding="utf-8")}])["added"]
+            self.assertEqual(added, 4)
+            self.assertEqual([(s["name"], s["hands"], s["hero"]) for s in main.students_summary()], [("Paul", 4, "Hero")])
+            self.assertEqual(main.find_hand("HAND02")[1], "Hero")  # ses mains s'ouvrent dans l'explorateur
+            self.assertIn("Leakfinding de Paul", student.self_page("leaks"))
+            self.assertIn('data-api="/api/eleves/paul/revue"', student.self_page("solveur"))
+            text, error = main.coach._run_tool("leakfinding", {"eleve": "Paul"})
+            self.assertFalse(error, text)
+            self.assertEqual(json.loads(text)["eleve"], "Paul")
+            main.set_kind("Villain", "rec")  # l'adversaire d'un élève se classe comme les tiens
+            self.assertEqual(student.leaks_report().scope_hands["rec"], 4)
+            with self.assertRaises(UnknownPlayer):
+                main.student("inconnu")
+            main.solves.shutdown()
 
     def test_solve_states(self):
         shutil.copy(FIXTURE, self.folder / "sample.txt")
@@ -79,8 +130,13 @@ class LibraryTest(unittest.TestCase):
             state = lib.explorer_state("HAND02")
             self.assertTrue(state["live"])
             self.assertEqual((state["meta"]["hero_cards"], state["meta"]["hero_position"]), (["Qh", "Jh"], "BB"))
+            # déroulé : l'action préflop jouée et le tapis effectif
+            self.assertEqual([s["name"] for s in state["meta"]["preflop"]], ["Open 2", "3bet 8", "Call"])
+            self.assertEqual(state["meta"]["stack"], 104.0)
             reply = lib.explorer_node("HAND02", [{"type": "action", "index": 1}])
             self.assertEqual((reply["live"], reply["node"]["type"]), (True, "action"))
+            self.assertIn("settled", reply["node"])  # mains quasi absentes : meilleure action selon l'EV
+            self.assertEqual(len(reply["node"]["presence"]), 2)
             # catégories des mains pour les filtres, alignées sur les mains de chaque joueur
             self.assertEqual([len(c) for c in reply["node"]["cats"]], [len(h) for h in reply["node"]["hands"]])
             self.assertEqual(state["categories"]["made"][0], ["sf", "Quinte flush"])
@@ -123,6 +179,21 @@ class ServerTest(unittest.TestCase):
         cls.server.server_close()
         cls.env.stop()
         cls.tmp.cleanup()
+
+    def test_client_gone(self):
+        # le navigateur abandonne des requêtes (page rechargée) : pas d'erreur, le serveur continue
+        import io
+        import socket
+        import struct
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            for path in ("/moi/bluffs", "/p/Villain/rapport", "/etudes/plan"):
+                s = socket.create_connection(("127.0.0.1", self.port))
+                s.sendall(f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n\r\n".encode())
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))  # coupure brutale
+                s.close()
+            time.sleep(1.5)
+            self.assertEqual(self.request("GET", "/moi/bluffs")[0], 200)
+        self.assertNotIn("Traceback", err.getvalue())
 
     def request(self, method, path, body=None, headers=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
@@ -184,6 +255,28 @@ class ServerTest(unittest.TestCase):
         body = json.dumps({"hand": "HAND03", "path": []})
         self.assertEqual(self.request("POST", "/api/explorateur/noeud", body, headers)[0], 404)
 
+    def test_ranges(self):
+        headers = {"Content-Type": "application/json"}
+        status, _, body = self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "HAND01"}), headers)
+        state = json.loads(body)
+        self.assertEqual((status, state["supported"], state["line"]), (200, True, "BTN open, BB call"))
+        save = json.dumps({"hand": "HAND01", "scope": "coup", "ranges": {"BB": "AA,KK"}})
+        status, _, body = self.request("POST", "/api/explorateur/ranges/enregistrer", save, headers)
+        self.assertEqual((status, json.loads(body)["adjusted"]), (200, "coup"))
+        state = json.loads(self.request("POST", "/api/explorateur/etat", json.dumps({"hand": "HAND01"}), headers)[2])
+        self.assertEqual(state["adjusted"], "coup")
+        for bad in ({"hand": "HAND01", "scope": "coup", "ranges": {"BB": "AXo"}},
+                    {"hand": "HAND01", "scope": "partout", "ranges": {"BB": "AA"}},
+                    {"hand": "HAND01", "scope": "coup", "ranges": "AA"}):
+            status, _, body = self.request("POST", "/api/explorateur/ranges/enregistrer", json.dumps(bad), headers)
+            self.assertEqual(status, 400, bad)
+        self.assertEqual(self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "NOPE"}), headers)[0], 404)
+        self.assertEqual(self.request("POST", "/api/explorateur/ranges/autre", json.dumps({"hand": "HAND01"}),
+                                      headers)[0], 400)
+        clear = json.dumps({"hand": "HAND01", "scope": "coup"})
+        status, _, body = self.request("POST", "/api/explorateur/ranges/effacer", clear, headers)
+        self.assertEqual((status, json.loads(body)["adjusted"]), (200, None))
+
     def test_studies_page(self):
         status, _, body = self.request("GET", "/etudes")
         self.assertEqual(status, 200)
@@ -222,6 +315,51 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((status, json.loads(body)["state"]), (409, "session"))
         body = json.dumps({"hand": "spot:srp:AhAh2c"})
         self.assertEqual(self.request("POST", "/api/explorateur/etat", body, headers)[0], 404)
+
+    def test_backup_endpoints(self):
+        status, _, body = self.request("GET", "/api/sauvegarde")
+        view = json.loads(body)
+        self.assertEqual((status, view["dest"], view["running"]), (200, "", None))
+        headers = {"Content-Type": "application/json"}
+        for bad in ({"dest": 3, "studies": False, "auto": False}, {"dest": "x"}, {"dest": "x" * 600, "studies": False,
+                                                                                    "auto": False}):
+            self.assertEqual(self.request("POST", "/api/sauvegarde/reglages", json.dumps(bad), headers)[0], 400)
+        dest = str(Path(self.tmp.name) / "sauvegardes-test")
+        body = json.dumps({"dest": dest, "studies": True, "auto": False})
+        view = json.loads(self.request("POST", "/api/sauvegarde/reglages", body, headers)[2])
+        self.assertEqual((view["dest"], view["studies"]), (dest, True))
+        self.request("POST", "/api/sauvegarde/lancer", "{}", headers)
+        deadline = time.time() + 20
+        while json.loads(self.request("GET", "/api/sauvegarde")[2])["running"] and time.time() < deadline:
+            time.sleep(0.05)
+        view = json.loads(self.request("GET", "/api/sauvegarde")[2])
+        self.assertEqual((view["error"], view["last"]["dest"]), (None, dest))
+        foreign = {"Origin": "http://evil.example", **headers}
+        self.assertEqual(self.request("POST", "/api/sauvegarde/lancer", "{}", foreign)[0], 403)
+
+    def test_student_routes(self):
+        headers = {"Content-Type": "application/json"}
+        status, _, data = self.request("POST", "/api/eleves", json.dumps({"name": "Anna", "pseudo": "Hero"}), headers)
+        self.assertEqual((status, json.loads(data)["id"]), (200, "anna"))
+        body = json.dumps({"files": [{"name": "s.txt", "content": FIXTURE.read_text(encoding="utf-8")}]})
+        status, _, data = self.request("POST", "/api/eleves/anna/import", body, headers)
+        self.assertEqual((status, json.loads(data)["added"]), (200, 4))
+        self.assertEqual([s["id"] for s in json.loads(self.request("GET", "/api/eleves")[2])], ["anna"])
+        for page in ("leaks", "preflop", "solveur", "spots"):
+            self.assertEqual(self.request("GET", f"/eleve/anna/{page}")[0], 200, page)
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+        conn.request("GET", "/eleve/anna/rapport")
+        resp = conn.getresponse()
+        report = resp.read()
+        conn.close()
+        self.assertEqual((resp.status, resp.getheader("Content-Disposition")),
+                         (200, 'attachment; filename="leakfinding-anna.html"'))
+        self.assertIn(b"Leakfinding de Anna", report)
+        self.assertEqual(json.loads(self.request("GET", "/api/eleves/anna/leaks")[2])["ready"], False)
+        self.assertEqual(self.request("GET", "/eleve/inconnu/leaks")[0], 404)
+        self.assertEqual(self.request("POST", "/api/eleves/inconnu/import", body, headers)[0], 404)
+        self.assertEqual(self.request("POST", "/api/eleves", json.dumps({"name": ""}), headers)[0], 400)
+        self.assertEqual(self.request("GET", "/moi/leaks")[0], 200)
 
     def test_not_found(self):
         for path in ("/p/Personne/plan", "/p/Villain/autre", "/static/server.py",

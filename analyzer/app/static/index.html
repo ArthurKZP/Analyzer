@@ -14,7 +14,10 @@
     <nav class="nav">
       <a href="#/moi" data-view="moi">Mon jeu</a>
       <a href="#/etudes" data-view="etudes">Études du solveur</a>
+      <a href="#/entraineur" data-view="entraineur">Entraîneur</a>
+      <a href="#/eleves" data-view="eleves">Élèves</a>
       <a href="#/importer" data-view="importer">Importer des mains</a>
+      <a href="#/sauvegarde" data-view="sauvegarde">Sauvegarde</a>
     </nav>
     <div class="opp-head">Adversaires <span id="opp-count"></span></div>
     <input class="search" id="opp-search" type="search" placeholder="Rechercher un joueur" aria-label="Rechercher un adversaire">
@@ -28,6 +31,9 @@
         <h1 id="title">Analyzer HU</h1>
         <div class="subtitle" id="subtitle"></div>
       </div>
+      <label class="kind" id="kind" hidden title="Contre un récréatif, tes mains ne sont pas comparées à la théorie">
+        Type <select id="kind-select" aria-label="Type de joueur"></select>
+      </label>
     </header>
     <nav class="tabs" id="tabs" aria-label="Sections"></nav>
     <section class="content">

@@ -1,0 +1,50 @@
+*** HEADER ***
+Site: Betclic.fr
+Game Mode: Cash Game
+Game Type: NL Texas Hold'em
+Game Name: NLHE 1/2 6 max Deep
+Game ID: 01M00000000000000000000001
+Hand ID: 01M00000000000000000000002
+Date & Time: 2026-10-04 13:32:53 (UTC)
+Table ID: 01M00000000000000000000003
+Blinds: €1.00/€2.00
+Total Pot: €401.00
+Rake: €4.00
+*** PLAYERS ***
+Seat 1: Joueur1 (€242.38)
+Seat 2: Hero (€200.00) [Hero]
+Seat 3: Joueur3 (€200.00)
+Seat 4: Joueur4 (€260.73) [BTN]
+Seat 5: Joueur5 (€243.25) [SB]
+Seat 6: Joueur6 (€200.00) [BB]
+*** HOLE CARDS ***
+Hero: [8h Js]
+Joueur3: [Ac Qs]
+Joueur6: [Kc Ad]
+*** PRE-FLOP ***
+13:32:53 - Joueur5: Posts SB €1.00
+13:32:53 - Joueur6: Posts BB €2.00
+13:32:54 - Joueur1: Folds
+13:32:55 - Hero: Folds
+13:33:01 - Joueur3: Raises to €4.50
+13:33:04 - Joueur4: Folds
+13:33:10 - Joueur5: Folds
+13:33:12 - Joueur6: Raises to €14.50
+13:33:27 - Joueur3: Calls €10.00
+*** FLOP *** [Jh Td 2c]
+13:33:31 - Joueur6: Checks
+13:33:47 - Joueur5: Sits in
+13:33:55 - Joueur3: Bets €9.90
+13:33:57 - Joueur6: Calls €9.90
+*** TURN *** [Jh Td 2c Qd]
+13:34:00 - Joueur6: Checks
+13:34:09 - Joueur3: Bets €39.86
+13:34:20 - Joueur6: Calls €39.86
+*** RIVER *** [Jh Td 2c Qd 4s]
+13:34:27 - Joueur6: Bets €135.74 and is all-in
+13:34:32 - Joueur3: Calls €135.74 and is all-in
+*** SHOWDOWN ***
+Joueur6 shows [Kc Ad] (Straight) [Ad Kc Qd Jh Td]
+Joueur3 shows [Ac Qs] (Pair) [Qs Qd Ac Jh Td]
+*** SUMMARY ***
+Joueur6 wins main pot of €397.00

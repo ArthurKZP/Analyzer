@@ -9,6 +9,7 @@ Les tailles de mise d'un flop se choisissent par situation (voir sizing.py) ; le
 """
 from __future__ import annotations
 
+import itertools
 import json
 import re
 import time
@@ -27,18 +28,19 @@ HIGH_CARD = {14: "Ace high", 13: "King high", 12: "Queen high", 11: "Jack high",
 FAMILIES = {
     "srp": {"name": "SRP", "label": "Pot relancé simple : open du bouton à 2,5 bb, call de la BB, 100 bb",
             "ip": ("sb_open", "raise"), "oop": ("bb_vs_open", "call"), "pot": 5.0, "stack": 97.5,
-            "oop_initiative": False},
+            "oop_initiative": False, "steps": (("BTN", "raise"), ("BB", "call"))},
     # La solution préflop 3bette à 11,5 bb (bb_vs_open) : pot de 23 bb, 88,5 bb derrière.
     "3bet": {"name": "pot 3bet",
              "label": "Pot 3bet : open du bouton à 2,5 bb, 3bet de la BB à 11,5 bb, call du bouton, 100 bb",
              "ip": ("sb_vs_3bet", "call"), "oop": ("bb_vs_open", "raise"), "pot": 23.0, "stack": 88.5,
-             "oop_initiative": True},
+             "oop_initiative": True, "steps": (("BTN", "raise"), ("BB", "raise"), ("BTN", "call"))},
     # 4bet du bouton à 26 bb (sb_vs_3bet), payé par la BB : pot de 52 bb, 74 bb derrière.
     "4bet": {"name": "pot 4bet",
              "label": "Pot 4bet : open du bouton à 2,5 bb, 3bet de la BB à 11,5 bb, 4bet du bouton à 26 bb, "
                       "call de la BB, 100 bb",
              "ip": ("sb_vs_3bet", "raise"), "oop": ("bb_vs_4bet", "call"), "pot": 52.0, "stack": 74.0,
-             "oop_initiative": False},
+             "oop_initiative": False,
+             "steps": (("BTN", "raise"), ("BB", "raise"), ("BTN", "raise"), ("BB", "call"))},
 }
 
 # Trois flops par texture : sec, connecté, deux couleurs (ou leurs équivalents pour pairé et monotone).
@@ -79,6 +81,42 @@ def flop_texture(board: list[str]) -> str:
 
 FLOPS = {"srp": SRP_FLOPS, "3bet": SRP_FLOPS, "4bet": SRP_FLOPS}  # les mêmes flops d'une famille à l'autre
 
+# Durée d'une résolution sur 4 cœurs, tailles déjà choisies (mesurée sur K♠K♦4♣).
+SOLVE_TIME = {"srp": "une dizaine de minutes", "3bet": "2 à 3 minutes", "4bet": "moins d'une minute"}
+
+
+def board_text(board: list[str]) -> str:
+    return "".join(c[0] + {"s": "♠", "h": "♥", "d": "♦", "c": "♣"}[c[1]] for c in board)
+
+
+def suit_pattern(board: list[str]) -> str:
+    """Structure de couleurs du flop : rainbow, deux couleurs (tirage couleur possible) ou monotone."""
+    return {3: "rainbow", 2: "deux couleurs", 1: "monotone"}[len({c[1] for c in board[:3]})]
+
+
+def canonical(board: list[str]) -> str:
+    """Forme commune des flops identiques aux couleurs près (même stratégie, couleurs renommées)."""
+    best = None
+    for perm in itertools.permutations("cdhs"):
+        rename = dict(zip("cdhs", perm))
+        cards = sorted((c[0] + rename[c[1]] for c in board[:3]), key=lambda c: (-RANK_VALUE[c[0]], c[1]))
+        text = "".join(cards)
+        if best is None or text < best:
+            best = text
+    return best
+
+
+def flop_distance(a: list[str], b: list[str]) -> int:
+    """Écart entre deux flops : texture, structure de couleurs, puis hauteur de chaque carte."""
+    ra = sorted((RANK_VALUE[c[0]] for c in a[:3]), reverse=True)
+    rb = sorted((RANK_VALUE[c[0]] for c in b[:3]), reverse=True)
+    distance = sum(abs(x - y) for x, y in zip(ra, rb))
+    if flop_texture(a) != flop_texture(b):
+        distance += 20
+    if suit_pattern(a) != suit_pattern(b):
+        distance += 10
+    return distance
+
 
 def flop_set(family: str = "srp", textures: Optional[list[str]] = None) -> list[str]:
     """Flops de la série, un par texture à tour de rôle : une série interrompue couvre déjà chaque texture."""
@@ -96,24 +134,48 @@ class StudySpot(postflop.SpotTree):
     oop: str = "BB"
     ip: str = "BTN"
     line: list = field(default_factory=list)
-    # Situation -> tailles (voir native/arbre.rs). None : les tailles choisies pour ce flop s'il y en a,
-    # sinon l'arbre par défaut ; {} : toujours l'arbre par défaut.
+    # Situation -> tailles (voir native/arbre.rs). None : les tailles choisies pour ce flop s'il y en a ; hors
+    # série, celles du flop le plus proche dont les tailles sont choisies ; sinon l'arbre par défaut.
+    # {} : toujours l'arbre par défaut.
     plan: Optional[dict] = None
+    sizes_from: Optional[str] = field(default=None, repr=False)  # flop dont les tailles sont empruntées
+    # True : tes ranges ajustées pour ce spot (custom_ranges, portée « coup ») ; les séries, plans et références
+    # restent faits avec les ranges de la solution.
+    custom: bool = field(default=False, repr=False)
 
     def __post_init__(self):
+        from . import custom_ranges
         info = FAMILIES[self.family]
         solution = self.solution or load_solution()
         self.name, self.label = info["name"], info["label"]
         self.pot_bb, self.stack_bb = info["pot"], info["stack"]
         self.ranges = {self.oop: postflop.range_weights(solution, *info["oop"]),
                        self.ip: postflop.range_weights(solution, *info["ip"])}
+        self.context = custom_ranges.context("HU", info["steps"])
+        self.reference = {p: dict(r) for p, r in self.ranges.items()}
+        self.adjusted = None
+        if self.custom:
+            scope, mine = custom_ranges.lookup(self.ident, None)
+            for p in (self.oop, self.ip):
+                if p in mine:
+                    self.ranges[p], self.adjusted = dict(mine[p]), scope
         self.sizes = postflop.default_sizes(self.oop, self.ip, info["oop_initiative"])
         if self.plan is None:
-            chosen = load_selection(self.family, "".join(self.board))
+            board = "".join(self.board)
+            chosen = load_selection(self.family, board)
+            # Un flop de la série a son propre choix des tailles (fait avant sa résolution) ; un autre flop
+            # prend celles du flop le plus proche, pour rester comparable à la série.
+            if chosen is None and board not in flop_set(self.family):
+                near = closest_selection(self.family, self.board)
+                if near is not None:
+                    self.sizes_from, chosen = near
             self.plan = dict(chosen["plan"]) if chosen else {}
 
     def menu_text(self) -> str:
-        return sizing.plan_text(self.plan, self.family) if self.plan else super().menu_text()
+        text = sizing.plan_text(self.plan, self.family) if self.plan else super().menu_text()
+        if self.sizes_from:
+            text += " (tailles de " + board_text(cards_of(self.sizes_from)) + ")"
+        return text
 
     @property
     def ident(self) -> str:
@@ -126,17 +188,36 @@ class StudySpot(postflop.SpotTree):
     def interpret(self, raw: dict) -> dict:
         return {"spot": True, "pot_type": self.name, "pot": self.pot_bb, "stack": self.stack_bb,
                 "board": self.board, "texture": self.texture, "oop": None, "menu": self.menu_text(), "added": [],
+                "adjusted": self.adjusted,
                 "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"),
                 "seconds": raw.get("seconds"), "tree_nodes": raw.get("tree_nodes"), "stopped": None,
                 "decisions": []}
 
+    def after_solve(self, session: postflop.Session) -> None:
+        """Juste après la résolution, l'étude encore ouverte : son plan de jeu (quelques secondes)."""
+        from . import coach
+        if not self.adjusted:  # les plans de jeu suivent la théorie
+            coach.extract_and_save(session, self)
+
     def write_meta(self, request: dict, raw: dict, session: Optional[postflop.Session] = None) -> None:
+        if self.adjusted:  # étude à part, avec les coups joués : hors des séries et des plans
+            meta = {
+                "kind": "spot-ajuste", "key": postflop.study_key(request), "hand": self.ident, "id": self.ident,
+                "date": "Spot " + self.name, "villain": "–", "hero_cards": [], "board": self.board,
+                "pot_type": self.name, "hero_position": None, "pot": self.pot_bb, "stack": self.stack_bb,
+                "net": None, "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"),
+                "seconds": raw.get("seconds"), "menu": self.menu_text(), "created": time.strftime("%d/%m/%Y %H:%M"),
+                "adjusted": self.adjusted,
+            }
+            postflop.study_path(request).with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False),
+                                                                         encoding="utf-8")
+            return
         meta = {
             "kind": "spot", "key": postflop.study_key(request), "id": self.ident, "family": self.family,
             "family_label": self.label, "pot_type": self.name, "texture": self.texture, "board": self.board,
             "pot": self.pot_bb, "stack": self.stack_bb, "iterations": raw.get("iterations"),
             "exploit_pct": raw.get("exploit_pct"), "seconds": raw.get("seconds"), "menu": self.menu_text(),
-            "created": time.strftime("%d/%m/%Y %H:%M"),
+            "created": time.strftime("%d/%m/%Y %H:%M"), "sizes_from": self.sizes_from,
         }
         if session is not None:
             meta["summary"] = flop_summary(session, self.family)
@@ -234,6 +315,78 @@ def load_selection(family: str, board: str) -> Optional[dict]:
     return None
 
 
+def selection_boards(family: str) -> list[str]:
+    """Flops dont les tailles sont choisies : sur cet ordinateur ou livrées avec Analyzer."""
+    boards = {path.stem.split("-", 1)[1] for path in (postflop.home() / "tailles").glob(f"{family}-*.json")}
+    shipped = shipped_path(family)
+    if shipped.is_file():
+        try:
+            boards |= set(json.loads(shipped.read_text(encoding="utf-8")).get("flops", {}))
+        except ValueError:
+            pass
+    return sorted(b for b in boards if re.fullmatch(r"(?:[2-9TJQKA][cdhs]){3}", b))
+
+
+def closest_selection(family: str, board: list[str]) -> Optional[tuple[str, dict]]:
+    """Le flop le plus proche dont les tailles sont choisies, et ce choix ; None s'il n'y en a aucun."""
+    own = "".join(board)
+    boards = [b for b in selection_boards(family) if b != own]
+    for near in sorted(boards, key=lambda b: (flop_distance(cards_of(b), board), b)):
+        chosen = load_selection(family, near)
+        if chosen and chosen.get("plan"):
+            return near, chosen
+    return None
+
+
+def normalize_board(family: str, board: list[str]) -> list[str]:
+    """Les trois cartes dans l'ordre d'un flop déjà connu (série, étude, tailles), sinon par hauteur : un même
+    flop choisi dans un autre ordre ne fait pas une seconde étude."""
+    wanted = set(board[:3])
+    known = family_boards(family) + selection_boards(family)
+    for other in known:
+        if set(cards_of(other)) == wanted:
+            return cards_of(other)
+    return sorted(board[:3], key=lambda c: (-RANK_VALUE[c[0]], "shdc".index(c[1])))
+
+
+def flop_options(family: str, board: list[str]) -> dict:
+    """Le flop choisi dans l'explorateur, et les flops résolus qui s'en approchent : d'abord le même aux
+    couleurs près, puis les mêmes hauteurs avec la même structure de couleurs, puis la même texture."""
+    board = normalize_board(family, board)
+    target = StudySpot(family, board)
+    solved = {i: m for i, m in spot_studies().items() if m.get("family") == family}
+    canon, pattern, texture = canonical(board), suit_pattern(board), target.texture
+    ranks = sorted(c[0] for c in board)
+    suggestions = []
+    for ident, meta in solved.items():
+        other = meta["board"]
+        if ident == target.ident:
+            continue
+        same_pattern = suit_pattern(other) == pattern
+        if canonical(other) == canon:
+            order, relation = 0, "le même flop aux couleurs près : même stratégie"
+        elif sorted(c[0] for c in other) == ranks and same_pattern:
+            order, relation = 1, "mêmes hauteurs et même structure de couleurs (la couleur commune change de carte)"
+        elif flop_texture(other) == texture and same_pattern:
+            order, relation = 2, "même texture, même structure de couleurs"
+        elif flop_texture(other) == texture:
+            order, relation = 3, "même texture"
+        else:
+            continue
+        suggestions.append({"id": ident, "board": other, "texture": flop_texture(other),
+                            "pattern": suit_pattern(other), "relation": relation, "order": order,
+                            "distance": flop_distance(other, board)})
+    suggestions.sort(key=lambda x: (x["order"], x["distance"], x["id"]))
+    series = "".join(board) in flop_set(family)
+    if series and not target.plan:
+        cost = "flop de la série : choix des tailles d'abord, puis résolution"
+    else:
+        cost = SOLVE_TIME[family] + " sur 4 cœurs"
+    return {"id": target.ident, "board": board, "texture": texture, "pattern": pattern,
+            "solved": target.ident in solved, "series": series, "suggestions": suggestions[:6],
+            "sizes": target.menu_text(), "sizes_from": target.sizes_from, "cost": cost}
+
+
 def save_selection(family: str, board: str, result: dict) -> Path:
     path = selection_path(family, board)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -258,14 +411,15 @@ def export_selections(family: str = "srp", path: Optional[Path] = None) -> Path:
     return path
 
 
-def parse_ident(ident: str) -> Optional[StudySpot]:
-    """« spot:srp:KsKd4c » -> le spot, si la famille existe et que le flop est valide ; sinon None."""
+def parse_ident(ident: str, custom: bool = False) -> Optional[StudySpot]:
+    """« spot:srp:KsKd4c » -> le spot, si la famille existe et que le flop est valide ; sinon None.
+    custom=True : avec tes ranges ajustées pour ce spot, s'il y en a (l'explorateur)."""
     parts = ident.split(":")
     if len(parts) != 3 or parts[0] != "spot" or parts[1] not in FAMILIES:
         return None
     if not re.fullmatch(r"(?:[2-9TJQKA][cdhs]){3}", parts[2]) or len(set(cards_of(parts[2]))) != 3:
         return None
-    return StudySpot(parts[1], cards_of(parts[2]))
+    return StudySpot(parts[1], cards_of(parts[2]), custom=custom)
 
 
 def family_boards(family: str = "srp") -> list[str]:

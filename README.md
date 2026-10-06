@@ -9,7 +9,10 @@ moteur de [GTOpen](https://github.com/MatthewPDingle/GTOpen).
 
 - Python 3.10+, **aucune dépendance** à installer (Pillow seulement pour lire de nouvelles captures de ranges ;
   Rust et git seulement pour installer le solveur postflop).
-- Sites supportés : **Betclic.fr** (cash game HU). D'autres formats peuvent être ajoutés (voir plus bas).
+- Sites supportés : **Betclic.fr**, **Winamax** et **Unibet** (cash game NLHE). Toute l'analyse porte sur les
+  mains **heads-up** ; les mains des tables à 3 joueurs et plus (3-max, 6-max) sont lues, avec la position de
+  chacun, pour l'analyse par position (voir *Sites et formats de table*). D'autres sites peuvent être ajoutés
+  (voir plus bas).
 
 ## Application
 
@@ -23,12 +26,15 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
 - **Menu latéral** : « Mon jeu », « Importer des mains » et la liste de tes adversaires (recherche,
   nombre de mains, ton résultat contre chacun).
 - **Adversaire** : onglets *Plan de jeu*, *Préflop* (tes décisions et ses fréquences face au solveur),
-  *Rapport* et *Spots*. Les liens « voir les mains » et « rejouer » ouvrent directement l'onglet Spots
+  *Rapport*, *Spots* et *Face au solveur* (tes mains postflop contre lui comparées au solveur, et ses écarts
+  à exploiter). En haut de la fiche, son type : régulier ou récréatif (voir « Face au solveur »). Les liens « voir les mains » et « rejouer » ouvrent directement l'onglet Spots
   sur la bonne ligne ou la bonne main. Dans le replayer, **Résoudre ce coup** lance le solveur GTOpen
   (voir plus bas).
 - **Mon jeu** : ton bilan contre tous tes adversaires (résultats, courbe, écarts aux repères, stats,
   pertes sans abattage, résultats par adversaire), *Mon préflop* face au solveur sur toutes tes mains,
-  et *Mes spots*.
+  *Mes spots* et *Face au solveur* (tes erreurs postflop, voir plus bas).
+- **Entraîneur** : joue des mains sur les spots résolus, le solveur juge chaque décision (voir plus bas).
+- **Sauvegarde** : tes calculs vers un dossier synchronisé ou un stockage en ligne (voir plus bas).
 - **Importer des mains** : glisse tes historiques ou choisis-les ; ils sont copiés dans le dossier des
   mains (`hands/` par défaut), les doublons et les formats non reconnus sont signalés.
 
@@ -50,7 +56,8 @@ python -m analyzer ~/Downloads/Hand.txt -a "peste noire" -o rapports/
 python -m analyzer -a berserk --sans-spots   # rapport seul, plus rapide
 ```
 
-Ton pseudo est détecté automatiquement (tag `Hero` de Betclic) ; sinon passe `--hero TonPseudo`.
+Ton pseudo est détecté automatiquement (tag `Hero` de Betclic, « Dealt to » de Winamax, compte entre crochets
+d'Unibet) ; sinon passe `--hero TonPseudo`.
 Le terminal affiche un résumé ; le rapport complet est écrit dans `reports/<adversaire>.html`, la page
 préflop dans `reports/<adversaire>-preflop.html` et le visualiseur dans `reports/<adversaire>-spots.html`
 (ouvre-les dans ton navigateur, ils fonctionnent hors ligne).
@@ -180,7 +187,9 @@ replayer la dévoile.
 **L'explorateur** (*Ouvrir l'explorateur ↗* dans le panneau du solveur, ou `/explorateur/<numéro de main>`)
 s'ouvre dans une nouvelle fenêtre, comme un solveur :
 
-- en haut, le déroulé du coup : chaque nœud avec ses actions (● = action jouée dans la main) ; clique sur
+- en haut, le déroulé du coup, comme dans Wizard : l'action préflop jouée (un clic ouvre la solution
+  préflop à ce moment), puis chaque nœud avec ses actions (● = action jouée dans la main), le tapis
+  effectif du joueur au-dessus de ses actions et le pot sur chaque street (FLOP, TURN, RIVER) ; clique sur
   une action pour suivre une autre branche, sur la turn ou la river pour changer de carte, ← pour revenir ;
 - la grille 13 × 13 de la range choisie (celle du joueur qui agit, ou l'autre), en *Stratégie*,
   *Stratégie + EV*, *EV* ou *Équité* ; la hauteur d'une case est la part de la main encore présente ;
@@ -192,21 +201,47 @@ s'ouvre dans une nouvelle fenêtre, comme un solveur :
   quinte flush aux mains non faites ; tirages au flop et à la turn ; équité, en 4 ou 7 tranches ; couleurs
   dépareillées ou assorties). Un clic sur une ou plusieurs lignes ne garde (ou n'écarte) que ces mains dans
   la grille, la synthèse et le détail des combos ; le filtre reste actif d'un nœud à l'autre ;
-- chaque case du déroulé affiche le pot à ce moment ; un clic sur une case ramène à ce moment du coup.
+- un clic sur une case du déroulé ramène à ce moment du coup.
 
 Les mises sont en % du pot ; les relances aussi, selon la convention des solveurs : le montant ajouté
 rapporté au pot après le call (relancer à 4,5 sur une mise de 1,7 dans un pot de 5 = 2,8 / 8,4 = 33 %).
+
+**Tes ranges préflop** (onglet *Ranges* de l'explorateur) : le solveur part des ranges de la référence (solution
+préflop heads-up, ou ta solution du format à une table à plusieurs). Pour voir ce que change une autre range — un
+adversaire qui défend plus large, un open plus serré, une réponse au 4bet qui dépend de l'adversaire —, ajuste
+celle de chaque joueur : grille 13 × 13 à peindre au clic ou en glissant (100, 75, 50, 25 % ou retirer), texte à
+coller (« AA,AKs,KQo:0.5,… »), *Plus serré* / *Plus large* (environ 10 % des combos retirés en partant des mains
+les plus faibles de la range, ou ajoutés en partant des plus fortes ; force = équité contre une main au hasard).
+Contour orange : différent de la référence. Deux portées : **pour ce coup seulement** (ou ce spot d'étude), ou
+**par défaut pour la ligne** et le format (« BTN open, BB call » en HU, « CO open, BB 3bet, CO call » en 6-max…) :
+elle s'applique alors à tes autres coups de cette ligne, à leur analyse et au leakfinding ; le réglage d'un coup
+passe avant celui de sa ligne. *Résoudre avec ces ranges* relance le solveur sur une étude à part : celle de la
+référence reste, et *Revenir à la référence* la rouvre en quelques secondes. Un badge *tes ranges* le rappelle en
+haut de l'explorateur, et la page *Études du solveur* marque ces études. Les séries de spots d'étude, leurs plans de
+jeu et la référence livrée restent faits avec la théorie. Tes ranges sont gardées dans
+`~/.analyzer/ranges/perso.json` (sauvegardé) ; code : `theory/custom_ranges.py`.
 
 **L'EV** est en bb, à partir du moment du coup affiché : un fold vaut 0, le pot déjà au milieu est à gagner
 et les mises à venir sont dépensées. Pour une action (au survol), c'est ce que rapporte cette action puis la
 suite jouée par le solveur ; pour une main (dans la grille), c'est l'EV de sa stratégie, la moyenne de ses
 actions pondérée par leurs fréquences. Une main qui folde 100 % vaut donc 0 même si payer coûterait 14 bb.
 
+**Mains que le solveur ne joue presque jamais à un nœud.** La fréquence d'une main est une moyenne sur les
+itérations, pondérée par sa présence au nœud. Une main qui n'y arrive presque jamais (hors de la range, ou
+une ligne que le solveur ne prend pas avec elle : moins d'une fois sur cent, ou mille fois moins présente
+que les autres) n'y apprend rien ; sa fréquence est un reste des premières itérations, arrondi par le
+stockage compressé (ex. : fold 36 % alors que payer rapporte 11 bb). Son EV par action, elle, est calculée
+face à la stratégie finale de l'adversaire. Pour ces mains, l'explorateur montre donc la meilleure action
+selon l'EV (nom de la case en italique, note dans le détail du combo), et la revue des mains juge la décision sur
+l'EV perdue. Quand c'est la range entière qui n'arrive presque jamais à un nœud (moins de 0,5 %), un
+avertissement le signale : la suite du coup n'y est pas optimisée.
+
 **Études du solveur** : chaque coup résolu est gardé sur disque (`~/.analyzer/etudes`, 50 à 170 Mo selon
 l'arbre) sous une forme compacte : la stratégie de chaque nœud sur 8 bits, compressée.
 L'explorateur rouvre une étude en une quinzaine de secondes au lieu de la recalculer (les fréquences
 restent à 1 point près, les EV à quelques centièmes de bb). La page *Études du solveur* de l'application
-liste les études, avec leur précision et leur taille, et permet de les rouvrir ou de les supprimer.
+liste les études (onglet *Coups joués*), avec leur précision et leur taille, et permet de les rouvrir ou
+de les supprimer.
 Une étude ouverte occupe environ 2 Go de mémoire : une seule reste ouverte, fermée après 30 minutes sans
 activité ou quand une autre s'ouvre.
 
@@ -255,6 +290,22 @@ rouvre d'elle-même, le choix de la carte s'ouvre quand on arrive à la turn ou 
 forcés de la BB (qui ne mène pas) sont passés pour aller droit à la décision suivante.
 *Étudier un autre flop* ouvre n'importe quel flop dans l'explorateur ; une fois résolu, il rejoint sa
 texture dans la page.
+
+**Explorateur depuis le préflop** : l'onglet *Explorateur* de *Études du solveur* (ou `/explorateur/preflop`)
+part de l'open du bouton. Le déroulé montre les actions préflop de la solution (fold, open 2,5, call, 3bet
+11,5, 4bet 26, tapis) et la grille leurs fréquences main par main, pour le joueur qui agit ou la range de
+l'autre. Au call, on choisit le flop : SRP après le call de l'open, pot 3bet après le call du 3bet, pot 4bet
+après le call du 4bet. On choisit ses trois cartes parmi les 52 : Analyzer propose alors les flops déjà
+résolus qui s'en approchent, à ouvrir tout de suite (le même flop aux couleurs près, qui a la même stratégie ;
+les mêmes hauteurs avec la même structure de couleurs, rainbow, deux couleurs ou monotone ; la même texture),
+ou résout ce flop (*Résoudre ce flop* : une dizaine de minutes en SRP, 2 à 3 en pot 3bet, moins d'une en pot
+4bet sur 4 cœurs ; l'étude est gardée). Un flop hors série prend les tailles du flop le plus proche dont les
+tailles sont choisies (même texture et même structure de couleurs d'abord) ; un flop de la série jamais
+résolu passe d'abord par son propre choix des tailles. La liste des flops de la série (surlignés quand ils sont
+résolus) reste en dessous. Le spot s'ouvre alors avec ses actions préflop en tête
+du déroulé : un clic y revient au préflop, *changer* sous le flop ramène au choix du flop, et *◀ Retour*
+au début du spot aussi. Les autres onglets de *Études du solveur* séparent les séries (SRP, pots 3bet,
+pots 4bet) et les coups joués résolus : plus besoin de dérouler toute la page.
 
 **Choix des tailles** (`analyzer/theory/sizing.py`) : chaque flop de la série a ses propres tailles, une par
 situation pour tout le flop (quelles que soient la turn et la river), deux à la river. Pour chaque situation,
@@ -352,6 +403,270 @@ Après une mise à jour d'Analyzer qui touche ce pont, relance `python -m analyz
 Variables d'environnement : `ANALYZER_HOME` (dossier de travail, `~/.analyzer` par défaut),
 `GTOPEN_DIR` (copie de GTOpen à utiliser), `ANALYZER_SOLVER` (chemin d'un `analyzer-solve` déjà compilé).
 
+## Face au solveur (mains jouées)
+
+L'onglet *Face au solveur* (dans « Mon jeu » et pour chaque adversaire) compare tes mains allées au flop à la
+théorie. Chaque main (SRP, pot 3bet ou 4bet ; pas les limps ni les tapis préflop) est résolue une fois, sur
+sa ligne réelle, avec les tailles de l'arbre par défaut ; on en garde un résumé de quelques Ko
+(`~/.analyzer/revue/`), qui survit aux mises à jour du solveur.
+
+```bash
+python -m analyzer gtopen --analyser            # toutes les mains pas encore analysées
+python -m analyzer gtopen --analyser --max 40   # les 40 plus gros pots seulement
+```
+
+**Réguliers et récréatifs** : contre un récréatif, le bon jeu est l'exploitation, pas la théorie. Le type de
+chaque adversaire se règle en haut de sa fiche (*Auto*, *Régulier*, *Récréatif*) ; en *Auto*, Analyzer le
+suggère d'après ses stats (récréatif quand au moins deux signaux concordent : il limpe plus de 20 % de ses
+boutons, ouvre moins de la moitié, folde plus de 55 % de ses BB face à l'open, ne 3bette presque jamais,
+folde trop face au 3bet, très passif après le flop), sinon régulier. Les mains contre les récréatifs sortent
+des comparaisons à la théorie : *Face au solveur* et *Mon préflop* de « Mon jeu », tes décisions sur sa fiche
+(qui ne garde que ses écarts à exploiter) ; le *Bilan* sépare tes résultats contre les deux types, et
+`--analyser` les laisse de côté (`--recreatifs` pour les inclure, pour lire leurs écarts). Le type est gardé
+par joueur (`~/.analyzer/joueurs.json`, inclus dans les sauvegardes) : il resservira aux tables à 3 et à 6.
+
+Ou bouton **Analyser les mains restantes** dans l'onglet (la page se complète au fur et à mesure, on peut la
+fermer). Les plus gros pots passent d'abord. Compte 3 minutes par SRP, 2 par pot 3bet et un quart de minute
+par pot 4bet sur 4 cœurs : une vingtaine d'heures pour 430 mains, à étaler sur plusieurs nuits.
+
+- **Les erreurs qui coûtent le plus** : décision par décision, l'EV que l'action jouée rapporte de moins
+  que la meilleure action pour ta main (en bb). Une action que le solveur joue au moins 10 % du temps avec
+  cette main ne coûte rien (à l'équilibre, les actions mélangées se valent ; un écart d'EV entre elles vient
+  d'un nœud profond pas tout à fait convergé). Seuil d'erreur : 0,25 bb. **Revoir ↗** ouvre la main
+  dans l'explorateur à cette décision.
+- **Les erreurs récurrentes** : par situation de la ligne (c-bet, face à la c-bet, 2e barrel, probe,
+  check-raise… les mêmes que pour le choix des tailles), le nombre de fois, les erreurs, l'EV perdue, et tes
+  fréquences fold / passif / agressif face à celles qu'aurait eues le solveur avec toute sa range dans les
+  mêmes coups.
+- **Ses écarts à exploiter** (page d'un adversaire) : ses fréquences dans chaque situation face à la
+  théorie. Ses cartes ne sont pas nécessaires : toutes ses décisions comptent. Un écart s'affiche à partir
+  de 8 occurrences et 10 points ; « solide » quand le hasard l'explique très mal (écart de plus de 2,5
+  écarts-types), « indicatif » sinon, avec la façon d'en profiter (il folde trop face à la c-bet : bluffe
+  plus…). **Ses erreurs connues** : l'EV qu'il a laissée quand ses cartes ont été montrées.
+
+## Leakfinding (toi et tes élèves)
+
+Le rapport de ce qu'un joueur doit travailler en priorité : onglet *Leakfinding* de *Mon jeu* pour toi, et menu
+*Élèves* pour tes élèves. Chaque élève a son dossier de mains (`~/.analyzer/eleves/<élève>/`, sauvegardé) : ajoute-le
+(nom, et son pseudo à la table si tu le connais), importe les historiques qu'il t'envoie (Betclic, Winamax ou Unibet), et son
+rapport se construit.
+
+- **Les leaks à travailler** : les cinq plus importants, avec leur preuve chiffrée, leur confiance et la façon de les
+  travailler (entraîneur sur la situation, onglet Préflop, plan de jeu) ; pour une perte face au solveur, la main la
+  plus chère à revoir. Classés par confiance puis par poids (fréquence de la situation multipliée par l'écart, ou EV
+  perdue). Seules les mains contre les réguliers comptent : contre un récréatif, l'exploitation prime.
+- **Ses stats face à la théorie**, sur toutes ses mains, contre les réguliers et contre les récréatifs : VPIP, PFR,
+  abattage, résultat, puis préflop face à la solution HU 100 bb (open, limp, 3bet, 4bet, folds) et après le flop
+  face aux plans de jeu des flops résolus (c-bet, barrels, c-bet retardée, folds face aux mises, relances, probes),
+  par type de pot et par position. Écart « solide » (le hasard l'explique mal) ou « indicatif ».
+- **Face au solveur** : ses décisions dans les mains choisies contre les réguliers, comparées à la meilleure action
+  pour sa main exacte (EV perdue par situation, décisions les plus chères). Un bouton les fait toutes résoudre
+  (environ 2 à 3 minutes par main).
+- **Mains à revoir** : les plus gros pots de chaque ligne (type de pot, position, dernière street jouée), deux par
+  ligne, contre les réguliers (avec l'avis du solveur) et contre les récréatifs (à revoir à la main).
+- **Ses adversaires** : leur type (régulier ou récréatif), suggéré d'après leurs stats et réglable ; il décide quelles
+  mains comptent pour les leaks.
+- **Télécharger le rapport** : la même page en fichier autonome, sans les boutons de l'application, à envoyer à
+  l'élève. Le coach a l'outil *leakfinding* : « Écris le rapport de coaching de Paul » dans l'application Claude
+  rédige un rapport à partir de ces données.
+
+L'élève a aussi ses onglets *Préflop* (face à la solution, main par main), *Face au solveur* (toutes ses mains
+contre les réguliers) et *Mains* (le visualiseur, d'où chaque main s'ouvre dans l'explorateur).
+
+## Bluffs des adversaires
+
+L'onglet *Ses bluffs* (fiche d'un adversaire) et *Bluffs des réguliers* (Mon jeu, tous les réguliers ensemble, puis un
+par un) cherchent où un joueur bluffe : dans quelles lignes, sur quelles cartes, avec quelles tailles. Deux sources :
+
+- **Ses fréquences**, sur toutes ses mains : à chaque situation (c-bet, 2e et 3e barrels, c-bet retardée, probe, mise
+  quand l'agresseur checke, autres mises à la river), sa fréquence de mise selon la carte qui vient de tomber
+  (overcard, couleur ou quinte possible, board qui se paire, brique) ou la texture du flop, face à celle du solveur
+  dans les mêmes situations (moyenne des plans de jeu des flops résolus). Une carte ne lui donne pas plus de bonnes
+  mains qu'à la théorie : s'il mise nettement plus que le solveur quand elle tombe, le surplus est fait de bluffs ou de
+  value fine. Sans repère du solveur, on compare à ses autres cartes.
+- **Ses mains montrées** : chaque mise ou relance vue à l'abattage est classée (value, value fine, semi-bluff, bluff)
+  et rangée par ligne, taille et carte. À la river, la part de bluffs est comparée à celle de la théorie pour la
+  taille de mise (l'équité qu'il te faut pour payer) ; au flop et à la turn, à sa propre moyenne. Le timing (temps de
+  réflexion des bluffs et de la value) est regardé aussi.
+
+*Ce qui ressort* liste les patterns, avec leur preuve chiffrée et la façon d'en profiter : « solide » quand le
+hasard l'explique mal (intervalle de confiance à 90 %, au moins 10 occasions), « à confirmer » quand l'écart est net
+sur peu de mains. Exemple sur un régulier : c-bet de 100 % sur les flops As-hauts et 95 % sur les flops pairés
+(65 % et 62 % pour le solveur), mais 33 % sur les flops Dix-hauts (72 %) ; mise river 62 % quand le board se paire
+contre 42 % sur les autres cartes. Le coach a le même outil (« Dans quelles lignes Villain bluffe-t-il ? »).
+
+## Plan de jeu suggéré
+
+Onglet *Plan de jeu suggéré* de *Études du solveur* : les études résolues réduites à des règles simples, du
+flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de flops résolus, plus il est précis.
+
+- **Lecture des études** : chaque étude est ouverte une fois pour lire ses stratégies aux nœuds clés : c-bet,
+  réponse à la c-bet et au check-raise, 2e barrel à chaque turn, 3e barrel sur un échantillon de rivers (13
+  turns, toutes leurs rivers), c-bet retardée et probe après un flop checké. Les mains y sont regroupées par
+  famille (deux paires et mieux, overpair, top pair bon ou petit kicker, paire moyenne, petite paire, tirage
+  couleur, tirage quinte, gutshot ou backdoor, hauteur As ou Roi, rien), les turns et rivers par effet sur le
+  board (overcard, brique, board pairé, couleur possible, quinte possible). Une étude résolue est lue tout de
+  suite ; les anciennes, avec **Préparer le plan** (quelques secondes en pot 4bet, une minute environ en SRP).
+  Résultats dans `~/.analyzer/plans/` (sauvegardés).
+- **Selon le flop** : une grille par catégorie de flop, la hauteur (haut : As ou Roi ; moyen : Dame à Dix ;
+  bas : 9 ou moins) en lignes et la structure (sec ; deux couleurs ; connecté, quintes possibles) en colonnes,
+  plus les flops pairés et monotones. Chaque case donne le niveau de c-bet de celui qui a l'initiative
+  (*mise presque tout* : 75 % et plus, en général petite ; *mise souvent* : 50 à 75 % ; *checke souvent* :
+  moins de 50 %), la c-bet et des flops résolus en exemple.
+- **Catégorie par catégorie** : ses flops, le pourquoi (avantage d'équité et de nuts), puis la stratégie pour
+  quatre familles de mains, *fortes* (deux paires et mieux, overpair, top pair bon kicker), *moyennes* (top
+  pair petit kicker, paires moyennes et petites), *tirages* (couleur, quinte) et *rien* (hauteur, gutshots,
+  backdoors) : au flop, à la turn et à la river selon la carte (overcard, brique, board pairé, couleur ou
+  quinte possible, chacune expliquée), avec la fréquence de mise. Le jeu de l'autre joueur (face à la c-bet
+  et aux barrels), les autres lignes (c-bet retardée, probe) et le détail en onze familles de mains sont
+  repliés.
+- **Les flops résolus** : chacun avec sa catégorie, son niveau, sa c-bet, sa taille et les deux avantages ; un
+  clic l'ouvre dans l'explorateur.
+
+## Coach
+
+Un coach avec qui discuter de stratégie. C'est Claude, l'IA d'Anthropic : il consulte tes données avant de
+répondre (le plan de jeu suggéré, la liste des études, la stratégie du solveur à un nœud par famille de mains
+avec équités et EV, une main précise, les écarts et les bluffs d'un adversaire réel) et explique pourquoi le
+solveur choisit une action, en règles simples. Il sait aussi faire lui-même un node-lock contre un adversaire
+réel (voir plus bas). Deux façons de lui parler :
+
+### Dans ton abonnement Claude (sans clé API)
+
+Analyzer donne ses outils à l'application Claude (Claude Desktop) ou à Claude Code par un serveur MCP local : la
+conversation tourne dans ton abonnement, sans coût par question (dans les limites d'usage de ton abonnement).
+
+```bash
+python -m analyzer mcp --config
+```
+
+affiche, avec les chemins de ta machine :
+
+- pour **Claude Desktop** : le bloc à coller dans `claude_desktop_config.json` (Réglages > Développeur >
+  Modifier la configuration), puis redémarre l'application ;
+- pour **Claude Code** : la commande `claude mcp add …` à lancer une fois.
+
+Ensuite, pose tes questions **dans Claude** (pas dans le panneau du coach d'Analyzer, qui passe toujours par
+l'API et sa facturation à part) : « Résume-moi le plan de jeu en SRP » ou « Dans quelles lignes Villain
+bluffe-t-il ? ». Depuis l'explorateur, *Copier pour Claude* (onglet Coach) copie ta question avec ce que tu
+regardes (spot ou main, ligne, case sélectionnée) : colle-la dans Claude, qui ouvre le même moment du coup.
+
+Pour vérifier le branchement : dans Claude Code, `claude mcp list` doit montrer `analyzer` connecté (et `/mcp`
+dans une session) ; dans Claude Desktop, le serveur apparaît dans Réglages > Développeur après un redémarrage
+complet de l'application.
+Le prompt *coach* du serveur (menu des prompts de l'application) donne au modèle la façon de répondre du coach.
+Le serveur (`python -m analyzer mcp`) est lancé par l'application Claude : il charge tes mains au premier outil
+appelé et ouvre les études comme l'application d'Analyzer (les deux peuvent tourner en même temps, chacune avec sa
+propre session du solveur). Il n'y a pas de dépendance à installer.
+
+### Dans l'application d'Analyzer (clé API)
+
+Le même coach est intégré à l'application : onglet *Plan de jeu suggéré* (« Discuter avec le coach ») et
+explorateur (onglet *Coach* à droite, qui sait quel spot, quelle ligne et quelle case tu regardes).
+
+```bash
+pip install anthropic
+export ANTHROPIC_API_KEY=sk-ant-...      # Windows : setx ANTHROPIC_API_KEY sk-ant-...
+python -m analyzer app
+```
+
+- Clé API à créer sur console.anthropic.com (ou `ant auth login`) ; sans elle, le panneau explique quoi faire.
+- Modèle : le plus récent des modèles de la famille Opus (les plus capables) que ta clé peut utiliser, choisi
+  dans la liste des modèles de l'API ; effort `high`. À changer avec `ANALYZER_COACH_MODEL` et
+  `ANALYZER_COACH_EFFORT`. Si le modèle décline une question, l'API la confie à un autre modèle Claude
+  (`fallbacks: "default"`).
+- Coût : facturé par Anthropic à l'usage (API séparée de l'abonnement), de 5 à 20 centimes par question environ
+  selon les outils consultés ; la page affiche le coût estimé de la discussion. Le compte API doit avoir du
+  crédit (console.anthropic.com, rubrique Billing) : sans crédit, le service refuse les questions (erreur 400).
+- En cas d'erreur, le panneau donne la raison renvoyée par le service (et le terminal, le numéro de la requête).
+  Si le relais vers un autre modèle n'est pas ouvert à ton compte, le coach s'en passe.
+- Ouvrir une étude pour répondre prend quelques secondes (une minute en SRP) ; elle reste ouverte pour
+  l'explorateur.
+
+### Exploiter un adversaire réel (node-lock)
+
+Demande au coach « Comment exploiter Villain sur ce flop ? » (ou, dans l'explorateur, « Comment exploiter mon
+adversaire ici ? ») : il verrouille lui-même le profil de l'adversaire dans l'étude et lit la meilleure réponse.
+
+1. **Son profil**, mesuré sur tes mains contre lui, dans ce type de pot et ce rôle (à l'initiative ou face à
+   elle) : c-bet, 2e et 3e barrels, c-bet retardée, fold face à la c-bet et aux barrels, relances, fold et
+   sur-relance face à une relance, probe (ou mise quand l'agresseur checke). Chaque fréquence est comparée à
+   celle du solveur dans les mêmes situations (moyenne des plans de jeu des flops résolus de ce type de pot).
+2. **L'écart devient un rapport de cotes**, ramené vers la théorie quand l'échantillon est petit : il compte pour
+   moitié à 30 occasions, pas du tout sous 8, et moins quand le repère du solveur tient sur moins de 5 flops
+   résolus (c'est le cas des pots 3bet tant qu'un seul flop est résolu).
+3. **Le verrou** (`native/profil.rs`) : à chaque nœud de l'adversaire, la fréquence du solveur est déplacée de
+   ce rapport de cotes, par un multiplicateur commun à toutes les mains. Il mise donc plus (ou moins) partout,
+   mais toujours davantage là où le solveur mise déjà beaucoup ; l'ordre des mains et le partage entre les
+   tailles sont gardés, et les mains jouées pures le restent. Les situations sans mesure gardent le jeu du
+   solveur.
+4. **La meilleure réponse** (`exploit_view` de GTOpen) au nœud demandé : le jeu du solveur et le jeu
+   exploitant pour toute la range et par famille de mains, les mains qui changent d'action, l'EV et le gain en
+   bb. Si c'est à l'adversaire d'agir, sa stratégie une fois verrouillée.
+
+« récréatifs » ou « réguliers » à la place d'un pseudo donnent le profil moyen d'un groupe (plus de mains).
+La meilleure réponse est maximale : elle suppose que l'adversaire ne s'adapte pas et pousse chaque main vers une
+action pure. Le coach en tire une direction (quelles familles changent d'action, où est le gain) et conseille
+une version tempérée. Compter de 5 à 40 secondes par nœud : ouverture de l'étude, verrou (de 1 à 5 s, 20 s pour
+la plus grosse étude), meilleure réponse ; le verrou demande de la mémoire en plus (de 70 Mo à 1 Go selon
+l'étude).
+
+## Entraîneur
+
+Menu **Entraîneur** de l'application : tu joues des mains sur les spots d'étude résolus (SRP, pots 3bet et
+4bet), le solveur juge chaque décision.
+
+- **Réglages** : type de pot ; flop précis, texture ou flop au hasard parmi ceux résolus (avec le nombre de
+  mains avant de changer : changer de flop rouvre une étude, quelques secondes) ; ton côté (BB, BTN ou les
+  deux) ; le départ : tout le coup dès le flop, la turn, la river, ou **une situation précise** (face à la
+  c-bet, 2e barrel, probe river…, mêmes situations que pour le choix des tailles).
+- **Une main** : on tire une ligne jusqu'au départ selon les fréquences du solveur (en grisé dans le
+  déroulé), puis les deux mains ensemble dans les ranges du solveur à ce moment du coup. Tu joues ; l'adversaire
+  joue la stratégie du solveur *pour sa main* ; turn et river tombent au hasard. Touches : 1, 2, 3… pour les
+  actions, Espace ou Entrée pour continuer, R pour les réglages.
+- **Après chaque décision** : ce que le solveur fait avec ta main (fréquences et EV de chaque action), la
+  stratégie de toute la range, l'EV perdue, et un lien vers l'explorateur à ce nœud. Mêmes règles que
+  « Face au solveur » : une action jouée au moins 10 % du temps avec ta main ne coûte rien ; une erreur, c'est
+  plus de 0,25 bb d'EV perdue. Par défaut, on enchaîne sans attendre quand l'action est juste.
+- **Tes progrès** : chaque décision est gardée (`~/.analyzer/entrainement/journal.jsonl`) ; la page de
+  réglages montre, situation par situation, ton taux de décisions justes et l'EV perdue (en tout et sur
+  7 jours), les plus coûteuses en tête, avec **S'entraîner** pour les retravailler.
+
+Deux raccourcis : **S'entraîner ici** dans l'explorateur rejoue des mains à partir du nœud affiché (aussi sur
+une main jouée recalculée), et **S'entraîner** dans « Les erreurs récurrentes » de *Face au solveur* lance la
+situation où tu perds de l'EV.
+
+## Sauvegarde
+
+Tout ce qu'Analyzer calcule est dans `~/.analyzer` (ou le dossier de `ANALYZER_HOME`). Menu **Sauvegarde** de
+l'application, ou en ligne de commande :
+
+```bash
+python -m analyzer sauvegarde "C:\Users\toi\OneDrive\Analyzer"   # dossier synchronisé ; retenu ensuite
+python -m analyzer sauvegarde gdrive:Analyzer --etudes                # stockage rclone, avec les études
+python -m analyzer sauvegarde                                         # même destination que la dernière fois
+python -m analyzer sauvegarde --auto        # sauvegarde automatique après chaque calcul dans l'application
+python -m analyzer sauvegarde --restaurer   # sur un autre ordinateur : reprend la dernière sauvegarde
+```
+
+- **Destination** : un dossier, de préférence synchronisé en ligne (OneDrive, Google Drive, Dropbox : leur
+  application l'envoie sur leurs serveurs), ou un stockage en ligne configuré avec
+  [rclone](https://rclone.org) (`rclone config` une fois, puis `nom:dossier` : Google Drive, OneDrive, S3,
+  SFTP…). Aucun mot de passe n'est gardé par Analyzer.
+- **L'essentiel** (quelques Mo) : tailles de mise choisies (les plus longues à recalculer : une heure et
+  demie par flop SRP), résolutions en cache, résumés des mains analysées, journal de l'entraîneur, fiches des
+  études. Une archive datée par sauvegarde dans `archives/`, les 10 dernières gardées.
+- **Les études** (`--etudes`, option de la page) : les fichiers des arbres résolus (20 Mo à quelques
+  centaines de Mo chacun) dans `etudes/` ; seules les nouvelles ou modifiées sont copiées ensuite.
+- **Automatique** : après une résolution, un choix de tailles ou une main analysée, au plus une fois par
+  quart d'heure.
+- **Restaurer** : la dernière archive, sans écraser un fichier local plus récent (le journal de l'entraîneur
+  est fusionné), puis les études absentes.
+
+Les tailles choisies et les synthèses de référence peuvent aussi rejoindre le dépôt (fichiers
+`analyzer/theory/data/*_tailles.json` et `*_reference.json`, voir plus haut) : elles sont alors livrées avec
+Analyzer.
+
 ## Contenu du rapport
 
 | Section | Ce qu'on y trouve |
@@ -388,30 +703,95 @@ Variables d'environnement : `ANALYZER_HOME` (dossier de travail, `~/.analyzer` p
 
 ```
 analyzer/
-  parsers/betclic.py   lecture des historiques Betclic
+  parsers/             lecture des historiques : betclic.py, winamax.py, unibet.py
+  ring.py              tables à 3 joueurs et plus : tes stats par position
   models.py            modèle commun (Hand, Action, Seat)
   stats.py             lecture des situations HU et agrégation des stats
   cards.py             notation des mains, évaluateur 7 cartes, équité
   insights.py          repères, exploits, duel, tells de sizing
   lines.py             lignes value / bluff, folds forcés, pertes sans abattage
+  bluffs.py            où un adversaire bluffe : fréquences par carte face au solveur, mains montrées, patterns
   plan.py              plan de jeu généré à partir de l'analyse
   spots.py             fiches des mains pour le visualiseur (tags de spot, lignes, équités)
   report.py            rapport HTML
   viewer.py            visualiseur de spots (HTML + JavaScript, sans dépendance)
   selfreport.py        « Mon jeu » : ton bilan contre tous tes adversaires
   theory/              préflop vs solveur : solution (data/), comparaison (preflop.py), page (page.py),
+                       arbre préflop pour l'explorateur (preflop_tree.py), plan de jeu suggéré
+                       (coach.py), profil d'un adversaire réel et node-lock (exploit.py),
                        catégories de mains pour les filtres (handclass.py),
                        lecture de captures de ranges (extract.py) ; postflop avec GTOpen : spots,
-                       installation et lecture des résultats (postflop.py), pont Rust (native/main.rs),
-                       commande `gtopen` (solve_cli.py)
+                       installation et lecture des résultats (postflop.py), pont Rust (native/main.rs ;
+                       arbre.rs pour les tailles, profil.rs pour le verrou d'un profil d'adversaire),
+                       commande `gtopen` (solve_cli.py), mains jouées face au solveur (review.py),
+                       ranges des tables à plusieurs (ring_ranges.py), tes ranges ajustées
+                       (custom_ranges.py, ordre des mains dans data/hand_order.json)
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
-                       (library.py), résolutions et sessions du solveur (solves.py), interface
+                       (library.py), résolutions et sessions du solveur (solves.py), page « Face au
+                       solveur » (review_page.py), leakfinding (leaks_page.py), bluffs des adversaires
+                       (bluffs_page.py), entraîneur
+                       (trainer.py, static/trainer.*), plan de jeu suggéré (plan_page.py), coach
+                       (coach_chat.py, static/coach.*) et son serveur MCP pour l'abonnement Claude
+                       (mcp_server.py), sauvegardes en arrière-plan (backups.py), interface
                        (static/, dont l'explorateur explorer.*)
+  backup.py            sauvegarde et restauration de ~/.analyzer (commande `sauvegarde`)
+  players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
+  leaks.py             leakfinding : stats face à la théorie, revue du solveur, mains à revoir, leaks prioritaires
+  students.py          les élèves : un dossier de mains par élève
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)
 hands/                 tes historiques (ignorés par git)
 reports/               rapports générés (ignorés par git)
 ```
+
+### Sites et formats de table
+
+| Site | Héros | Particularités |
+|---|---|---|
+| Betclic | étiquette `[Hero]` | heure de chaque action (temps de réflexion) |
+| Winamax | ligne « Dealt to » | pot du résumé net du rake ; aux tables anonymes, « Incognito 2 » devient « Incognito-<identifiant> » (ligne *Player Info*) pour ne pas mélanger deux joueurs assis à la même place |
+| Unibet | compte entre crochets (`Pseudo[Unibet_…]`) | joueurs « sitting out » écartés (pas servis) |
+
+Ton pseudo peut changer d'un site à l'autre : le héros de chaque main prend le pseudo principal (celui qui revient
+le plus souvent), pour que *Mon jeu* réunisse tous les sites. Chaque joueur reçoit sa position (BTN, SB, BB, CO,
+HJ, UTG…) d'après le bouton et les blindes postées. L'import indique, par fichier, le site et le nombre de mains
+en HU, 3-max et 6-max. Les mains heads-up (deux joueurs servis) alimentent toute l'analyse ; les autres sont
+gardées pour l'analyse par position.
+
+**Tables à plusieurs** (onglet de *Mon jeu*, et de chaque élève) : tes stats par position, en 6-max et en 3-max —
+mains et bb/100, VPIP, PFR, open quand tu parles le premier, limp, 3bet et call face à une ouverture, fold face au
+3bet après ton open, défense des blindes face à un vol (ouverture du CO, du bouton ou de la SB sans caller), c-bet
+au flop en pot à deux ou à plusieurs, fold face à la c-bet, abattage et gain à l'abattage. En 6-max, des repères
+indicatifs (stats de tracker courantes d'un régulier à 100 bb) colorent les écarts, en attendant ceux du solveur ;
+pas encore de repère en 3-max. Code : `analyzer/ring.py` (lecture des mains) et `app/ring_page.py` (la page).
+
+**Pots à deux joueurs au flop** (3-max, 6-max) : quand il ne reste que deux joueurs au flop, le coup se résout au
+solveur postflop comme un coup heads-up — hors de position celui qui parle le premier après le flop, pot avec
+l'argent mort des joueurs qui ont foldé, tapis effectif des deux joueurs. Leurs ranges viennent de **ta solution
+préflop** du format, à déposer dans `~/.analyzer/ranges/<format>.json` (`6-max.json`, `3-max.json`, sauvegardé) :
+
+```json
+{"format": "6-max", "stack_bb": 100, "source": "…",
+ "lines": {"CO:raise BB:call": {"pot_type": "SRP", "ranges": {"CO": "AA,AKs,KQo:0.5,…", "BB": "…"}},
+           "BTN:raise SB:raise BTN:call": {"pot_type": "pot 3bet", "ranges": {"SB": "…", "BTN": "…"}}}}
+```
+
+Une ligne = les relances et calls préflop dans l'ordre, avec la position de leur auteur (les folds n'y sont pas) ;
+chaque range est celle du joueur au flop (« main » ou « main:poids »).
+
+En 6-max, les charts gratuits de [Hand2Note Guide](https://hand2noteguide.com/fr/poker/free-poker-tools/preflop-gto-charts/)
+(100 bb, tirés de PioSolver, fréquences arrondies à 25 %) se chargent d'un clic dans l'onglet *Tables à plusieurs*,
+ou avec `python -m analyzer ranges --hand2note`. Ils donnent l'open de chaque position, la réponse à un open et la
+réponse de l'ouvreur au 3bet : on en tire, en 6-max, 8 pots simples (open, call), 15 pots 3bet (open, 3bet, call ;
+l'ouvreur garde les mains qu'il ouvre *et* paie le 3bet) et 15 pots 4bet (open, 3bet, 4bet hors tapis, call). Le
+site ne publiant pas la réponse au 4bet, celle du 3bettor vient d'une réponse type mesurée sur une capture de solveur
+(la SB face au 4bet du bouton, `theory/data/vs4bet_reference.json`), appliquée à toutes les positions. Le **3-max**
+reprend les charts du BTN, de la SB et de la BB (8 lignes). Les conditions d'utilisation du site réservent ces charts
+à un usage personnel : ils sont téléchargés sur ta machine (`~/.analyzer/ranges/6-max.json` et `3-max.json`), jamais
+dans le dépôt. `python -m analyzer ranges` liste les solutions présentes. L'onglet *Tables à plusieurs* liste ces
+coups (les plus gros pots d'abord) avec *Ouvrir au solveur ↗*, ou la raison s'ils ne se résolvent pas encore :
+pas de range pour la ligne, troisième joueur qui a mis de l'argent avant de se coucher (call puis fold, squeeze),
+tapis préflop. L'explorateur montre le préflop de toute la table et les vraies positions (`theory/ring_ranges.py`).
 
 ### Ajouter un site
 

@@ -362,6 +362,9 @@ class PostflopSpot(SpotTree):
     action_index: list[int]  # indice dans hand.actions de chaque étape de la ligne (-1 : carte)
     sizes: dict[str, list[dict[str, list]]]  # joueur -> street -> {"bet", "raise", "donk"}
     added: list[str] = field(default_factory=list)  # joueurs dont la main a été ajoutée à la range
+    context: str = ""  # la ligne préflop et son format, pour tes ranges ajustées (custom_ranges.context)
+    adjusted: Optional[str] = None  # tes ranges ajustées en jeu : « coup », « ligne », ou None (référence)
+    reference: dict[str, dict[str, float]] = field(default_factory=dict, repr=False)  # ranges de la référence
 
     @property
     def board(self) -> list[str]:
@@ -383,24 +386,35 @@ class PostflopSpot(SpotTree):
         write_study_meta(self, request, raw)
 
 
-def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> PostflopSpot:
-    solution = solution or load_solution()
-    sb, bb_player = hand.button, hand.big_blind
-    villain = hand.opponent_of(hero)
-    if len(hand.seats) != 2 or not sb or not bb_player or villain is None:
+POSTFLOP_ORDER = ("SB", "BB", "UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN")  # ordre de parole après le flop
+
+
+def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custom: bool = True) -> PostflopSpot:
+    """Le spot postflop d'une main : heads-up (ranges de la solution HU), ou table à plusieurs quand il ne reste que
+    deux joueurs au flop (ranges de ta solution du format, voir ring_ranges). Tes ranges ajustées pour ce coup ou
+    pour sa ligne (custom_ranges) remplacent celles de la référence, sauf avec custom=False."""
+    from . import custom_ranges
+    if len(hand.seats) == 2 and (not hand.button or not hand.big_blind or hand.opponent_of(hero) is None):
         raise Unsupported("Seules les mains heads-up se résolvent.")
     pre = [a for a in hand.actions if a.street == "preflop" and a.kind in VOLUNTARY]
     if any(a.all_in for a in pre):
         raise Unsupported("Tapis préflop : il n'y a plus de décision après le flop.")
     if len(hand.board) < 3 or not any(a.street == "flop" for a in hand.actions):
         raise Unsupported("La main s'arrête avant le flop : rien à résoudre après le flop.")
-    pattern = tuple(("sb" if a.player == sb else "bb", a.kind) for a in pre)
-    if pattern not in PREFLOP_LINES:
-        if pattern[:1] == (("sb", CALL),):
-            raise Unsupported("Pot limpé : la solution préflop ne donne pas de range pour ce cas.")
-        raise Unsupported("Ligne préflop hors de la solution (seuls SRP, pots 3bet et 4bet sont couverts).")
-    pot_type, sb_source, bb_source = PREFLOP_LINES[pattern]
-    ranges = {sb: range_weights(solution, *sb_source), bb_player: range_weights(solution, *bb_source)}
+    if len(hand.seats) == 2:
+        oop, ip, pot_type, ranges = _heads_up_ranges(hand, pre, solution or load_solution())
+    else:
+        oop, ip, pot_type, ranges = _ring_ranges(hand, hero, pre)
+    villain = ip if hero == oop else oop
+    context = custom_ranges.context(hand.table_format, [(hand.position(a.player), a.kind) for a in pre
+                                                        if a.kind != FOLD])
+    reference = {p: dict(r) for p, r in ranges.items()}
+    adjusted = None
+    if custom:
+        scope, mine = custom_ranges.lookup(hand.hand_id, context)
+        for p in (oop, ip):
+            if hand.position(p) in mine:
+                ranges[p], adjusted = dict(mine[hand.position(p)]), scope
 
     added = []
     for player in (hero, villain):
@@ -413,12 +427,11 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> Po
 
     bb = hand.bb
     put = {p: sum(a.amount for a in hand.actions if a.player == p and a.street == "preflop") for p in hand.seats}
-    pot = sum(put.values())
-    stack = min(hand.seats[p].stack - put[p] for p in hand.seats)
+    pot = sum(put.values())  # l'argent mort des joueurs qui ont foldé compris
+    stack = min(hand.seats[p].stack - put[p] for p in (oop, ip))
     if stack <= 0:
         raise Unsupported("Tapis préflop : il n'y a plus de décision après le flop.")
 
-    oop, ip = bb_player, sb
     played = {p: [{"bet": [], "raise": [], "donk": []} for _ in range(3)] for p in (oop, ip)}
     line: list[dict] = []
     index: list[int] = []
@@ -455,7 +468,97 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None) -> Po
     sizes = {p: [{k: _merge_sizes(defaults[p][s][k], played[p][s][k]) for k in ("bet", "raise", "donk")}
                  for s in range(3)] for p in (oop, ip)}
     return PostflopSpot(hand, hero, villain, pot_type, oop, ip, round(pot / bb, 4), round(stack / bb, 4),
-                        ranges, line, index, sizes, added)
+                        ranges, line, index, sizes, added, context, adjusted, reference)
+
+
+
+def _heads_up_ranges(hand: Hand, pre: list, solution: Solution) -> tuple[str, str, str, dict]:
+    """Heads-up : la ligne préflop dans la solution HU ; la BB est hors de position."""
+    sb, bb_player = hand.button, hand.big_blind
+    pattern = tuple(("sb" if a.player == sb else "bb", a.kind) for a in pre)
+    if pattern not in PREFLOP_LINES:
+        if pattern[:1] == (("sb", CALL),):
+            raise Unsupported("Pot limpé : la solution préflop ne donne pas de range pour ce cas.")
+        raise Unsupported("Ligne préflop hors de la solution (seuls SRP, pots 3bet et 4bet sont couverts).")
+    pot_type, sb_source, bb_source = PREFLOP_LINES[pattern]
+    ranges = {sb: range_weights(solution, *sb_source), bb_player: range_weights(solution, *bb_source)}
+    return bb_player, sb, pot_type, ranges
+
+
+def flop_pair(hand: Hand) -> Optional[tuple[str, str]]:
+    """(hors de position, en position) s'il ne reste que deux joueurs au flop, sinon None."""
+    if len(hand.seats) == 2:
+        return (hand.big_blind, hand.button) if hand.button and hand.big_blind else None
+    folded = {a.player for a in hand.actions if a.street == "preflop" and a.kind == FOLD}
+    players = [p for p in hand.seats if p not in folded]
+    if len(players) != 2 or len(hand.board) < 3 or any(hand.position(p) not in POSTFLOP_ORDER for p in players):
+        return None
+    oop, ip = sorted(players, key=lambda p: POSTFLOP_ORDER.index(hand.position(p)))
+    return oop, ip
+
+
+def _ring_ranges(hand: Hand, hero: str, pre: list) -> tuple[str, str, str, dict]:
+    """Table à plusieurs : les deux joueurs qui voient le flop, leurs ranges d'après ta solution du format."""
+    from . import ring_ranges
+    folded = {a.player for a in pre if a.kind == FOLD}
+    players = [p for p in hand.seats if p not in folded]
+    if hero not in players:
+        raise Unsupported("Tu as foldé avant le flop : rien à résoudre après le flop.")
+    if len(players) != 2:
+        raise Unsupported(f"Pot à {len(players)} joueurs au flop : le solveur ne résout que les pots à deux.")
+    if any(a.player not in players and a.kind != FOLD for a in pre):
+        raise Unsupported("Un troisième joueur a mis de l'argent avant de se coucher (call puis fold, squeeze…) : "
+                          "cette ligne n'est pas encore couverte.")
+    positions = {p: hand.position(p) for p in players}
+    if any(pos not in POSTFLOP_ORDER for pos in positions.values()):
+        raise Unsupported("Positions inconnues : le bouton manque dans l'historique.")
+    steps = [(positions[a.player], a.kind) for a in pre if a.kind != FOLD]
+    found = ring_ranges.lookup(hand.table_format, steps)
+    if found is None:
+        raise Unsupported(f"Pas de range préflop pour « {ring_ranges.describe(steps)} » en {hand.table_format} : "
+                          f"ajoute ta solution ({ring_ranges.folder() / (hand.table_format + '.json')}).")
+    pot_type, by_position = found
+    if any(pos not in by_position for pos in positions.values()):
+        raise Unsupported(f"Ta solution ne donne pas les deux ranges de « {ring_ranges.describe(steps)} ».")
+    oop, ip = sorted(players, key=lambda p: POSTFLOP_ORDER.index(positions[p]))
+    return oop, ip, pot_type, {p: dict(by_position[positions[p]]) for p in players}
+
+PREFLOP_RAISES = ("Open", "3bet", "4bet", "5bet")
+
+
+def preflop_steps(hand: Hand, hero: Optional[str] = None) -> list[dict]:
+    """L'action préflop jouée, pour le déroulé de l'explorateur : position et joueur de l'arbre (0 = hors de
+    position, 1 = en position ; None pour un joueur qui n'est plus là au flop), action, tapis restant avant d'agir
+    (effectif en heads-up, le sien à une table à plusieurs) et pot (en bb), ligne de la solution préflop HU."""
+    bb = hand.bb
+    heads_up = len(hand.seats) == 2
+    effective = min(seat.stack for seat in hand.seats.values())
+    pair = flop_pair(hand)
+    put = dict.fromkeys(hand.seats, 0.0)
+    steps, line, raises = [], [], 0
+    for a in hand.actions:
+        if a.street != "preflop":
+            continue
+        if a.kind not in VOLUNTARY:  # blindes
+            put[a.player] += a.amount
+            continue
+        if a.kind == RAISE:
+            name = "Tapis" if a.all_in else PREFLOP_RAISES[min(raises, len(PREFLOP_RAISES) - 1)]
+            name, key = f"{name} {_num(a.to / bb, 2)}", "allin" if a.all_in else "raise"
+            raises += 1
+        else:
+            name = {CALL: "Call" if raises else "Limp", FOLD: "Fold", CHECK: "Check"}[a.kind]
+            key = {CALL: "call", FOLD: "fold"}.get(a.kind)
+        stack = (effective if heads_up else hand.seats[a.player].stack) - put[a.player]
+        steps.append({"player": pair.index(a.player) if pair and a.player in pair else None,
+                      "position": hand.position(a.player), "hero": a.player == hero, "name": name,
+                      "stack": round(stack / bb, 2), "pot": round(sum(put.values()) / bb, 2),
+                      "line": list(line) if heads_up else None})
+        if a.kind in (RAISE, CALL):
+            put[a.player] = a.to
+        if key:
+            line.append(key)
+    return steps
 
 
 # --- Exécution et cache --------------------------------------------------------------------
@@ -566,10 +669,11 @@ def write_study_meta(spot: PostflopSpot, request: dict, raw: dict) -> None:
     meta = {
         "kind": "hand", "key": study_key(request), "hand": hand.hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"),
         "hero": spot.hero, "villain": spot.villain, "hero_cards": hand.hole_cards.get(spot.hero, []),
-        "board": hand.board, "pot_type": spot.pot_type, "hero_position": "BB" if spot.oop == spot.hero else "BTN",
+        "board": hand.board, "pot_type": spot.pot_type, "table_format": hand.table_format,
+        "hero_position": ("BB" if spot.oop == spot.hero else "BTN") if len(hand.seats) == 2 else hand.position(spot.hero),
         "pot": spot.pot_bb, "stack": spot.stack_bb, "net": round(hand.net(spot.hero) / hand.bb, 2),
         "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"), "seconds": raw.get("seconds"),
-        "menu": spot.menu_text(), "created": time.strftime("%d/%m/%Y %H:%M"),
+        "menu": spot.menu_text(), "created": time.strftime("%d/%m/%Y %H:%M"), "adjusted": spot.adjusted,
     }
     path = study_path(request).with_suffix(".json")
     path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
@@ -625,6 +729,7 @@ class Session:
         self._lock = threading.Lock()
         self._errors: list = []
         self._tmp = tempfile.TemporaryDirectory(prefix="analyzer-session-")
+        self.profile: Optional[dict] = None  # profil d'adversaire verrouillé dans le pont (Session.ask)
 
     def start(self, on_progress: Optional[Callable[[dict], None]] = None,
               on_start: Optional[Callable[[subprocess.Popen], None]] = None) -> dict:
@@ -665,24 +770,38 @@ class Session:
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None and self.result is not None
 
-    def node(self, path: list) -> dict:
-        """Nœud de l'arbre au bout du chemin (étapes {"type": "action", "index": i} / {"type": "card", "card": c})."""
+    def ask(self, query: dict) -> dict:
+        """Requête au pont : {"path": [...]} et, au besoin, "profile" (profil d'adversaire verrouillé)
+        et "exploit" (joueur dont on veut la meilleure réponse). Renvoie la réponse complète."""
         with self._lock:
             if not self.alive:
                 raise SolverError("La session du solveur est fermée : relance la résolution.")
             self.last_used = time.time()
             try:
-                self.proc.stdin.write(json.dumps({"path": path}) + "\n")
+                self.proc.stdin.write(json.dumps(query) + "\n")
                 self.proc.stdin.flush()
                 line = self.proc.stdout.readline()
             except OSError as exc:
                 raise SolverError("La session du solveur s'est arrêtée.") from exc
-        if not line:
+            reply = json.loads(line) if line else None
+            # le pont garde le profil de la requête (sans profil : l'arbre du solveur) ; en cas d'erreur,
+            # on le considère retiré, la requête suivante le remettra au besoin
+            self.profile = query.get("profile") if reply and "error" not in reply else None
+        if reply is None:
             raise SolverError("La session du solveur s'est arrêtée.")
-        reply = json.loads(line)
         if "error" in reply:
             raise SolverError(reply["error"])
-        return reply["node"]
+        return reply
+
+    def node(self, path: list) -> dict:
+        """Nœud de l'arbre au bout du chemin (étapes {"type": "action", "index": i} / {"type": "card", "card": c}),
+        tel que le solveur le joue (un profil d'adversaire en place est retiré)."""
+        return self.ask({"path": path})["node"]
+
+    def exploit(self, path: list, profile: dict, player: int) -> dict:
+        """Le nœud avec l'adversaire verrouillé sur son profil, et la meilleure réponse de `player` :
+        {"node", "profile" (fréquences du solveur et du profil par situation), "exploit"}."""
+        return self.ask({"path": path, "profile": profile, "exploit": player})
 
     def close(self) -> None:
         proc = self.proc
@@ -797,6 +916,64 @@ def node_summary(node: dict) -> tuple[list[float], dict[str, list[float]]]:
     return [round(x / total, 4) if total else 0.0 for x in range_], out
 
 
+# --- Mains que le solveur ne joue (presque) jamais à un nœud ------------------------------------------
+#
+# La stratégie d'une main est une moyenne sur les itérations, pondérée par sa présence au nœud. Une main
+# qui n'y arrive presque jamais (hors de la range, ou une ligne que le solveur ne prend pas avec elle) n'y
+# apprend rien : ses fréquences sont un reste des premières itérations, arrondi sur quelques unités du
+# stockage compressé. Son EV par action, elle, est calculée face à la stratégie finale de l'adversaire :
+# pour ces mains, on montre la meilleure action selon l'EV.
+RARE_PATH = 0.01    # la main suit cette ligne moins d'une fois sur cent dans la stratégie du solveur
+RARE_MASS = 1e-3    # ou elle pèse mille fois moins que la main la plus présente du nœud
+RARE_RANGE = 0.005  # part de la range arrivée au nœud sous laquelle la suite n'est pas optimisée
+EV_TIE = 0.01       # bb : deux actions dont l'EV diffère de moins se valent
+
+
+def weights_of(spot) -> list[dict[str, float]]:
+    """Poids de départ des mains, par joueur de l'arbre (0 = hors de position)."""
+    return [spot.ranges[spot.oop], spot.ranges[spot.ip]]
+
+
+def best_response(evs: list[float]) -> list[float]:
+    """La meilleure action selon l'EV (partagée entre les actions qui se valent)."""
+    top = max(evs)
+    best = [e >= top - EV_TIE for e in evs]
+    return [round(1 / sum(best), 3) if b else 0.0 for b in best]
+
+
+def settle(node: dict, weights: Optional[list[dict[str, float]]] = None) -> dict:
+    """Remplace la stratégie des mains quasi absentes du nœud par leur meilleure action selon l'EV.
+
+    node["settled"] : ces mains (du joueur qui agit). Avec les poids de départ, node["presence"] : la part
+    de la range de chaque joueur qui arrive au nœud ; node["rare"] : les joueurs dont la range n'y arrive
+    presque jamais (la suite du coup n'est alors pas optimisée par le solveur)."""
+    if weights:
+        counts = live_combos(node["board"])
+        presence = []
+        for p in (0, 1):
+            start = sum(w * counts.get(cls, 0) for cls, w in weights[p].items())
+            presence.append(round(sum(r[1] for r in node["hands"][p]) / start, 5) if start else None)
+        node["presence"] = presence
+        node["rare"] = [p for p in (0, 1) if presence[p] is not None and presence[p] < RARE_RANGE]
+    actor = node.get("player")
+    node["settled"] = []
+    if actor is None or not node["hands"][actor]:
+        return node
+    na = len(node["actions"])
+    rows = node["hands"][actor]
+    top = max(r[1] for r in rows)
+    for row in rows:
+        evs = row[4 + na:4 + 2 * na]
+        if len(evs) < na or any(e is None for e in evs):
+            continue
+        weight = weights[actor].get(class_of(row[0])) if weights else None
+        if row[1] < RARE_MASS * top or (weight and row[1] / weight < RARE_PATH):
+            row[4:4 + na] = best_response(evs)
+            row[3] = round(max(evs), 3)  # l'EV de la main avec cette action
+            node["settled"].append(row[0])
+    return node
+
+
 def combo_row(node: dict, player: int, cards: list[str]) -> Optional[list]:
     wanted = set(cards)
     for row in node["hands"][player]:
@@ -811,8 +988,9 @@ def interpret(spot: PostflopSpot, raw: dict) -> dict:
     who = {spot.hero: "H", spot.villain: "V"}
     roles = {0: spot.oop, 1: spot.ip}
     decisions = []
+    weights = weights_of(spot)
     for d in raw["decisions"]:
-        node = d["node"]
+        node = settle(dict(d["node"], hands=[[list(r) for r in rows] for rows in d["node"]["hands"]]), weights)
         i = spot.action_index[d["step"]]
         player = roles[node["player"]]
         na = len(node["actions"])
@@ -839,10 +1017,12 @@ def interpret(spot: PostflopSpot, raw: dict) -> dict:
             "range": range_, "combo": "".join(cards) if row else None,
             "strategy": strategy, "evs": evs, "eq": row[2] if row else None, "reach": row[1] if row else None,
             "frequency": freq, "verdict": verdict(freq), "ev_loss": ev_loss, "classes": classes,
+            "settled": bool(row and row[0] in node["settled"]),
         })
     return {
         "hand": hand.hand_id, "pot_type": spot.pot_type, "pot": spot.pot_bb, "stack": spot.stack_bb,
-        "board": spot.board, "oop": who[spot.oop], "menu": spot.menu_text(),
+        "table_format": hand.table_format, "positions": {"H": hand.position(spot.hero), "V": hand.position(spot.villain)},
+        "board": spot.board, "oop": who[spot.oop], "menu": spot.menu_text(), "adjusted": spot.adjusted,
         "added": [who[p] for p in spot.added],
         "iterations": raw["iterations"], "exploit_pct": raw["exploit_pct"], "seconds": raw["seconds"],
         "tree_nodes": raw["tree_nodes"], "stopped": raw.get("stopped"), "decisions": decisions,
@@ -863,12 +1043,19 @@ def _strategy_text(actions: list[dict], freqs: list[float]) -> str:
 
 
 def result_text(result: dict, hero: str) -> str:
-    pos = "en BB (hors position)" if result["oop"] == "H" else "au bouton (en position)"
-    lines = [f"Main {result['hand']} — {result['pot_type']}, toi {pos} · flop {' '.join(result['board'])} · "
+    where = "hors position" if result["oop"] == "H" else "en position"
+    if result.get("table_format", "HU") != "HU":  # pot à deux à une table à plusieurs
+        pos = f"en {result['table_format']}, toi {result['positions']['H']} contre {result['positions']['V']} ({where})"
+    else:
+        pos = "toi " + ("en BB (hors position)" if result["oop"] == "H" else "au bouton (en position)")
+    lines = [f"Main {result['hand']} — {result['pot_type']}, {pos} · flop {' '.join(result['board'])} · "
              f"pot {_num(result['pot'])} bb · tapis {_num(result['stack'])} bb",
              f"GTOpen : {result['iterations']} itérations, exploitabilité {_num(result['exploit_pct'], 2)} % du pot, "
              f"{_num(result['seconds'], 0)} s · {result['tree_nodes']:_} nœuds".replace("_", " "),
              f"Tailles de l'arbre — {result['menu']}"]
+    if result.get("adjusted"):
+        lines.append("Ranges préflop : les tiennes, ajustées " + ("pour ce coup" if result["adjusted"] == "coup"
+                                                                  else "pour cette ligne") + " (pas la référence).")
     if result["added"]:
         lines.append("Note : " + " et ".join("ta main" if w == "H" else "sa main" for w in result["added"])
                      + " n'était pas dans la range du solveur ; elle y a été ajoutée avec un poids infime.")
@@ -882,7 +1069,9 @@ def result_text(result: dict, hero: str) -> str:
         if d["strategy"] is not None:
             what = "ta main" if d["who"] == "H" else "sa main"
             lines.append(f"   {what} : {_strategy_text(d['actions'], d['strategy'])} → {d['verdict']}"
-                         + (f", perte d'EV {_num(d['ev_loss'], 2)} bb" if d["ev_loss"] else ""))
+                         + (f", perte d'EV {_num(d['ev_loss'], 2)} bb" if d["ev_loss"] else "")
+                         + (" (le solveur n'arrive presque jamais ici avec cette main : meilleure action selon l'EV)"
+                            if d.get("settled") else ""))
     if result["stopped"]:
         lines.append(f"\nArrêt du suivi de la ligne : {result['stopped']}")
     return "\n".join(lines)

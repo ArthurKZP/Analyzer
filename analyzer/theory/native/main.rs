@@ -21,6 +21,11 @@
 //! Avec --serve, le programme garde ensuite l'arbre en mémoire et lit sur stdin une requête par
 //! ligne, {"path": [{"type": "action", "index": 0}, {"type": "card", "card": "Ah"}, ...]}, à laquelle
 //! il répond par une ligne {"node": ...} ou {"error": "..."}. Il s'arrête à la fin de stdin.
+//! Une requête peut porter un profil d'adversaire, "profile": {"villain": 0, "aggressor": 1,
+//! "tilts": {"cbet": 1.4, ...}} (voir profil.rs) : ses nœuds sont alors verrouillés sur ce profil
+//! tant que les requêtes le portent, et la réponse ajoute "profile" (fréquences du solveur et du
+//! profil par situation). "exploit": 0 | 1 ajoute la meilleure réponse de ce joueur au nœud
+//! (exploit_view de GTOpen : stratégie, EV par action et gain de chaque main contre le profil).
 //!
 //! Une étude (--save) garde l'arbre résolu sur disque sous une forme compacte : la requête, puis la
 //! stratégie moyenne de chaque nœud sur 8 bits (sans la dernière action, qui s'en déduit), le tout
@@ -43,13 +48,14 @@
 //! carte NVIDIA via le moteur CUDA de GTOpen, et revient au processeur si la carte n'est pas utilisable.
 
 mod arbre;
+mod profil;
 
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use solver::query::{ActionView, NodeView};
+use solver::query::{ActionView, ExploitView, NodeView};
 use solver::tree::{KIND_ACTION, KIND_CHANCE, SENTINEL};
 use solver::{PathStep, RunOptions, Solver, Spot, SpotConfig, Storage};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
@@ -214,6 +220,10 @@ enum Step {
 #[derive(Deserialize)]
 struct Query {
     path: Vec<PathStep>,
+    #[serde(default)]
+    profile: Option<profil::Profile>,
+    #[serde(default)]
+    exploit: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -587,19 +597,82 @@ fn load_study(path: &str) -> Result<(Request, Value, Solver), String> {
     Ok((request, header["summary"].clone(), solver))
 }
 
-fn serve(solver: &Solver) {
+/// Meilleure réponse au nœud : par main (portée non nulle), [combo, portée, EV de la meilleure
+/// réponse, EV de la stratégie du solveur, gain, stratégie de la meilleure réponse..., EV par action...].
+fn exploit_out(view: &ExploitView) -> Value {
+    let hands: Vec<Value> = view
+        .hands
+        .iter()
+        .filter(|h| h.reach > 1e-6)
+        .map(|h| {
+            let mut row = vec![json!(h.combo), json!(round(h.reach as f64, 4)), opt(h.br_ev, 3), opt(h.cur_ev, 3), opt(h.gain, 3)];
+            if let Some(s) = &h.br_strategy {
+                row.extend(s.iter().map(|&x| json!(round(x as f64, 3))));
+            }
+            if let Some(e) = &h.evs {
+                row.extend(e.iter().map(|&x| opt(x, 3)));
+            }
+            Value::Array(row)
+        })
+        .collect();
+    json!({
+        "type": view.node_type, "exploiter": view.exploiter, "player": view.player,
+        "actions": actions_out(&view.actions), "locked": view.locked,
+        "avg": [opt(view.avg_br_ev, 4), opt(view.avg_cur_ev, 4), opt(view.avg_gain, 4)],
+        "hands": hands,
+    })
+}
+
+/// Profil d'adversaire en place (et ce qu'il donne) entre deux requêtes.
+#[derive(Default)]
+struct Locks {
+    profile: Option<profil::Profile>,
+    summary: Value,
+}
+
+fn answer(solver: &mut Solver, locks: &mut Locks, q: Query) -> Value {
+    if q.profile != locks.profile {
+        match &q.profile {
+            None => profil::clear(solver),
+            Some(p) => match profil::apply(solver, p) {
+                Ok(summary) => locks.summary = summary,
+                Err(e) => {
+                    profil::clear(solver);
+                    locks.profile = None;
+                    return json!({ "error": e });
+                }
+            },
+        }
+        locks.profile = q.profile;
+    }
+    let view = match solver.node_view(&q.path) {
+        Ok(view) => view,
+        Err(e) => return json!({ "error": e }),
+    };
+    let mut reply = json!({ "node": node_out(solver, &view) });
+    if locks.profile.is_some() {
+        reply["profile"] = locks.summary.clone();
+    }
+    if let Some(p) = q.exploit {
+        match solver.exploit_view(&q.path, p) {
+            Ok(v) => reply["exploit"] = exploit_out(&v),
+            Err(e) => return json!({ "error": e }),
+        }
+    }
+    reply
+}
+
+fn serve(solver: &mut Solver) {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
+    let mut locks = Locks::default();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
         }
         let reply = match serde_json::from_str::<Query>(&line) {
-            Ok(q) => match solver.node_view(&q.path) {
-                Ok(view) => json!({ "node": node_out(solver, &view) }),
-                Err(e) => json!({ "error": e }),
-            },
+            Ok(q) => answer(solver, &mut locks, q),
             Err(e) => json!({ "error": format!("requête invalide : {e}") }),
         };
         if writeln!(out, "{reply}").and_then(|_| out.flush()).is_err() {
@@ -635,7 +708,7 @@ fn main() {
     }
     if let Some(study) = option(&args, "--load") {
         let start = std::time::Instant::now();
-        let (request, summary, solver) = load_study(&study).unwrap_or_else(|e| fail(e));
+        let (request, summary, mut solver) = load_study(&study).unwrap_or_else(|e| fail(e));
         let _ = writeln!(std::io::stderr(), "{}", json!({ "loaded": round(start.elapsed().as_secs_f64(), 1) }));
         let (decisions, stopped) = follow_line(&solver, &request.line);
         let out = Output {
@@ -651,7 +724,7 @@ fn main() {
         println!("{}", serde_json::to_string(&out).expect("sérialisation du résultat"));
         let _ = std::io::stdout().flush();
         if session {
-            serve(&solver);
+            serve(&mut solver);
         }
         return;
     }
@@ -726,6 +799,6 @@ fn main() {
     println!("{}", serde_json::to_string(&out).expect("sérialisation du résultat"));
     let _ = std::io::stdout().flush();
     if session {
-        serve(&solver);
+        serve(&mut solver);
     }
 }

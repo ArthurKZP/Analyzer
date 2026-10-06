@@ -2,12 +2,14 @@
   'use strict';
 
   const HAND = document.body.dataset.hand;
+  const PRE = HAND === 'preflop';  // arbre préflop de la solution, jusqu'au choix du flop d'un spot d'étude
   const SPOT = HAND.startsWith('spot:');  // spot d'étude : pas de main jouée, les joueurs sont nommés par leur position
+  const FAMILY = SPOT ? HAND.split(':')[1] : null;
   const $ = (id) => document.getElementById(id);
   const RANKS = 'AKQJT98765432';
   const SUITS = { s: '♠', h: '♥', d: '♦', c: '♣' };
   const STREET = ['Flop', 'Turn', 'River'];
-  const POS = ['BB', 'BTN'];
+  let POS = ['BB', 'BTN'];  // joueur 0 (hors de position), joueur 1 : à une table à plusieurs, leurs positions
   const NAME = { H: 'Toi', V: 'Lui' };
   const MODES = [['strategy', 'Stratégie'], ['strategy_ev', 'Stratégie + EV'], ['ev', 'EV'], ['equity', 'Équité']];
   const SHADES = ['var(--g-bet1)', 'var(--g-bet2)', 'var(--g-bet3)', 'var(--g-bet4)'];
@@ -26,6 +28,10 @@
   let notice = '';
   let pollTimer = null;
   let rightTab = 'combos';
+  let preLine = [];   // PRE : actions préflop depuis l'open du bouton
+  let picked = [];    // PRE : cartes choisies pour le flop
+  let flopInfo = null;  // PRE : le flop choisi et les flops résolus proches (/api/explorateur/flop)
+  let prefix = null;  // SPOT : la ligne préflop de la famille (nœud « flop »), en tête du déroulé
   const nodes = new Map();
   // Filtres : clés « m:i » (main faite), « d:i » (tirage), « e:i » / « q:i » (équité), « o:s » / « s:s » (couleurs).
   const filters = { mode: 'include', keys: new Set() };
@@ -53,11 +59,13 @@
   const prefixOf = (p, full) => p.length <= full.length && same(p, full.slice(0, p.length));
 
   function roleOf(p) {
-    const oop = meta.hero_position === 'BB' ? 'H' : 'V';
+    const oop = (meta.hero_oop !== undefined ? meta.hero_oop : meta.hero_position === 'BB') ? 'H' : 'V';
     return p === 0 ? oop : (oop === 'H' ? 'V' : 'H');
   }
   const playerOf = (role) => (roleOf(0) === role ? 0 : 1);
-  const who = (p) => (SPOT ? POS[p] : POS[p] + ' · ' + NAME[roleOf(p)]);
+  const who = (p) => (SPOT || PRE ? POS[p] : POS[p] + ' · ' + NAME[roleOf(p)]);
+  const streetName = (s) => (s < 0 ? 'Préflop' : STREET[s]);
+  const preHref = (line) => '/explorateur/preflop#ligne=' + line.join('.');
 
   // Libellés des actions d'un nœud. Mise : % du pot ; relance : montant ajouté en % du pot après le
   // call (convention des solveurs : relancer à 4,5 sur une mise de 1,7 dans un pot de 5 = 33 %).
@@ -65,6 +73,7 @@
     const call = actions.find((x) => x.kind === 'call');
     const base = call && put && player !== null && player !== undefined ? 2 * put[1 - player] : 0;
     return actions.map((a) => {
+      if (a.name) return a.name;  // préflop : « Open 2,5 », « 3bet 11,5 »…
       if ((a.kind === 'bet' || a.kind === 'raise') && a.allin) return 'Tapis ' + num(a.amount);
       if (a.kind === 'bet') return 'Mise ' + num(a.amount) + ' (' + Math.round(100 * a.amount / pot) + ' %)';
       if (a.kind === 'raise') return 'Relance ' + num(a.amount) + (base ? ' (' + Math.round(100 * (a.amount - call.amount) / base) + ' %)' : '');
@@ -109,6 +118,8 @@
       || (row[0].slice(0, 2) === hole[1] && row[0].slice(2) === hole[0])) || null;
   }
   const revealed = () => $('reveal').checked;
+  // Main que le solveur ne joue presque jamais au nœud : le serveur a mis sa meilleure action selon l'EV.
+  const rare = (combo) => !!(node.settled && node.settled.includes(combo));
 
   // ---------- serveur ----------
   async function api(url, body) {
@@ -176,11 +187,14 @@
   }
 
   async function back() {
+    if (PRE) { if (preLine.length) goLine(preLine.slice(0, -1)); return; }
     const p = path.slice();
     for (;;) {
       while (p.length && p[p.length - 1].type === 'card') p.pop();
-      if (!p.length) return;
+      if (!p.length) { if (prefix) location.href = preHref(prefix.preflop.line); return; }  // retour au préflop
       p.pop();
+      // au début d'un spot, un check forcé (la BB ne mène pas) ramène directement au préflop
+      if (SPOT && !p.length && prefix && nodes.has('[]') && forced(nodes.get('[]'))) { location.href = preHref(prefix.preflop.line); return; }
       if (!SPOT || !p.length) break;
       // dans un spot, on remonte aussi au-delà d'un nœud forcé (sauf la racine)
       const n = nodes.get(JSON.stringify(p));
@@ -189,9 +203,28 @@
     goTo(p);
   }
 
+  async function goLine(line) {
+    document.body.classList.add('busy');
+    try {
+      node = await api('/api/explorateur/preflop', { line });
+      if (preLine.join('.') !== line.join('.')) { picked = []; flopInfo = null; }
+      preLine = line.slice();
+      history.replaceState(null, '', '#ligne=' + preLine.join('.'));
+      if (node.player !== null && node.player !== undefined) viewPlayer = node.player;
+      selected = null;
+      notice = '';
+    } catch (e) {
+      notice = e.message;
+    } finally {
+      document.body.classList.remove('busy');
+    }
+    render();
+  }
+
   async function loadState() {
     state = await api('/api/explorateur/etat', { hand: HAND });
     meta = state.meta;
+    if (meta && meta.positions) POS = meta.positions;
     live = !!state.live;
     const decisions = state.result ? state.result.decisions : [];
     const last = decisions[decisions.length - 1];
@@ -219,6 +252,7 @@
         if (v.state === 'done') {
           nodes.clear();
           await loadState();
+          if (SPOT && !live && state.study) { solve(); return; }  // résolu sans session : on rouvre l'étude
           renderMeta();
           await (node ? goTo(path) : goStart());
           renderStatus();
@@ -236,27 +270,50 @@
 
   // ---------- rendu ----------
   function renderMeta() {
+    if (PRE) {
+      $('meta').textContent = node ? 'Préflop · ' + node.preflop.description : 'Préflop';
+      return;
+    }
     if (SPOT) {
       const box = $('meta');
       box.textContent = '';
       box.title = meta.family_label + (meta.sizes ? '\nTailles : ' + meta.sizes : '');
       box.append('Spot d\'étude · ' + meta.pot_type + ' · BTN contre BB · flop ', cards(meta.board), ' · ' + meta.texture
         + ' · pot ' + num(meta.pot) + ' bb, tapis ' + num(meta.stack) + ' bb');
+      box.append(adjustedBadge());
       return;
     }
     const parts = ['Main ' + meta.hand, meta.date];
     if (state.result) parts.push(state.result.pot_type);
-    parts.push('toi ' + (meta.hero_position === 'BTN' ? 'au bouton' : 'en BB'));
+    if (meta.table_format && meta.table_format !== 'HU') parts.push(meta.table_format, 'toi ' + meta.hero_position + ' contre ' + POS[meta.hero_oop ? 1 : 0]);
+    else parts.push('toi ' + (meta.hero_position === 'BTN' ? 'au bouton' : 'en BB'));
     const box = $('meta');
     box.textContent = '';
     box.append(parts.join(' · ') + ' · ', cards(meta.hero_cards), ' vs ',
       revealed() && meta.villain_cards.length ? cards(meta.villain_cards) : '??',
-      ' · ' + meta.villain + ' · résultat ' + (meta.net > 0 ? '+' : '') + num(meta.net) + ' bb');
+      ' · ' + meta.villain + (meta.stack ? ' · tapis effectif ' + num(meta.stack) + ' bb' : '')
+      + ' · résultat ' + (meta.net > 0 ? '+' : '') + num(meta.net) + ' bb', adjustedBadge());
+  }
+
+  // Ranges préflop ajustées en jeu : un rappel, qui ouvre l'onglet Ranges.
+  function adjustedBadge() {
+    if (!state || !state.adjusted) return '';
+    return el('button', {
+      type: 'button', class: 'rg-badge', title: 'Le solveur joue avec tes ranges préflop, pas celles de la référence',
+      onclick: () => { rightTab = 'ranges'; renderTabs(); },
+    }, 'tes ranges' + (state.adjusted === 'ligne' ? ' (ligne)' : ''));
   }
 
   function renderStatus() {
     const box = $('status');
     box.textContent = '';
+    if (PRE) {
+      if (node) box.append(el('span', {}, node.type === 'flop' ? 'Choisis le flop : les flops résolus s\'ouvrent en quelques secondes.'
+        : node.type === 'allin' ? 'Tapis préflop : pas de jeu après le flop à étudier.'
+          : 'Solution préflop : choisis les actions dans le déroulé ; au call, tu choisis le flop et le coup continue au postflop.'));
+      if (notice) box.append(el('span', { class: 'err' }, notice));
+      return;
+    }
     if (!state) return;
     const s = state.state;
     if (s === 'unsupported') box.append(el('span', {}, state.message));
@@ -269,6 +326,7 @@
       const elapsed = state.elapsed ? ' · ' + (state.elapsed >= 60 ? Math.floor(state.elapsed / 60) + ' min ' : '') + Math.round(state.elapsed % 60) + ' s' : '';
       box.append(el('span', {}, s === 'waiting' ? 'En attente d\'une autre résolution…'
         : state.mode === 'load' ? 'Ouverture de l\'étude enregistrée…' + elapsed
+        : state.mode === 'choose' ? 'Flop de la série : choix des tailles de mise, puis résolution. ' + (p.stage || '') + elapsed
         : (p.iteration ? 'Résolution : itération ' + p.iteration + ' / ' + state.max_iterations + ' · exploitabilité ' + num(p.exploit_pct) + ' % du pot (objectif ' + num(state.target) + ' %)'
           : p.tree_nodes ? 'Résolution lancée : arbre de ' + p.tree_nodes.toLocaleString('fr-FR') + ' nœuds, première mesure après 10 itérations'
             : 'Construction de l\'arbre…') + elapsed),
@@ -307,15 +365,18 @@
     if (current || !reachable(target)) return step;
     step.classList.add('nav');
     step.title = 'Revenir à ce moment du coup';
-    step.addEventListener('click', (e) => { if (!e.target.closest('button')) goTo(target); });
+    step.addEventListener('click', (e) => { if (!e.target.closest('button, a')) goTo(target); });
     return step;
   }
 
+  // Comme Wizard : le tapis (effectif) du joueur au-dessus de ses actions, le pot sur chaque street.
+  const stackOf = (x, title) => el('span', { class: 'stk', title: title || 'Tapis effectif restant avant d\'agir' }, num(x) + ' bb');
+  const streetHead = (name, pot) => el('div', { class: 'head' }, el('span', { class: 'st' }, name.toUpperCase()), el('span', {}, 'pot ' + num(pot)));
+
   function actionStep(h, k, current) {
     const role = roleOf(h.player);
-    const step = el('div', { class: 'step' + (current ? ' current' : '') },
-      el('div', { class: 'head' }, el('span', { class: role }, who(h.player)),
-        el('span', { title: 'tapis ' + num(h.stack) + ' bb' }, 'pot ' + num(h.pot))));
+    const step = el('div', { class: 'step' + (current ? ' current' : ''), title: 'pot ' + num(h.pot) + ' bb' },
+      el('div', { class: 'head' }, el('span', { class: role }, who(h.player)), stackOf(h.stack)));
     const prefix = path.slice(0, k);
     navStep(step, prefix, current);
     const onLine = prefixOf(prefix, played) && played[k] && played[k].type === 'action';
@@ -337,15 +398,57 @@
       type: 'button', disabled: !live, title: live ? 'Changer de carte' : 'Recalcule pour changer de carte', 'data-k': k,
       onclick: (e) => openPicker(k, e.currentTarget),
     }, h.card ? card(h.card) : '?');
-    const step = el('div', { class: 'step cards' }, el('div', { class: 'head' }, el('span', {}, STREET[h.street] || 'Carte'), el('span', {}, 'pot ' + num(h.pot))), btn);
+    const step = el('div', { class: 'step cards' }, streetHead(STREET[h.street] || 'Carte', h.pot), btn);
     return navStep(step, path.slice(0, k + 1), false);
+  }
+
+  // Étape préflop : chaque action mène à son nœud (navigate reçoit la ligne jusqu'à cette action).
+  function preStep(h, k, line, current, navigate) {
+    const step = el('div', { class: 'step pre' + (current ? ' current' : ''), title: 'Préflop · pot ' + num(h.pot) + ' bb' },
+      el('div', { class: 'head' }, el('span', {}, POS[h.player]), stackOf(h.stack)));
+    h.actions.forEach((a, j) => step.append(el('button', {
+      type: 'button', class: 'act' + (h.chosen === j ? ' on' : ''), onclick: () => navigate(line.slice(0, k).concat([h.keys[j]])),
+    }, el('span', {}, a.name))));
+    return step;
+  }
+
+  // Action préflop d'une main jouée (tailles réelles) : ouvre la solution préflop à ce moment du coup.
+  function playedPreStep(s) {
+    // à une table à plusieurs, les joueurs qui ne voient pas le flop n'ont que leur position (player null)
+    const inPot = s.player !== null && s.player !== undefined;
+    const step = el('div', { class: 'step pre' + (inPot ? '' : ' out'), title: 'Préflop · pot ' + num(s.pot) + ' bb' },
+      el('div', { class: 'head' }, el('span', { class: inPot ? roleOf(s.player) : '' }, inPot ? who(s.player) : s.position),
+        stackOf(s.stack, meta.table_format && meta.table_format !== 'HU' ? 'Son tapis restant avant d\'agir' : null)));
+    step.append(el('button', {
+      type: 'button', class: 'act on', disabled: !s.line, title: s.line ? 'Voir la solution préflop à ce moment du coup' : null,
+      onclick: () => window.open(preHref(s.line), '_blank', 'noopener'),
+    }, el('span', {}, s.name), el('span', { class: 'dot', title: 'Joué dans la main' }, '●')));
+    return step;
   }
 
   function renderRibbon() {
     const box = $('ribbon');
     box.textContent = '';
+    if (PRE) {
+      node.history.forEach((h, k) => {
+        const current = k === node.history.length - 1;
+        if (h.kind === 'action') box.append(preStep(h, k, preLine, current, goLine));
+        else if (h.kind === 'flop') box.append(el('div', { class: 'step cards current' },
+          streetHead('Flop', h.pot), el('span', { class: 'muted small' }, 'à choisir')));
+        else box.append(el('div', { class: 'step end current' }, h.kind === 'terminal_fold' ? 'Fin : fold' : 'Tapis préflop'));
+      });
+      box.scrollLeft = box.scrollWidth;
+      return;
+    }
+    if (prefix) {
+      prefix.history.forEach((h, k) => {
+        if (h.kind === 'action') box.append(preStep(h, k, prefix.preflop.line, false, (line) => { location.href = preHref(line); }));
+      });
+    }
+    (meta.preflop || []).forEach((s) => box.append(playedPreStep(s)));
     box.append(navStep(el('div', { class: 'step cards' },
-      el('div', { class: 'head' }, el('span', {}, 'Flop'), el('span', {}, 'pot ' + num(state.result.pot))), cards(meta.board.slice(0, 3))),
+      streetHead('Flop', state.result.pot), cards(meta.board.slice(0, 3)),
+      prefix ? el('a', { class: 'change', href: preHref(prefix.preflop.line), title: 'Choisir un autre flop' }, 'changer') : ''),
     [], path.length === 0));
     node.history.forEach((h, k) => {
       const current = k === node.history.length - 1;
@@ -435,7 +538,7 @@
     const modes = $('modes');
     modes.textContent = '';
     const actor = node.player !== null && node.player !== undefined;
-    MODES.forEach(([id, label]) => modes.append(el('button', {
+    (PRE ? MODES.slice(0, 1) : MODES).forEach(([id, label]) => modes.append(el('button', {
       type: 'button', 'aria-pressed': mode === id ? 'true' : 'false',
       onclick: () => { mode = id; render(); },
     }, label)));
@@ -458,12 +561,16 @@
     const values = Object.values(agg).map((a) => a[key]).filter((x) => x !== null);
     const lo = Math.min(...values), hi = Math.max(...values);
     const heroCls = viewPlayer === playerOf('H') && meta.hero_cards.length === 2 ? classOf(meta.hero_cards.join('')) : null;
+    let anyRare = false;
     const villainCls = revealed() && viewPlayer === playerOf('V') && meta.villain_cards.length === 2 ? classOf(meta.villain_cards.join('')) : null;
     for (let i = 0; i < 13; i++) for (let j = 0; j < 13; j++) {
       const hand = handAt(i, j);
       const a = agg[hand];
-      const cls = 'cell' + (a ? '' : ' out') + (hand === heroCls ? ' me' : '') + (hand === villainCls ? ' him' : '') + (hand === selected ? ' sel' : '');
-      const cell = el('div', { class: cls, 'data-hand': hand }, el('span', { class: 'h' }, hand));
+      const settledCell = strat && a && a.rows.every((r) => rare(r[0]));
+      if (settledCell) anyRare = true;
+      const cls = 'cell' + (a ? '' : ' out') + (settledCell ? ' rare' : '') + (hand === heroCls ? ' me' : '') + (hand === villainCls ? ' him' : '') + (hand === selected ? ' sel' : '');
+      const cell = el('div', { class: cls, 'data-hand': hand, title: settledCell ? 'Presque jamais jouée ici : meilleure action selon l\'EV' : null },
+        el('span', { class: 'h' }, hand));
       if (a) {
         const presence = Math.min(1, a.w / (counts[hand] || 1));
         const height = Math.max(6, Math.round(100 * presence)) + '%';
@@ -494,6 +601,8 @@
     if (strat && (mode === 'strategy' || mode === 'strategy_ev')) {
       nodeLabels().forEach((label, k) => legend.append(el('span', {}, el('i', { style: 'background:' + cols[k] }), label)));
     }
+    if (anyRare && mode !== 'equity') legend.append(el('span', {}, 'Nom en italique : main que le solveur ne joue presque jamais '
+      + 'ici ; on montre sa meilleure action selon l\'EV.'));
     legend.append(el('span', {}, mode === 'equity' ? 'Couleur : équité de la main (plus foncé = plus forte).'
       : mode === 'ev' ? 'Couleur : EV de la main (plus foncé = plus élevée).'
         : 'Hauteur : part de la main encore présente.' + (mode === 'strategy_ev' ? ' Nombre : EV de la main.' : '')));
@@ -520,7 +629,7 @@
       const full = filterActive() && p === viewPlayer ? node.hands[p].reduce((s, r) => s + r[1], 0) : 0;
       const freqs = node.actions.map((_, k) => Object.values(agg).reduce((s, a) => s + a.w * a.s[k], 0));
       const cols = colors(node.actions);
-      panel.append(el('div', { class: 'ttl' }, el('h2', {}, STREET[node.street] + ' · ' + who(p) + ' agit'),
+      panel.append(el('div', { class: 'ttl' }, el('h2', {}, streetName(node.street) + ' · ' + who(p) + ' agit'),
         el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb · tapis ' + num(node.stacks[p]) + ' bb')));
       const tiles = el('div', { class: 'tiles' });
       node.actions.forEach((a, k) => tiles.append(el('div', { class: 'tile', style: 'background:' + cols[k] },
@@ -532,18 +641,101 @@
       panel.append(stack);
       if (full) panel.append(el('div', { class: 'muted small', style: 'margin-top:6px' },
         'Filtre actif : ' + pct(total / full) + ' de la range (' + num(total, 1) + ' combos) ; fréquences de ces mains seulement.'));
+      if (node.rare && node.rare.length) panel.append(el('div', { class: 'warn' }, 'Ligne que le solveur ne prend presque jamais : '
+        + node.rare.map((q) => who(q) + ' y arrive avec ' + (node.presence[q] < 0.001 ? 'moins de 0,1' : num(100 * node.presence[q], 1)) + ' % de sa range').join(', ')
+        + '. Les stratégies qui suivent n\'y sont pas optimisées : lis les EV plutôt que les fréquences, et avec prudence.'));
+    } else if (node.type === 'flop') {
+      box.append(flopChooser());
+      return;
     } else {
-      panel.append(el('div', { class: 'ttl' }, el('h2', {}, node.type === 'terminal_fold' ? 'Fin du coup : fold' : 'Abattage'),
-        el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb')));
+      panel.append(el('div', { class: 'ttl' }, el('h2', {}, node.type === 'terminal_fold' ? 'Fin du coup : fold'
+        : node.type === 'allin' ? 'Tapis préflop' : 'Abattage'),
+      el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb')));
     }
     const eqs = [0, 1].map((p) => {
       const rows = node.hands[p].filter((r) => r[2] !== null);
       const w = rows.reduce((s, r) => s + r[1], 0);
       return w ? rows.reduce((s, r) => s + r[1] * r[2], 0) / w : null;
     });
-    panel.append(el('div', { class: 'muted small', style: 'margin-top:6px' },
-      'Équité des ranges : ' + [0, 1].map((p) => (SPOT ? POS[p] : POS[p] + ' (' + NAME[roleOf(p)] + ')') + ' ' + (eqs[p] === null ? '—' : pct(eqs[p]))).join(' · ')));
+    if (eqs.some((e) => e !== null)) {
+      panel.append(el('div', { class: 'muted small', style: 'margin-top:6px' },
+        'Équité des ranges : ' + [0, 1].map((p) => (SPOT ? POS[p] : POS[p] + ' (' + NAME[roleOf(p)] + ')') + ' ' + (eqs[p] === null ? '—' : pct(eqs[p]))).join(' · ')));
+    } else if (PRE) {
+      panel.append(el('div', { class: 'muted small', style: 'margin-top:6px' }, 'Fréquences de la solution préflop (pas d\'EV à ce stade).'));
+    }
     box.append(panel);
+  }
+
+  // Fin de la ligne préflop (call) : trois cartes parmi les 52, avec les flops déjà résolus qui s'en approchent.
+  async function pickCard(c) {
+    const i = picked.indexOf(c);
+    if (i >= 0) picked.splice(i, 1);
+    else if (picked.length < 3) picked.push(c);
+    flopInfo = null;
+    if (picked.length === 3) {
+      try {
+        flopInfo = await api('/api/explorateur/flop', { family: node.preflop.family, board: picked });
+      } catch (e) { notice = e.message; renderStatus(); }
+    }
+    renderOverview();
+  }
+
+  const spotHref = (id) => '/explorateur/' + encodeURIComponent(id);
+
+  function flopResult() {
+    const f = flopInfo;
+    const box = el('div', { class: 'fl-result' }, el('div', { class: 'fl-pick' }, cards(f.board),
+      el('span', { class: 'muted small' }, f.texture + ' · ' + f.pattern)));
+    if (f.solved) {
+      box.append(el('a', { class: 'fl-go', href: spotHref(f.id) }, 'Ouvrir l\'étude de ce flop'));
+      return box;
+    }
+    if (f.suggestions.length) {
+      box.append(el('div', { class: 'small' }, 'Déjà résolus, à ouvrir tout de suite :'));
+      box.append(el('ul', { class: 'fl-sugg' }, f.suggestions.map((x) => el('li', {},
+        el('a', { class: 'fl solved', href: spotHref(x.id) }, cards(x.board)), el('span', { class: 'muted small' }, ' ' + x.relation)))));
+    }
+    box.append(el('a', { class: 'fl-go', href: spotHref(f.id) + '#resoudre', title: 'Tailles : ' + f.sizes },
+      'Résoudre ce flop (' + f.cost + ')'));
+    box.append(el('div', { class: 'muted small' }, f.sizes_from
+      ? 'Tailles du flop le plus proche dont les tailles sont choisies (' + f.sizes_from.match(/../g).map((c) => c[0] + SUITS[c[1]]).join('') + '). L\'étude est gardée.'
+      : 'L\'étude est gardée ensuite.'));
+    return box;
+  }
+
+  function flopChooser() {
+    const info = node.preflop;
+    const panel = el('div', { class: 'card' }, el('div', { class: 'ttl' }, el('h2', {}, 'Flop · ' + info.family_name),
+      el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb · tapis ' + num(node.stacks[0]) + ' bb')));
+    panel.append(el('p', { class: 'muted small fl-note' }, info.family_label + '. Grille : la range de chacun au flop.'));
+    const deck = el('div', { class: 'deck', role: 'group', 'aria-label': 'Cartes du flop' });
+    for (const st of 'shdc') {
+      for (const r of RANKS) {
+        const c = r + st, on = picked.includes(c);
+        deck.append(el('button', {
+          type: 'button', class: 'dc s' + st + (on ? ' on' : ''), 'aria-pressed': on ? 'true' : 'false',
+          disabled: picked.length >= 3 && !on, onclick: () => pickCard(c),
+        }, r + SUITS[st]));
+      }
+    }
+    panel.append(el('div', { class: 'deck-head' }, el('b', {}, 'Choisis trois cartes'),
+      picked.length ? cards(picked) : el('span', { class: 'muted small' }, 'ou un flop résolu ci-dessous'),
+      picked.length ? el('button', { type: 'button', class: 'linkish', onclick: () => { picked = []; flopInfo = null; renderOverview(); } }, 'Effacer') : ''),
+    deck);
+    if (picked.length === 3 && flopInfo) panel.append(flopResult());
+    panel.append(el('div', { class: 'fl-head' }, el('b', {}, 'Flops de la série et flops déjà résolus'),
+      el('span', { class: 'muted small' }, ' surlignés quand ils sont résolus')));
+    const groups = el('div', { class: 'flops' });
+    for (const t of info.textures) {
+      const list = info.spots.filter((x) => x.texture === t);
+      if (!list.length) continue;
+      groups.append(el('div', { class: 'fl-group' }, el('div', { class: 'fl-t' }, t), el('div', { class: 'fl-list' }, list.map((x) => el('a', {
+        class: 'fl' + (x.solved ? ' solved' : ''), href: '/explorateur/' + encodeURIComponent(x.id),
+        title: x.solved ? 'Ouvrir l\'étude' : 'Pas encore résolu : il se résout à l\'ouverture',
+      }, cards(x.board))))));
+    }
+    panel.append(groups);
+    return panel;
   }
 
   function comboCard(row, p, title) {
@@ -553,7 +745,8 @@
     const labels = nodeLabels();
     const head = el('div', { class: 'ch' }, el('span', {}, title ? title + ' ' : '', cards([row[0].slice(0, 2), row[0].slice(2)])),
       el('span', { class: 'muted' }, (row[1] < 0.995 ? 'présence ' + pct(row[1]) + ' · ' : '') + (row[2] === null ? '' : 'éq. ' + pct(row[2]))));
-    const box = el('div', { class: 'combo' }, head);
+    const settled = strat && rare(row[0]);
+    const box = el('div', { class: 'combo' + (settled ? ' settled' : '') }, head);
     if (strat) {
       const s = row.slice(4, 4 + na);
       const evs = row.slice(4 + na, 4 + 2 * na);
@@ -569,10 +762,12 @@
         body.append(el('tr', { class: k === best && mode !== 'strategy' ? 'best' : '' }, tds));
       });
       box.append(el('table', {}, body));
+      if (settled) box.append(el('div', { class: 'note' }, 'Le solveur ne joue presque jamais cette main ici : sa fréquence '
+        + 'n\'y est pas apprise. On montre sa meilleure action selon l\'EV.'));
       if (mode !== 'strategy' && row[3] !== null) {
         box.append(el('div', { class: 'muted evs' }, 'EV de la main avec cette stratégie : ' + num(row[3], 2) + ' bb'));
       }
-    } else {
+    } else if (!PRE) {
       box.append(el('div', { class: 'muted' }, 'EV ' + (row[3] === null ? '—' : num(row[3], 2) + ' bb')));
     }
     return box;
@@ -679,10 +874,275 @@
       + 'L\'équité est celle de la main contre la range adverse à ce moment du coup.'));
   }
 
+  // Le coach sait ce que l'élève regarde : le spot, la ligne jouée jusqu'ici et la case sélectionnée.
+  let coachMounted = false;
+  function mountCoach() {
+    if (coachMounted || !window.AnalyzerCoach) return;
+    coachMounted = true;
+    window.AnalyzerCoach.mount($('coach-box'), {
+      context: () => (PRE ? null : { spot: HAND, path, main: selected || null }),
+      suggestions: PRE ? ['Comment construire ma range de défense de BB ?', 'Pourquoi 3better certaines mains en bluff ?']
+        : ['Pourquoi le solveur joue-t-il ainsi ici ?', 'Quelle stratégie simple retenir ici ?',
+          'Quelles mains mettent la pression ici, et pourquoi ?', 'Comment exploiter mon adversaire ici ?'],
+    });
+  }
+
+  // ---------- ranges préflop ajustées (onglet Ranges) ----------
+  // Tes ranges à la place de celles de la référence, pour ce coup ou par défaut pour toute sa ligne : le coup
+  // se résout à nouveau, dans une étude à part (celle de la référence reste et se rouvre en quelques secondes).
+  const BRUSHES = [[1, '100 %'], [0.75, '75 %'], [0.5, '50 %'], [0.25, '25 %'], [0, 'Retirer']];
+  const HAND_RE = /^(?:([2-9TJQKA])\1|[2-9TJQKA]{2}[so])$/;
+  const RESIZE = 0.10;  // « plus serré » / « plus large » : environ 10 % des combos de la range
+  const ALL_HANDS = [];
+  for (let i = 0; i < 13; i++) for (let j = 0; j < 13; j++) ALL_HANDS.push(handAt(i, j));
+  const rg = { data: null, edit: null, player: 0, brush: 1, scope: 'coup', painting: false, busy: false, msg: '', ui: null };
+
+  const comboCount = (h) => (h.length === 2 ? 6 : h[2] === 's' ? 4 : 12);
+  const combosOf = (w) => Object.entries(w).reduce((t, [h, x]) => t + x * comboCount(h), 0);
+  const validHand = (h) => HAND_RE.test(h) && (h.length === 2 || RANKS.indexOf(h[0]) < RANKS.indexOf(h[1]));
+  const sameRange = (a, b) => [...new Set(Object.keys(a).concat(Object.keys(b)))].every((h) => Math.abs((a[h] || 0) - (b[h] || 0)) <= 0.002);
+  const rangeText = (w) => ALL_HANDS.filter((h) => (w[h] || 0) >= 0.001)
+    .map((h) => (w[h] >= 0.999 ? h : h + ':' + Math.round(w[h] * 1000) / 1000)).join(',');
+
+  function parseRange(text) {
+    const out = {};
+    for (const item of text.replace(/\s+/g, '').split(',')) {
+      if (!item) continue;
+      const [h, weight] = item.split(':');
+      const v = weight === undefined || weight === '' ? 1 : Number(weight);
+      if (!validHand(h) || !Number.isFinite(v) || v < 0) throw new Error('Illisible : « ' + item + ' ». Écris AA, AKs, AKo…, avec un poids éventuel (AKo:0.5).');
+      if (v > 0) out[h] = Math.min(1, v);
+    }
+    if (!Object.keys(out).length) throw new Error('Range vide : garde au moins une main.');
+    return out;
+  }
+
+  // Plus serré : retire environ 10 % des combos, en partant des mains les plus faibles de la range (équité contre
+  // une main au hasard) ; plus large : en ajoute autant, en partant des plus fortes qui n'y sont pas en entier.
+  function resize(w, sign) {
+    const out = { ...w };
+    let left = RESIZE * combosOf(w);
+    if (sign > 0) left = Math.max(left, 0.01 * 1326);
+    for (const h of sign < 0 ? rg.data.order.slice().reverse() : rg.data.order) {
+      if (left <= 0.01) break;
+      const x = out[h] || 0;
+      const room = sign < 0 ? x : 1 - x;
+      if (room <= 0) continue;
+      const d = Math.min(room, left / comboCount(h));
+      const v = Math.round((x + sign * d) * 1000) / 1000;
+      if (v >= 0.001) out[h] = v; else delete out[h];
+      left -= d * comboCount(h);
+    }
+    return Object.keys(out).length ? out : w;
+  }
+
+  function setRanges(data) {
+    rg.data = data;
+    rg.edit = data.supported ? data.players.map((p) => ({ ...p.current })) : null;
+    const line = data.supported && data.players.some((p) => p.source === 'ligne') && !data.players.some((p) => p.source === 'coup');
+    rg.scope = data.can_line && line ? 'ligne' : 'coup';
+  }
+
+  async function mountRanges() {
+    if (!rg.data) {
+      $('ranges-box').textContent = 'Chargement…';
+      try {
+        setRanges(await api('/api/explorateur/ranges', { hand: HAND }));
+      } catch (e) {
+        $('ranges-box').textContent = e.message;
+        return;
+      }
+    }
+    renderRanges();
+  }
+
+  const cellTitle = (h, x, r) => h + ' · ' + pct(x) + (Math.abs(x - r) > 0.002 ? ' (référence ' + pct(r) + ')' : '');
+  function paintCell(cell) {
+    const h = cell.dataset.h;
+    const w = rg.edit[rg.player];
+    if ((w[h] || 0) === rg.brush) return;
+    if (rg.brush > 0) w[h] = rg.brush; else delete w[h];
+    refreshRanges();
+  }
+
+  function rangeGrid() {
+    const grid = el('div', { class: 'rgrid', 'aria-label': 'Range : clique ou glisse sur les mains pour les peindre' });
+    rg.ui.cells = ALL_HANDS.map((h) => grid.appendChild(el('div', { class: 'rcell', 'data-h': h }, el('span', { class: 'h' }, h))));
+    // souris et doigt : on peint les cases survolées tant que le bouton (ou le doigt) reste appuyé
+    grid.addEventListener('pointerdown', (e) => {
+      const cell = e.target.closest('.rcell');
+      if (!cell || rg.busy) return;
+      rg.painting = true;
+      paintCell(cell);
+      e.preventDefault();
+    });
+    grid.addEventListener('pointermove', (e) => {
+      if (!rg.painting) return;
+      const target = document.elementFromPoint(e.clientX, e.clientY);
+      const cell = target && target.closest('.rcell');
+      if (cell && grid.contains(cell)) paintCell(cell);
+    });
+    return grid;
+  }
+
+  const playerLabel = (q) => q.position + (q.role ? ' · ' + NAME[q.role] : '');
+
+  // Le panneau ; ce qui dépend des ranges en cours d'édition se met à jour à part (refreshRanges), sans
+  // reconstruire les boutons : un clic juste après avoir tapé une range ne se perd pas.
+  function renderRanges() {
+    const box = $('ranges-box');
+    box.textContent = '';
+    rg.ui = null;
+    const d = rg.data;
+    if (!d) return;
+    if (!d.supported) { box.append(el('p', { class: 'empty' }, d.message)); return; }
+    const p = d.players[rg.player];
+    const ui = rg.ui = {};
+    const wrap = el('div', { class: 'rg' });
+    box.append(wrap);
+    const what = SPOT ? 'ce spot' : 'ce coup';
+    wrap.append(el('p', { class: 'small muted' }, 'Ligne préflop : ' + d.line + (d.format !== 'HU' ? ' en ' + d.format : '')
+      + ' · référence : ' + d.reference + '. Ajuste les ranges, puis résous ' + what + ' avec elles.'));
+
+    const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Range modifiée' });
+    ui.players = d.players.map((q, k) => seg.appendChild(el('button', {
+      type: 'button', 'aria-pressed': String(k === rg.player), onclick: () => { rg.player = k; renderRanges(); },
+    }, playerLabel(q))));
+    const source = { coup: 'ta range pour ' + what, ligne: 'ta range par défaut de la ligne', reference: 'range de la référence' }[p.source];
+    wrap.append(el('div', { class: 'rg-row' }, seg, el('span', { class: 'small muted' }, 'En jeu : ' + source)));
+    ui.count = wrap.appendChild(el('div', { class: 'small' }));
+
+    const brushes = el('div', { class: 'seg', role: 'group', 'aria-label': 'Pinceau' });
+    const brushButtons = BRUSHES.map(([v, label]) => brushes.appendChild(el('button', {
+      type: 'button', 'aria-pressed': String(rg.brush === v), title: v ? 'Peindre les mains à ' + label : 'Retirer les mains de la range',
+      onclick: () => { rg.brush = v; brushButtons.forEach((b, k) => b.setAttribute('aria-pressed', String(BRUSHES[k][0] === v))); },
+    }, label)));
+    const change = (next) => { rg.edit[rg.player] = next; rg.msg = ''; refreshRanges(); };
+    const current = () => rg.edit[rg.player];
+    wrap.append(el('div', { class: 'rg-row' }, brushes,
+      el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, title: 'Retire environ 10 % des combos, en commençant par les mains les plus faibles', onclick: () => change(resize(current(), -1)) }, 'Plus serré'),
+      el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, title: 'Ajoute environ 10 % de combos, en commençant par les mains les plus fortes', onclick: () => change(resize(current(), 1)) }, 'Plus large')));
+
+    wrap.append(rangeGrid());
+    wrap.append(el('div', { class: 'small muted' }, 'Clique ou glisse sur les mains avec le pinceau choisi. Contour orange : différent de la référence.'));
+
+    ui.text = el('textarea', { class: 'rg-text', rows: 4, spellcheck: 'false', 'aria-label': 'Range de ' + p.position + ' en texte' });
+    ui.text.addEventListener('input', () => {  // la grille suit la saisie dès qu'elle se lit
+      try { rg.edit[rg.player] = parseRange(ui.text.value); rg.msg = ''; refreshRanges(); } catch (e) { /* avis au change */ }
+    });
+    ui.text.addEventListener('change', () => {
+      const typed = ui.text.value;
+      try { change(parseRange(typed)); } catch (e) { rg.msg = e.message; refreshRanges(); ui.text.value = typed; }  // à corriger
+    });
+    wrap.append(ui.text);
+
+    ui.toRef = el('button', { type: 'button', class: 'rg-btn', onclick: () => change({ ...p.reference }) }, 'Range de la référence');
+    const resets = el('div', { class: 'rg-row' }, ui.toRef);
+    if (p.line && p.source === 'coup') resets.append(el('button', { type: 'button', class: 'rg-btn', onclick: () => change({ ...p.line }) }, 'Ta range de la ligne'));
+    ui.undo = resets.appendChild(el('button', { type: 'button', class: 'rg-btn', onclick: () => change({ ...p.current }) }, 'Annuler mes changements'));
+    wrap.append(resets);
+
+    if (d.can_line) {
+      const scope = el('div', { class: 'rg-scope', role: 'radiogroup', 'aria-label': 'Portée' });
+      [['coup', 'Pour ce coup seulement'],
+        ['ligne', 'Par défaut pour « ' + d.line + ' » en ' + d.format + ' : tes autres coups de cette ligne, leur analyse et le leakfinding']]
+        .forEach(([v, label]) => {
+          const input = el('input', { type: 'radio', name: 'rg-scope', value: v, checked: rg.scope === v, onchange: () => { rg.scope = v; refreshRanges(); } });
+          scope.append(el('label', {}, input, el('span', {}, label)));
+        });
+      wrap.append(scope);
+    }
+
+    ui.solve = el('button', { type: 'button', class: 'rg-btn go', onclick: saveRanges }, 'Résoudre avec ces ranges');
+    const actions = el('div', { class: 'rg-row' }, ui.solve);
+    if (d.adjusted) actions.append(el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, onclick: resetRanges }, 'Revenir à la référence'));
+    wrap.append(actions);
+    ui.msg = wrap.appendChild(el('p', { class: 'err', role: 'alert' }));
+    wrap.append(el('p', { class: 'small muted' }, 'Une autre range change la solution : ' + what + ' se résout à nouveau, dans une étude à part. '
+      + 'Celle de la référence reste : « Revenir à la référence » la rouvre en quelques secondes.'));
+    refreshRanges();
+  }
+
+  function refreshRanges() {
+    const ui = rg.ui, d = rg.data;
+    if (!ui) return;
+    const p = d.players[rg.player];
+    const w = rg.edit[rg.player];
+    ui.cells.forEach((cell) => {
+      const h = cell.dataset.h, x = w[h] || 0, r = p.reference[h] || 0;
+      cell.style.setProperty('--w', Math.round(100 * x) + '%');
+      cell.classList.toggle('diff', Math.abs(x - r) > 0.002);
+      cell.title = cellTitle(h, x, r);
+    });
+    const n = combosOf(w), ref = combosOf(p.reference);
+    ui.count.textContent = num(n, 0) + ' combos (' + num(100 * n / 1326, 1) + ' % des mains) · référence '
+      + num(ref, 0) + ' (' + num(100 * ref / 1326, 1) + ' %)';
+    ui.players.forEach((b, k) => { b.textContent = playerLabel(d.players[k]) + (sameRange(rg.edit[k], d.players[k].current) ? '' : ' •'); });
+    if (document.activeElement !== ui.text) ui.text.value = rangeText(w);
+    ui.toRef.disabled = rg.busy || sameRange(w, p.reference);
+    ui.undo.disabled = rg.busy || sameRange(w, p.current);
+    const dirty = rg.edit.some((x, k) => !sameRange(x, d.players[k].current))
+      || (rg.scope === 'ligne' && d.players.some((q) => q.source === 'coup'));
+    ui.solve.disabled = !dirty || rg.busy;
+    ui.msg.textContent = rg.msg;
+    ui.msg.hidden = !rg.msg;
+  }
+
+  async function saveRanges() {
+    if (rg.ui && rg.ui.text.value !== rangeText(rg.edit[rg.player])) {  // texte tapé sans quitter la zone
+      try { rg.edit[rg.player] = parseRange(rg.ui.text.value); } catch (e) { rg.msg = e.message; refreshRanges(); return; }
+    }
+    const ranges = {};
+    rg.data.players.forEach((p, k) => { ranges[p.position] = rangeText(rg.edit[k]); });
+    if (Object.values(ranges).some((t) => !t)) { rg.msg = 'Range vide : garde au moins une main.'; refreshRanges(); return; }
+    await rangesCall('/api/explorateur/ranges/enregistrer', { hand: HAND, scope: rg.scope, ranges }, true);
+  }
+
+  async function resetRanges() {
+    const d = rg.data;
+    const scope = d.players.some((p) => p.source === 'coup') ? 'coup' : 'ligne';
+    if (scope === 'ligne' && !window.confirm('Effacer ta range par défaut pour « ' + d.line + ' » en ' + d.format
+      + ' ? Elle ne s\'appliquera plus à aucun coup de cette ligne.')) return;
+    await rangesCall('/api/explorateur/ranges/effacer', { hand: HAND, scope }, false);
+  }
+
+  async function rangesCall(url, body, solveNow) {
+    rg.busy = true;
+    rg.msg = '';
+    renderRanges();
+    try {
+      setRanges(await api(url, body));
+      await reopen(solveNow);
+    } catch (e) {
+      rg.msg = e.message;
+    }
+    rg.busy = false;
+    renderRanges();
+  }
+
+  // Les ranges ont changé : un autre coup pour le solveur (ou celui de la référence, souvent déjà résolu).
+  async function reopen(solveNow) {
+    clearTimeout(pollTimer);
+    nodes.clear();
+    node = null;
+    path = [];
+    selected = null;
+    hovered = null;
+    for (const id of ['ribbon', 'overview', 'mine', 'combos', 'grid', 'legend']) $(id).textContent = '';
+    await loadState();
+    await showSpot(solveNow);
+  }
+
   function renderTabs() {
     const n = filters.keys.size;
     $('tab-combos').setAttribute('aria-selected', rightTab === 'combos' ? 'true' : 'false');
     $('tab-filters').setAttribute('aria-selected', rightTab === 'filters' ? 'true' : 'false');
+    $('tab-coach').setAttribute('aria-selected', rightTab === 'coach' ? 'true' : 'false');
+    $('tab-ranges').setAttribute('aria-selected', rightTab === 'ranges' ? 'true' : 'false');
+    $('pane-coach').hidden = rightTab !== 'coach';
+    $('pane-ranges').hidden = rightTab !== 'ranges';
+    if (rightTab === 'coach') mountCoach();
+    if (rightTab === 'ranges') mountRanges();
     $('tab-filters').textContent = 'Filtres';
     if (n) $('tab-filters').append(el('span', { class: 'count' }, n));
     $('pane-combos').hidden = rightTab !== 'combos';
@@ -708,23 +1168,56 @@
     renderCombos();
     renderFilters();
     renderTabs();
-    $('b-back').disabled = !path.some((s) => s.type === 'action');
+    $('b-back').disabled = PRE ? !preLine.length : !path.some((s) => s.type === 'action') && !prefix;
+    // L'entraîneur rejoue depuis ce nœud : il faut l'étude ouverte et une vraie décision.
+    $('b-train').disabled = PRE || !live || node.type !== 'action' || node.actions.length < 2;
   }
 
   function initialPath() {
     const decisions = state.result ? state.result.decisions : [];
-    const k = Number(new URLSearchParams(location.hash.slice(1)).get('d'));
+    const hash = new URLSearchParams(location.hash.slice(1));
+    // #chemin=[…] : un moment précis du coup (lien de l'entraîneur)
+    if (hash.has('chemin') && live) {
+      try {
+        const p = JSON.parse(hash.get('chemin'));
+        if (Array.isArray(p) && p.every((s) => s && (s.type === 'action' || s.type === 'card'))) return p;
+      } catch (e) { /* chemin illisible : départ habituel */ }
+    }
+    const k = Number(hash.get('d'));
     return (decisions[k] || decisions[0] || { path: [] }).path;
   }
 
   // Premier nœud affiché ; dans un spot d'étude, on passe le check forcé de la BB (qui ne mène pas).
   const goStart = () => goTo(initialPath(), true);
 
+  // Le coup tel que l'état le donne ; solveNow : le résoudre s'il ne l'est pas encore (nouvelles ranges).
+  async function showSpot(solveNow) {
+    renderMeta();
+    renderStatus();
+    // Un spot d'étude n'a pas de ligne jouée en cache : il s'affiche une fois l'étude ouverte.
+    if (state.result && (live || !SPOT)) await goStart();
+    else $('grid').append(el('div', { class: 'empty', style: 'grid-column: 1 / -1' },
+      state.study ? 'Ouverture de l\'étude…' : SPOT ? 'Résous ce spot pour voir la stratégie du solveur.'
+        : 'Résous ce coup pour voir la stratégie du solveur.'));
+    // L'étude se rouvre seule, en quelques secondes (aussi quand le résultat en cache manque, par exemple
+    // après une mise à jour du solveur).
+    if (['done', 'absent'].includes(state.state) && !live && state.study) solve();
+    else if (state.state === 'absent' && (solveNow || (SPOT && /resoudre/.test(location.hash)))) {
+      if (!solveNow) history.replaceState(null, '', location.pathname);  // choisi dans le sélecteur de flop
+      solve();
+    } else poll();
+  }
+
   // ---------- démarrage ----------
   $('b-back').onclick = back;
   $('tab-combos').onclick = () => { rightTab = 'combos'; renderTabs(); };
   $('tab-filters').onclick = () => { rightTab = 'filters'; renderTabs(); };
+  $('tab-coach').onclick = () => { rightTab = 'coach'; renderTabs(); };
+  $('tab-ranges').onclick = () => { rightTab = 'ranges'; renderTabs(); };
+  document.addEventListener('pointerup', () => { rg.painting = false; });
   $('b-line').onclick = () => state && state.result && goTo(state.result.decisions[0].path);
+  $('b-train').onclick = () => window.open('/entraineur?spot=' + encodeURIComponent(HAND) + '&chemin='
+    + encodeURIComponent(JSON.stringify(path)), '_blank', 'noopener');
   if (SPOT) {  // pas de ligne jouée ni de main adverse à dévoiler
     $('b-line').hidden = true;
     $('reveal').closest('label').hidden = true;
@@ -741,23 +1234,35 @@
     if (!picker.hidden && !picker.contains(e.target) && !e.target.closest('.step.cards')) closePicker();
   });
 
+  if (window.self !== window.top) document.body.classList.add('embed');  // dans l'application : pas de bandeau
+  if (PRE) {
+    meta = { hero_cards: [], villain_cards: [], board: [], hero_position: 'BB' };
+    state = { state: 'pre', categories: { made: [], draws: [] } };
+    mode = 'strategy';
+    $('b-line').hidden = true;
+    $('reveal').closest('label').hidden = true;
+    $('b-train').hidden = true;
+    $('tab-filters').hidden = true;  // les filtres (mains faites, tirages, équité) n'ont de sens qu'au postflop
+    $('tab-ranges').hidden = true;
+    document.title = 'Explorateur — préflop';
+  }
+  if (SPOT) {  // ligne préflop du spot, en tête du déroulé
+    api('/api/explorateur/preflop', { family: FAMILY }).then((n) => { prefix = n; if (node) render(); }).catch(() => {});
+  }
+
   (async () => {
+    if (PRE) {
+      const line = (new URLSearchParams(location.hash.slice(1)).get('ligne') || '').split('.').filter(Boolean);
+      await goLine(line);
+      if (!node) await goLine([]);
+      return;
+    }
     try {
       await loadState();
     } catch (e) {
       $('status').textContent = e.message;
       return;
     }
-    renderMeta();
-    renderStatus();
-    // Un spot d'étude n'a pas de ligne jouée en cache : il s'affiche une fois l'étude ouverte.
-    if (state.result && (live || !SPOT)) await goStart();
-    else $('grid').append(el('div', { class: 'empty', style: 'grid-column: 1 / -1' },
-      state.study ? 'Ouverture de l\'étude…' : SPOT ? 'Résous ce spot pour voir la stratégie du solveur.'
-        : 'Résous ce coup pour voir la stratégie du solveur.'));
-    // L'étude se rouvre seule, en quelques secondes (aussi quand le résultat en cache manque, par exemple
-    // après une mise à jour du solveur).
-    if (['done', 'absent'].includes(state.state) && !live && state.study) solve();
-    else poll();
+    await showSpot(false);
   })();
 })();

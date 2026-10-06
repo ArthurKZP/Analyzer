@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entraîneur — Analyzer HU</title>
+<link rel="stylesheet" href="/static/explorer.css">
+<link rel="stylesheet" href="/static/trainer.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">Analyzer <span>HU</span> · Entraîneur</div>
+  <div class="hand-meta" id="meta"></div>
+  <div class="top-actions">
+    <button type="button" id="b-setup" hidden title="Changer de spot ou de situation (R)">Réglages</button>
+  </div>
+</header>
+<div class="status" id="status" role="status" aria-live="polite"></div>
+
+<main id="setup" class="setup" hidden>
+  <section class="card setup-form" aria-labelledby="setup-title">
+    <h1 id="setup-title">S'entraîner face au solveur</h1>
+    <p class="muted">Tu reçois une main tirée dans la range du solveur et tu joues le coup ; l'adversaire joue la stratégie
+      du solveur avec sa propre main. Après chaque décision : ce que le solveur fait avec ta main et l'EV de chaque action.</p>
+    <div class="field"><span class="lbl">Pot</span><div class="seg" id="f-family" role="group" aria-label="Type de pot"></div></div>
+    <div class="field"><label class="lbl" for="f-flop">Flop</label><select id="f-flop"></select></div>
+    <div class="field" id="row-per"><label class="lbl" for="f-per">Mains par flop</label>
+      <select id="f-per"><option value="1">1</option><option value="5">5</option><option value="10">10</option><option value="25">25</option></select>
+      <span class="muted small">Changer de flop rouvre une étude (quelques secondes).</span></div>
+    <div class="field"><span class="lbl">Ton côté</span><div class="seg" id="f-side" role="group" aria-label="Ton côté"></div></div>
+    <div class="field"><label class="lbl" for="f-start">Départ</label><select id="f-start"></select></div>
+    <div class="field checks">
+      <label class="check"><input type="checkbox" id="f-single"> Une seule décision par main</label>
+      <label class="check"><input type="checkbox" id="f-auto"> Enchaîner sans attendre quand l'action est juste</label>
+    </div>
+    <div class="field"><span class="lbl"></span><button type="button" class="go" id="b-start">Commencer</button>
+      <span class="muted small" id="setup-note"></span></div>
+  </section>
+  <section class="card" id="progress" aria-label="Progrès"></section>
+</main>
+
+<main id="play" class="play" hidden>
+  <section class="card table" aria-label="Table">
+    <div class="seat" id="seat-v"></div>
+    <div class="felt">
+      <div class="board" id="board"></div>
+      <div class="pot" id="pot"></div>
+    </div>
+    <div class="seat hero" id="seat-h"></div>
+    <div class="actions" id="actions"></div>
+    <div class="line" id="line"></div>
+  </section>
+  <aside class="side">
+    <section class="card" id="feedback" aria-live="polite"></section>
+    <section class="card" id="session"></section>
+  </aside>
+</main>
+<script src="/static/trainer.js"></script>
+</body>
+</html>
