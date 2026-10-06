@@ -85,8 +85,8 @@ def _leak_link(leak: leaks.Leak, pages: str, drills: dict, standalone: bool) -> 
         if key not in drills.get(family, ()):
             return ""
         href = f"/entraineur?famille={quote(family)}&situation={quote(key, safe='')}"
-    elif leak.link == "preflop":
-        href = f"{pages}/preflop"
+    elif leak.link in ("preflop", "mains"):
+        href = f"{pages}/{leak.link}"
     else:
         href = "/etudes/plan"
     return f'<a href="{escape(href)}">{escape(leak.link_text)}</a>'

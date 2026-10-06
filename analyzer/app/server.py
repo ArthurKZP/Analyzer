@@ -31,7 +31,7 @@ STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css
 MAX_PATH = 40  # étapes d'un chemin dans l'arbre (bien plus qu'un coup réel)
 MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
 MAX_SMALL_BODY = 64 * 1024
-STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "bluffs", "tables")
+STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "bluffs", "tables", "mains")
 
 
 class AppServer(ThreadingHTTPServer):

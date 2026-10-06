@@ -32,7 +32,8 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   (voir plus bas).
 - **Mon jeu** : ton bilan contre tous tes adversaires (résultats, courbe, écarts aux repères, stats,
   pertes sans abattage, résultats par adversaire), *Mon préflop* face au solveur sur toutes tes mains,
-  *Mes spots* et *Face au solveur* (tes erreurs postflop, voir plus bas).
+  *Mains de départ* (ce que rapporte chaque main, voir plus bas), *Mes spots* et *Face au solveur* (tes erreurs
+  postflop, voir plus bas).
 - **Entraîneur** : joue des mains sur les spots résolus, le solveur juge chaque décision (voir plus bas).
 - **Sauvegarde** : tes calculs vers un dossier synchronisé ou un stockage en ligne (voir plus bas).
 - **Importer des mains** : glisse tes historiques ou choisis-les — des fichiers `.txt`, un dossier (avec ses
@@ -547,8 +548,36 @@ rapport se construit.
   l'élève. Le coach a l'outil *leakfinding* : « Écris le rapport de coaching de Paul » dans l'application Claude
   rédige un rapport à partir de ces données.
 
-L'élève a aussi ses onglets *Préflop* (face à la solution, main par main), *Face au solveur* (toutes ses mains
-contre les réguliers) et *Mains* (le visualiseur, d'où chaque main s'ouvre dans l'explorateur).
+L'élève a aussi ses onglets *Préflop* (face à la solution, main par main), *Mains de départ*, *Face au solveur*
+(toutes ses mains contre les réguliers) et *Mains* (le visualiseur, d'où chaque main s'ouvre dans l'explorateur).
+
+Les leaks comptent aussi les **mains de départ qui perdent plus que le fold** contre les réguliers (une main, ou
+sa famille, jouée au moins 15 fois de la même façon, à la même position, et nettement sous le fold même en
+tenant compte du hasard) : les trois plus coûteuses, avec l'avis de la théorie (« folde-la ici » si la théorie ne
+la joue presque jamais ainsi, « revois la suite du coup » si elle la joue).
+
+## Mains de départ
+
+Onglet *Mains de départ* de *Mon jeu* (et de chaque élève) : ce que rapporte ou coûte chaque main de départ, en
+heads-up et aux tables à plusieurs (un format à la fois).
+
+- **En tout** : le résultat de chaque main (grille 13×13, en bb par main), puis par position, et contre tous tes
+  adversaires, les réguliers ou les récréatifs (heads-up).
+- **À chaque décision préflop** : premier à parler (open, limp ou fold), après un limp, face à une ouverture
+  (call, 3bet ou fold), face au 3bet, face au 4bet. Le résultat d'une décision est celui de toute la main qui suit,
+  comparé au **fold à ce moment**, qui coûte ce que tu as déjà mis au pot : rien hors des blindes, la SB
+  (−0,5 bb, −50 bb/100), la BB (−1 bb, −100 bb/100), ton open face au 3bet (−2,5 bb après un open à 2,5 bb,
+  −250 bb/100). Ouvrir une main est rentable si elle gagne plus que le fold de ta position ; défendre la BB, si la
+  main fait mieux que −100 bb/100 ; payer un 3bet, si elle fait mieux que −250 bb/100. En vert les mains qui font
+  mieux que le fold, en rouge celles qui font moins bien.
+- **Face à la théorie** : pour chaque main, la fréquence à laquelle la théorie joue cette action (la solution
+  préflop en heads-up, tes charts aux tables à plusieurs), et un conseil : une main qui perd et que la théorie
+  ne joue presque jamais ainsi est à couper ; une main que la théorie joue mais qui perd est à revoir après le
+  flop (ou la variance) ; une main que tu foldes et que la théorie joue est signalée.
+- **Mesure** : *EV all-in* par défaut (les tapis payés avant la river remplacés par leur espérance, pour ôter la
+  chance ; en heads-up) ou résultat *réel*. Chaque moyenne a son intervalle à 95 % : sur quelques dizaines de mains
+  la variance domine, d'où les **familles de mains** (paires hautes, as assortis, broadways, connecteurs…) qui
+  tranchent plus vite.
 
 ## Bluffs des adversaires
 
@@ -806,7 +835,7 @@ analyzer/
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
                        solveur » (review_page.py), leakfinding (leaks_page.py), bluffs des adversaires
-                       (bluffs_page.py), entraîneur
+                       (bluffs_page.py), mains de départ (hands_page.py), entraîneur
                        (trainer.py, static/trainer.*), plan de jeu suggéré (plan_page.py), coach
                        (coach_chat.py, static/coach.*) et son serveur MCP pour l'abonnement Claude
                        (mcp_server.py), sauvegardes en arrière-plan (backups.py), interface
@@ -814,6 +843,7 @@ analyzer/
   backup.py            sauvegarde et restauration de ~/.analyzer (commande `sauvegarde`)
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
   leaks.py             leakfinding : stats face à la théorie, revue du solveur, mains à revoir, leaks prioritaires
+  handplay.py          mains de départ : résultat de chaque main, décisions préflop face au fold et à la théorie
   students.py          les élèves : un dossier de mains par élève
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)

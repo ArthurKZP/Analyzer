@@ -9,7 +9,7 @@ from html import escape
 from pathlib import Path
 from typing import Optional
 
-from .. import bluffs, leaks, players, ring, students
+from .. import bluffs, handplay, leaks, players, ring, students
 from ..cli import detect_hero, slugify, unify_hero
 from ..lines import villain_lines
 from ..models import CALL, RAISE, Hand
@@ -19,8 +19,10 @@ from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
 from ..theory import coach, custom_ranges, handclass, postflop, review, ring_ranges, studyspots
 from ..theory.page import build_preflop_page
+from ..theory.preflop import load_solution
 from ..viewer import build_viewer
 from .bluffs_page import build_bluffs_page
+from .hands_page import build_hands_page
 from .leaks_page import build_leaks_page
 from .ring_page import build_ring_page
 from .plan_page import build_coach_page
@@ -30,7 +32,7 @@ from .coach_chat import Coach
 from .solves import SolveQueue
 
 PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur", "bluffs")
-SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks", "tables")
+SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks", "tables", "mains")
 MAX_IMPORT_FILES = 5000  # fichiers (ou archives zip) par import
 
 
@@ -209,6 +211,9 @@ class Library:
             return self._cached(("self", "tables"), lambda: build_ring_page(
                 ring.analyze(self.ring, self.hero or ""), self.hero or "", spots=self.ring_spots(),
                 ranges=ring_ranges.available()))
+        if page == "mains":  # heads-up et tables à plusieurs
+            key = ("self", "mains", tuple(sorted(ring_ranges.available().items()))) + self._kinds_key()
+            return self._cached(key, self._hands_page)
         if not self.hands:
             raise UnknownPlayer("moi")
         regular, excluded = self.regular_hands()
@@ -229,6 +234,19 @@ class Library:
             return build_viewer(self.hands, self.hero, None, embed=True, solver=True)
         kinds = self._kinds_key() if page in ("bilan", "preflop", "bluffs") else ()
         return self._cached(("self", page) + kinds, build)
+
+    def _hands_page(self) -> str:
+        """Ce que rapporte chaque main de départ, en heads-up puis à chaque format de table à plusieurs."""
+        theory = handplay.Theory(load_solution(), handplay.ring_lines())
+        kinds = {name: info["kind"] for name, info in self.kinds().items()}
+        formats = {}
+        if self.hands and self.hero:
+            formats["HU"] = handplay.aggregate(handplay.collect(self.hands, self.hero, theory), kinds)
+        for table_format in ring.FORMATS:
+            hands = [h for h in self.ring if h.table_format == table_format]
+            if hands and self.hero:
+                formats[table_format] = handplay.aggregate(handplay.collect(hands, self.hero, theory))
+        return build_hands_page({k: v for k, v in formats.items() if v["hands"]})
 
     def _population_bluffs(self) -> str:
         """Les bluffs des réguliers, ensemble puis un par un."""

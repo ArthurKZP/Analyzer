@@ -4,9 +4,9 @@
   const $ = (id) => document.getElementById(id);
   const frame = $('frame');
   const TABS = {
-    moi: [['bilan', 'Bilan'], ['leaks', 'Leakfinding'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots'],
+    moi: [['bilan', 'Bilan'], ['leaks', 'Leakfinding'], ['mains', 'Mains de départ'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots'],
       ['solveur', 'Face au solveur'], ['bluffs', 'Bluffs des réguliers'], ['tables', 'Tables à plusieurs']],
-    eleve: [['leaks', 'Leakfinding'], ['preflop', 'Préflop'], ['solveur', 'Face au solveur'], ['spots', 'Mains'],
+    eleve: [['leaks', 'Leakfinding'], ['mains', 'Mains de départ'], ['preflop', 'Préflop'], ['solveur', 'Face au solveur'], ['spots', 'Mains'],
       ['tables', 'Tables à plusieurs'], ['importer', 'Importer']],
     adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
       ['solveur', 'Face au solveur'], ['bluffs', 'Ses bluffs']],

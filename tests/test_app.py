@@ -50,6 +50,7 @@ class LibraryTest(unittest.TestCase):
         self.assertIn('href="spots#hand=HAND03"', preflop)
         self.assertIn("Bouton face au 3bet", lib.self_page("preflop"))
         self.assertIn("Résultats par adversaire", lib.self_page("bilan"))
+        self.assertIn('"K9s"', lib.self_page("mains"))  # mains de départ : les données de la page
         self.assertIn('id="data"', lib.self_page("spots"))
         self.assertIn("Les bluffs de Villain", lib.player_page("Villain", "bluffs"))
         population = lib.self_page("bluffs")
@@ -288,6 +289,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.request("GET", "/moi/bilan")[0], 200)
         self.assertEqual(self.request("GET", "/p/Villain/preflop")[0], 200)
         self.assertEqual(self.request("GET", "/moi/preflop")[0], 200)
+        self.assertEqual(self.request("GET", "/moi/mains")[0], 200)
 
     def test_solver_endpoints(self):
         status, ctype, body = self.request("GET", "/api/solveur")
@@ -418,7 +420,7 @@ class ServerTest(unittest.TestCase):
         status, _, data = self.request("POST", "/api/eleves/anna/import", body, headers)
         self.assertEqual((status, json.loads(data)["added"]), (200, 4))
         self.assertEqual([s["id"] for s in json.loads(self.request("GET", "/api/eleves")[2])], ["anna"])
-        for page in ("leaks", "preflop", "solveur", "spots"):
+        for page in ("leaks", "preflop", "solveur", "spots", "mains"):
             self.assertEqual(self.request("GET", f"/eleve/anna/{page}")[0], 200, page)
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
         conn.request("GET", "/eleve/anna/rapport")

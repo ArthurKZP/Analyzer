@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from . import players
+from . import handplay, players
 from .insights import wilson
 from .models import Hand
 from .stats import HandReader, Ratio, analyze
@@ -41,6 +41,7 @@ LOOSE_N = 10       # occasions minimum pour un écart « indicatif »
 LOOSE_GAP = 0.08
 MISTAKE_COST = 0.5  # bb par décision jouée autrement que la théorie : sert seulement à classer les leaks
 TOP = 5
+HAND_LEAKS = 3  # mains de départ qui perdent plus que le fold, au plus
 
 
 @dataclass
@@ -276,9 +277,27 @@ def _solver_leak(group: dict, analyzed: int, digests: Optional[list[dict]] = Non
                 _worst(digests or [], group))
 
 
+def _hand_leak(x: "handplay.Loser", hands: int) -> Leak:
+    """Une main (ou une famille) jouée ainsi perd nettement plus que le fold, contre les réguliers."""
+    evidence = (f"{x.n} fois contre les réguliers : {x.mean:+.2f} bb par main (± {x.half_width:.1f}), contre "
+                f"{x.fold:+.2f} bb pour le fold, soit {100 * x.gap:+.0f} bb/100 par rapport au fold").replace(".", ",")
+    t = None if x.theory is None else round(100 * x.theory)
+    if t is None:
+        advice = "Joue-la moins souvent ainsi, ou revois la suite de ces coups."
+    elif t < 10:
+        advice = f"La théorie ne la joue presque jamais ainsi ({t} %) : folde-la ici."
+    elif t >= 50:
+        advice = (f"La théorie la joue ainsi ({t} %) : la perte vient de la suite du coup ; revois ces mains "
+                  "(Face au solveur).")
+    else:
+        advice = f"La théorie la mélange ({t} %) : joue-la moins souvent ainsi."
+    return Leak(f"Préflop · {x.label}", evidence, advice, "préflop", "solide", -100 * x.gap * x.n / max(hands, 1),
+                "mains", "Voir Mains de départ")
+
+
 def rank(stats: list[Stat], groups: list[dict], analyzed: int, top: int = TOP,
-         digests: Optional[list[dict]] = None) -> list[Leak]:
-    leaks = [x for x in (_stat_leak(s) for s in stats) if x]
+         digests: Optional[list[dict]] = None, extra: Optional[list[Leak]] = None) -> list[Leak]:
+    leaks = [x for x in (_stat_leak(s) for s in stats) if x] + list(extra or [])
     leaks += [x for x in (_solver_leak(g, analyzed, digests) for g in groups) if x]
     leaks.sort(key=lambda x: (x.confidence != "solide", -x.weight))
     return leaks[:top]
@@ -315,11 +334,14 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None) -> Report:
     rows = preflop_stats(stats, hero, parts) + postflop_stats(parts, hero)
     solver = solver_review(parts["reg"], hero)
     picks = interesting(parts, hero, solver["digests"])
+    plays = handplay.collect(parts["reg"], hero, handplay.Theory(preflop.load_solution()))
+    hand_leaks = [_hand_leak(x, len(parts["reg"])) for x in handplay.losers(plays)[:HAND_LEAKS]]
     opponents: dict = {"reg": [], "rec": []}
     for name, info_k in kinds.items():
         opponents["rec" if info_k.get("kind") == "rec" else "reg"].append(name)
     return Report(hero, len(hands), {s: len(parts[s]) for s, _ in SCOPES}, winrate, info, rows, solver, picks,
-                  rank(rows, solver["groups"], solver["analyzed"], digests=solver["digests"]), rec_notes(rows),
+                  rank(rows, solver["groups"], solver["analyzed"], digests=solver["digests"], extra=hand_leaks),
+                  rec_notes(rows),
                   opponents)
 
 
