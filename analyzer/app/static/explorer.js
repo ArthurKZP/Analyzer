@@ -244,9 +244,48 @@
     played = last ? last.path.concat(last.chosen === null ? [] : [{ type: 'action', index: last.chosen }]) : [];
   }
 
-  async function solve() {
+  // Précision visée (exploitabilité en % du pot) et durée estimée de la résolution, selon cet ordinateur.
+  const PRECISIONS = [3, 2, 1.5, 1, 0.5];
+  let estim = null;  // /api/estimation : durée estimée de ce spot pour chaque précision
+  const dur = (sec) => (sec < 60 ? Math.max(5, Math.round(sec / 5) * 5) + ' s'
+    : sec < 3600 ? Math.round(sec / 60) + ' min'
+      : Math.floor(sec / 3600) + ' h ' + String(Math.round((sec % 3600) / 60)).padStart(2, '0'));
+  const estimateOf = (t) => { const o = estim && estim.options.find((x) => x.target === t); return o ? o.seconds : null; };
+  const withTime = (t) => (estimateOf(t) !== null ? ' (≈ ' + dur(estimateOf(t)) + ')' : '');
+
+  async function loadEstimate() {
+    if (PRE || estim) return;
     try {
-      const v = await api('/api/resoudre', { hand: HAND, start: true, force: true });
+      estim = await api('/api/estimation', { hand: HAND });
+      renderStatus();
+    } catch (e) { /* solveur absent, coup non couvert : pas d'estimation */ }
+  }
+
+  function precisionPicker() {
+    const sel = el('select', { 'aria-label': 'Précision visée', title: 'Exploitabilité visée, en % du pot : plus elle est basse, '
+      + 'plus la solution est proche de l\'équilibre, et plus la résolution est longue. Réglage gardé pour les prochaines résolutions.' });
+    PRECISIONS.forEach((t) => sel.append(el('option', { value: t, selected: t === state.precision },
+      num(t, 1) + ' % du pot' + (estimateOf(t) !== null ? ' · ≈ ' + dur(estimateOf(t)) : ''))));
+    sel.onchange = async () => {
+      try {
+        state.precision = (await api('/api/precision', { precision: Number(sel.value) })).precision;
+      } catch (e) {
+        notice = e.message;
+      }
+      renderStatus();
+    };
+    return el('label', { class: 'prec' }, 'Précision ', sel);
+  }
+
+  // Résultat moins précis que le réglage : on propose de l'affiner (nouvelle résolution).
+  function refineButton() {
+    if (!state.precision || !state.target || state.target <= state.precision + 1e-9) return '';
+    return el('button', { type: 'button', onclick: () => solve(true) }, 'Affiner à ' + num(state.precision, 1) + ' %' + withTime(state.precision));
+  }
+
+  async function solve(fresh) {
+    try {
+      const v = await api('/api/resoudre', { hand: HAND, start: true, force: true, fresh: fresh === true });
       Object.assign(state, v);
       renderStatus();
       poll();
@@ -396,25 +435,29 @@
     } else if (s === 'done' && live) {
       const r = state.result;
       box.append(el('span', {}, 'Session active : toutes les branches et toutes les cartes sont explorables (fermée après 30 min sans activité). '
-        + r.iterations + ' itérations, exploitabilité ' + num(r.exploit_pct, 2) + ' % du pot.'));
+        + r.iterations + ' itérations, exploitabilité ' + num(r.exploit_pct, 2) + ' % du pot.'), precisionPicker(), refineButton());
     } else if (s === 'done' && state.study && SPOT) {
       box.append(el('span', {}, 'Étude enregistrée.'),
-        el('button', { type: 'button', class: 'go', onclick: solve }, 'Ouvrir l\'étude (quelques secondes)'));
+        el('button', { type: 'button', class: 'go', onclick: () => solve() }, 'Ouvrir l\'étude (quelques secondes)'));
     } else if (s === 'done' && SPOT) {
-      box.append(el('span', {}, 'L\'étude de ce spot a été supprimée : recalcule-le pour l\'explorer.'),
-        el('button', { type: 'button', class: 'go', onclick: solve }, 'Recalculer (quelques minutes)'));
+      box.append(el('span', {}, 'L\'étude de ce spot a été supprimée : recalcule-le pour l\'explorer.'), precisionPicker(),
+        el('button', { type: 'button', class: 'go', onclick: () => solve(true) }, 'Recalculer' + withTime(state.precision)));
     } else if (s === 'done' && state.study) {
       box.append(el('span', {}, 'Étude enregistrée : ligne jouée affichée.'),
-        el('button', { type: 'button', class: 'go', onclick: solve }, 'Ouvrir l\'étude complète (quelques secondes)'));
+        el('button', { type: 'button', class: 'go', onclick: () => solve() }, 'Ouvrir l\'étude complète (quelques secondes)'));
     } else if (s === 'done') {
       box.append(el('span', {}, 'Ligne jouée seulement (résultat enregistré). Pour explorer les autres branches et changer les cartes :'),
-        el('button', { type: 'button', class: 'go', onclick: solve }, 'Recalculer (quelques minutes)'));
+        precisionPicker(),
+        el('button', { type: 'button', class: 'go', onclick: () => solve(true) }, 'Recalculer' + withTime(state.precision)));
     } else {
       if (state.error) box.append(el('span', { class: 'err' }, state.error));
-      box.append(el('span', {}, SPOT ? 'Ce spot n\'est pas encore résolu (quelques minutes ; il sera gardé dans les études).'
-        : 'Ce coup n\'est pas encore résolu.'),
-        el('button', { type: 'button', class: 'go', onclick: solve }, SPOT ? 'Résoudre ce spot' : 'Résoudre ce coup'));
+      box.append(el('span', {}, SPOT ? 'Ce spot n\'est pas encore résolu (il sera gardé dans les études).'
+        : 'Ce coup n\'est pas encore résolu.'), precisionPicker(),
+        el('button', { type: 'button', class: 'go', onclick: () => solve() }, (SPOT ? 'Résoudre ce spot' : 'Résoudre ce coup')
+          + withTime(state.precision)));
+      loadEstimate();
     }
+    if (s === 'done') loadEstimate();
     if (notice) box.append(el('span', { class: 'err' }, notice));
   }
 

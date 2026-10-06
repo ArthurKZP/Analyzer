@@ -44,6 +44,9 @@
 //! analyzer-solve --verifier-arbre requete.json : vérifie qu'avec un plan vide, l'arbre d'Analyzer
 //! est identique à celui de GTOpen.
 //!
+//! analyzer-solve --taille requete.json : la taille de l'arbre sans le résoudre (pour estimer la durée) :
+//!   {"tree_nodes": 341640, "arena_mb": 1021.2, "hands": [612, 588]} (combos de chaque joueur, board ôté).
+//!
 //! Compilé avec la fonctionnalité `gpu` (cargo build --features gpu), "gpu": true résout sur une
 //! carte NVIDIA via le moteur CUDA de GTOpen, et revient au processeur si la carte n'est pas utilisable.
 
@@ -692,6 +695,15 @@ fn main() {
         run_lot(&path);
         return;
     }
+    if let Some(path) = option(&args, "--taille") {
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| fail(format!("lecture de {path} : {e}")));
+        let request: Request = serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("requête invalide : {e}")));
+        let spot = make_spot(&request).unwrap_or_else(|e| fail(e));
+        let arena = spot.arena_bytes_for(Storage::Compressed);
+        println!("{}", json!({"tree_nodes": spot.tree.nodes.len(), "arena_mb": round(arena as f64 / 1e6, 1),
+                              "hands": [spot.hands[0].len(), spot.hands[1].len()]}));
+        return;
+    }
     if let Some(path) = option(&args, "--verifier-arbre") {
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| fail(format!("lecture de {path} : {e}")));
         let mut request: Request = serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("requête invalide : {e}")));
@@ -738,13 +750,14 @@ fn main() {
 
     let spot = make_spot(&request).unwrap_or_else(|e| fail(e));
     let tree_nodes = spot.tree.nodes.len();
+    let hands = [spot.hands[0].len(), spot.hands[1].len()];
     // Le moteur GPU travaille en précision complète (f32).
     let storage = if request.gpu { Storage::F32 } else { Storage::Compressed };
     let mut solver = Solver::with_storage(Arc::new(spot), storage);
     let _ = writeln!(
         std::io::stderr(),
         "{}",
-        json!({"tree_nodes": tree_nodes, "arena_mb": round(solver.arena_bytes() as f64 / 1e6, 1)})
+        json!({"tree_nodes": tree_nodes, "arena_mb": round(solver.arena_bytes() as f64 / 1e6, 1), "hands": hands})
     );
 
     let opts = RunOptions {

@@ -281,7 +281,7 @@ def load_plan(key: str) -> Optional[dict]:
 
 
 def extract_and_save(session: postflop.Session, spot: studyspots.StudySpot) -> dict:
-    key = postflop.study_key(spot.request())
+    key = postflop.study_key(session.request)  # l'étude ouverte, à sa précision
     return json.loads(save_plan(extract(session.node, spot, key)).read_text(encoding="utf-8"))
 
 

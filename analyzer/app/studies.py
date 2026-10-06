@@ -36,6 +36,9 @@ STYLE = """
 .spot-head button.go { background: var(--series-1); border-color: var(--series-1); color: #fff; font-weight: 600; }
 .spot-head button:disabled { opacity: .5; cursor: default; }
 .spot-status { font-size: 12px; color: var(--ink-2); }
+.spot-prec { font-size: 13px; color: var(--ink-2); display: inline-flex; gap: 6px; align-items: center; }
+.spot-prec select { font: inherit; font-size: 13px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--page); color: var(--ink); }
 .spot-status .bar { display: inline-block; vertical-align: middle; width: 120px; height: 6px; border-radius: 3px;
   background: var(--grid); overflow: hidden; margin-left: 6px; }
 .spot-status .bar span { display: block; height: 100%; background: var(--series-1); }
@@ -108,7 +111,36 @@ document.querySelectorAll('.spot-head').forEach(function (box) {
     clearTimeout(timer);
     if (s.busy) timer = setTimeout(refresh, 3000);
   }
-  function refresh() { fetch('/api/spots/' + family).then(function (r) { return r.json(); }).then(show); }
+  // Précision visée et durée estimée par flop (d'après le premier flop manquant), réglage commun à l'application.
+  var prec = card.querySelector('.spot-prec select'), est = card.querySelector('.spot-est'), estimate = null, missing = 0;
+  function dur(sec) {
+    return sec < 60 ? Math.max(5, Math.round(sec / 5) * 5) + ' s' : sec < 3600 ? Math.round(sec / 60) + ' min'
+      : Math.floor(sec / 3600) + ' h ' + String(Math.round((sec % 3600) / 60)).padStart(2, '0');
+  }
+  function showEstimate() {
+    if (!estimate) return;
+    Array.prototype.forEach.call(prec.options, function (o) {
+      var e = estimate.options.filter(function (x) { return x.target === Number(o.value); })[0];
+      o.textContent = o.value.replace('.', ',') + ' % du pot' + (e ? ' · ≈ ' + dur(e.seconds) + ' par flop' : '');
+    });
+    var e = estimate.options.filter(function (x) { return x.target === Number(prec.value); })[0];
+    est.textContent = e && missing ? '≈ ' + dur(e.seconds * missing) + ' pour les ' + missing + ' flops, choix des tailles en plus' : '';
+  }
+  prec.addEventListener('change', function () {
+    post('/api/precision', { precision: Number(prec.value) }).then(showEstimate);
+  });
+  function refresh() {
+    fetch('/api/spots/' + family).then(function (r) { return r.json(); }).then(function (s) {
+      if (s.precision) prec.value = String(s.precision);
+      var todo = (s.rows || []).filter(function (r) { return !r.done; });
+      missing = todo.length;
+      if (todo.length && !estimate && s.ready) {
+        post('/api/estimation', { hand: todo[0].id }).then(function (e) { if (e.options) { estimate = e; showEstimate(); } });
+      }
+      showEstimate();
+      show(s);
+    });
+  }
   run.addEventListener('click', function () {
     run.disabled = true;
     post('/api/spots/' + family + '/resoudre').then(show);
@@ -237,6 +269,9 @@ READING = {
 }
 
 
+PRECISION_OPTIONS = "".join(f'<option value="{t:g}">{num(t, 1)} % du pot</option>' for t in postflop.PRECISIONS)
+
+
 def _reading(family: str) -> str:
     """Ce que montre chaque ligne de la série (les nœuds de sa synthèse)."""
     if family in READING:
@@ -333,6 +368,8 @@ celui qui mise l'emporte. Chaque ligne donne la stratégie de toute la range : {
   <span><b>{done} / {total}</b> flops résolus{" · " + _size(size) if size else ""}</span>
   <button type="button" class="go spot-run"{" hidden" if not missing else ""}>Résoudre les {missing} flops manquants</button>
   <button type="button" class="spot-stop" hidden>Arrêter</button>
+  <label class="spot-prec"{" hidden" if not missing else ""}>Précision <select aria-label="Précision visée">{PRECISION_OPTIONS}</select></label>
+  <span class="spot-est muted small"></span>
   <span class="spot-status"></span>
 </div>
 <p class="note">Un flop sans tailles choisies passe d'abord par leur choix, puis par sa résolution : {escape(cost)}

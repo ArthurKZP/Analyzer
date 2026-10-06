@@ -219,7 +219,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, "Requête invalide.")
             try:
                 return self._json(library.solve(payload["hand"], bool(payload.get("start")),
-                                                bool(payload.get("force"))))
+                                                bool(payload.get("force")), bool(payload.get("fresh"))))
             except UnknownPlayer:
                 return self._error(404, "Main introuvable.")
         if parts == ["api", "etudes", "supprimer"]:
@@ -255,6 +255,22 @@ class Handler(BaseHTTPRequestHandler):
                     and trainer.valid_cards(board, 3)):
                 return self._error(400, "Requête invalide.")
             return self._json(studyspots.flop_options(payload["family"], board))
+        if parts == ["api", "estimation"]:  # durée d'une résolution selon la précision
+            payload = self._small_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.estimate(payload["hand"]))
+            except (UnknownPlayer, KeyError):
+                return self._error(404, "Main introuvable.")
+            except (ValueError, postflop.SolverError) as exc:  # coup non couvert, solveur absent
+                return self._error(400, str(exc))
+        if parts == ["api", "precision"]:  # précision visée des prochaines résolutions
+            payload = self._small_json()
+            try:
+                return self._json({"precision": postflop.set_precision(float(payload["precision"]))})
+            except (TypeError, KeyError, ValueError):
+                return self._error(400, "Précision inconnue.")
         if parts == ["api", "explorateur", "tailles"]:
             payload = self._small_json()
             if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):

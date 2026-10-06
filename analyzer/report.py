@@ -139,7 +139,7 @@ def chart_svg(curve: list[tuple[float, ...]]) -> str:
     def y(v: float) -> float:
         return pad_t + (height - pad_t - pad_b) * (1 - (v - lo) / (hi - lo or 1))
 
-    grid = []
+    grid, xticks = [], []
     tick = lo
     while tick <= hi + 1e-9:
         cls = "axis" if abs(tick) < 1e-9 else "grid"
@@ -150,16 +150,18 @@ def chart_svg(curve: list[tuple[float, ...]]) -> str:
         tick += step
     xstep = _nice_step(n / 6)
     for i in range(0, n, int(xstep) or 1):
-        grid.append(f'<text class="tick" x="{x(i):.1f}" y="{height - 10}" text-anchor="middle">{i}</text>')
+        xticks.append(f'<text class="tick" x="{x(i):.1f}" y="{height - 10}" text-anchor="middle">{i}</text>')
     lines = []
     for s, (_, var) in enumerate(SERIES):
         pts = " ".join(f"{x(i):.1f},{y(p[s]):.1f}" for i, p in enumerate(curve))
-        lines.append(f'<polyline class="line" style="stroke:var({var})" points="{pts}"/>')
+        lines.append(f'<polyline class="line" data-series="{s}" style="stroke:var({var})" points="{pts}"/>')
     data = json.dumps([[round(v, 1) for v in p] for p in curve])
+    # Le script redessine l'axe vertical et les courbes quand on en masque (cases de la légende).
     return f"""
-<div class="chart-wrap"><div class="chart" data-points='{data}' data-x0="{pad_l}" data-x1="{width - pad_r}">
+<div class="chart-wrap"><div class="chart" data-points='{data}' data-x0="{pad_l}" data-x1="{width - pad_r}"
+  data-y0="{pad_t}" data-y1="{height - pad_b}">
   <svg viewBox="0 0 {width} {height}" role="img" aria-label="Résultat cumulé en big blinds, main par main">
-    {''.join(grid)}
+    <g class="yaxis">{''.join(grid)}</g>{''.join(xticks)}
     {''.join(lines)}
     <line class="cross" x1="0" x2="0" y1="{pad_t}" y2="{height - pad_b}" visibility="hidden"/>
     <rect class="hit" x="{pad_l}" y="{pad_t}" width="{width - pad_l - pad_r}" height="{height - pad_t - pad_b}"/>
@@ -196,9 +198,11 @@ def tiles(hero: PlayerStats) -> str:
 
 
 def legend(curve) -> str:
+    """Légende du graphique : une case par courbe, pour la masquer ou l'afficher."""
     last = curve[-1] if curve else (0, 0, 0, 0)
     return '<div class="legend">' + "".join(
-        f'<span><i style="background:var({var})"></i>{name} <b>{num(last[i], 0, sign=True)}&nbsp;bb</b></span>'
+        f'<label><input type="checkbox" checked data-series="{i}"><i style="background:var({var})"></i>{name} '
+        f'<b>{num(last[i], 0, sign=True)}&nbsp;bb</b></label>'
         for i, (name, var) in enumerate(SERIES)
     ) + "</div>"
 
@@ -862,6 +866,9 @@ table.duel tr.ok .lvl { color: var(--good); font-weight: 700; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin-bottom: 8px; }
 .legend i { display: inline-block; width: 16px; height: 2px; vertical-align: middle; margin-right: 6px; }
 .legend b { color: var(--ink); font-weight: 600; }
+.legend label { cursor: pointer; }
+.legend input { margin: 0 6px 0 0; vertical-align: -2px; accent-color: var(--ink-2); }
+.legend label:has(input:not(:checked)) { opacity: 0.45; }
 .barcell { width: 34%; position: relative; }
 .bar { display: inline-block; height: 8px; background: var(--series-1); border-radius: 0 4px 4px 0; vertical-align: middle; max-width: calc(100% - 44px); }
 .barv { margin-left: 6px; color: var(--ink-2); font-size: 12px; }
@@ -1039,10 +1046,62 @@ document.querySelectorAll('.chart').forEach(function (chart) {
   var pts = JSON.parse(chart.dataset.points);
   var svg = chart.querySelector('svg'), hit = chart.querySelector('.hit');
   var cross = chart.querySelector('.cross'), tip = chart.querySelector('.tooltip');
-  var x0 = +chart.dataset.x0, x1 = +chart.dataset.x1;
+  var x0 = +chart.dataset.x0, x1 = +chart.dataset.x1, y0 = +chart.dataset.y0, y1 = +chart.dataset.y1;
   var names = ['Résultat réel', 'EV all-in', "À l'abattage", 'Sans abattage'];
   var vars = ['--series-1', '--series-2', '--series-3', '--series-4'];
+  var shown = names.map(function () { return true; });
   function fmt(v) { return (v > 0 ? '+' : '') + v.toFixed(0).replace('-', '\\u2212') + ' bb'; }
+  // Courbes masquées (cases de la légende) : l'échelle verticale suit celles qui restent ; le choix est gardé.
+  var card = chart.closest('.card'), boxes = card ? card.querySelectorAll('.legend input[data-series]') : [];
+  var KEY = 'analyzer.courbes-masquees';
+  function niceStep(raw) {
+    raw = Math.max(raw, 1e-9);
+    var mag = raw >= 1 ? Math.pow(10, String(Math.floor(raw)).length) / 10 : 1;
+    var ms = [1, 2, 2.5, 5, 10];
+    for (var k = 0; k < ms.length; k++) if (raw <= ms[k] * mag) return ms[k] * mag;
+    return 10 * mag;
+  }
+  function tickText(v) { return (v < -1e-9 ? '\\u2212' : '') + Math.abs(Math.round(v)).toLocaleString('fr-FR'); }
+  function redraw() {
+    var values = [0];
+    pts.forEach(function (p) { p.forEach(function (v, s) { if (shown[s]) values.push(v); }); });
+    var lo = Math.min.apply(null, values), hi = Math.max.apply(null, values);
+    var step = niceStep((hi - lo) / 5 || 1);
+    lo = step * Math.floor(lo / step); hi = step * Math.ceil(hi / step);
+    var y = function (v) { return y0 + (y1 - y0) * (1 - (v - lo) / ((hi - lo) || 1)); };
+    var x = function (i) { return x0 + (x1 - x0) * (i / Math.max(pts.length - 1, 1)); };
+    var axis = svg.querySelector('.yaxis'), ns = 'http://www.w3.org/2000/svg';
+    axis.textContent = '';
+    for (var t = lo; t <= hi + 1e-9; t += step) {
+      var line = document.createElementNS(ns, 'line');
+      line.setAttribute('class', Math.abs(t) < 1e-9 ? 'axis' : 'grid');
+      line.setAttribute('x1', x0); line.setAttribute('x2', x1);
+      line.setAttribute('y1', y(t).toFixed(1)); line.setAttribute('y2', y(t).toFixed(1));
+      var text = document.createElementNS(ns, 'text');
+      text.setAttribute('class', 'tick'); text.setAttribute('x', x0 - 8); text.setAttribute('y', (y(t) + 4).toFixed(1));
+      text.setAttribute('text-anchor', 'end'); text.textContent = tickText(t);
+      axis.appendChild(line); axis.appendChild(text);
+    }
+    svg.querySelectorAll('polyline[data-series]').forEach(function (pl) {
+      var s = +pl.dataset.series;
+      pl.style.display = shown[s] ? '' : 'none';
+      if (shown[s]) pl.setAttribute('points', pts.map(function (p, i) { return x(i).toFixed(1) + ',' + y(p[s]).toFixed(1); }).join(' '));
+    });
+  }
+  try {
+    var hidden = JSON.parse(localStorage.getItem(KEY) || '[]');
+    if (boxes.length) hidden.forEach(function (s) { if (s >= 0 && s < shown.length) shown[s] = false; });
+  } catch (e) { /* stockage indisponible : toutes les courbes */ }
+  boxes.forEach(function (box) {
+    var s = +box.dataset.series;
+    box.checked = shown[s];
+    box.addEventListener('change', function () {
+      shown[s] = box.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(shown.map(function (v, k) { return v ? -1 : k; }).filter(function (k) { return k >= 0; }))); } catch (e) { /* rien */ }
+      redraw();
+    });
+  });
+  if (shown.some(function (v) { return !v; })) redraw();
   function show(i) {
     var x = x0 + (x1 - x0) * i / Math.max(pts.length - 1, 1);
     cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('visibility', 'visible');
@@ -1050,6 +1109,7 @@ document.querySelectorAll('.chart').forEach(function (chart) {
     var head = document.createElement('div'); head.textContent = 'Main ' + (i + 1); head.style.color = 'var(--muted)';
     tip.appendChild(head);
     pts[i].forEach(function (v, s) {
+      if (!shown[s]) return;
       var row = document.createElement('div'); row.className = 'row';
       var key = document.createElement('i'); key.style.background = 'var(' + vars[s] + ')';
       var label = document.createElement('span'); label.textContent = names[s];

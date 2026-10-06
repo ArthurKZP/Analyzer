@@ -307,7 +307,8 @@ class StudySpot(postflop.SpotTree):
     def write_meta(self, request: dict, raw: dict, session: Optional[postflop.Session] = None) -> None:
         if self.adjusted:  # étude à part, avec les coups joués : hors des séries et des plans
             meta = {
-                "kind": "spot-ajuste", "key": postflop.study_key(request), "hand": self.ident, "id": self.ident,
+                "kind": "spot-ajuste", "key": postflop.study_key(request), "base": postflop.base_key(request),
+                "hand": self.ident, "id": self.ident,
                 "date": "Spot " + self.name, "villain": "–", "hero_cards": [], "board": self.board,
                 "pot_type": self.name, "hero_position": None, "pot": self.pot_bb, "stack": self.stack_bb,
                 "net": None, "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"),
@@ -318,7 +319,8 @@ class StudySpot(postflop.SpotTree):
                                                                          encoding="utf-8")
             return
         meta = {
-            "kind": "spot", "key": postflop.study_key(request), "id": self.ident, "family": self.family,
+            "kind": "spot", "key": postflop.study_key(request), "base": postflop.base_key(request), "id": self.ident,
+            "family": self.family,
             "family_label": self.label, "pot_type": self.name, "texture": self.texture, "board": self.board,
             "pot": self.pot_bb, "stack": self.stack_bb, "iterations": raw.get("iterations"),
             "exploit_pct": raw.get("exploit_pct"), "seconds": raw.get("seconds"), "menu": self.menu_text(),
@@ -388,7 +390,12 @@ def _current(meta: dict) -> Optional[bool]:
         spot = parse_ident(meta.get("id", ""))
     except postflop.Unsupported:
         return None
-    return spot is not None and meta.get("key") == postflop.study_key(spot.request())
+    if spot is None:
+        return False
+    request = spot.request()
+    if meta.get("base"):  # la précision de la résolution ne compte pas
+        return meta["base"] == postflop.base_key(request)
+    return meta.get("key") == postflop.study_key(request)
 
 
 def spot_studies(families: Optional[tuple[str, ...]] = None) -> dict[str, dict]:
@@ -639,7 +646,7 @@ def export_reference(family: str = "srp", path: Optional[Path] = None) -> Path:
     for board in flop_set(family):
         spot = StudySpot(family, cards_of(board))
         meta = studies.get(spot.ident)
-        if not meta or not meta.get("summary") or meta["key"] != postflop.study_key(spot.request()):
+        if not meta or not meta.get("summary") or not _current(meta):
             continue
         spots[spot.ident] = {
             "key": meta["key"], "texture": spot.texture, "iterations": meta["iterations"],

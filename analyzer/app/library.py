@@ -370,10 +370,11 @@ class Library:
             raise UnknownPlayer(hand_id)
         return postflop.build_spot(*found)
 
-    def solve(self, hand_id: str, start: bool = False, force: bool = False) -> dict:
+    def solve(self, hand_id: str, start: bool = False, force: bool = False, fresh: bool = False) -> dict:
         """État de la résolution GTOpen d'une main (ou d'un spot d'étude) ; start=True la lance si besoin.
 
-        force=True relance une main déjà résolue pour rouvrir une session navigable.
+        force=True relance une main déjà résolue pour rouvrir une session navigable ; fresh=True la résout à
+        nouveau à la précision réglée (affiner).
         """
         try:
             spot = self._spot(hand_id)
@@ -381,14 +382,20 @@ class Library:
             return {"hand": hand_id, "state": "unsupported", "message": str(exc)}
         view = self.solves.lookup(spot)
         reopen = force and view["state"] == "done" and not view["live"]
-        if start and (view["state"] in ("absent", "error", "cancelled") or reopen):
+        if start and fresh and view["state"] not in ("waiting", "running"):
+            solver = postflop.status()
+            if not solver["ready"]:
+                return {"hand": hand_id, "state": "unavailable", "message": solver["message"],
+                        "install": solver["install"]}
+            view = self.solves.start(spot, fresh=True)
+        elif start and (view["state"] in ("absent", "error", "cancelled") or reopen):
             solver = postflop.status()
             if not solver["ready"]:
                 return {"hand": hand_id, "state": "unavailable", "message": solver["message"],
                         "install": solver["install"]}
             board = "".join(getattr(spot, "board", []))
             if (isinstance(spot, studyspots.StudySpot) and not spot.plan and not spot.adjusted
-                    and board in studyspots.flop_set(spot.family) and not postflop.study_path(spot.request()).is_file()):
+                    and board in studyspots.flop_set(spot.family) and postflop.solved_request(spot.request()) is None):
                 # flop de la série sans tailles choisies : le choix d'abord, comme pour la série entière
                 family = spot.family
                 view = self.solves.choose_and_solve(
@@ -400,7 +407,15 @@ class Library:
             solver = postflop.status()
             view["solver"] = {k: solver[k] for k in ("ready", "message", "install")}
         view["adjusted"] = spot.adjusted
+        view["precision"] = self.solves.precision()[1]  # le réglage, pour la prochaine résolution
         return view
+
+    def estimate(self, hand_id: str) -> dict:
+        """Durée estimée de la résolution d'un coup ou d'un spot d'étude, pour chaque précision."""
+        spot = self._spot(hand_id)
+        out = postflop.estimate(spot.request())
+        out["precision"] = self.solves.precision()[1]
+        return out
 
     # --- ranges préflop ajustées (panneau Ranges de l'explorateur) ------------------------
     @staticmethod
@@ -587,6 +602,7 @@ class Library:
                            max_iterations=view.get("max_iterations"), mode=view.get("mode"))
             rows.append(row)
         return {"family": family, "label": studyspots.family_info(family)["label"], "ready": ready,
+                "precision": self.solves.precision()[1],
                 "total": len(rows), "done": sum(r["done"] for r in rows),
                 "busy": sum(r.get("state") in ("waiting", "running") for r in rows), "rows": rows}
 

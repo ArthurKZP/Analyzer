@@ -270,12 +270,27 @@ activité ou quand une autre s'ouvre.
 **Durée** : un arbre de flop compte des centaines de milliers de nœuds et jusqu'à 2 Go de mémoire avec les
 ranges HU complètes. Sur un processeur à 4 cœurs, l'objectif par défaut (1,5 % du pot d'exploitabilité,
 120 itérations au plus) demande 30 secondes à 2 minutes pour un SRP, davantage quand des tailles jouées
-s'ajoutent à l'arbre ; c'est plus rapide avec plus de cœurs. Ce qui joue sur la durée, mesuré sur 4 cœurs :
+s'ajoutent à l'arbre ; c'est plus rapide avec plus de cœurs.
+
+**Précision et durée estimée** : la précision visée (exploitabilité en % du pot : 3, 2, 1,5, 1 ou 0,5) se règle
+dans l'explorateur, à côté de *Résoudre*, et en tête de chaque série de spots d'étude ; elle vaut pour les
+résolutions suivantes (explorateur, séries, analyse des mains, leakfinding). Chaque choix affiche sa durée
+estimée pour ce spot : la taille de l'arbre (`analyzer-solve --taille`, sans résoudre) × la vitesse de cet
+ordinateur × les itérations qu'il faut pour descendre à cette précision. Vitesse et itérations viennent des
+dernières résolutions faites ici (`~/.analyzer/durees.json`) ; avant la première, de repères mesurés sur 4 cœurs
+(environ 3 milliardièmes de seconde par itération, par nœud et par combo ; 1,5 % vers 45 itérations, 0,5 % vers
+70). Un spot déjà résolu se rouvre à sa précision, quelle qu'elle soit (la dernière employée est notée dans
+`~/.analyzer/precisions.json`) ; s'il est moins précis que le réglage, *Affiner* le résout à nouveau. Le choix
+des tailles d'un flop garde sa propre précision (0,4 % du pot au flop).
+
+Ce qui joue sur la durée, mesuré sur 4 cœurs :
 
 - la largeur des ranges : le même arbre de SRP sur K♠K♦4♣ (340 000 nœuds) se résout en 64 s avec les ranges
   6-max BB contre BTN, 122 s avec les ranges heads-up ;
 - la taille de l'arbre : chaque taille de plus multiplie les branches (d'où une seule taille river dans
-  l'arbre des coups joués) ;
+  l'arbre des coups joués). Un pot où l'ouvreur est hors de position (SB contre BB) a un arbre plus gros, les
+  deux joueurs pouvant miser au flop (c-bet de la SB, stab de la BB) : 596 000 nœuds contre 342 000 pour un SRP
+  ouvert en position, et une convergence plus lente (90 itérations pour 1,5 % au lieu de 60) ;
 - la variante de CFR : GTOpen propose aussi CFR+ et CFR+ prédictif ; sur nos spots, DCFR (celle utilisée)
   atteint l'objectif en moins d'itérations (pot 3bet : 72 s contre 84 s en CFR+ et 124 s en CFR+ prédictif ;
   SRP : 172 s contre 348 s en CFR+ prédictif) ;
@@ -734,7 +749,7 @@ Analyzer.
 | Section | Ce qu'on y trouve |
 |---|---|
 | Plan de jeu | Son profil en une phrase et au plus 4 consignes par moment du coup (préflop, quand tu mises, face à ses mises, à tester), chacune avec sa preuve chiffrée et un niveau de confiance |
-| Résultat | Ton gain en bb et en €, bb/100, résultat **EV all-in** (la part de chance), gains avec/sans abattage, courbe main par main |
+| Résultat | Ton gain en bb et en €, bb/100, résultat **EV all-in** (la part de chance), gains avec/sans abattage, courbe main par main (une case par courbe dans la légende pour la masquer ; l'échelle suit les courbes affichées, le choix est gardé) |
 | Lecture de l'adversaire | Ses écarts aux repères d'un régulier HU, classés par importance, avec l'exploit correspondant ; tes propres écarts dans ce match |
 | Le duel | Ses attaques face à tes réponses (ses 3bets / tes folds vs 3bet, ses barrels / tes folds...), avec alerte quand il t'exploite — en tenant compte de ta main quand tu as foldé |
 | Ses lignes : value ou bluff ? | Chaque ligne postflop (c-bet, check-raise, barrel, mise après check…, par taille) : combien de fois, ta réponse, **avec quoi tu as foldé**, ce qu'il a montré (bluff / semi-bluff / value fine / value, selon son équité réelle contre ta main) et un verdict qui tient compte de la taille de l'échantillon. Synthèse par taille, ce qu'il montre quand il checke, timing selon sa main |

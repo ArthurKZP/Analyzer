@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -713,6 +714,209 @@ def _save_cache(request: dict, result: dict) -> None:
     path = cache_path(request)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(result), encoding="utf-8")
+    _remember_precision(request)
+
+
+# --- Précision des résolutions et durée ----------------------------------------------------------
+#
+# La précision visée (exploitabilité, en % du pot) se règle dans l'application ; elle fait partie de la requête
+# (et donc de la clé d'un résultat). Pour retrouver un spot déjà résolu quelle que soit sa précision, la dernière
+# précision employée pour chaque spot est notée (precisions.json) ; sans note, celle par défaut.
+
+PRECISIONS = (3.0, 2.0, 1.5, 1.0, 0.5)
+ITERATION_CAP = {3.0: 120, 2.0: 120, 1.5: 120, 1.0: 250, 0.5: 600}  # garde-fou si l'objectif n'est pas atteint
+_lock = threading.Lock()
+
+
+def iterations_for(target: float) -> int:
+    return ITERATION_CAP.get(target, DEFAULT_ITERATIONS if target >= DEFAULT_TARGET else 600)
+
+
+def settings_path() -> Path:
+    return home() / "reglages.json"
+
+
+def precision() -> float:
+    """La précision visée des nouvelles résolutions (réglage de l'application)."""
+    try:
+        value = float(json.loads(settings_path().read_text(encoding="utf-8")).get("precision", DEFAULT_TARGET))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return DEFAULT_TARGET
+    return value if value in PRECISIONS else DEFAULT_TARGET
+
+
+def set_precision(target: float) -> float:
+    if target not in PRECISIONS:
+        raise ValueError(f"Précision inconnue : {target}")
+    with _lock:
+        try:
+            data = json.loads(settings_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        data["precision"] = target
+        settings_path().parent.mkdir(parents=True, exist_ok=True)
+        settings_path().write_text(json.dumps(data), encoding="utf-8")
+    return target
+
+
+PRECISION_FIELDS = ("max_iterations", "target_exploit_pct")
+
+
+def base_key(request: dict) -> str:
+    """Le spot sans sa précision (itérations, exploitabilité visée)."""
+    rest = {k: v for k, v in request.items() if k not in RUNTIME_FIELDS + PRECISION_FIELDS}
+    return hashlib.sha256(json.dumps(rest, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:20]
+
+
+def _precisions_path() -> Path:
+    return home() / "precisions.json"
+
+
+def _precisions() -> dict:
+    try:
+        return json.loads(_precisions_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _remember_precision(request: dict) -> None:
+    """Note la précision du dernier résultat de ce spot (celle par défaut n'a pas besoin de note)."""
+    entry = {"iterations": request.get("max_iterations"), "target": request.get("target_exploit_pct")}
+    with _lock:
+        data = _precisions()
+        key = base_key(request)
+        if entry == {"iterations": DEFAULT_ITERATIONS, "target": DEFAULT_TARGET}:
+            if data.pop(key, None) is None:
+                return
+        else:
+            data[key] = entry
+        _precisions_path().parent.mkdir(parents=True, exist_ok=True)
+        _precisions_path().write_text(json.dumps(data), encoding="utf-8")
+
+
+def solved_request(request: dict) -> Optional[dict]:
+    """La requête de ce spot dont le résultat ou l'étude existe, quelle que soit sa précision ; None sinon."""
+    entry = _precisions().get(base_key(request))
+    candidates = [dict(request, max_iterations=entry["iterations"], target_exploit_pct=entry["target"])] if entry else []
+    candidates.append(dict(request, max_iterations=DEFAULT_ITERATIONS, target_exploit_pct=DEFAULT_TARGET))
+    for candidate in candidates:
+        if cache_path(candidate).is_file() or study_path(candidate).is_file():
+            return candidate
+    return None
+
+
+def durations_path() -> Path:
+    return home() / "durees.json"
+
+
+def _durations() -> list[dict]:
+    try:
+        data = json.loads(durations_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+class _Tracker:
+    """Suit la progression d'une résolution (taille de l'arbre, exploitabilité par itération) pour en garder la
+    durée : les estimations suivantes s'appuient sur cet ordinateur."""
+
+    def __init__(self, forward: Optional[Callable[[dict], None]]):
+        self.forward, self.size, self.curve = forward, {}, []
+
+    def __call__(self, data: dict) -> None:
+        if "tree_nodes" in data and "hands" in data:
+            self.size = data
+        elif "iteration" in data and "exploit_pct" in data:
+            self.curve.append([data["iteration"], data["exploit_pct"], data.get("elapsed", 0.0)])
+        if self.forward:
+            self.forward(data)
+
+    def record(self) -> None:
+        if not self.size or len(self.curve) < 2:
+            return
+        entry = {"nodes": self.size["tree_nodes"], "hands": sum(self.size["hands"]), "curve": self.curve[-60:]}
+        with _lock:
+            data = _durations()[-(MAX_DURATIONS - 1):] + [entry]
+            durations_path().parent.mkdir(parents=True, exist_ok=True)
+            durations_path().write_text(json.dumps(data), encoding="utf-8")
+
+
+MAX_DURATIONS = 100
+# Repères mesurés sur 4 cœurs (avant toute résolution sur cet ordinateur), sur K♠8♦3♥ : secondes par itération, par
+# nœud de l'arbre et par combo des deux ranges (de 2,7 à 3,3 milliardièmes de seconde en SRP, 3bet et 4bet, heads-up
+# ou 6-max) ; exploitabilité (% du pot) au fil des itérations, au milieu des courbes mesurées (le SRP SB contre BB
+# converge plus lentement : 1,5 % vers 65 itérations au lieu de 45 ; le pot 4bet plus vite).
+DEFAULT_SPEED = 2.9e-9
+DEFAULT_CURVE = [[10, 18.0], [20, 6.2], [30, 2.9], [40, 1.7], [50, 1.1], [60, 0.8], [70, 0.6], [80, 0.48],
+                 [90, 0.4], [100, 0.33], [120, 0.27]]
+START_SECONDS = 3.0  # construction de l'arbre, mémoire, lecture du résultat
+
+
+def _iterations_to(curve: list, target: float) -> float:
+    """Itérations pour descendre sous la cible, d'après une courbe (itération, exploitabilité) : interpolée, ou
+    prolongée en loi de puissance au-delà de la dernière mesure."""
+    points = [(float(c[0]), float(c[1])) for c in curve if c[0] > 0 and c[1] > 0]
+    if not points:
+        return float(DEFAULT_ITERATIONS)
+    if points[0][1] <= target:
+        return points[0][0]
+    for (i0, e0), (i1, e1) in zip(points, points[1:]):
+        if e1 <= target < e0:
+            slope = math.log(e0 / e1) / math.log(i1 / i0) if i1 > i0 and e0 > e1 else 1.0
+            return i0 * (e0 / target) ** (1 / slope)
+    (i0, e0), (i1, e1) = (points[-2], points[-1]) if len(points) > 1 else ((points[0][0] / 2, points[0][1] * 2),
+                                                                        points[0])
+    slope = min(max(math.log(e0 / e1) / math.log(i1 / i0), 0.4), 2.0) if i1 > i0 and e0 > e1 else 1.0
+    return i1 * (e1 / target) ** (1 / slope)
+
+
+def _median(values: list[float]) -> float:
+    values = sorted(values)
+    n = len(values)
+    return values[n // 2] if n % 2 else (values[n // 2 - 1] + values[n // 2]) / 2
+
+
+_SIZES: dict[str, dict] = {}
+
+
+def tree_size(request: dict) -> dict:
+    """Taille de l'arbre d'un spot sans le résoudre (analyzer-solve --taille) : nœuds, mémoire, combos."""
+    key = base_key(request)
+    if key not in _SIZES:
+        exe = binary_path()
+        if not exe.is_file():
+            raise SolverError(status()["message"])
+        with tempfile.TemporaryDirectory(prefix="analyzer-taille-") as tmp:
+            path = Path(tmp) / "requete.json"
+            path.write_text(json.dumps(request), encoding="utf-8")
+            done = subprocess.run([str(exe), "--taille", str(path)], capture_output=True, **PIPE_TEXT)
+        try:
+            _SIZES[key] = json.loads(done.stdout)
+        except ValueError:
+            raise SolverError((done.stderr or "").strip()[-300:] or "taille de l'arbre illisible") from None
+    return _SIZES[key]
+
+
+def estimate(request: dict, targets: tuple[float, ...] = PRECISIONS) -> dict:
+    """Durée estimée de la résolution d'un spot pour chaque précision : taille de l'arbre (nœuds × combos) ×
+    secondes par itération sur cet ordinateur × itérations pour atteindre la précision (d'après les résolutions
+    déjà faites ici ; repères mesurés sur 4 cœurs avant la première)."""
+    size = tree_size(request)
+    work = size["tree_nodes"] * max(sum(size["hands"]), 1)
+    history = [h for h in _durations() if h.get("nodes") and h.get("hands") and len(h.get("curve", [])) >= 2][-30:]
+    speeds = [h["curve"][-1][2] / h["curve"][-1][0] / (h["nodes"] * h["hands"]) for h in history
+              if h["curve"][-1][0] and h["curve"][-1][2]]
+    speed = _median(speeds) if len(speeds) >= 3 else DEFAULT_SPEED
+    curves = [h["curve"] for h in history] or [DEFAULT_CURVE]
+    options = []
+    for target in targets:
+        needed = _median([_iterations_to(c, target) for c in curves])
+        iterations = min(int(math.ceil(needed / 10) * 10), iterations_for(target))  # mesure toutes les 10
+        options.append({"target": target, "iterations": iterations,
+                        "seconds": round(START_SECONDS + speed * work * iterations)})
+    return {"tree_nodes": size["tree_nodes"], "hands": size["hands"], "arena_mb": size.get("arena_mb"),
+            "options": options, "measured": len(speeds) >= 3}
 
 
 def _progress_reader(stream, on_progress: Optional[Callable[[dict], None]], errors: list) -> None:
@@ -759,12 +963,14 @@ def solve(request: dict, on_progress: Optional[Callable[[dict], None]] = None,
             proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.PIPE, **PIPE_TEXT)
             if on_start:
                 on_start(proc)
-            _progress_reader(proc.stderr, on_progress, errors)
+            tracker = _Tracker(on_progress)
+            _progress_reader(proc.stderr, tracker, errors)
             proc.wait()
         if proc.returncode != 0:
             raise SolverError(errors[-1] if errors else f"analyzer-solve s'est arrêté (code {proc.returncode}).")
         result = json.loads(out_path.read_text(encoding="utf-8"))
     _save_cache(request, result)
+    tracker.record()
     return result
 
 
@@ -782,7 +988,8 @@ def write_study_meta(spot: PostflopSpot, request: dict, raw: dict) -> None:
     """Fiche de l'étude (pour la bibliothèque), à côté du fichier de l'arbre."""
     hand = spot.hand
     meta = {
-        "kind": "hand", "key": study_key(request), "hand": hand.hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"),
+        "kind": "hand", "key": study_key(request), "base": base_key(request), "hand": hand.hand_id,
+        "date": hand.date.strftime("%d/%m/%Y %H:%M"),
         "hero": spot.hero, "villain": spot.villain, "hero_cards": hand.hole_cards.get(spot.hero, []),
         "board": hand.board, "pot_type": spot.pot_type, "table_format": hand.table_format,
         "hero_position": ("BB" if spot.oop == spot.hero else "BTN") if len(hand.seats) == 2 else hand.position(spot.hero),
@@ -865,7 +1072,8 @@ class Session:
                                      **PIPE_TEXT)
         if on_start:
             on_start(self.proc)
-        reader = threading.Thread(target=_progress_reader, args=(self.proc.stderr, on_progress, self._errors),
+        tracker = _Tracker(on_progress)
+        reader = threading.Thread(target=_progress_reader, args=(self.proc.stderr, tracker, self._errors),
                                   daemon=True)
         reader.start()
         line = self.proc.stdout.readline()
@@ -878,6 +1086,8 @@ class Session:
         self.result = json.loads(line)
         if self.save:
             _save_cache(self.request, self.result)
+        if not self.loading:
+            tracker.record()
         self.last_used = time.time()
         return self.result
 

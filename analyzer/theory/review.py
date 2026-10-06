@@ -142,7 +142,8 @@ def _done(spot: postflop.PostflopSpot) -> Optional[dict]:
             return upgrade(json.loads(path.read_text(encoding="utf-8")))
         except ValueError:
             pass
-    raw = postflop.cached(spot.request())
+    request = postflop.solved_request(spot.request())  # résolu à n'importe quelle précision
+    raw = postflop.cached(request) if request else None
     return save_digest(spot, raw) if raw is not None else None
 
 
