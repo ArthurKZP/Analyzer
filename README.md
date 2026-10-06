@@ -553,13 +553,15 @@ L'élève a aussi ses onglets *Préflop* (face à la solution, main par main), *
 
 Les leaks comptent aussi les **mains de départ qui perdent plus que le fold** contre les réguliers (une main, ou
 sa famille, jouée au moins 15 fois de la même façon, à la même position, et nettement sous le fold même en
-tenant compte du hasard) : les trois plus coûteuses, avec l'avis de la théorie (« folde-la ici » si la théorie ne
-la joue presque jamais ainsi, « revois la suite du coup » si elle la joue).
+tenant compte du hasard) : les trois plus coûteuses, avec **d'où vient la perte** (le type de pot qui coûte le plus,
+et l'EV perdue selon le solveur sur ceux déjà analysés), l'avis de la théorie (« folde-la ici » si elle ne la joue
+presque jamais ainsi, « revois la suite du coup » si elle la joue), le coup le plus cher à revoir et un lien vers
+le détail de la main dans *Mains de départ*.
 
 ## Mains de départ
 
 Onglet *Mains de départ* de *Mon jeu* (et de chaque élève) : ce que rapporte ou coûte chaque main de départ, en
-heads-up et aux tables à plusieurs (un format à la fois).
+heads-up et aux tables à plusieurs (3-max et 6-max ensemble).
 
 - **En tout** : le résultat de chaque main (grille 13×13, en bb par main), puis par position, et contre tous tes
   adversaires, les réguliers ou les récréatifs (heads-up).
@@ -578,6 +580,19 @@ heads-up et aux tables à plusieurs (un format à la fois).
   chance ; en heads-up) ou résultat *réel*. Chaque moyenne a son intervalle à 95 % : sur quelques dizaines de mains
   la variance domine, d'où les **familles de mains** (paires hautes, as assortis, broadways, connecteurs…) qui
   tranchent plus vite.
+- **Les mains et familles les plus problématiques** : les plus grosses pertes par rapport au fold, en tout (fois ×
+  écart), à chaque décision et position ; « net » quand le hasard l'explique mal.
+- **D'où vient la perte** (clic sur une main, une famille ou une case de la grille) :
+  - la **suite du coup** : sans flop (ils foldent, tu foldes ensuite, tapis préflop) ou le pot au flop (limpé, SRP,
+    3bet, 4bet, à plusieurs), avec la part de chacune dans l'écart au fold (les parts s'additionnent) ;
+  - dans un pot, **ta main au flop** (deux paires ou mieux, top pair, paire moyenne, tirage, rien), **la fin du
+    coup** (il folde, tu foldes à telle street, abattage gagné ou perdu) et ta position au flop ;
+  - **tes choix face à la théorie** à cette décision et à la suivante (ex. après ton open : face au 3bet, tes folds,
+    calls et 4bets contre ceux de la théorie) ;
+  - l'**avis du solveur** sur les coups déjà analysés (EV perdue après le flop), et un diagnostic en quelques phrases ;
+  - les **coups à revoir** : les plus chers du pot choisi, à rejouer (heads-up) ou à ouvrir dans le solveur.
+
+  Le détail est calculé à la demande par l'application ; les liens du leakfinding y mènent directement.
 
 ## Bluffs des adversaires
 
@@ -843,7 +858,8 @@ analyzer/
   backup.py            sauvegarde et restauration de ~/.analyzer (commande `sauvegarde`)
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
   leaks.py             leakfinding : stats face à la théorie, revue du solveur, mains à revoir, leaks prioritaires
-  handplay.py          mains de départ : résultat de chaque main, décisions préflop face au fold et à la théorie
+  handplay.py          mains de départ : résultat de chaque main, décisions préflop face au fold et à la théorie,
+                       d'où vient la perte (suite du coup, main au flop, fin du coup, solveur)
   students.py          les élèves : un dossier de mains par élève
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)

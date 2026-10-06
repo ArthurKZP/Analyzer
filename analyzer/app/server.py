@@ -154,6 +154,10 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] in ("leaks", "revue"):
                 student = library.student(parts[2])
                 return self._json(student.leaks_state() if parts[3] == "leaks" else student.review_state())
+            if parts == ["api", "mains"] or (len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] == "mains"):
+                owner = library if len(parts) == 2 else library.student(parts[2])
+                query = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+                return self._json(owner.hands_detail(query))
             if len(parts) == 3 and parts[0] == "p":
                 return self._html(library.player_page(parts[1], parts[2]))
             if parts == ["etudes"]:

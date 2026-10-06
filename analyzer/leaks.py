@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional
+from urllib.parse import urlencode
 
 from . import handplay, players
 from .insights import wilson
@@ -278,21 +279,44 @@ def _solver_leak(group: dict, analyzed: int, digests: Optional[list[dict]] = Non
 
 
 def _hand_leak(x: "handplay.Loser", hands: int) -> Leak:
-    """Une main (ou une famille) jouée ainsi perd nettement plus que le fold, contre les réguliers."""
-    evidence = (f"{x.n} fois contre les réguliers : {x.mean:+.2f} bb par main (± {x.half_width:.1f}), contre "
-                f"{x.fold:+.2f} bb pour le fold, soit {100 * x.gap:+.0f} bb/100 par rapport au fold").replace(".", ",")
+    """Une main (ou une famille) jouée ainsi perd nettement plus que le fold, contre les réguliers : d'où vient la perte
+    (le type de pot qui coûte le plus), ce qu'en dit la théorie, et le coup le plus cher à revoir."""
+    fr = lambda text: text.replace(".", ",")  # noqa: E731
+    evidence = fr(f"{x.n} fois contre les réguliers : {x.mean:+.2f} bb par main (± {x.half_width:.1f}), contre "
+                  f"{x.fold:+.2f} bb pour le fold, soit {100 * x.gap:+.0f} bb/100 par rapport au fold.")
+    costly = [src for src in x.sources if src.contribution < 0][:2]
+    if costly:
+        parts = [fr(f"{handplay.POT_SOURCES[src.pot]} ({src.n} fois, {src.mean:+.1f} bb par main : "
+                    f"{100 * src.contribution:+.0f} bb/100)") for src in costly]
+        evidence += " La perte vient surtout " + ", puis ".join(parts) + "."
+        worst = costly[0]
+        if worst.solver_n:
+            evidence += fr(f" Le solveur y voit {worst.solver_loss:.2f} bb perdus par coup après le flop "
+                           f"({worst.solver_n} coups analysés).")
     t = None if x.theory is None else round(100 * x.theory)
-    if t is None:
-        advice = "Joue-la moins souvent ainsi, ou revois la suite de ces coups."
-    elif t < 10:
+    where = handplay.POT_WORDS.get(costly[0].pot, "") if costly else ""
+    if t is not None and t < 10:
         advice = f"La théorie ne la joue presque jamais ainsi ({t} %) : folde-la ici."
-    elif t >= 50:
-        advice = (f"La théorie la joue ainsi ({t} %) : la perte vient de la suite du coup ; revois ces mains "
-                  "(Face au solveur).")
-    else:
+    elif costly and costly[0].pot == "fold":
+        advice = ("Tu la joues puis l'abandonnes trop souvent face à la relance : défends-la plus, ou ne l'engage pas "
+                  "(onglet Mains de départ, « Tes choix face à la théorie »).")
+    elif costly and costly[0].pot in handplay.REVIEW_POTS:
+        theory = f"La théorie la joue ainsi ({t} %) : " if t is not None and t >= 50 else (
+            f"La théorie la mélange ({t} %) : " if t is not None else "")
+        advice = f"{theory}la perte vient de la suite du coup, {where} ; revois ces coups (Mains de départ, puis le solveur)."
+    elif t is not None and t < 50:
         advice = f"La théorie la mélange ({t} %) : joue-la moins souvent ainsi."
+    else:
+        advice = "Joue-la moins souvent ainsi, ou revois la suite de ces coups."
+    group = "fold" if x.action == "fold" else "pas" if x.action in ("call", "check") else "agg"
+    link = "mains#" + urlencode({"fmt": "HU", "kind": "reg", "pos": x.position, "sit": x.situation, "main": x.name,
+                                 "act": group})
+    example = None
+    if x.worst and x.worst[0][1] < 0:
+        hand_id, ev, _ = x.worst[0]
+        example = (hand_id, 0, -ev)
     return Leak(f"Préflop · {x.label}", evidence, advice, "préflop", "solide", -100 * x.gap * x.n / max(hands, 1),
-                "mains", "Voir Mains de départ")
+                link, "Voir d'où vient la perte", example)
 
 
 def rank(stats: list[Stat], groups: list[dict], analyzed: int, top: int = TOP,
@@ -334,7 +358,8 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None) -> Report:
     rows = preflop_stats(stats, hero, parts) + postflop_stats(parts, hero)
     solver = solver_review(parts["reg"], hero)
     picks = interesting(parts, hero, solver["digests"])
-    plays = handplay.collect(parts["reg"], hero, handplay.Theory(preflop.load_solution()))
+    plays = handplay.collect(parts["reg"], hero, handplay.Theory(preflop.load_solution()),
+                             review.hero_losses(solver["digests"]))
     hand_leaks = [_hand_leak(x, len(parts["reg"])) for x in handplay.losers(plays)[:HAND_LEAKS]]
     opponents: dict = {"reg": [], "rec": []}
     for name, info_k in kinds.items():

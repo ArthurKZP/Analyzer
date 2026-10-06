@@ -59,6 +59,12 @@ def _kind_note(kind: dict) -> str:
 
 
 
+def _digest_count() -> int:
+    """Le nombre de mains passées au solveur : les pages qui s'en servent sont recalculées quand il change."""
+    folder = review.review_dir()
+    return sum(1 for _ in folder.glob("*.json")) if folder.is_dir() else 0
+
+
 def _formats(hands: list[Hand]) -> dict[str, int]:
     """Mains par format de table (HU, 3-max, 6-max…), dans cet ordre."""
     counts: dict[str, int] = {}
@@ -211,8 +217,8 @@ class Library:
             return self._cached(("self", "tables"), lambda: build_ring_page(
                 ring.analyze(self.ring, self.hero or ""), self.hero or "", spots=self.ring_spots(),
                 ranges=ring_ranges.available()))
-        if page == "mains":  # heads-up et tables à plusieurs
-            key = ("self", "mains", tuple(sorted(ring_ranges.available().items()))) + self._kinds_key()
+        if page == "mains":  # heads-up et tables à plusieurs ; les analyses du solveur s'y ajoutent
+            key = ("self", "mains", tuple(sorted(ring_ranges.available().items())), _digest_count()) + self._kinds_key()
             return self._cached(key, self._hands_page)
         if not self.hands:
             raise UnknownPlayer("moi")
@@ -235,18 +241,42 @@ class Library:
         kinds = self._kinds_key() if page in ("bilan", "preflop", "bluffs") else ()
         return self._cached(("self", page) + kinds, build)
 
+    def _plays(self) -> dict[str, list]:
+        """Tes mains de départ lues (handplay), en heads-up et aux tables à plusieurs (3-max et 6-max ensemble), avec
+        l'EV perdue après le flop des coups déjà passés au solveur."""
+        def build():
+            if not self.hero:
+                return {}
+            theory = handplay.Theory(load_solution(), handplay.ring_lines())
+            losses = review.hero_losses(review.saved_digests())
+            plays = {"HU": handplay.collect(self.hands, self.hero, theory, losses),
+                     "ring": handplay.collect(self.ring, self.hero, theory, losses)}
+            return {k: v for k, v in plays.items() if v}
+        return self._cached(("plays", tuple(sorted(ring_ranges.available().items())), _digest_count()), build)
+
+    def _kind_map(self) -> dict[str, str]:
+        return {name: info["kind"] for name, info in self.kinds().items()}
+
     def _hands_page(self) -> str:
-        """Ce que rapporte chaque main de départ, en heads-up puis à chaque format de table à plusieurs."""
-        theory = handplay.Theory(load_solution(), handplay.ring_lines())
-        kinds = {name: info["kind"] for name, info in self.kinds().items()}
-        formats = {}
-        if self.hands and self.hero:
-            formats["HU"] = handplay.aggregate(handplay.collect(self.hands, self.hero, theory), kinds)
-        for table_format in ring.FORMATS:
-            hands = [h for h in self.ring if h.table_format == table_format]
-            if hands and self.hero:
-                formats[table_format] = handplay.aggregate(handplay.collect(hands, self.hero, theory))
-        return build_hands_page({k: v for k, v in formats.items() if v["hands"]})
+        """Ce que rapporte chaque main de départ ; le détail d'une main se demande à hands_detail."""
+        kinds = self._kind_map()
+        formats = {fmt: handplay.aggregate(plays, kinds if fmt == "HU" else None) for fmt, plays in self._plays().items()}
+        return build_hands_page(formats, api=f"{self.api}/mains")
+
+    def hands_detail(self, query: dict[str, str]) -> dict:
+        """D'où vient le résultat d'une main (ou d'une famille) : fmt, main, et les filtres de la page (type
+        d'adversaire, position, décision, groupe d'actions : agg, pas)."""
+        plays = self._plays().get(query.get("fmt") or "HU")
+        name = query.get("main") or ""
+        if plays is None or not name:
+            raise KeyError(name)
+        actions = {"agg": ("raise", "allin"), "pas": ("call", "check")}.get(query.get("act") or "")
+        situation = query.get("sit") or "all"
+        if situation != "all" and situation not in dict(handplay.SITUATIONS):
+            raise KeyError(situation)
+        return handplay.detail(plays, self._kind_map() if query.get("fmt", "HU") == "HU" else None, name=name,
+                               kind=query.get("kind") or "", position=query.get("pos") or "", situation=situation,
+                               actions=actions)
 
     def _population_bluffs(self) -> str:
         """Les bluffs des réguliers, ensemble puis un par un."""
@@ -337,9 +367,7 @@ class Library:
     # --- leakfinding ----------------------------------------------------------------------
     def leaks_report(self) -> "leaks.Report":
         """Le rapport, recalculé quand des mains ou des analyses du solveur s'ajoutent."""
-        digests = review.review_dir()
-        count = sum(1 for _ in digests.glob("*.json")) if digests.is_dir() else 0
-        return self._cached(("leaks", count) + self._kinds_key(),
+        return self._cached(("leaks", _digest_count()) + self._kinds_key(),
                             lambda: leaks.build(self.hands, self.hero, self.kinds()))
 
     def leaks_page(self, standalone: bool = False) -> str:

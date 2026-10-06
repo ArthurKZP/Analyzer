@@ -181,6 +181,24 @@ def analyze(hands: list[Hand], hero: str, log=print, limit: Optional[int] = None
     return len(todo)
 
 
+def saved_digests() -> list[dict]:
+    """Les résumés de toutes les mains déjà passées au solveur (les tiennes et celles des élèves)."""
+    folder = review_dir()
+    out = []
+    for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+        try:
+            out.append(upgrade(json.loads(path.read_text(encoding="utf-8"))))
+        except (OSError, ValueError, KeyError):
+            continue
+    return out
+
+
+def hero_losses(digests: list[dict]) -> dict[str, float]:
+    """L'EV perdue après le flop par le joueur de chaque main analysée (main -> bb)."""
+    return {g["hand"]: sum(loss(d) or 0.0 for d in g["decisions"] if d["who"] == "H")
+            for g in digests if g.get("hand")}
+
+
 # --- Regroupements -------------------------------------------------------------------------------
 
 def decisions_of(digests: list[dict], who: str) -> list[tuple[dict, dict]]:

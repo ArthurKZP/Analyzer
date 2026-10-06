@@ -290,6 +290,9 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.request("GET", "/p/Villain/preflop")[0], 200)
         self.assertEqual(self.request("GET", "/moi/preflop")[0], 200)
         self.assertEqual(self.request("GET", "/moi/mains")[0], 200)
+        status, _, body = self.request("GET", "/api/mains?main=K9s&sit=open&pos=BTN")  # d'où vient le résultat
+        self.assertEqual((status, json.loads(body)["n"]), (200, 1))
+        self.assertEqual(self.request("GET", "/api/mains?main=K9s&sit=nulle")[0], 404)
 
     def test_solver_endpoints(self):
         status, ctype, body = self.request("GET", "/api/solveur")
@@ -422,6 +425,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual([s["id"] for s in json.loads(self.request("GET", "/api/eleves")[2])], ["anna"])
         for page in ("leaks", "preflop", "solveur", "spots", "mains"):
             self.assertEqual(self.request("GET", f"/eleve/anna/{page}")[0], 200, page)
+        self.assertEqual(self.request("GET", "/api/eleves/anna/mains?main=AA")[0], 200)
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
         conn.request("GET", "/eleve/anna/rapport")
         resp = conn.getresponse()
