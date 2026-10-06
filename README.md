@@ -442,7 +442,10 @@ en heads-up ; trois structures n'existent pas en heads-up et ont leurs propres c
 position (SB contre BB : celles d'un SRP), pot 3bet du joueur en position (c-bet 33 / 75 % / géo sur deux
 streets) et pot 4bet hors de position (25 % / géo / tapis). Une famille : `6max_<hors de position>_<en
 position>_<pot>` (`python -m analyzer gtopen --spots 6max_bb_btn_srp`, explorateur
-`/explorateur/spot:6max_bb_btn_srp:KsKd4c`). Les séries 6-max restent à part : plans de jeu, entraîneur,
+`/explorateur/spot:6max_bb_btn_srp:KsKd4c`). Les ranges plus serrées raccourcissent les calculs : mesuré sur
+K♠K♦4♣ avec 4 cœurs, BB contre BTN en pot 3bet demande 12 minutes pour choisir les tailles et 81 secondes pour
+résoudre (26 minutes et 2 min 30 en heads-up), et les tailles changent (c-bet de la BB à 75 % au lieu de 33 %
+en heads-up). Les séries 6-max restent à part : plans de jeu, entraîneur,
 coach et leakfinding travaillent sur les séries heads-up. Leurs résultats viennent de tes charts et restent sur
 ta machine (rien n'est livré avec Analyzer).
 
