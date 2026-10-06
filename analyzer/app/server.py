@@ -255,6 +255,16 @@ class Handler(BaseHTTPRequestHandler):
                     and trainer.valid_cards(board, 3)):
                 return self._error(400, "Requête invalide.")
             return self._json(studyspots.flop_options(payload["family"], board))
+        if parts == ["api", "explorateur", "tailles"]:
+            payload = self._small_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.choose_hand_sizes(payload["hand"]))
+            except (UnknownPlayer, KeyError):
+                return self._error(404, "Main introuvable.")
+            except ValueError as exc:  # pot non couvert (Unsupported compris)
+                return self._error(400, str(exc))
         if parts[:3] == ["api", "explorateur", "ranges"] and len(parts) <= 4:
             payload = self._small_json()
             if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):

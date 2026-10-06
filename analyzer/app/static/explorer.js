@@ -82,6 +82,19 @@
   }
   const nodeLabels = () => actLabels(node.actions, node.pot, node.put, node.player);
 
+  // Taille jouée dans la main, ajoutée à l'arbre (ou à la place d'une taille théorique proche) : signalée.
+  function sizeTag(a) {
+    const info = a.played_size;
+    if (!info) return '';
+    return el('span', {
+      class: 'sz-tag',
+      title: info.how === 'added'
+        ? 'Taille jouée dans la main (' + info.size + '), ajoutée à l\'arbre à côté de la théorie (' + info.theory + ') pour juger la décision. '
+          + 'La part de la range sur chaque taille compare ces options : ce n\'est pas un mélange à reproduire.'
+        : 'Taille jouée dans la main (' + info.size + '), à la place de la taille théorique proche (' + info.theory + ') pour suivre le coup exactement.',
+    }, info.how === 'added' ? 'jouée' : 'jouée ≈');
+  }
+
   function colors(actions) {
     const sized = actions.map((a, k) => k).filter((k) => (actions[k].kind === 'bet' || actions[k].kind === 'raise') && !actions[k].allin);
     return actions.map((a, k) => {
@@ -293,6 +306,50 @@
       revealed() && meta.villain_cards.length ? cards(meta.villain_cards) : '??',
       ' · ' + meta.villain + (meta.stack ? ' · tapis effectif ' + num(meta.stack) + ' bb' : '')
       + ' · résultat ' + (meta.net > 0 ? '+' : '') + num(meta.net) + ' bb', adjustedBadge());
+    renderSizes();
+  }
+
+  // Tailles de l'arbre d'un coup joué : d'où elles viennent, et les tailles jouées ajoutées pour juger la décision.
+  function renderSizes() {
+    const box = $('sizes');
+    box.textContent = '';
+    const info = !PRE && !SPOT && meta ? meta.sizes : null;
+    box.hidden = !info;
+    if (!info) return;
+    const head = el('div', { title: 'Tailles de l\'arbre : ' + info.plan });
+    if (info.source === 'flop') head.append(el('b', {}, 'Tailles théoriques de ce flop'), ' : choisies comme pour les spots d\'étude.');
+    else if (info.source === 'proche') {
+      head.append(el('b', {}, 'Tailles théoriques empruntées à '), cards(info.board),
+        info.same_texture ? ' (même texture) : ' : ' (autre texture) : ', 'celles de ce flop ne sont pas encore choisies.',
+        el('button', { type: 'button', onclick: chooseSizes, disabled: ['waiting', 'running'].includes(state.state) },
+          'Choisir les tailles de ce flop (' + info.choose_time + ')'));
+    } else head.append(el('b', {}, 'Tailles par défaut'), ' (33 % au flop, 75 % à la turn et à la river, relance 60 %) : '
+      + 'pas encore de tailles théoriques pour ce type de pot.');
+    box.append(head);
+    const played = info.played.filter((q) => q.how !== 'same');
+    played.forEach((q) => box.append(el('div', { class: 'played' },
+      (q.who === 'H' ? 'Toi' : 'Lui') + ' · ' + q.label + ' ' + q.size_text + ' : ' + (q.how === 'added'
+        ? 'taille jouée, ajoutée à l\'arbre à côté de la théorie (' + q.theory_text + ').'
+        : 'taille jouée, à la place de la théorie proche (' + q.theory_text + ').'))));
+    if (played.some((q) => q.how === 'added')) box.append(el('div', { class: 'small' },
+      'Une taille ajoutée sert à juger la décision (l\'EV de chaque taille) : la part de la range sur chaque taille compare ces options, '
+      + 'ce n\'est pas un mélange à reproduire. Repère « jouée » sur l\'action.'));
+  }
+
+  async function chooseSizes() {
+    const info = meta.sizes;
+    if (!window.confirm('Choisir les tailles théoriques de ce flop, comme pour un spot d\'étude : ' + info.choose_time
+      + ' de calcul sur 4 cœurs, puis la résolution du coup avec elles. Le flop rejoindra ensuite les spots d\'étude. Lancer ?')) return;
+    try {
+      const v = await api('/api/explorateur/tailles', { hand: HAND });
+      Object.assign(state, v);
+      renderStatus();
+      renderSizes();
+      poll();
+    } catch (e) {
+      notice = e.message;
+      renderStatus();
+    }
   }
 
   // Ranges préflop ajustées en jeu : un rappel, qui ouvre l'onglet Ranges.
@@ -326,7 +383,8 @@
       const elapsed = state.elapsed ? ' · ' + (state.elapsed >= 60 ? Math.floor(state.elapsed / 60) + ' min ' : '') + Math.round(state.elapsed % 60) + ' s' : '';
       box.append(el('span', {}, s === 'waiting' ? 'En attente d\'une autre résolution…'
         : state.mode === 'load' ? 'Ouverture de l\'étude enregistrée…' + elapsed
-        : state.mode === 'choose' ? 'Flop de la série : choix des tailles de mise, puis résolution. ' + (p.stage || '') + elapsed
+        : state.mode === 'choose' ? (SPOT ? 'Flop de la série : choix des tailles de mise, puis résolution. '
+          : 'Choix des tailles théoriques de ce flop, puis résolution du coup avec elles. ') + (p.stage || '') + elapsed
         : (p.iteration ? 'Résolution : itération ' + p.iteration + ' / ' + state.max_iterations + ' · exploitabilité ' + num(p.exploit_pct) + ' % du pot (objectif ' + num(state.target) + ' %)'
           : p.tree_nodes ? 'Résolution lancée : arbre de ' + p.tree_nodes.toLocaleString('fr-FR') + ' nœuds, première mesure après 10 itérations'
             : 'Construction de l\'arbre…') + elapsed),
@@ -388,7 +446,7 @@
         type: 'button', class: 'act' + (h.chosen === j ? ' on' : ''), disabled: !allowed,
         title: allowed ? null : 'Hors de la ligne jouée : recalcule pour explorer cette branche',
         onclick: () => goTo(prefix.concat([{ type: 'action', index: j }]), true),
-      }, el('span', {}, labels[j]), isPlayed ? el('span', { class: 'dot', title: 'Joué dans la main' }, '●') : ''));
+      }, el('span', {}, labels[j]), sizeTag(a), isPlayed ? el('span', { class: 'dot', title: 'Joué dans la main' }, '●') : ''));
     });
     return step;
   }
@@ -633,7 +691,7 @@
         el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb · tapis ' + num(node.stacks[p]) + ' bb')));
       const tiles = el('div', { class: 'tiles' });
       node.actions.forEach((a, k) => tiles.append(el('div', { class: 'tile', style: 'background:' + cols[k] },
-        el('div', { class: 'l' }, nodeLabels()[k]), el('div', { class: 'p' }, total ? pct(freqs[k] / total) : '—'),
+        el('div', { class: 'l' }, nodeLabels()[k], sizeTag(a)), el('div', { class: 'p' }, total ? pct(freqs[k] / total) : '—'),
         el('div', { class: 'c' }, num(freqs[k], 1) + ' combos'))));
       panel.append(tiles);
       const stack = el('div', { class: 'stack' });

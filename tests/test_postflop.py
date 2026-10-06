@@ -25,7 +25,7 @@ class SpotTest(unittest.TestCase):
         cls.hands = {h.hand_id: h for h in load_hands([FIXTURES])}
 
     def test_srp(self):
-        spot = postflop.build_spot(self.hands["HAND01"], "Hero")
+        spot = postflop.build_spot(self.hands["HAND01"], "Hero", theory=False)  # tailles fixes (voir test_sizes)
         self.assertEqual((spot.pot_type, spot.oop, spot.ip), ("SRP", "Villain", "Hero"))
         self.assertEqual((spot.pot_bb, spot.stack_bb, spot.board), (5.0, 97.5, ["Kc", "7h", "2s"]))
         self.assertEqual(spot.line, [{"action": "check"}, {"action": "bet", "to": 1.6},

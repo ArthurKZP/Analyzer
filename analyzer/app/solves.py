@@ -144,11 +144,15 @@ class SolveQueue:
         (self._loader if job.mode == "load" else self._executor).submit(self._run, job, spot, request, keep_live)
         return dict(job.view(), live=False, study=job.mode == "load")
 
-    def choose_and_solve(self, ident: str, choose: Callable[[Job], None], make_spot: Callable[[], object]) -> dict:
-        """Choisit d'abord les tailles du spot (long), puis le résout sans garder de session.
+    def choose_and_solve(self, ident: str, choose: Callable[[Job], None], make_spot: Callable[[], object],
+                         aliases: tuple[str, ...] = (), keep_live: bool = False,
+                         after: Optional[Callable[[], None]] = None) -> dict:
+        """Choisit d'abord les tailles du spot (long), puis le résout (sans garder de session, sauf keep_live).
 
         choose(job) fait le choix (job.progress["stage"] : l'étape en cours ; job.process : le programme
-        lancé ; job.cancelled : l'arrêt demandé) ; make_spot() rend ensuite le spot avec ses tailles."""
+        lancé ; job.cancelled : l'arrêt demandé) ; make_spot() rend ensuite le spot avec ses tailles. aliases :
+        d'autres identifiants qui suivent la tâche (le coup joué dont on choisit les tailles du flop) ; after() :
+        lancé une fois le spot résolu."""
         with self._lock:
             current = self._jobs.get(self._series.get(ident, ""))
             if current and current.state in ("waiting", "running"):
@@ -156,11 +160,13 @@ class SolveQueue:
             key = "choix-" + hashlib.sha256(ident.encode()).hexdigest()[:14]
             job = Job(key, ident, self.iterations, self.target, mode="choose")
             self._jobs[key] = job
-            self._series[ident] = key
-        self._executor.submit(self._run_series, job, choose, make_spot)
+            for name in (ident, *aliases):
+                self._series[name] = key
+        self._executor.submit(self._run_series, job, choose, make_spot, keep_live, after)
         return job.view()
 
-    def _run_series(self, job: Job, choose: Callable[[Job], None], make_spot: Callable[[], object]) -> None:
+    def _run_series(self, job: Job, choose: Callable[[Job], None], make_spot: Callable[[], object],
+                    keep_live: bool = False, after: Optional[Callable[[], None]] = None) -> None:
         if job.cancelled:
             return
         job.state, job.started = "running", time.time()
@@ -179,7 +185,12 @@ class SolveQueue:
         spot = make_spot()
         job.mode = "solve"
         job.progress.clear()
-        self._run(job, spot, self._request(spot), keep_live=False)
+        self._run(job, spot, self._request(spot), keep_live=keep_live)
+        if after is not None and job.state == "done":
+            try:
+                after()
+            except Exception:  # noqa: BLE001 — le spot reste résolu
+                traceback.print_exc()
 
     def analyze(self, spot, on_done: Callable[[object, dict], None]) -> dict:
         """Résout une main jouée pour l'analyse : le résultat seul (cache), sans étude ni session ;

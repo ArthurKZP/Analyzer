@@ -83,6 +83,8 @@ FLOPS = {"srp": SRP_FLOPS, "3bet": SRP_FLOPS, "4bet": SRP_FLOPS}  # les mêmes f
 
 # Durée d'une résolution sur 4 cœurs, tailles déjà choisies (mesurée sur K♠K♦4♣).
 SOLVE_TIME = {"srp": "une dizaine de minutes", "3bet": "2 à 3 minutes", "4bet": "moins d'une minute"}
+# Durée du choix des tailles d'un flop sur 4 cœurs (mesurée sur K♠K♦4♣).
+CHOOSE_TIME = {"srp": "1 h 10 environ", "3bet": "25 minutes environ", "4bet": "2 minutes environ"}
 
 
 def board_text(board: list[str]) -> str:
@@ -336,6 +338,69 @@ def closest_selection(family: str, board: list[str]) -> Optional[tuple[str, dict
         if chosen and chosen.get("plan"):
             return near, chosen
     return None
+
+
+_CHOICES: dict[str, tuple] = {}  # famille -> (signature des fichiers, {flop: choix})
+
+
+def _choices(family: str) -> dict[str, dict]:
+    """Les choix de tailles d'une famille (sur cet ordinateur ou livrés), par flop ; relus quand un fichier
+    change (les analyses en lot construisent un spot par main)."""
+    files = sorted((postflop.home() / "tailles").glob(f"{family}-*.json")) + [shipped_path(family)]
+    signature = tuple((str(f), f.stat().st_mtime_ns) for f in files if f.is_file())
+    cached = _CHOICES.get(family)
+    if cached and cached[0] == signature:
+        return cached[1]
+    choices = {}
+    for board in selection_boards(family):
+        chosen = load_selection(family, board)
+        if chosen and chosen.get("plan"):
+            choices[board] = chosen
+    _CHOICES[family] = (signature, choices)
+    return choices
+
+
+def _nearest(family: str, board: list[str]) -> Optional[tuple[dict, str, bool]]:
+    choices = _choices(family)
+    if not choices:
+        return None
+    own = canonical(board[:3])
+    for near, chosen in choices.items():
+        if canonical(cards_of(near)) == own:
+            return chosen, near, True
+    near = min(choices, key=lambda b: (flop_distance(cards_of(b), board[:3]), b))
+    return choices[near], near, False
+
+
+def sizes_for(family: str, board: list[str]) -> Optional[tuple[dict, str, bool]]:
+    """Les tailles théoriques d'un flop : (plan, flop dont elles viennent, True si c'est ce flop aux couleurs
+    près). Sans choix pour ce flop, celles du flop choisi le plus proche (même texture et mêmes couleurs
+    d'abord) ; None si la famille n'a encore aucun choix."""
+    found = _nearest(family, board)
+    return (dict(found[0]["plan"]), found[1], found[2]) if found else None
+
+
+def hand_sizes_for(family: str, board: list[str]) -> Optional[tuple[dict, str, bool]]:
+    """Les tailles théoriques pour l'arbre d'un coup joué : celles du flop (sizes_for), avec une seule taille par
+    situation à la river (la plus employée des deux choisies) et sans relance à la river, sauf jouée, comme dans
+    l'arbre par défaut. Avec les deux tailles et les relances, l'arbre d'un SRP compte 5 fois plus de nœuds
+    (1,7 million, 6 Go) ; ainsi, moins de 2 fois."""
+    found = _nearest(family, board)
+    if not found:
+        return None
+    chosen, near, exact = found
+    candidates = {s.key: s.candidates for s in sizing.situations(family)}
+    plan = {}
+    for key, sizes in chosen["plan"].items():
+        if key.startswith("raise:r"):
+            continue  # la configuration par défaut : pas de relance à la river, sauf jouée
+        if key.startswith("bet:r") and len(sizes) > 1:
+            usage = (chosen.get("report") or {}).get(key, {}).get("usage") or []
+            options = candidates.get(key, [])
+            used = {s: usage[options.index(s)] for s in sizes if s in options and len(usage) == len(options)}
+            sizes = [max(sizes, key=lambda s: used.get(s, 0.0))] if used else sizes[:1]
+        plan[key] = list(sizes)
+    return plan, near, exact
 
 
 def normalize_board(family: str, board: list[str]) -> list[str]:

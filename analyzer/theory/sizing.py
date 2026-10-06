@@ -224,6 +224,7 @@ def size_text(size) -> str:
         return "tapis"
     if isinstance(size, str) and size.startswith("geo"):
         return "géo" if size == "geo" else f"géo {size[3:]} streets"
+    size = round(size)  # une taille jouée (53,7 % du pot) se lit arrondie
     return "pot" if size == 100 else f"{size} %"
 
 

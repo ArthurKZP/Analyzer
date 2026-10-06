@@ -134,24 +134,33 @@ def save_digest(spot: postflop.PostflopSpot, raw: dict) -> dict:
     return data
 
 
+def _done(spot: postflop.PostflopSpot) -> Optional[dict]:
+    """Le résumé de la main pour cet arbre, s'il est déjà fait (ou son résultat en cache)."""
+    path = digest_path(spot)
+    if path.is_file():
+        try:
+            return upgrade(json.loads(path.read_text(encoding="utf-8")))
+        except ValueError:
+            pass
+    raw = postflop.cached(spot.request())
+    return save_digest(spot, raw) if raw is not None else None
+
+
 def collect(hands: list[Hand], hero: str) -> tuple[list[dict], list[postflop.PostflopSpot]]:
-    """Résumés des mains déjà résolues, et mains à résoudre (les plus gros pots d'abord)."""
+    """Résumés des mains déjà résolues, et mains à résoudre (les plus gros pots d'abord).
+
+    Une main analysée avec l'arbre d'avant les tailles théoriques (tailles fixes) garde son analyse."""
     done, todo = [], []
     for hand in hands:
         try:
             spot = postflop.build_spot(hand, hero)
         except postflop.Unsupported:
             continue
-        path = digest_path(spot)
-        if path.is_file():
-            try:
-                done.append(upgrade(json.loads(path.read_text(encoding="utf-8"))))
-                continue
-            except ValueError:
-                pass
-        raw = postflop.cached(spot.request())
-        if raw is not None:
-            done.append(save_digest(spot, raw))
+        data = _done(spot)
+        if data is None and spot.plan is not None:
+            data = _done(postflop.build_spot(hand, hero, theory=False))
+        if data is not None:
+            done.append(data)
         else:
             todo.append(spot)
     todo.sort(key=lambda s: -sum(a.amount for a in s.hand.actions) / s.hand.bb)

@@ -495,7 +495,15 @@ class Library:
         pair = postflop.flop_pair(hand)  # (hors de position, en position) au flop
         villain = (pair[1] if pair[0] == hero else pair[0]) if pair and hero in pair else hand.opponent_of(hero)
         positions = [hand.position(p) for p in pair] if pair else ["BB", "BTN"]
+        try:
+            spot = self._spot(hand_id)
+        except postflop.Unsupported:
+            spot = None
+        sizes = spot.sizes_info() if spot is not None else None
+        if sizes and sizes["source"] == "proche":
+            sizes["choose_time"] = studyspots.CHOOSE_TIME[sizes["family"]]
         view["meta"] = {
+            "sizes": sizes,
             "hand": hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"), "hero": hero, "villain": villain,
             "board": hand.board, "hero_cards": hand.hole_cards.get(hero, []),
             "villain_cards": hand.hole_cards.get(villain, []),
@@ -508,9 +516,30 @@ class Library:
         return view
 
     def explorer_node(self, hand_id: str, path: list) -> dict:
-        reply = self.solves.node(self._spot(hand_id), path)
+        spot = self._spot(hand_id)
+        reply = self.solves.node(spot, path)
         handclass.annotate(reply["node"])  # catégories des mains, pour les filtres
+        if isinstance(spot, postflop.PostflopSpot):
+            postflop.mark_played_sizes(reply["node"], spot)  # la taille jouée ajoutée à l'arbre
         return reply
+
+    def choose_hand_sizes(self, hand_id: str) -> dict:
+        """Choisit les tailles théoriques du flop de ce coup (comme pour un spot d'étude, long), puis résout le coup
+        avec elles ; ensuite, le spot d'étude de ce flop se résout à son tour et rejoint sa série dans les études."""
+        spot = self._spot(hand_id)
+        if not isinstance(spot, postflop.PostflopSpot) or not spot.family:
+            raise ValueError("Pas de tailles théoriques pour ce type de pot.")
+        if spot.sizes_from and spot.sizes_from["exact"]:
+            return self.solve(hand_id, start=True)  # déjà choisies
+        solver = postflop.status()
+        if not solver["ready"]:
+            return {"hand": hand_id, "state": "unavailable", "message": solver["message"], "install": solver["install"]}
+        family = spot.family
+        board = "".join(studyspots.normalize_board(family, spot.board))
+        study = lambda: studyspots.StudySpot(family, studyspots.cards_of(board))  # noqa: E731
+        return self.solves.choose_and_solve(
+            f"spot:{family}:{board}", lambda job: self._choose(family, board, job), lambda: self._spot(hand_id),
+            aliases=(hand_id,), keep_live=True, after=lambda: self.solves.start(study(), keep_live=False))
 
     def spot_set(self, family: str = "srp", start: bool = False) -> dict:
         """Série de spots d'étude : état de chaque flop ; start=True met en file ceux qui manquent.

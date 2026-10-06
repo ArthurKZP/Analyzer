@@ -176,12 +176,28 @@ s'affiche tout de suite.
 - ranges de départ tirées de la solution préflop : SRP (open du bouton / call de la BB), pot 3bet
   (3bet de la BB / call du bouton), pot 4bet (4bet du bouton / call de la BB) ;
 - board, pot et tapis effectif au flop, en bb, sans rake ;
-- tailles : mise 33 % au flop, 75 % à la turn et à la river, relance 60 % du pot au flop et à la turn,
-  deux relances au plus par street, pas de donk (mise d'ouverture hors de position après avoir payé) :
-  en SRP et en pot 4bet, la BB ne mène ni au flop ni après une mise du bouton ; elle mise à la turn après
-  un flop checké. En pot 3bet, la BB a l'initiative et c-bette normalement.
-  Les tailles réellement jouées dans la main sont ajoutées (ou remplacent la taille par défaut la plus
-  proche) pour que chaque décision tombe sur une branche de l'arbre, y compris un donk joué.
+- tailles **théoriques**, une par situation (c-bet, 2e barrel, c-bet retardée, probe, check-raise…) : celles
+  choisies pour ce flop comme pour les spots d'étude (voir *Choix des tailles* plus bas), dans la famille de
+  même structure (SRP où l'ouvreur est en position, pot 3bet où le 3bettor est hors de position, pot 4bet où
+  le 4bettor est en position ; à une table à plusieurs aussi, CO contre BB par exemple). Tant que ce flop n'a
+  pas ses propres tailles, celles du flop choisi le plus proche (même texture et mêmes couleurs d'abord). Pour
+  garder l'arbre léger, une seule taille par situation à la river (la plus employée des deux choisies) et pas
+  de relance à la river, sauf jouée : l'arbre d'un SRP compte environ 600 000 nœuds (2 Go, 3 minutes sur 4
+  cœurs) au lieu de 1,7 million avec toutes les tailles de l'étude. Pas de donk (mise d'ouverture hors de
+  position dans l'agresseur de la street précédente), deux relances au plus par street. Les autres structures
+  (SRP ouvert hors de position, 3bet en position, 4bet hors de position) gardent les tailles par défaut : 33 %
+  au flop, 75 % à la turn et à la river, relance 60 % ;
+- **les tailles jouées** dans la main s'ajoutent à la théorie, dans la situation où elles ont été jouées (ou
+  la remplacent quand elles en sont à moins de 10 points), pour que chaque décision tombe sur une branche de
+  l'arbre et que l'EV de chaque taille juge ton choix de taille. L'explorateur le dit en tête (« Toi ·
+  C-bet 66 % : taille jouée, ajoutée à l'arbre à côté de la théorie (33 %) ») et marque l'action « jouée » :
+  la part de la range sur chaque taille compare ces options, ce n'est pas un mélange à reproduire ;
+- **Choisir les tailles de ce flop** (bouton en tête de l'explorateur, quand les tailles sont empruntées) :
+  le choix exact pour ce flop, comme pour un spot d'étude (1 h 10 environ en SRP, 25 minutes en pot 3bet,
+  2 minutes en pot 4bet sur 4 cœurs), puis le coup se résout avec elles ; ensuite le spot d'étude de ce flop
+  se résout à son tour et rejoint sa série dans *Études du solveur*. Les analyses en lot (revue, leakfinding)
+  prennent les tailles du flop le plus proche ; une main déjà analysée avec les anciennes tailles fixes garde
+  son analyse.
 
 **La lecture**, pour chaque décision : la stratégie du solveur avec ta main exacte, avec toute ta range,
 l'EV de chaque action et la perte d'EV de ton choix ; le même verdict qu'au préflop (action principale,

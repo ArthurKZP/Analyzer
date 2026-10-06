@@ -365,6 +365,12 @@ class PostflopSpot(SpotTree):
     context: str = ""  # la ligne préflop et son format, pour tes ranges ajustées (custom_ranges.context)
     adjusted: Optional[str] = None  # tes ranges ajustées en jeu : « coup », « ligne », ou None (référence)
     reference: dict[str, dict[str, float]] = field(default_factory=dict, repr=False)  # ranges de la référence
+    # Tailles théoriques par situation (plan de native/arbre.rs) : celles choisies pour ce flop dans sa famille de
+    # pots (srp, 3bet, 4bet), sinon celles du flop choisi le plus proche ; None : tailles par défaut (DEFAULT_BETS).
+    plan: Optional[dict] = None
+    family: Optional[str] = None
+    sizes_from: Optional[dict] = None  # {"board": flop dont viennent les tailles, "exact": ce flop aux couleurs près}
+    played_sizes: list[dict] = field(default_factory=list)  # chaque mise ou relance jouée face aux tailles de l'arbre
 
     @property
     def board(self) -> list[str]:
@@ -379,6 +385,38 @@ class PostflopSpot(SpotTree):
     def ident(self) -> str:
         return self.hand.hand_id
 
+    def _named(self, text: str) -> str:
+        """Les libellés des familles nomment BTN (en position) et BB : à une table à plusieurs, les vraies positions."""
+        if len(self.hand.seats) == 2:
+            return text
+        names = {"BTN": self.hand.position(self.ip), "BB": self.hand.position(self.oop)}
+        return re.sub(r"\b(BTN|BB)\b", lambda m: names[m.group(1)], text)
+
+    def menu_text(self) -> str:
+        if not self.plan:
+            return super().menu_text()
+        from . import sizing
+        return self._named(sizing.plan_text(self.plan, self.family))
+
+    def sizes_info(self) -> dict:
+        """D'où viennent les tailles de l'arbre, et chaque taille jouée face à elles (pour l'explorateur)."""
+        from . import sizing, studyspots
+        source = self.sizes_from or {}
+        near = studyspots.cards_of(source["board"]) if source.get("board") else None
+        played = []
+        for p in self.played_sizes:
+            who = "H" if (self.oop if p["player"] == 0 else self.ip) == self.hero else "V"
+            label = (self._named(sizing.label(p["key"], self.family)) if self.family and self.plan
+                     and p["key"] in self.plan else _generic_label(p["key"]))
+            played.append(dict(p, who=who, label=label, size_text=sizing.size_text(p["size"]),
+                               theory_text=sizing.sizes_text(p["theory"])))
+        return {
+            "family": self.family if self.plan else None,
+            "source": ("flop" if source.get("exact") else "proche") if self.plan else "defaut",
+            "board": near, "same_texture": bool(near and studyspots.flop_texture(near) == studyspots.flop_texture(self.board)),
+            "plan": self.menu_text(), "played": played,
+        }
+
     def interpret(self, raw: dict) -> dict:
         return interpret(self, raw)
 
@@ -389,11 +427,21 @@ class PostflopSpot(SpotTree):
 POSTFLOP_ORDER = ("SB", "BB", "UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN")  # ordre de parole après le flop
 
 
-def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custom: bool = True) -> PostflopSpot:
+# (type de pot, l'agresseur préflop est-il hors de position ?) -> famille des spots d'étude de même structure,
+# dont les tailles choisies servent de tailles théoriques (sizing.py).
+SIZE_FAMILIES = {("SRP", False): "srp", ("pot 3bet", True): "3bet", ("pot 4bet", False): "4bet"}
+
+
+def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custom: bool = True,
+               theory: bool = True) -> PostflopSpot:
     """Le spot postflop d'une main : heads-up (ranges de la solution HU), ou table à plusieurs quand il ne reste que
     deux joueurs au flop (ranges de ta solution du format, voir ring_ranges). Tes ranges ajustées pour ce coup ou
-    pour sa ligne (custom_ranges) remplacent celles de la référence, sauf avec custom=False."""
-    from . import custom_ranges
+    pour sa ligne (custom_ranges) remplacent celles de la référence, sauf avec custom=False.
+
+    Tailles : les tailles théoriques du flop (studyspots.hand_sizes_for), une par situation, plus chaque taille jouée
+    (ajoutée, ou à la place d'une taille théorique à moins de 10 points) ; theory=False : l'arbre d'avant, aux
+    tailles fixes (DEFAULT_BETS), pour retrouver les analyses déjà faites."""
+    from . import custom_ranges, studyspots
     if len(hand.seats) == 2 and (not hand.button or not hand.big_blind or hand.opponent_of(hero) is None):
         raise Unsupported("Seules les mains heads-up se résolvent.")
     pre = [a for a in hand.actions if a.street == "preflop" and a.kind in VOLUNTARY]
@@ -433,18 +481,28 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
         raise Unsupported("Tapis préflop : il n'y a plus de décision après le flop.")
 
     played = {p: [{"bet": [], "raise": [], "donk": []} for _ in range(3)] for p in (oop, ip)}
+    situations: list[dict] = []  # chaque mise ou relance jouée : sa situation (clé de native/arbre.rs) et sa taille
+    spent = {oop: 0.0, ip: 0.0}
     line: list[dict] = []
     index: list[int] = []
-    street, aggressor, prev_aggressor = "flop", None, None
+    street, aggressor, prev_aggressor, past, raises = "flop", None, None, "", 0
     for i, a in enumerate(hand.actions):
         if a.street == "preflop" or a.kind not in VOLUNTARY:
             continue
         if a.street != street:
-            prev_aggressor, aggressor = aggressor, None
+            past += ("o" if aggressor == oop else "i") if aggressor else "x"
+            prev_aggressor, aggressor, raises = aggressor, None, 0
             street = a.street
             line.append({"card": hand.board[2 + STREET_INDEX[street]]})
             index.append(-1)
         s = STREET_INDEX[street]
+        where = "ftr"[s] + ("o" if a.player == oop else "i")
+        if a.kind in (BET, RAISE):
+            behind = min(stack - spent[oop], stack - spent[ip])  # tapis effectif avant la mise
+            key = f"bet:{where}:{past}" if a.kind == BET else f"raise:{where}:{past}:{raises}"
+            situations.append({"key": key, "street": s, "player": 0 if a.player == oop else 1,
+                               "kind": "bet" if a.kind == BET else "raise",
+                               "equiv": _symbolic_sizes(a.pot_before, behind, 3 - s) if a.kind == BET else {}})
         step: dict = {"action": a.kind}
         if a.kind in (BET, RAISE, CALL):
             step["to"] = round(a.to / bb, 4)
@@ -454,12 +512,16 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
             size = "a" if a.all_in else round(100 * a.to / a.pot_before, 1)
             kind = "donk" if a.player == oop and s > 0 and prev_aggressor == ip else "bet"
             played[a.player][s][kind].append(size)
+            situations[-1].update(size=size, config=kind)
         elif a.kind == RAISE:
             opponent_to = (a.to - a.amount) + a.facing
             size = "a" if a.all_in else round(100 * (a.to - opponent_to) / (a.pot_before + a.facing), 1)
             played[a.player][s]["raise"].append(size)
+            situations[-1].update(size=size, config="raise")
+            raises += 1
         if a.kind in (BET, RAISE):
             aggressor = a.player
+        spent[a.player] += a.amount
         line.append(step)
         index.append(i)
 
@@ -467,8 +529,59 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
     defaults = default_sizes(oop, ip, initiative)
     sizes = {p: [{k: _merge_sizes(defaults[p][s][k], played[p][s][k]) for k in ("bet", "raise", "donk")}
                  for s in range(3)] for p in (oop, ip)}
+    family = SIZE_FAMILIES.get((pot_type, initiative))
+    plan, sizes_from = None, None
+    found = studyspots.hand_sizes_for(family, hand.board) if family and theory else None
+    if found:
+        plan, near, exact = found
+        sizes_from = {"board": near, "exact": exact}
+    played_sizes = []
+    for sit in situations:
+        if plan is not None and sit["key"] in plan:
+            theory_sizes = plan[sit["key"]]
+            plan[sit["key"]], how = _merge_played(theory_sizes, sit["size"], sit["equiv"])
+        else:  # situation hors du plan (donk…) : les tailles de la street, comme dans GTOpen
+            player = oop if sit["player"] == 0 else ip
+            theory_sizes = defaults[player][sit["street"]][sit["config"]]
+            how = _merge_played(theory_sizes, sit["size"], sit["equiv"])[1]
+        played_sizes.append({"key": sit["key"], "street": sit["street"], "player": sit["player"], "kind": sit["kind"],
+                             "size": sit["size"], "theory": list(theory_sizes), "how": how})
     return PostflopSpot(hand, hero, villain, pot_type, oop, ip, round(pot / bb, 4), round(stack / bb, 4),
-                        ranges, line, index, sizes, added, context, adjusted, reference)
+                        ranges, line, index, sizes, added, context, adjusted, reference, plan=plan,
+                        family=family if plan else None, sizes_from=sizes_from, played_sizes=played_sizes)
+
+
+def _symbolic_sizes(pot: float, behind: float, streets: int) -> dict[str, float]:
+    """Ce que valent, en % du pot, les tailles symboliques d'un plan pour une mise (voir native/arbre.rs) : le
+    géométrique sur les streets restantes (ou sur N), le tapis."""
+    if pot <= 0 or behind <= 0:
+        return {}
+    def geo(n: int) -> float:
+        return round(100 * ((1 + 2 * behind / pot) ** (1 / n) - 1) / 2, 1)
+    out = {"geo": geo(streets), "a": round(100 * behind / pot, 1)}
+    out.update({f"geo{n}": geo(min(n, streets)) for n in (1, 2, 3)})
+    return out
+
+
+def _merge_played(theory: list, played, equiv: dict[str, float]) -> tuple[list, str]:
+    """La taille jouée dans les tailles théoriques d'une situation : « same » (déjà là, à 1 point près),
+    « replaced » (elle remplace la taille théorique à moins de SIZE_MERGE points) ou « added » (en plus)."""
+    if played == "a":
+        return (list(theory), "same") if "a" in theory else (list(theory) + ["a"], "added")
+    values = [s if not isinstance(s, str) else equiv.get(s) for s in theory]
+    near = sorted((abs(v - played), k) for k, v in enumerate(values) if v is not None and abs(v - played) <= SIZE_MERGE)
+    if near and near[0][0] <= 1:
+        return list(theory), "same"
+    if near:
+        out = list(theory)
+        out[near[0][1]] = played
+        return out, "replaced"
+    return list(theory) + [played], "added"
+
+
+def _generic_label(key: str) -> str:
+    kind, where, *_ = key.split(":")
+    return ("Mise" if kind == "bet" else "Relance") + " " + {"f": "flop", "t": "turn", "r": "river"}[where[0]]
 
 
 
@@ -1023,10 +1136,70 @@ def interpret(spot: PostflopSpot, raw: dict) -> dict:
         "hand": hand.hand_id, "pot_type": spot.pot_type, "pot": spot.pot_bb, "stack": spot.stack_bb,
         "table_format": hand.table_format, "positions": {"H": hand.position(spot.hero), "V": hand.position(spot.villain)},
         "board": spot.board, "oop": who[spot.oop], "menu": spot.menu_text(), "adjusted": spot.adjusted,
+        "sizes": spot.sizes_info(),
         "added": [who[p] for p in spot.added],
         "iterations": raw["iterations"], "exploit_pct": raw["exploit_pct"], "seconds": raw["seconds"],
         "tree_nodes": raw["tree_nodes"], "stopped": raw.get("stopped"), "decisions": decisions,
     }
+
+
+def situation_keys(node: dict) -> list[Optional[str]]:
+    """La situation (clé de native/arbre.rs) de chaque action d'un nœud : sa mise ou sa relance ; None pour check,
+    call et fold. Le passé se lit dans l'historique du nœud (dernier agresseur de chaque street terminée)."""
+    past, street, aggressor, raises = "", 0, None, 0
+    steps = [h for h in node.get("history", []) if h.get("kind") == "action" and h.get("chosen") is not None]
+    for h in steps + [None]:
+        at = node["street"] if h is None else h["street"]
+        while street < at:
+            past += aggressor or "x"
+            street, aggressor, raises = street + 1, None, 0
+        if h is None:
+            break
+        kind = h["actions"][h["chosen"]]["kind"]
+        if kind in ("bet", "raise"):
+            raises += kind == "raise"
+            aggressor = "o" if h["player"] == 0 else "i"
+    where = "ftr"[node["street"]] + ("o" if node.get("player") == 0 else "i")
+    return [f"bet:{where}:{past}" if a["kind"] == "bet" else f"raise:{where}:{past}:{raises}" if a["kind"] == "raise"
+            else None for a in node["actions"]]
+
+
+def _action_pct(node: dict, k: int) -> Optional[float]:
+    """Taille d'une mise (% du pot) ou d'une relance (% du pot après le call), comme dans l'explorateur."""
+    a = node["actions"][k]
+    if a["kind"] == "bet" and node["pot"] > 0:
+        return 100 * a["amount"] / node["pot"]
+    call = next((x for x in node["actions"] if x["kind"] == "call"), None)
+    base = 2 * node["put"][1 - node["player"]] if call and node.get("put") else 0
+    return 100 * (a["amount"] - call["amount"]) / base if base else None
+
+
+def mark_played_sizes(node: dict, spot: PostflopSpot) -> None:
+    """Signale dans un nœud la taille jouée ajoutée à l'arbre (ou mise à la place d'une taille théorique) :
+    action["played_size"] = {"how", "size", "theory"} (textes pour l'explorateur)."""
+    if not spot.played_sizes:
+        return
+    from . import sizing
+    history = node.get("history", [])
+    # le nœud, et chaque étape du déroulé (même forme : street, joueur, pot, actions ; l'historique avant elle)
+    steps = [dict(h, history=history[:j]) for j, h in enumerate(history) if h.get("kind") == "action"]
+    if node.get("type") == "action":
+        steps.append(node)
+    for step in steps:
+        keys = situation_keys(step)
+        for p in spot.played_sizes:
+            options = [k for k, key in enumerate(keys) if key == p["key"]]
+            if p["how"] == "same" or not options:
+                continue
+            if p["size"] == "a":
+                k = next((k for k in options if step["actions"][k].get("allin")), None)
+            else:
+                pcts = {k: _action_pct(step, k) for k in options}
+                k = min((k for k in options if pcts[k] is not None), key=lambda k: abs(pcts[k] - p["size"]),
+                        default=None)
+            if k is not None:
+                step["actions"][k]["played_size"] = {"how": p["how"], "size": sizing.size_text(p["size"]),
+                                                     "theory": sizing.sizes_text(p["theory"])}
 
 
 def cached_node(raw: dict, path: list) -> Optional[dict]:
@@ -1042,6 +1215,21 @@ def _strategy_text(actions: list[dict], freqs: list[float]) -> str:
     return ", ".join(f"{actions[k]['label']} {round(100 * freqs[k])} %" for k in order if freqs[k] >= 0.005)
 
 
+def _sizes_note(info: Optional[dict]) -> str:
+    if not info:
+        return ""
+    if info["source"] == "flop":
+        note = " (tailles théoriques de ce flop)"
+    elif info["source"] == "proche":
+        note = f" (tailles théoriques empruntées à {''.join(info['board'])}, ce flop n'a pas encore les siennes)"
+    else:
+        note = " (tailles par défaut)"
+    added = [f"{p['label'].lower()} {p['size_text']}" for p in info["played"] if p["how"] == "added"]
+    if added:
+        note += " ; tailles jouées ajoutées pour juger la décision : " + ", ".join(added)
+    return note
+
+
 def result_text(result: dict, hero: str) -> str:
     where = "hors position" if result["oop"] == "H" else "en position"
     if result.get("table_format", "HU") != "HU":  # pot à deux à une table à plusieurs
@@ -1052,7 +1240,7 @@ def result_text(result: dict, hero: str) -> str:
              f"pot {_num(result['pot'])} bb · tapis {_num(result['stack'])} bb",
              f"GTOpen : {result['iterations']} itérations, exploitabilité {_num(result['exploit_pct'], 2)} % du pot, "
              f"{_num(result['seconds'], 0)} s · {result['tree_nodes']:_} nœuds".replace("_", " "),
-             f"Tailles de l'arbre — {result['menu']}"]
+             f"Tailles de l'arbre — {result['menu']}" + _sizes_note(result.get("sizes"))]
     if result.get("adjusted"):
         lines.append("Ranges préflop : les tiennes, ajustées " + ("pour ce coup" if result["adjusted"] == "coup"
                                                                   else "pour cette ligne") + " (pas la référence).")
