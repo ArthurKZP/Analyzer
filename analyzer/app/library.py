@@ -1,6 +1,8 @@
 """Bibliothèque de mains de l'application : chargement du dossier, import, analyses en cache."""
 from __future__ import annotations
 
+import base64
+import binascii
 import threading
 from datetime import datetime
 from html import escape
@@ -11,7 +13,7 @@ from .. import bluffs, leaks, players, ring, students
 from ..cli import detect_hero, slugify, unify_hero
 from ..lines import villain_lines
 from ..models import CALL, RAISE, Hand
-from ..parsers import load_hands, parse_text
+from ..parsers import load_hands, parse_text, read_zip
 from ..report import build_plan_page, build_report
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
@@ -29,7 +31,7 @@ from .solves import SolveQueue
 
 PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur", "bluffs")
 SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks", "tables")
-MAX_IMPORT_FILES = 200
+MAX_IMPORT_FILES = 5000  # fichiers (ou archives zip) par import
 
 
 class UnknownPlayer(KeyError):
@@ -622,33 +624,62 @@ class Library:
 
     # --- import -----------------------------------------------------------------
     def import_files(self, files: list[dict]) -> dict:
-        """Enregistre dans le dossier les fichiers reconnus qui apportent de nouvelles mains."""
-        results = []
-        added = 0
+        """Enregistre dans le dossier les fichiers reconnus qui apportent de nouvelles mains.
+
+        Chaque fichier : {"name", "content"} (texte), ou {"name", "zip"} (archive zip en base64, dossiers compris :
+        chacun de ses historiques s'importe comme un fichier)."""
+        results: list[dict] = []
         known = set(self.known_ids)
+        added = 0
         for item in files[:MAX_IMPORT_FILES]:
             name = str(item.get("name") or "fichier")[:200]
-            content = item.get("content")
-            if not isinstance(content, str) or not content.strip():
-                results.append({"name": name, "status": "vide", "hands": 0, "new": 0})
-                continue
-            try:
-                hands = parse_text(content)
-            except ValueError:
-                results.append({"name": name, "status": "format non reconnu", "hands": 0, "new": 0})
-                continue
-            new = [h for h in hands if f"{h.site}:{h.hand_id}" not in known]
-            detail = {"sites": sorted({h.site for h in hands}), "formats": _formats(hands)}
-            if not new:
-                results.append(dict(detail, name=name, status="déjà importé", hands=len(hands), new=0))
-                continue
-            self._save(name, content)
-            known |= {f"{h.site}:{h.hand_id}" for h in new}
-            added += len(new)
-            results.append(dict(detail, name=name, status="importé", hands=len(hands), new=len(new)))
+            if isinstance(item.get("zip"), str):
+                added += self._import_zip(name, item["zip"], known, results)
+            else:
+                added += self._import_one(name, item.get("content"), known, results)
         if added:
             self.reload()
         return {"files": results, "added": added, "state": self.summary()}
+
+    def _import_zip(self, name: str, data: str, known: set, results: list[dict]) -> int:
+        try:
+            content = read_zip(base64.b64decode(data, validate=True))
+        except binascii.Error:
+            content, reason = None, "archive zip illisible (envoi abîmé)"
+        except ValueError as exc:  # illisible, trop grosse
+            content, reason = None, str(exc)
+        if content is None:
+            results.append({"name": name, "status": reason, "hands": 0, "new": 0})
+            return 0
+        start = len(results)
+        added = sum(self._import_one(f"{name} › {path}"[:300], text, known, results) for path, text in content.files)
+        results.extend({"name": f"{name} › {path}"[:300], "status": "illisible (chiffré ou abîmé)", "hands": 0, "new": 0}
+                       for path in content.unreadable)
+        parts = [f"{len(content.files)} historique(s)"]
+        if content.ignored:
+            parts.append(f"{content.ignored} autre(s) fichier(s) laissé(s) de côté")
+        results.append({"name": name, "status": "archive : " + ", ".join(parts), "archive": True,
+                        "hands": sum(r["hands"] for r in results[start:]), "new": added})
+        return added
+
+    def _import_one(self, name: str, content, known: set, results: list[dict]) -> int:
+        if not isinstance(content, str) or not content.strip():
+            results.append({"name": name, "status": "vide", "hands": 0, "new": 0})
+            return 0
+        try:
+            hands = parse_text(content)
+        except ValueError:
+            results.append({"name": name, "status": "format non reconnu", "hands": 0, "new": 0})
+            return 0
+        new = [h for h in hands if f"{h.site}:{h.hand_id}" not in known]
+        detail = {"sites": sorted({h.site for h in hands}), "formats": _formats(hands)}
+        if not new:
+            results.append(dict(detail, name=name, status="déjà importé", hands=len(hands), new=0))
+            return 0
+        self._save(name.rsplit(" › ", 1)[-1], content)  # nom du fichier dans l'archive
+        known |= {f"{h.site}:{h.hand_id}" for h in new}
+        results.append(dict(detail, name=name, status="importé", hands=len(hands), new=len(new)))
+        return len(new)
 
     def _save(self, original_name: str, content: str) -> Path:
         # Le nom d'origine ne sert qu'à lire le fichier plus tard : jamais utilisé comme chemin.

@@ -147,7 +147,7 @@
       subtitle.textContent = 'Joue des mains sur les spots résolus : le solveur juge chaque décision';
     } else {
       title.textContent = 'Importer des mains';
-      subtitle.textContent = 'Historiques Betclic (.txt) — les mains déjà présentes sont ignorées';
+      subtitle.textContent = 'Historiques Betclic, Winamax, Unibet (.txt, dossier ou archive .zip) — les mains déjà présentes sont ignorées';
     }
     document.title = (route.view === 'adv' ? route.player : title.textContent) + ' — Analyzer HU';
   }
@@ -245,35 +245,73 @@
   }
 
   function showImport(student) {
-    const input = el('input', { type: 'file', multiple: true, accept: '.txt,.log,.hh', hidden: true });
+    const input = el('input', { type: 'file', multiple: true, accept: '.txt,.log,.hh,.zip', hidden: true });
     const result = el('div', { class: 'result', 'aria-live': 'polite' });
     const drop = el('div', { class: 'drop' },
       el('div', { class: 'drop-title' }, 'Dépose tes historiques ici'),
       el('div', { class: 'muted' }, 'ou'),
       el('button', { type: 'button', class: 'primary', onclick: () => input.click() }, 'Choisir des fichiers'),
-      el('div', { class: 'muted small' }, 'Betclic (.txt), plusieurs fichiers à la fois'));
+      el('div', { class: 'muted small' }, 'Betclic, Winamax, Unibet (.txt) : plusieurs fichiers à la fois, un dossier, '
+        + 'ou une archive .zip avec ses dossiers'));
     input.addEventListener('change', () => upload(input.files, result, student));
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (e) => {
       e.preventDefault();
       drop.classList.remove('over');
-      upload(e.dataTransfer.files, result, student);
+      droppedFiles(e.dataTransfer).then((files) => upload(files, result, student));
     });
     const who = student && students.find((s) => s.id === student);
     const folder = who
-      ? el('p', { class: 'muted small' }, 'Les mains de ' + who.name + ' (Betclic, heads-up) : ' + who.folder)
+      ? el('p', { class: 'muted small' }, 'Les mains de ' + who.name + ' : ' + who.folder)
       : el('p', { class: 'muted small' }, 'Dossier des mains : ' + state.folder + ' · ',
         el('button', { type: 'button', class: 'link', onclick: () => reload(result) }, 'Recharger le dossier'),
         ' (si tu y as copié des fichiers à la main)');
     showPanel(el('div', { class: 'import' }, drop, input, result, folder));
   }
 
+  const HISTORY = /\.(txt|log|hh|zip)$/i;
+
+  // Fichiers déposés ; un dossier déposé est parcouru avec ses sous-dossiers (historiques et archives seulement).
+  async function droppedFiles(dt) {
+    const entries = [...(dt.items || [])].map((i) => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null)).filter(Boolean);
+    if (!entries.some((e) => e.isDirectory)) return [...dt.files];
+    const out = [];
+    const walk = async (entry) => {
+      if (entry.isFile) {
+        if (HISTORY.test(entry.name)) out.push(await new Promise((ok, ko) => entry.file(ok, ko)));
+        return;
+      }
+      const reader = entry.createReader();
+      for (;;) {  // readEntries rend les fichiers par paquets
+        const batch = await new Promise((ok, ko) => reader.readEntries(ok, ko));
+        if (!batch.length) break;
+        for (const child of batch) await walk(child);
+      }
+    };
+    for (const entry of entries) await walk(entry);
+    return out;
+  }
+
+  // Un historique part en texte ; une archive zip en base64 (le serveur l'ouvre, dossiers compris).
+  function readUpload(f) {
+    if (!/\.zip$/i.test(f.name)) return f.text().then((content) => ({ name: f.name, content }));
+    return new Promise((ok, ko) => {
+      const reader = new FileReader();
+      reader.onload = () => ok({ name: f.name, zip: String(reader.result).split(',')[1] || '' });
+      reader.onerror = () => ko(reader.error);
+      reader.readAsDataURL(f);
+    });
+  }
+
   async function upload(fileList, result, student) {
-    if (!fileList || !fileList.length) return;
+    if (!fileList || !fileList.length) {
+      result.textContent = 'Aucun historique (.txt) ni archive .zip dans ce que tu as déposé.';
+      return;
+    }
     result.textContent = 'Import en cours…';
     try {
-      const files = await Promise.all([...fileList].map(async (f) => ({ name: f.name, content: await f.text() })));
+      const files = await Promise.all([...fileList].map(readUpload));
       const url = student ? '/api/eleves/' + encodeURIComponent(student) + '/import' : '/api/import';
       const res = await fetch(url, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files }),
@@ -303,17 +341,26 @@
       ? el('b', {}, data.added + ' nouvelle(s) main(s) ajoutée(s).')
       : 'Aucune nouvelle main.', ' ',
     data.added ? next : ''));
-    const rows = data.files.map((f) => el('tr', {},
+    const rows = data.files.map((f) => el('tr', { class: f.archive ? 'archive' : null },
       el('td', {}, f.name),
       el('td', {}, (f.sites || []).join(', ')),
-      el('td', { class: f.status === 'importé' ? 'ok' : f.status === 'déjà importé' ? '' : 'ko' }, f.status),
+      el('td', { class: f.status === 'importé' ? 'ok' : f.status === 'déjà importé' || f.archive ? '' : 'ko' }, f.status),
       el('td', { class: 'num' }, String(f.hands)),
       el('td', {}, Object.entries(f.formats || {}).map(([k, n]) => n + ' ' + k).join(' · ')),
       el('td', { class: 'num' }, String(f.new))));
-    result.append(el('table', {},
+    const table = el('table', {},
       el('thead', {}, el('tr', {}, el('th', {}, 'Fichier'), el('th', {}, 'Site'), el('th', {}, 'Statut'), el('th', { class: 'num' }, 'Mains'),
         el('th', {}, 'Tables'), el('th', { class: 'num' }, 'Nouvelles'))),
-      el('tbody', {}, rows)));
+      el('tbody', {}, rows));
+    const singles = data.files.filter((f) => !f.archive);
+    if (singles.length > 20) {  // une archive ou un dossier : le bilan, puis le détail sur demande
+      const count = {};
+      singles.forEach((f) => { count[f.status] = (count[f.status] || 0) + 1; });
+      const plural = { 'importé': 'importés', 'déjà importé': 'déjà importés', vide: 'vides', 'format non reconnu': 'au format non reconnu' };
+      result.append(el('p', {}, singles.length + ' fichiers : '
+        + Object.entries(count).map(([k, n]) => n + ' ' + (n > 1 && plural[k] || k)).join(', ') + '.'));
+      result.append(el('details', {}, el('summary', {}, 'Détail par fichier'), table));
+    } else result.append(table);
     if (data.files.some((f) => f.formats && Object.keys(f.formats).some((k) => k !== 'HU'))) {
       result.append(el('p', { class: 'small' }, 'Les mains heads-up vont dans toute l\'analyse (adversaires, solveur, '
         + 'leakfinding) ; celles des tables à 3 joueurs et plus sont gardées pour l\'analyse par position.'));

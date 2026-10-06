@@ -161,6 +161,79 @@ class LibraryTest(unittest.TestCase):
         self.assertEqual(lib.import_files([{"name": "x.txt", "content": content}])["added"], 0)
 
 
+def make_zip(entries: dict) -> bytes:
+    import io
+    import zipfile
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    return buffer.getvalue()
+
+
+class ZipImportTest(unittest.TestCase):
+    """Une archive zip d'historiques, avec ses dossiers : chacun s'importe comme un fichier."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.folder = Path(tmp.name) / "mains"
+        sites = Path(__file__).parent / "sites"
+        self.betclic = FIXTURE.read_text(encoding="utf-8")
+        self.winamax = (sites / "winamax.txt").read_text(encoding="utf-8")
+
+    def test_archive_with_folders(self):
+        import base64
+        inner = make_zip({"Unibet/table.txt": (Path(__file__).parent / "sites" / "unibet.txt").read_bytes()})
+        data = make_zip({
+            "Historiques/Betclic/2026-01/hu.txt": "\ufeff" + self.betclic,  # avec BOM
+            "Historiques/Winamax/table.txt": self.winamax.encode("utf-8"),
+            "Historiques/Winamax/copie.txt": self.winamax.encode("utf-8"),
+            "Historiques/notes.pdf": b"%PDF",
+            "__MACOSX/Historiques/._hu.txt": b"x",
+            "Historiques/.DS_Store": b"x",
+            "Historiques/autres.zip": inner,
+            "Historiques/vide.txt": b"",
+        })
+        lib = Library(self.folder)
+        try:
+            result = lib.import_files([{"name": "mains.zip", "zip": base64.b64encode(data).decode()},
+                                       {"name": "abime.zip", "zip": base64.b64encode(b"pas un zip").decode()},
+                                       {"name": "envoi.zip", "zip": "@@@"}])
+            rows = {r["name"]: r for r in result["files"]}
+            self.assertEqual(rows["mains.zip › Historiques/Betclic/2026-01/hu.txt"]["status"], "importé")
+            self.assertEqual(rows["mains.zip › Historiques/Winamax/copie.txt"]["status"], "déjà importé")
+            self.assertEqual(rows["mains.zip › Historiques/autres.zip/Unibet/table.txt"]["sites"], ["Unibet"])
+            self.assertEqual(rows["mains.zip › Historiques/vide.txt"]["status"], "vide")
+            archive = rows["mains.zip"]
+            self.assertTrue(archive["archive"])
+            self.assertEqual(archive["status"], "archive : 5 historique(s), 1 autre(s) fichier(s) laissé(s) de côté")
+            self.assertEqual(archive["new"], result["added"])
+            self.assertEqual(rows["abime.zip"]["status"], "archive zip illisible")
+            self.assertEqual(rows["envoi.zip"]["status"], "archive zip illisible (envoi abîmé)")
+            saved = sorted(p.name for p in self.folder.iterdir())
+            self.assertEqual(len(saved), 3)  # un fichier par historique qui apporte des mains, à plat
+            self.assertTrue(all(name.startswith("import-") for name in saved))
+            self.assertEqual(result["state"]["hands"], len(lib.hands))
+            self.assertEqual(lib.import_files([{"name": "mains.zip", "zip": base64.b64encode(data).decode()}])["added"],
+                             0)
+        finally:
+            lib.solves.shutdown()
+
+    def test_zip_in_folder(self):
+        from analyzer.parsers import decode, load_hands, read_zip
+        self.folder.mkdir()
+        (self.folder / "archive.zip").write_bytes(make_zip({"a/b/hu.txt": self.betclic.encode("cp1252")}))
+        self.assertEqual(len(load_hands([self.folder])), 4)  # un zip copié dans le dossier se lit aussi
+        (self.folder / "abime.zip").write_bytes(b"PK pas un zip")
+        self.assertEqual(len(load_hands([self.folder])), 4)
+        self.assertEqual(decode("é".encode("cp1252")), "é")
+        self.assertEqual(decode("é".encode("utf-16")), "é")  # avec son BOM
+        with mock.patch("analyzer.parsers.MAX_ZIP_SIZE", 10):
+            with self.assertRaises(ValueError):
+                read_zip(make_zip({"hu.txt": self.betclic}))
+
+
 class ServerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

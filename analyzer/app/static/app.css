@@ -84,6 +84,8 @@ a { color: var(--accent); }
 .result .num { text-align: right; font-variant-numeric: tabular-nums; }
 .result .ok { color: var(--win); font-weight: 600; }
 .result .ko { color: var(--loss); font-weight: 600; }
+.result tr.archive td { font-weight: 600; }
+.result details summary { cursor: pointer; margin: 4px 0 8px; color: var(--ink-2); }
 .welcome { max-width: 560px; }
 .students { max-width: 760px; }
 .student-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }

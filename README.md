@@ -35,8 +35,12 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   *Mes spots* et *Face au solveur* (tes erreurs postflop, voir plus bas).
 - **Entraîneur** : joue des mains sur les spots résolus, le solveur juge chaque décision (voir plus bas).
 - **Sauvegarde** : tes calculs vers un dossier synchronisé ou un stockage en ligne (voir plus bas).
-- **Importer des mains** : glisse tes historiques ou choisis-les ; ils sont copiés dans le dossier des
-  mains (`hands/` par défaut), les doublons et les formats non reconnus sont signalés.
+- **Importer des mains** : glisse tes historiques ou choisis-les — des fichiers `.txt`, un dossier (avec ses
+  sous-dossiers) ou une **archive `.zip`** avec ses dossiers (et les archives qu'elle contient). Chaque historique
+  qui apporte des mains est copié dans le dossier des mains (`hands/` par défaut) ; les doublons, les formats non
+  reconnus et les autres fichiers de l'archive (PDF, images…) sont signalés. Une archive : 20 000 historiques et
+  1 Go décompressé au plus, 200 Mo par envoi (une archive de 150 Mo environ). Un `.zip` copié à la main dans le
+  dossier des mains se lit aussi.
 
 Options : `--dossier` (dossier des historiques), `--port`, `--hero`, `--sans-navigateur`.
 Les analyses sont calculées à la première ouverture d'une page puis gardées en mémoire ; un import les recalcule.
