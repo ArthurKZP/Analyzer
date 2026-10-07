@@ -78,7 +78,7 @@ class HeadsUpPotTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        env = mock.patch.dict(os.environ, {"ANALYZER_HOME": tmp.name})
+        env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": tmp.name})
         env.start()
         self.addCleanup(env.stop)
         self.home = Path(tmp.name)
@@ -169,7 +169,7 @@ class Hand2NoteTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        env = mock.patch.dict(os.environ, {"ANALYZER_HOME": tmp.name})
+        env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": tmp.name})
         env.start()
         self.addCleanup(env.stop)
 

@@ -28,7 +28,7 @@ def stats(name="X", hands=200, **pcts):
 class SuggestTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": self.tmp.name})
+        self.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name})
         self.env.start()
 
     def tearDown(self):
@@ -61,11 +61,9 @@ class SuggestTest(unittest.TestCase):
         self.assertEqual((out["A"]["kind"], out["A"]["source"], out["A"]["suggestion"]), ("reg", "toi", "rec"))
         self.assertEqual(players.describe(out["B"]), "Récréatif (classé par toi)")
         players.set_kind("B", None)  # retour à la suggestion
-        self.assertEqual(players.load(), {"A": "reg"})
+        self.assertEqual(players.load(), {"A": "reg"})  # gardé dans la base
         with self.assertRaises(ValueError):
             players.set_kind("A", "fish")
-        players.path().write_text("pas du json", encoding="utf-8")
-        self.assertEqual(players.load(), {})
 
 
 class ByKindTest(unittest.TestCase):
@@ -83,7 +81,7 @@ class LibraryKindsTest(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         shutil.copy(FIXTURES / "betclic_sample.txt", Path(cls.tmp.name) / "sample.txt")
-        cls.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": str(Path(cls.tmp.name) / "home"),
+        cls.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(Path(cls.tmp.name) / "home"),
                                                "ANALYZER_SOLVER": str(Path(cls.tmp.name) / "absent")})
         cls.env.start()
         cls.lib = Library(cls.tmp.name)

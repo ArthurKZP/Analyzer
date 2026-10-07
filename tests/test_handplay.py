@@ -201,7 +201,7 @@ class PageTest(unittest.TestCase):
         self.assertIn('"api":"/api/mains"', build_hands_page(data, api="/api/mains"))
 
     def test_library(self):
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"ANALYZER_HOME": tmp}):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": tmp}):
             folder = Path(tmp) / "mains"
             folder.mkdir()
             for path in list(FIXTURES.glob("*.txt")) + list(SITES.glob("*.txt")):

@@ -4,15 +4,15 @@ Contre un récréatif, le bon jeu est l'exploitation, pas la théorie : ses main
 au solveur (« Face au solveur », préflop), ses écarts restent affichés pour en profiter.
 
 Le type se choisit dans l'application (fiche de l'adversaire) ; sans choix, une suggestion d'après ses stats,
-sinon « régulier ». Le classement est gardé par joueur, pas par duel (~/.analyzer/joueurs.json) : il servira
-tel quel aux tables à 3 ou 6 joueurs. Les signaux de la suggestion, eux, sont ceux du heads-up (bouton / BB).
+sinon « régulier ». Le classement est gardé par joueur, pas par duel (base de données, table adversaires ; avant :
+~/.analyzer/joueurs.json, repris à la première ouverture) : il servira tel quel aux tables à 3 ou 6 joueurs. Les signaux de la suggestion, eux, sont ceux du heads-up (bouton / BB).
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Optional
 
+from . import db
 from .stats import PlayerStats
 from .theory import postflop
 
@@ -31,30 +31,28 @@ SIGNALS = (
 
 
 def path() -> Path:
+    """L'ancien fichier des types (repris dans la base, analyzer/db/legacy.py)."""
     return postflop.home() / "joueurs.json"
 
 
 def load() -> dict[str, str]:
     """Types choisis à la main : {joueur: "reg" | "rec"}."""
-    try:
-        data = json.loads(path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return {k: v for k, v in data.items() if isinstance(k, str) and v in KINDS} if isinstance(data, dict) else {}
+    base = db.current()
+    return {name: kind for name, kind in base.all("SELECT nom, type FROM adversaires WHERE compte_id = ?",
+                                                    (base.account(),)) if kind in KINDS}
 
 
 def set_kind(name: str, kind: Optional[str]) -> None:
     """Fixe le type d'un joueur ; None revient à la suggestion."""
     if kind is not None and kind not in KINDS:
         raise ValueError(kind)
-    data = load()
+    base = db.current()
     if kind is None:
-        data.pop(name, None)
+        base.execute("DELETE FROM adversaires WHERE compte_id = ? AND nom = ?", (base.account(), name))
     else:
-        data[name] = kind
-    target = path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        base.execute("INSERT INTO adversaires (compte_id, nom, type, maj_le) VALUES (?, ?, ?, ?) "
+                     "ON CONFLICT (compte_id, nom) DO UPDATE SET type = excluded.type, maj_le = excluded.maj_le",
+                     (base.account(), name, kind, db.now()))
 
 
 def suggest(st: Optional[PlayerStats]) -> tuple[Optional[str], list[str]]:

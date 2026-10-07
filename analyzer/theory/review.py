@@ -3,7 +3,7 @@ l'adversaire à exploiter.
 
 Chaque main résolue (postflop.solve, mise en cache) donne, à chaque décision, l'EV de chaque action pour la
 main connue (la tienne ; la sienne au showdown) et la stratégie de toute la range. On en garde un résumé par
-main (~/.analyzer/revue), qu'on regroupe ensuite par situation de la ligne : c-bet, face à la c-bet,
+main (base de données, table analyses), qu'on regroupe ensuite par situation de la ligne : c-bet, face à la c-bet,
 2e barrel, probe… (mêmes clés que le choix des tailles, voir sizing.py).
 
 - Erreur : l'EV perdue par l'action jouée face à la meilleure action pour cette main (en bb). Une action
@@ -16,12 +16,12 @@ main (~/.analyzer/revue), qu'on regroupe ensuite par situation de la ligne : c-b
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 from pathlib import Path
 from typing import Optional
 
-from .. import store
+from .. import db, store
+from ..db import analyses as db_analyses
 from ..models import Hand
 from . import postflop, sizing
 from .preflop import MIXED_THRESHOLD
@@ -33,6 +33,7 @@ CATEGORIES = (("fold", "fold"), ("passive", "check / call"), ("aggressive", "mis
 
 
 def review_dir() -> Path:
+    """L'ancien dossier des résumés (repris dans la base, analyzer/db/legacy.py)."""
     return postflop.home() / "revue"
 
 
@@ -123,46 +124,48 @@ def upgrade(data: dict) -> dict:
     return data
 
 
-def digest_path(spot: postflop.PostflopSpot) -> Path:
+def digest_key(spot: postflop.PostflopSpot) -> str:
     # Clé du spot seul (comme une étude) : une mise à jour du pont ne fait pas perdre l'analyse.
-    return review_dir() / f"{postflop.study_key(spot.request())}.json"
+    return postflop.study_key(spot.request())
 
 
 def save_digest(spot: postflop.PostflopSpot, raw: dict) -> dict:
+    """Résume la main résolue et garde le résumé dans la base (table analyses)."""
     data = digest(spot, raw)
-    path = digest_path(spot)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    key = digest_key(spot)
+    base = db.current()
+    db_analyses.put(base, key, data)
+    _DIGESTS[(base.url, key)] = data
     return data
 
 
-_DIGESTS: dict[Path, tuple[tuple[int, int], dict]] = {}  # résumé lu -> (date et taille du fichier, contenu)
+_DIGESTS: dict[tuple[str, str], dict] = {}  # (base, clé) -> résumé lu
 
 
-def _read_digest(path: Path) -> Optional[dict]:
-    """Un résumé enregistré (relu seulement quand le fichier change)."""
-    try:
-        stat = path.stat()
-    except OSError:
-        return None
-    stamp = (stat.st_mtime_ns, stat.st_size)
-    known = _DIGESTS.get(path)
-    if known is None or known[0] != stamp:
-        try:
-            known = (stamp, upgrade(json.loads(path.read_text(encoding="utf-8"))))
-        except (OSError, ValueError):
+def _read_digest(key: str) -> Optional[dict]:
+    """Un résumé enregistré (lu une fois)."""
+    base = db.current()
+    known = _DIGESTS.get((base.url, key))
+    if known is None:
+        data = db_analyses.get(base, key)
+        if data is None:
             return None
-        _DIGESTS[path] = known
-    return known[1]
+        known = _DIGESTS[(base.url, key)] = upgrade(data)
+    return known
+
+
+def digest_keys() -> set[str]:
+    """Les clés des mains déjà résumées."""
+    return db_analyses.keys(db.current())
 
 
 def _done(spot: postflop.PostflopSpot, listed: Optional[set[str]] = None,
           solved: Optional[set[str]] = None) -> Optional[dict]:
-    """Le résumé de la main pour cet arbre, s'il est déjà fait (ou son résultat en cache). listed, solved : les noms
-    des résumés et des résultats déjà sur le disque (une seule lecture de dossier pour toutes les mains)."""
-    path = digest_path(spot)
-    if listed is None or path.name in listed:
-        data = _read_digest(path)
+    """Le résumé de la main pour cet arbre, s'il est déjà fait (ou son résultat en cache). listed : les clés des
+    résumés de la base ; solved : les noms des résultats et études sur le disque (une lecture pour toutes les mains)."""
+    key = digest_key(spot)
+    if listed is None or key in listed:
+        data = _read_digest(key)
         if data is not None:
             return data
     request = postflop.solved_request(spot.request(), solved)  # résolu à n'importe quelle précision
@@ -202,7 +205,7 @@ def _signature() -> tuple:
 def _variant(spot: postflop.PostflopSpot) -> dict:
     request = spot.request()
     default = dict(request, max_iterations=postflop.DEFAULT_ITERATIONS, target_exploit_pct=postflop.DEFAULT_TARGET)
-    return {"theory": spot.plan is not None, "digest": digest_path(spot).name, "base": postflop.base_key(request),
+    return {"theory": spot.plan is not None, "digest": digest_key(spot), "base": postflop.base_key(request),
             "solved": (postflop.cache_path(default).name, postflop.study_path(default).name),
             "pot_type": spot.pot_type}
 
@@ -250,7 +253,7 @@ def _done_by_keys(hand: Hand, hero: str, variants: list[dict], listed: set[str],
     """Comme _done, avec les clés gardées : le spot ne se reconstruit que si un résultat attend son résumé."""
     for variant in variants:
         if variant["digest"] in listed:
-            data = _read_digest(review_dir() / variant["digest"])
+            data = _read_digest(variant["digest"])
             if data is not None:
                 return data
         if variant["base"] in precisions or any(name in solved for name in variant["solved"]):
@@ -301,8 +304,7 @@ def collect(hands: list[Hand], hero: str) -> tuple[list[dict], PendingSpots]:
 
     Une main analysée avec l'arbre d'avant les tailles théoriques (tailles fixes) garde son analyse."""
     done, todo = [], []
-    folder = review_dir()
-    listed = {p.name for p in folder.iterdir()} if folder.is_dir() else set()
+    listed = digest_keys()
     solved = {p.name for d in (postflop.home() / "resolutions", postflop.studies_dir()) if d.is_dir()
               for p in d.iterdir()}
     signature = _signature()
@@ -335,12 +337,11 @@ def analyze(hands: list[Hand], hero: str, log=print, limit: Optional[int] = None
 
 def saved_digests() -> list[dict]:
     """Les résumés de toutes les mains déjà passées au solveur (les tiennes et celles des élèves)."""
-    folder = review_dir()
     out = []
-    for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+    for _, data in db_analyses.every(db.current()):
         try:
-            out.append(upgrade(json.loads(path.read_text(encoding="utf-8"))))
-        except (OSError, ValueError, KeyError):
+            out.append(upgrade(data))
+        except (ValueError, KeyError):
             continue
     return out
 

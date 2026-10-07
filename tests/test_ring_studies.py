@@ -27,7 +27,7 @@ class RingHome(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.home = Path(tmp.name)
-        env = mock.patch.dict(os.environ, {"ANALYZER_HOME": str(self.home)})
+        env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.home)})
         env.start()
         self.addCleanup(env.stop)
 

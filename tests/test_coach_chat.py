@@ -131,7 +131,7 @@ def wait(c, conv_id):
 class CoachChatTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": self.tmp.name})
+        self.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name})
         self.env.start()
         spot = StudySpot("srp", list(BOARD), plan={})
         key = postflop.study_key(spot.request())
@@ -322,7 +322,7 @@ class CoachRoutesTest(unittest.TestCase):
         from analyzer.app.server import start
         tmp = tempfile.TemporaryDirectory()
         shutil.copy(Path(__file__).parent / "fixtures" / "betclic_sample.txt", Path(tmp.name) / "s.txt")
-        with mock.patch.dict(os.environ, {"ANALYZER_HOME": str(Path(tmp.name) / "home"), "ANTHROPIC_API_KEY": ""}):
+        with mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(Path(tmp.name) / "home"), "ANTHROPIC_API_KEY": ""}):
             lib = Library(tmp.name)
             server = start(lib, port=0)
             threading.Thread(target=server.serve_forever, daemon=True).start()

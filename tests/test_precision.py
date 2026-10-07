@@ -21,7 +21,7 @@ class HomeTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.home = Path(tmp.name)
-        env = mock.patch.dict(os.environ, {"ANALYZER_HOME": tmp.name, "ANALYZER_SOLVER": str(FAKE_SOLVER)})
+        env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": tmp.name, "ANALYZER_SOLVER": str(FAKE_SOLVER)})
         env.start()
         self.addCleanup(env.stop)
         self.spot = postflop.build_spot({h.hand_id: h for h in load_hands([FIXTURES])}["HAND02"], "Hero")

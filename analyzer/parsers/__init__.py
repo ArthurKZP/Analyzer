@@ -1,6 +1,7 @@
 """Détection du format et chargement des historiques."""
 from __future__ import annotations
 
+import functools
 import hashlib
 import io
 import zipfile
@@ -109,8 +110,9 @@ def _texts(file: Path) -> Iterable[str]:
         return
 
 
+@functools.lru_cache(maxsize=1)
 def _code_version() -> str:
-    """Empreinte du code de lecture : le changer relit tous les fichiers (cache des mains lues)."""
+    """Empreinte du code de lecture : le changer relit tous les fichiers (cache des mains lues, base de données)."""
     root = Path(__file__).parent
     digest = hashlib.sha1()
     for source in sorted(root.glob("*.py")) + [root.parent / "models.py"]:

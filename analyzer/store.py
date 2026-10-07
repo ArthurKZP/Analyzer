@@ -19,7 +19,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-VERSIONS = {"equite": 1, "mains": 1, "spots": 2, "fiches": 1}
+VERSIONS = {"equite": 1, "mains": 1, "spots": 3, "fiches": 1}
 PICKLED = {"mains"}  # espaces gardés en pickle (objets Python)
 BY_KEY = {"mains"}  # espaces volumineux : lus clé par clé, pas chargés en entier
 WRITE_BATCH = 500
@@ -210,6 +210,22 @@ def forget(space: str, keys: Optional[list[str]] = None) -> None:
             db.executemany("DELETE FROM cache WHERE espace = ? AND cle = ?", [(space, k) for k in keys])
             for k in keys:
                 _loaded.get(space, {}).pop(k, None)
+
+
+def forget_prefix(space: str, prefix: str) -> None:
+    """Efface les valeurs d'un espace dont la clé commence ainsi (sans les lire)."""
+    if not enabled():
+        return
+    with _lock:
+        db = _connect()
+        if db is None:
+            return
+        _flush_locked()
+        db.execute("DELETE FROM cache WHERE espace = ? AND substr(cle, 1, ?) = ?", (space, len(prefix), prefix))
+        values = _loaded.get(space)
+        if values:
+            for k in [k for k in values if k.startswith(prefix)]:
+                del values[k]
 
 
 def retain(space: str, keep: Callable[[str], bool]) -> int:

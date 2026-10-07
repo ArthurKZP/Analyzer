@@ -4,16 +4,17 @@ from __future__ import annotations
 import base64
 import binascii
 import threading
-from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Optional
 
-from .. import bluffs, handplay, leaks, players, ring, spots, store, students
-from ..cli import detect_hero, slugify, unify_hero
+from .. import bluffs, db, handplay, leaks, players, ring, spots, store, students
+from ..db import analyses as db_analyses
+from ..db import hands as db_hands
+from ..cli import detect_hero, unify_hero
 from ..lines import villain_lines
 from ..models import CALL, RAISE, Hand
-from ..parsers import load_hands, parse_text, read_zip
+from ..parsers import read_zip
 from ..report import build_plan_page, build_report
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
@@ -61,8 +62,7 @@ def _kind_note(kind: dict) -> str:
 
 def _digest_count() -> int:
     """Le nombre de mains passées au solveur : les pages qui s'en servent sont recalculées quand il change."""
-    folder = review.review_dir()
-    return sum(1 for _ in folder.glob("*.json")) if folder.is_dir() else 0
+    return db_analyses.count(db.current())
 
 
 def _formats(hands: list[Hand]) -> dict[str, int]:
@@ -76,11 +76,16 @@ class Library:
     """Les mains d'un dossier et les pages d'analyse, calculées à la demande puis gardées en cache."""
 
     def __init__(self, folder: Path | str, hero: Optional[str] = None, solves: Optional[SolveQueue] = None,
-                 backups: Optional[Backups] = None, api: str = "/api", pages: str = "/moi"):
-        """solves, backups : ceux de la bibliothèque principale, partagés par celles des élèves (une résolution à
-        la fois) ; api, pages : préfixes des adresses de ses pages et de leurs actions."""
+                 backups: Optional[Backups] = None, api: str = "/api", pages: str = "/moi", space: str = "moi",
+                 space_name: str = "Moi"):
+        """folder : la boîte d'arrivée des historiques (importés dans la base au chargement) ; space : l'espace de la
+        base (« moi », ou « eleve:<identifiant> ») ; solves, backups : ceux de la bibliothèque principale, partagés par
+        celles des élèves (une résolution à la fois) ; api, pages : préfixes des adresses de ses pages et de leurs
+        actions."""
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
+        self.db = db.current()
+        self.space_id = db_hands.space(self.db, space, space_name, hero)
         self.hero_override = hero
         self.version = 0
         self._lock = threading.Lock()
@@ -90,7 +95,6 @@ class Library:
         self.ring: list[Hand] = []
         self.by_id: dict[str, Hand] = {}
         self.hero: Optional[str] = None
-        self.known_ids: set[str] = set()
         self.api, self.pages = api, pages
         self.display_name: Optional[str] = None  # nom de l'élève (rapport)
         self._students: dict[str, Library] = {}
@@ -103,13 +107,14 @@ class Library:
 
     # --- chargement -------------------------------------------------------------
     def reload(self) -> None:
-        hands = load_hands([self.folder])
+        """Importe les historiques nouveaux du dossier, puis lit les mains de l'espace dans la base."""
+        db_hands.sync_folder(self.db, self.space_id, self.folder)
+        hands = db_hands.load(self.db, self.space_id)
         hero = self.hero_override or detect_hero(hands)
         unify_hero(hands, hero)
         heads_up = [h for h in hands if hero and hero in h.seats and len(h.seats) == 2 and h.button and h.bb]
         ring = [h for h in hands if hero and hero in h.seats and len(h.seats) > 2 and h.button and h.bb]
         with self._lock:
-            self.known_ids = {f"{h.site}:{h.hand_id}" for h in hands}
             self.hands = heads_up
             self.ring = ring  # tes mains aux tables à plusieurs (3-max, 6-max)
             self.by_id = {h.hand_id: h for h in heads_up + ring}  # le solveur résout aussi leurs pots à deux
@@ -344,7 +349,8 @@ class Library:
             lib = self._students.get(ident)
         if lib is None:
             lib = Library(students.folder(ident), meta.get("pseudo"), solves=self.solves, backups=self.backups,
-                          api=f"/api/eleves/{ident}", pages=f"/eleve/{ident}")
+                          api=f"/api/eleves/{ident}", pages=f"/eleve/{ident}", space=students.PREFIX + ident,
+                          space_name=meta["name"])
             lib.display_name = meta["name"]
             with self._lock:
                 lib = self._students.setdefault(ident, lib)
@@ -768,24 +774,24 @@ class Library:
 
     # --- import -----------------------------------------------------------------
     def import_files(self, files: list[dict]) -> dict:
-        """Enregistre dans le dossier les fichiers reconnus qui apportent de nouvelles mains.
+        """Importe dans la base les historiques reconnus (le texte d'origine est gardé ; un historique ou une main
+        déjà importés ne le sont pas deux fois).
 
         Chaque fichier : {"name", "content"} (texte), ou {"name", "zip"} (archive zip en base64, dossiers compris :
         chacun de ses historiques s'importe comme un fichier)."""
         results: list[dict] = []
-        known = set(self.known_ids)
         added = 0
         for item in files[:MAX_IMPORT_FILES]:
             name = str(item.get("name") or "fichier")[:200]
             if isinstance(item.get("zip"), str):
-                added += self._import_zip(name, item["zip"], known, results)
+                added += self._import_zip(name, item["zip"], results)
             else:
-                added += self._import_one(name, item.get("content"), known, results)
+                added += self._import_one(name, item.get("content"), results)
         if added:
             self.reload()
         return {"files": results, "added": added, "state": self.summary()}
 
-    def _import_zip(self, name: str, data: str, known: set, results: list[dict]) -> int:
+    def _import_zip(self, name: str, data: str, results: list[dict]) -> int:
         try:
             content = read_zip(base64.b64decode(data, validate=True))
         except binascii.Error:
@@ -796,7 +802,7 @@ class Library:
             results.append({"name": name, "status": reason, "hands": 0, "new": 0})
             return 0
         start = len(results)
-        added = sum(self._import_one(f"{name} › {path}"[:300], text, known, results) for path, text in content.files)
+        added = sum(self._import_one(f"{name} › {path}"[:300], text, results) for path, text in content.files)
         results.extend({"name": f"{name} › {path}"[:300], "status": "illisible (chiffré ou abîmé)", "hands": 0, "new": 0}
                        for path in content.unreadable)
         parts = [f"{len(content.files)} historique(s)"]
@@ -806,33 +812,18 @@ class Library:
                         "hands": sum(r["hands"] for r in results[start:]), "new": added})
         return added
 
-    def _import_one(self, name: str, content, known: set, results: list[dict]) -> int:
+    def _import_one(self, name: str, content, results: list[dict]) -> int:
         if not isinstance(content, str) or not content.strip():
             results.append({"name": name, "status": "vide", "hands": 0, "new": 0})
             return 0
         try:
-            hands = parse_text(content)
+            # le nom d'origine n'est qu'une étiquette (jamais un chemin) : celui du fichier, ou sa place dans l'archive
+            label = name if " › " in name else Path(name.replace("\\", "/")).name
+            hands, new, _ = db_hands.import_text(self.db, self.space_id, label, content)
         except ValueError:
             results.append({"name": name, "status": "format non reconnu", "hands": 0, "new": 0})
             return 0
-        new = [h for h in hands if f"{h.site}:{h.hand_id}" not in known]
         detail = {"sites": sorted({h.site for h in hands}), "formats": _formats(hands)}
-        if not new:
-            results.append(dict(detail, name=name, status="déjà importé", hands=len(hands), new=0))
-            return 0
-        self._save(name.rsplit(" › ", 1)[-1], content)  # nom du fichier dans l'archive
-        known |= {f"{h.site}:{h.hand_id}" for h in new}
-        results.append(dict(detail, name=name, status="importé", hands=len(hands), new=len(new)))
-        return len(new)
-
-    def _save(self, original_name: str, content: str) -> Path:
-        # Le nom d'origine ne sert qu'à lire le fichier plus tard : jamais utilisé comme chemin.
-        stem = slugify(Path(original_name).stem)[:40]
-        base = f"import-{datetime.now():%Y%m%d-%H%M%S}-{stem}"
-        path = self.folder / f"{base}.txt"
-        n = 2
-        while path.exists():
-            path = self.folder / f"{base}-{n}.txt"
-            n += 1
-        path.write_text(content, encoding="utf-8")
-        return path
+        status = "importé" if new else "déjà importé"
+        results.append(dict(detail, name=name, status=status, hands=len(hands), new=new))
+        return new

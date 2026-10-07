@@ -89,7 +89,7 @@ class HeroAcrossSitesTest(unittest.TestCase):
         self.assertEqual(unibet.actions[1].player, "Hero")
 
         from analyzer.app.library import Library
-        with mock.patch.dict(os.environ, {"ANALYZER_HOME": str(Path(tmp.name) / "home")}):
+        with mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(Path(tmp.name) / "home")}):
             lib = Library(folder)
             try:
                 self.assertEqual([h.site for h in lib.hands], ["Winamax"])  # le HU va dans l'analyse heads-up

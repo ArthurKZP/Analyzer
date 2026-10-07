@@ -93,7 +93,7 @@ class BucketTest(unittest.TestCase):
 class ExtractTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": self.tmp.name})
+        self.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name})
         self.env.start()
 
     def tearDown(self):
@@ -165,7 +165,7 @@ class SynthesisTest(unittest.TestCase):
 class PlanPageTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": self.tmp.name})
+        self.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name})
         self.env.start()
 
     def tearDown(self):

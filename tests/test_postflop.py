@@ -176,7 +176,7 @@ class InstallTest(unittest.TestCase):
 class SolveTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        env = {"ANALYZER_HOME": self.tmp.name, "ANALYZER_SOLVER": str(FAKE_SOLVER)}
+        env = {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name, "ANALYZER_SOLVER": str(FAKE_SOLVER)}
         self.env = mock.patch.dict(os.environ, env)
         self.env.start()
         self.hand = {h.hand_id: h for h in load_hands([FIXTURES])}["HAND02"]

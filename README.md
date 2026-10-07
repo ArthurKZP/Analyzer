@@ -38,10 +38,11 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
 - **Sauvegarde** : tes calculs vers un dossier synchronisé ou un stockage en ligne (voir plus bas).
 - **Importer des mains** : glisse tes historiques ou choisis-les — des fichiers `.txt`, un dossier (avec ses
   sous-dossiers) ou une **archive `.zip`** avec ses dossiers (et les archives qu'elle contient). Chaque historique
-  qui apporte des mains est copié dans le dossier des mains (`hands/` par défaut) ; les doublons, les formats non
-  reconnus et les autres fichiers de l'archive (PDF, images…) sont signalés. Une archive : 20 000 historiques et
-  1 Go décompressé au plus, 200 Mo par envoi (une archive de 150 Mo environ). Un `.zip` copié à la main dans le
-  dossier des mains se lit aussi.
+  qui apporte des mains entre dans la base de données (son texte d'origine compris, voir « Base de données ») ; les
+  doublons, les formats non reconnus et les autres fichiers de l'archive (PDF, images…) sont signalés. Une
+  archive : 20 000 historiques et 1 Go décompressé au plus, 200 Mo par envoi (une archive de 150 Mo environ). Le
+  dossier des mains (`hands/` par défaut) reste une boîte d'arrivée : un historique ou un `.zip` qu'on y dépose
+  est importé au lancement de l'application.
 
 Options : `--dossier` (dossier des historiques), `--port`, `--hero`, `--sans-navigateur`.
 Les analyses sont calculées à la première ouverture d'une page puis gardées en mémoire ; un import les recalcule.
@@ -485,8 +486,8 @@ Variables d'environnement : `ANALYZER_HOME` (dossier de travail, `~/.analyzer` p
 
 L'onglet *Face au solveur* (dans « Mon jeu » et pour chaque adversaire) compare tes mains allées au flop à la
 théorie. Chaque main (SRP, pot 3bet ou 4bet ; pas les limps ni les tapis préflop) est résolue une fois, sur
-sa ligne réelle, avec les tailles de l'arbre par défaut ; on en garde un résumé de quelques Ko
-(`~/.analyzer/revue/`), qui survit aux mises à jour du solveur.
+sa ligne réelle, avec les tailles de l'arbre par défaut ; on en garde un résumé de quelques Ko (dans la base de
+données), qui survit aux mises à jour du solveur.
 
 ```bash
 python -m analyzer gtopen --analyser            # toutes les mains pas encore analysées
@@ -501,7 +502,7 @@ folde trop face au 3bet, très passif après le flop), sinon régulier. Les main
 des comparaisons à la théorie : *Face au solveur* et *Mon préflop* de « Mon jeu », tes décisions sur sa fiche
 (qui ne garde que ses écarts à exploiter) ; le *Bilan* sépare tes résultats contre les deux types, et
 `--analyser` les laisse de côté (`--recreatifs` pour les inclure, pour lire leurs écarts). Le type est gardé
-par joueur (`~/.analyzer/joueurs.json`, inclus dans les sauvegardes) : il resservira aux tables à 3 et à 6.
+par joueur (dans la base de données, incluse dans les sauvegardes) : il resservira aux tables à 3 et à 6.
 
 Ou bouton **Analyser les mains restantes** dans l'onglet (la page se complète au fur et à mesure, on peut la
 fermer). Les plus gros pots passent d'abord. Compte 3 minutes par SRP, 2 par pot 3bet et un quart de minute
@@ -525,7 +526,8 @@ par pot 4bet sur 4 cœurs : une vingtaine d'heures pour 430 mains, à étaler su
 ## Leakfinding (toi et tes élèves)
 
 Le rapport de ce qu'un joueur doit travailler en priorité : onglet *Leakfinding* de *Mon jeu* pour toi, et menu
-*Élèves* pour tes élèves. Chaque élève a son dossier de mains (`~/.analyzer/eleves/<élève>/`, sauvegardé) : ajoute-le
+*Élèves* pour tes élèves. Chaque élève a son espace dans la base de données (ses historiques et ses mains,
+sauvegardés ; son dossier `~/.analyzer/eleves/<élève>/` sert de boîte d'arrivée) : ajoute-le
 (nom, et son pseudo à la table si tu le connais), importe les historiques qu'il t'envoie (Betclic, Winamax ou Unibet), et son
 rapport se construit.
 
@@ -785,9 +787,9 @@ python -m analyzer sauvegarde --restaurer   # sur un autre ordinateur : reprend 
   application l'envoie sur leurs serveurs), ou un stockage en ligne configuré avec
   [rclone](https://rclone.org) (`rclone config` une fois, puis `nom:dossier` : Google Drive, OneDrive, S3,
   SFTP…). Aucun mot de passe n'est gardé par Analyzer.
-- **L'essentiel** (quelques Mo) : tailles de mise choisies (les plus longues à recalculer : une heure et
-  demie par flop SRP), résolutions en cache, résumés des mains analysées, journal de l'entraîneur, fiches des
-  études. Une archive datée par sauvegarde dans `archives/`, les 10 dernières gardées.
+- **L'essentiel** (quelques Mo) : la base de données (tes mains et celles de tes élèves, type des adversaires,
+  résumés des mains analysées), tailles de mise choisies (les plus longues à recalculer : une heure et demie par
+  flop SRP), résolutions en cache, journal de l'entraîneur, fiches des études. Une archive datée par sauvegarde dans `archives/`, les 10 dernières gardées.
 - **Les études** (`--etudes`, option de la page) : les fichiers des arbres résolus (20 Mo à quelques
   centaines de Mo chacun) dans `etudes/` ; seules les nouvelles ou modifiées sont copiées ensuite.
 - **Automatique** : après une résolution, un choix de tailles ou une main analysée, au plus une fois par
@@ -798,6 +800,37 @@ python -m analyzer sauvegarde --restaurer   # sur un autre ordinateur : reprend 
 Les tailles choisies et les synthèses de référence peuvent aussi rejoindre le dépôt (fichiers
 `analyzer/theory/data/*_tailles.json` et `*_reference.json`, voir plus haut) : elles sont alors livrées avec
 Analyzer.
+
+### Base de données
+
+Tes mains et celles de tes élèves sont dans une base de données, avec le texte d'origine de chaque historique,
+le type de tes adversaires et les résumés des mains passées au solveur :
+
+- **Sur ton ordinateur** : SQLite, `~/.analyzer/analyzer.db` (rien à installer). Elle est créée au premier
+  lancement et reprend ce qui était dans des fichiers (`joueurs.json`, `revue/`, les élèves de `eleves/` et leurs
+  historiques) ; ces fichiers restent en place mais ne servent plus.
+- **En ligne** : PostgreSQL, avec la même structure. `pip install "psycopg[binary]"` puis
+  `ANALYZER_DB=postgresql://utilisateur:motdepasse@hôte:5432/base` avant de lancer l'application.
+- **Organisation** : un compte (« local » ici, un client en ligne), ses espaces (toi, chaque élève), et dans chaque
+  espace ses historiques (texte d'origine compressé, importé une seule fois) et ses mains (une seule fois chacune,
+  même si deux historiques la contiennent). Le type des adversaires et les résumés du solveur appartiennent au
+  compte. Si le code de lecture des historiques change, les mains sont relues depuis le texte gardé.
+- **Évolutions** : le schéma est versionné (`analyzer/db/schema.py`) ; les nouvelles versions s'appliquent seules
+  à l'ouverture.
+- **Sauvegarde** : la base fait partie de l'archive (copie cohérente, même application ouverte). À la
+  restauration, elle n'est reprise que si celle de l'ordinateur est encore vide. Une base PostgreSQL est
+  sauvegardée par son hébergeur.
+- Les études du solveur (fichiers `.etude`, jusqu'à quelques centaines de Mo) restent des fichiers.
+
+```bash
+python -m analyzer base                                   # état : espaces, mains, historiques, analyses
+python -m analyzer base --importer ~/Historiques          # importe un dossier (et ses .zip) dans ton espace
+python -m analyzer base --importer ~/Paul --eleve paul    # … dans l'espace d'un élève
+python -m analyzer base --copier-vers postgresql://moi:motdepasse@hote:5432/analyzer   # vers une base vide
+```
+
+Ordre de grandeur : 8 000 mains s'importent en 4 secondes et se rechargent en moins d'une seconde ; la base
+pèse environ 0,9 Ko par main, historique d'origine compris.
 
 ### Cache des calculs
 
@@ -887,7 +920,10 @@ analyzer/
   leaks.py             leakfinding : stats face à la théorie, revue du solveur, mains à revoir, leaks prioritaires
   handplay.py          mains de départ : résultat de chaque main, décisions préflop face au fold et à la théorie,
                        d'où vient la perte (suite du coup, main au flop, fin du coup, solveur)
-  students.py          les élèves : un dossier de mains par élève
+  students.py          les élèves : un espace de la base par élève
+  db/                  base de données : connexion SQLite ou PostgreSQL et schéma versionné (__init__.py,
+                       schema.py), historiques et mains (hands.py), résumés du solveur (analyses.py), reprise des
+                       anciens fichiers (legacy.py), commande `base` (cli.py)
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)
 hands/                 tes historiques (ignorés par git)
@@ -958,7 +994,13 @@ ANALYZER_TEST_GTOPEN=1 python -m unittest tests.test_postflop   # + une vraie r�
 ```
 
 Les autres tests du postflop utilisent un faux solveur (`tests/fixtures/fake_solver.py`) : ils ne
-demandent ni Rust ni GTOpen.
+demandent ni Rust ni GTOpen. Chaque test qui touche la base a son propre dossier temporaire : rien n'est écrit
+dans `~/.analyzer`. Les tests de la base tournent aussi sur PostgreSQL avec une base **dédiée aux tests, effacée à
+chaque test** :
+
+```bash
+ANALYZER_TEST_PG=postgresql://analyzer@127.0.0.1:5432/analyzer_test python -m unittest tests.test_db
+```
 
 ## Plan de jeu
 

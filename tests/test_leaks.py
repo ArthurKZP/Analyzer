@@ -14,7 +14,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 class StudentsTest(unittest.TestCase):
     def test_create_and_list(self):
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"ANALYZER_HOME": tmp}):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": tmp}):
             paul = students.create("Paul Élève", "PaulPoker")
             self.assertEqual((paul["id"], paul["pseudo"]), ("paul-eleve", "PaulPoker"))
             self.assertEqual(students.create("Paul Élève")["created"], paul["created"])  # déjà là : le même
@@ -62,7 +62,7 @@ class ReportTest(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": self.tmp.name})
+        self.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name})
         self.env.start()
 
     def tearDown(self):

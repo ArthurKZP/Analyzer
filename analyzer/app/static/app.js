@@ -262,11 +262,14 @@
       droppedFiles(e.dataTransfer).then((files) => upload(files, result, student));
     });
     const who = student && students.find((s) => s.id === student);
+    // Les historiques importés vont dans la base ; le dossier reste une boîte d'arrivée (lue au lancement).
     const folder = who
-      ? el('p', { class: 'muted small' }, 'Les mains de ' + who.name + ' : ' + who.folder)
-      : el('p', { class: 'muted small' }, 'Dossier des mains : ' + state.folder + ' · ',
-        el('button', { type: 'button', class: 'link', onclick: () => reload(result) }, 'Recharger le dossier'),
-        ' (si tu y as copié des fichiers à la main)');
+      ? el('p', { class: 'muted small' }, 'Les mains de ' + who.name + ' sont gardées dans la base d\'Analyzer. '
+        + 'Boîte d\'arrivée : ' + who.folder)
+      : el('p', { class: 'muted small' }, 'Tes mains sont gardées dans la base d\'Analyzer. Boîte d\'arrivée : '
+        + state.folder + ' · ',
+        el('button', { type: 'button', class: 'link', onclick: () => reload(result) }, 'Relire le dossier'),
+        ' (si tu y as déposé des historiques à la main)');
     showPanel(el('div', { class: 'import' }, drop, input, result, folder));
   }
 

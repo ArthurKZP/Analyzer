@@ -54,7 +54,7 @@ class PreflopServerTest(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         shutil.copy(FIXTURE, Path(cls.tmp.name) / "sample.txt")
-        cls.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": str(Path(cls.tmp.name) / "home"),
+        cls.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(Path(cls.tmp.name) / "home"),
                                                "ANALYZER_SOLVER": str(Path(cls.tmp.name) / "absent")})
         cls.env.start()
         cls.lib = Library(cls.tmp.name)

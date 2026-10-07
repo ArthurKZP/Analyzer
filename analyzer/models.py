@@ -188,3 +188,29 @@ class Hand:
         self.seats[bb].position = "BB"
         for s, label in zip(rest, labels):
             s.position = label
+
+
+# --- Sérialisation (base de données) ------------------------------------------------------------
+# Une main en types simples (JSON), et retour : les actions et les places en listes, pour rester compact.
+
+def hand_to_dict(h: Hand) -> dict:
+    return {
+        "site": h.site, "id": h.hand_id, "table": h.table_id, "game": h.game_name, "date": h.date.isoformat(),
+        "sb": h.sb, "bb": h.bb, "pot": h.total_pot, "rake": h.rake, "max": h.max_seats,
+        "seats": [[s.name, s.seat, s.stack, s.is_button, s.is_hero, s.position] for s in h.seats.values()],
+        "cards": h.hole_cards, "board": h.board,
+        "actions": [[a.player, a.kind, a.street, a.amount, a.to, a.all_in, a.time.isoformat() if a.time else None,
+                     a.pot_before, a.facing] for a in h.actions],
+        "won": h.winnings, "sd": h.showdown, "shown": h.shown_hand, "put": h.put, "unc": h.uncalled,
+    }
+
+
+def hand_from_dict(d: dict) -> Hand:
+    seats = {name: Seat(name, seat, stack, button, hero, position)
+             for name, seat, stack, button, hero, position in d["seats"]}
+    actions = [Action(player, kind, street, amount, to, all_in, datetime.fromisoformat(time) if time else None,
+                      pot_before, facing)
+               for player, kind, street, amount, to, all_in, time, pot_before, facing in d["actions"]]
+    return Hand(d["site"], d["id"], d["table"], d["game"], datetime.fromisoformat(d["date"]), d["sb"], d["bb"],
+                d["pot"], d["rake"], d["max"], seats, d["cards"], d["board"], actions, d["won"], d["sd"], d["shown"],
+                d["put"], d["unc"])

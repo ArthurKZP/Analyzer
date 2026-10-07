@@ -18,7 +18,7 @@ class TempHome(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = Path(self.tmp.name)
-        self.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": str(self.home), "ANALYZER_CACHE": "1"})
+        self.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.home), "ANALYZER_CACHE": "1"})
         self.env.start()
 
     def tearDown(self):

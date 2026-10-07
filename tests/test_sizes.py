@@ -1,6 +1,5 @@
 """Tailles théoriques dans l'arbre des coups joués : celles choisies pour le flop (ou le flop choisi le plus proche),
 plus les tailles jouées, signalées dans l'explorateur."""
-import json
 import os
 import shutil
 import tempfile
@@ -25,7 +24,7 @@ class HomeTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.home = Path(tmp.name)
-        env = mock.patch.dict(os.environ, {"ANALYZER_HOME": str(self.home / "home")})
+        env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.home / "home")})
         env.start()
         self.addCleanup(env.stop)
 
@@ -120,9 +119,10 @@ class ReviewTest(HomeTest):
     def test_old_tree_analysis_kept(self):
         hand = self.hands["HAND01"]
         legacy = postflop.build_spot(hand, "Hero", theory=False)
-        path = review.digest_path(legacy)
-        path.parent.mkdir(parents=True)
-        path.write_text(json.dumps({"v": review.VERSION, "hand": hand.hand_id, "decisions": []}), encoding="utf-8")
+        from analyzer import db
+        from analyzer.db import analyses
+        analyses.put(db.current(), review.digest_key(legacy), {"v": review.VERSION, "hand": hand.hand_id,
+                                                                "decisions": []})
         done, todo = review.collect([hand, self.hands["HAND02"]], "Hero")
         self.assertEqual([d["hand"] for d in done], ["HAND01"])  # analysée avec les tailles fixes : gardée
         self.assertEqual([s.hand.hand_id for s in todo], ["HAND02"])

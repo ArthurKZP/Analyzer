@@ -142,7 +142,7 @@ class SolveSpotsTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.folder = Path(self.tmp.name)
-        env = {"ANALYZER_HOME": str(self.folder / "home"), "ANALYZER_SOLVER": str(FAKE_SOLVER)}
+        env = {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.folder / "home"), "ANALYZER_SOLVER": str(FAKE_SOLVER)}
         self.env = mock.patch.dict(os.environ, env)
         self.env.start()
         # Sans les tailles livrées avec Analyzer : chaque test part d'aucun choix.

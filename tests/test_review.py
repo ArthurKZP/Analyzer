@@ -110,7 +110,7 @@ class AnalyzeTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.folder = Path(self.tmp.name)
-        env = {"ANALYZER_HOME": str(self.folder / "home"), "ANALYZER_SOLVER": str(FAKE_SOLVER)}
+        env = {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.folder / "home"), "ANALYZER_SOLVER": str(FAKE_SOLVER)}
         self.env = mock.patch.dict(os.environ, env)
         self.env.start()
         self.hands = load_hands([FIXTURES / "betclic_sample.txt"])
@@ -132,9 +132,10 @@ class AnalyzeTest(unittest.TestCase):
         self.assertIn(("H", "bet:fo:"), keys)  # la BB 3betteuse c-bette (ou checke) au flop
         self.assertTrue(all(len(d["actions"]) > 1 for d in digest["decisions"]))
         self.assertTrue(any(d["who"] == "V" and d["combo"] for d in digest["decisions"]))  # cartes montrées
-        files = list(review.review_dir().glob("*.json"))
-        self.assertEqual(len(files), 2)
-        self.assertLess(max(f.stat().st_size for f in files), 60_000)
+        from analyzer import db
+        stored = db.current().all("SELECT main, LENGTH(donnees) FROM analyses ORDER BY main")
+        self.assertEqual([main for main, _ in stored], ["HAND01", "HAND02"])  # gardés dans la base
+        self.assertLess(max(size for _, size in stored), 20_000)  # compressés
         page = build_review_page(self.hands, "Hero")
         for text in ("2 / 2</b> mains analysées", "Les erreurs qui coûtent le plus", "Les erreurs récurrentes"):
             self.assertIn(text, page)

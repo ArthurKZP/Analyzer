@@ -3,14 +3,15 @@
 Destination : un dossier (de préférence synchronisé en ligne : OneDrive, Google Drive, Dropbox…) ou un
 stockage en ligne configuré avec rclone (« gdrive:Analyzer », « s3:mon-bucket/analyzer »… voir rclone.org).
 
-- L'essentiel, quelques Mo : tailles de mise choisies, résolutions en cache, résumés des mains analysées,
-  journal de l'entraîneur, type des adversaires et fiches des études. Une archive datée par sauvegarde (archives/), les
-  KEEP dernières sont gardées.
+- L'essentiel : la base de données (tes mains et celles de tes élèves avec leurs historiques d'origine, type des
+  adversaires, résumés des mains analysées ; copie cohérente même pendant que l'application tourne), tailles de mise
+  choisies, résolutions en cache, journal de l'entraîneur et fiches des études. Une archive datée par sauvegarde
+  (archives/), les KEEP dernières sont gardées. Une base PostgreSQL (ANALYZER_DB) est sauvegardée par son hébergeur.
 - Les études (.etude : de 20 Mo à quelques centaines de Mo chacune), en option : copiées dans etudes/,
   puis seules les nouvelles ou les modifiées passent.
 
 La restauration reprend la dernière archive (sans écraser un fichier local plus récent ; le journal de
-l'entraîneur est fusionné) puis les études absentes.
+l'entraîneur est fusionné ; la base seulement si celle de cet ordinateur est encore vide) puis les études absentes.
 """
 from __future__ import annotations
 
@@ -25,10 +26,13 @@ import zipfile
 from pathlib import Path
 from typing import Callable, Optional
 
+from . import db
 from .theory import postflop
 
-FOLDERS = ("tailles", "resolutions", "revue", "entrainement", "plans", "eleves", "ranges")  # recopiés en entier dans l'archive
-FILES = ("joueurs.json",)  # type des adversaires (régulier / récréatif)
+FOLDERS = ("tailles", "resolutions", "entrainement", "plans", "ranges")  # recopiés en entier dans l'archive
+FILES: tuple[str, ...] = ()  # (le type des adversaires est dans la base)
+DB_ENTRY = "analyzer.db"  # la base SQLite, dans l'archive
+LEGACY = ("joueurs.json", "revue/", "eleves/")  # archives d'avant la base : repris dans la base à la restauration
 JOURNAL = "entrainement/journal.jsonl"
 KEEP = 10      # archives gardées à destination
 KEEP_LOCAL = 2
@@ -126,10 +130,38 @@ def make_archive() -> Path:
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
         for f in essential_files():
             z.write(f, f.relative_to(root).as_posix())
+        snapshot = db.current().snapshot(staging / "analyzer.db.copie")  # None : base PostgreSQL
+        if snapshot is not None:
+            z.write(snapshot, DB_ENTRY)
+            snapshot.unlink()
     tmp.replace(path)
     for old in sorted(staging.glob(PREFIX + "*.zip"))[:-KEEP_LOCAL]:
         old.unlink()
     return path
+
+
+def _restore_db(data: bytes, log: Callable[[str], None]) -> bool:
+    """Remet la base de l'archive si celle de cet ordinateur est encore vide (aucune main ni analyse) : une base
+    qui a déjà servi n'est jamais écrasée. Renvoie True si elle a été remise."""
+    current = db.current()
+    if current.dialect != "sqlite":
+        log("Base PostgreSQL : la base de l'archive n'est pas reprise (sauvegardée par son hébergeur).")
+        return False
+    if current.value("SELECT COUNT(*) FROM mains", default=0) or current.value("SELECT COUNT(*) FROM analyses", default=0):
+        log("Base : celle de cet ordinateur a déjà des mains ou des analyses, elle est gardée.")
+        return False
+    target = current.path
+    tmp = target.with_name(target.name + ".restauree")
+    tmp.write_bytes(data)
+    db.close_all()
+    for suffix in ("-wal", "-shm"):
+        side = target.with_name(target.name + suffix)
+        if side.exists():
+            side.unlink()
+    tmp.replace(target)
+    db.current()  # rouvre (et met à jour le schéma si l'archive est plus ancienne)
+    log("Base restaurée.")
+    return True
 
 
 def _newer(src: Path, dst: Path) -> bool:
@@ -238,6 +270,7 @@ def restore(source: Optional[str] = None, studies: bool = True, log: Callable[[s
         raise BackupError(f"Aucune sauvegarde Analyzer dans {source}.")
     root = home().resolve()
     restored = kept = 0
+    legacy = False
     with zipfile.ZipFile(archive) as z:
         for info in z.infolist():
             name = info.filename
@@ -245,6 +278,13 @@ def restore(source: Optional[str] = None, studies: bool = True, log: Callable[[s
             if info.is_dir() or name.startswith("/") or ".." in Path(name).parts or root not in target.parents:
                 continue  # chemin hors du dossier d'Analyzer : ignoré
             data = z.read(info)
+            if name == DB_ENTRY:
+                if _restore_db(data, log):
+                    restored += 1
+                else:
+                    kept += 1
+                continue
+            legacy = legacy or name.startswith(LEGACY)
             if name == JOURNAL:
                 restored += bool(_merge_journal(target, data))
                 continue
@@ -255,6 +295,9 @@ def restore(source: Optional[str] = None, studies: bool = True, log: Callable[[s
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
             restored += 1
+    if legacy:  # archive d'avant la base : ses fichiers rejoignent la base
+        from .db import legacy as db_legacy
+        db_legacy.import_once(db.current(), force=True)
     log(f"{archive.name} : {restored} fichier(s) restauré(s), {kept} déjà à jour.")
     copied = 0
     if studies:

@@ -13,17 +13,21 @@ from unittest import mock
 from analyzer.app.library import Library, UnknownPlayer
 from analyzer.app.server import start
 
+try:
+    from .base import IsolatedHome
+except ImportError:  # lancé par « unittest discover -s tests »
+    from base import IsolatedHome
+
 FIXTURE = Path(__file__).parent / "fixtures" / "betclic_sample.txt"
 FAKE_SOLVER = Path(__file__).parent / "fixtures" / "fake_solver.py"
 
 
-class LibraryTest(unittest.TestCase):
+class LibraryTest(IsolatedHome):
     def setUp(self):
+        super().setUp()
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.folder = Path(self.tmp.name)
-
-    def tearDown(self):
-        self.tmp.cleanup()
 
     def test_empty_folder(self):
         lib = Library(self.folder / "hands")
@@ -67,7 +71,7 @@ class LibraryTest(unittest.TestCase):
         from analyzer.theory import coach, postflop, studyspots
         shutil.copy(FIXTURE, self.folder / "sample.txt")
         lib = Library(self.folder)
-        env = {"ANALYZER_HOME": str(self.folder / "home"), "ANALYZER_SOLVER": str(FAKE_SOLVER)}
+        env = {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.folder / "home"), "ANALYZER_SOLVER": str(FAKE_SOLVER)}
         spot = studyspots.StudySpot("srp", ["Ks", "7d", "2c"], plan={})
         request = spot.request()
         with mock.patch.dict(os.environ, env), mock.patch.object(coach, "missing", return_value=[spot.ident]), \
@@ -87,7 +91,7 @@ class LibraryTest(unittest.TestCase):
         lib.solves.shutdown()
 
     def test_students(self):
-        with mock.patch.dict(os.environ, {"ANALYZER_HOME": str(self.folder / "home")}):
+        with mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.folder / "home")}):
             main = Library(self.folder / "moi")  # aucune main à moi
             paul = main.create_student("Paul", None)
             self.assertEqual((paul["id"], paul["hands"]), ("paul", 0))
@@ -111,7 +115,7 @@ class LibraryTest(unittest.TestCase):
     def test_solve_states(self):
         shutil.copy(FIXTURE, self.folder / "sample.txt")
         lib = Library(self.folder)
-        env = {"ANALYZER_HOME": str(self.folder / "home"), "ANALYZER_SOLVER": str(self.folder / "absent")}
+        env = {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.folder / "home"), "ANALYZER_SOLVER": str(self.folder / "absent")}
         with mock.patch.dict(os.environ, env):
             self.assertEqual(lib.solve("HAND03")["state"], "unsupported")
             absent = lib.solve("HAND02")
@@ -155,9 +159,9 @@ class LibraryTest(unittest.TestCase):
         self.assertEqual(result["added"], 4)
         self.assertEqual([f["status"] for f in result["files"]],
                          ["importé", "déjà importé", "format non reconnu", "vide"])
-        saved = list(self.folder.iterdir())
-        self.assertEqual(len(saved), 1)
-        self.assertTrue(saved[0].name.startswith("import-") and saved[0].name.endswith("-piege.txt"))
+        self.assertEqual(list(self.folder.iterdir()), [])  # rien dans le dossier : tout est dans la base
+        files = lib.db.all("SELECT nom, mains FROM fichiers WHERE espace_id = ?", (lib.space_id,))
+        self.assertEqual(files, [("piege.txt", 4)])  # le nom d'origine ne sert jamais de chemin
         self.assertEqual(result["state"]["hands"], 4)
         self.assertEqual(lib.import_files([{"name": "x.txt", "content": content}])["added"], 0)
 
@@ -172,10 +176,11 @@ def make_zip(entries: dict) -> bytes:
     return buffer.getvalue()
 
 
-class ZipImportTest(unittest.TestCase):
+class ZipImportTest(IsolatedHome):
     """Une archive zip d'historiques, avec ses dossiers : chacun s'importe comme un fichier."""
 
     def setUp(self):
+        super().setUp()
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.folder = Path(tmp.name) / "mains"
@@ -212,9 +217,10 @@ class ZipImportTest(unittest.TestCase):
             self.assertEqual(archive["new"], result["added"])
             self.assertEqual(rows["abime.zip"]["status"], "archive zip illisible")
             self.assertEqual(rows["envoi.zip"]["status"], "archive zip illisible (envoi abîmé)")
-            saved = sorted(p.name for p in self.folder.iterdir())
-            self.assertEqual(len(saved), 3)  # un fichier par historique qui apporte des mains, à plat
-            self.assertTrue(all(name.startswith("import-") for name in saved))
+            saved = lib.db.all("SELECT nom FROM fichiers WHERE espace_id = ? ORDER BY nom", (lib.space_id,))
+            self.assertEqual([n for (n,) in saved], [  # un par historique nouveau, avec sa place dans l'archive
+                "mains.zip › Historiques/Betclic/2026-01/hu.txt", "mains.zip › Historiques/Winamax/table.txt",
+                "mains.zip › Historiques/autres.zip/Unibet/table.txt"])
             self.assertEqual(result["state"]["hands"], len(lib.hands))
             self.assertEqual(lib.import_files([{"name": "mains.zip", "zip": base64.b64encode(data).decode()}])["added"],
                              0)
@@ -240,7 +246,7 @@ class ServerTest(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         shutil.copy(FIXTURE, Path(cls.tmp.name) / "sample.txt")
-        cls.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": str(Path(cls.tmp.name) / "home"),
+        cls.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(Path(cls.tmp.name) / "home"),
                                                "ANALYZER_SOLVER": str(Path(cls.tmp.name) / "absent")})
         cls.env.start()
         cls.server = start(Library(cls.tmp.name), port=0)
