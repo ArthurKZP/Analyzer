@@ -10,6 +10,7 @@ pickle (objets Python, pour les mains lues). Lecture : tout un espace est charg�
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import os
 import pickle
@@ -18,7 +19,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-VERSIONS = {"equite": 1, "mains": 1, "spots": 2}
+VERSIONS = {"equite": 1, "mains": 1, "spots": 2, "fiches": 1}
 PICKLED = {"mains"}  # espaces gardés en pickle (objets Python)
 BY_KEY = {"mains"}  # espaces volumineux : lus clé par clé, pas chargés en entier
 WRITE_BATCH = 500
@@ -28,6 +29,17 @@ _db: Optional[sqlite3.Connection] = None
 _db_path: Optional[Path] = None
 _loaded: dict[str, dict[str, Any]] = {}
 _pending: list[tuple[str, str, int, bytes]] = []
+
+
+def fingerprint(*paths: Path) -> str:
+    """Empreinte de fichiers de code (à mettre dans les clés de ce qu'ils calculent)."""
+    digest = hashlib.sha1()
+    for p in paths:
+        try:
+            digest.update(Path(p).read_bytes())
+        except OSError:
+            digest.update(str(p).encode())
+    return digest.hexdigest()[:12]
 
 
 def enabled() -> bool:

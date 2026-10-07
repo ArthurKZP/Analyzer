@@ -123,6 +123,29 @@ SERIES = [
 ]
 
 
+CHART_POINTS = 1500  # au-delà, la courbe garde les creux et les sommets de chaque tranche de mains
+
+
+def chart_sample(curve: list[tuple[float, ...]], limit: int = CHART_POINTS) -> list[int]:
+    """Les mains à dessiner : toutes, ou pour une longue série, par tranche, la première, la dernière, et les creux et
+    sommets du résultat réel et de l'EV (la forme de la courbe ne change pas, la page reste légère)."""
+    n = len(curve)
+    if n <= limit:
+        return list(range(n))
+    buckets = limit // 6
+    keep = {0, n - 1}
+    for b in range(buckets):
+        lo, hi = b * n // buckets, min((b + 1) * n // buckets, n)
+        if lo >= hi:
+            continue
+        keep.update((lo, hi - 1))
+        for series in (0, 1):
+            seg = range(lo, hi)
+            keep.add(min(seg, key=lambda i: curve[i][series]))
+            keep.add(max(seg, key=lambda i: curve[i][series]))
+    return sorted(keep)
+
+
 def chart_svg(curve: list[tuple[float, ...]]) -> str:
     if not curve:
         return ""
@@ -152,13 +175,15 @@ def chart_svg(curve: list[tuple[float, ...]]) -> str:
     for i in range(0, n, int(xstep) or 1):
         xticks.append(f'<text class="tick" x="{x(i):.1f}" y="{height - 10}" text-anchor="middle">{i}</text>')
     lines = []
+    kept = chart_sample(curve)
     for s, (_, var) in enumerate(SERIES):
-        pts = " ".join(f"{x(i):.1f},{y(p[s]):.1f}" for i, p in enumerate(curve))
+        pts = " ".join(f"{x(i):.1f},{y(curve[i][s]):.1f}" for i in kept)
         lines.append(f'<polyline class="line" data-series="{s}" style="stroke:var({var})" points="{pts}"/>')
-    data = json.dumps([[round(v, 1) for v in p] for p in curve])
+    data = json.dumps([[round(v, 1) for v in curve[i]] for i in kept])
+    sampled = f" data-idx='{json.dumps(kept)}' data-n=\"{n}\"" if len(kept) < n else ""
     # Le script redessine l'axe vertical et les courbes quand on en masque (cases de la légende).
     return f"""
-<div class="chart-wrap"><div class="chart" data-points='{data}' data-x0="{pad_l}" data-x1="{width - pad_r}"
+<div class="chart-wrap"><div class="chart" data-points='{data}'{sampled} data-x0="{pad_l}" data-x1="{width - pad_r}"
   data-y0="{pad_t}" data-y1="{height - pad_b}">
   <svg viewBox="0 0 {width} {height}" role="img" aria-label="Résultat cumulé en big blinds, main par main">
     <g class="yaxis">{''.join(grid)}</g>{''.join(xticks)}
@@ -468,7 +493,7 @@ def lines_html(lines: list[Line], hero: str, villain: str, min_count: int = 3, s
             if ln.count < min_count:
                 continue
             rows.append(line_rows(ln, spots_href=spots_href))
-            for s_ in ln.seen:
+            for s_ in sorted(ln.seen, key=lambda x: x.hand.date)[-MAX_ROWS:]:
                 h = s_.hand
                 seen_rows.append(
                     f'<tr><td class="nowrap">{h.date:%H:%M}</td><td>{escape(ln.name)}</td>'
@@ -615,6 +640,9 @@ def allin_html(hands: list[Hand], hero: str, villain: str) -> str:
     )
 
 
+MAX_ROWS = 40  # mains montrées par tableau (les plus récentes) ; toutes restent dans Spots
+
+
 def showdowns_html(villain_stats: PlayerStats, hero: str, villain: str, spots_href: str = "") -> str:
     groups: dict[str, list] = defaultdict(list)
     for entry in villain_stats.showdowns:
@@ -625,7 +653,11 @@ def showdowns_html(villain_stats: PlayerStats, hero: str, villain: str, spots_hr
         combos = Counter(e.combo for e in entries)
         combo_list = ", ".join(f"{c}{'×' + str(n) if n > 1 else ''}" for c, n in combos.most_common())
         rows = []
-        for e in sorted(entries, key=lambda e: e.hand.date):
+        recent = sorted(entries, key=lambda e: e.hand.date)[-MAX_ROWS:]
+        if len(recent) < len(entries):
+            rows.append(f'<tr><td colspan="5" class="muted">Les {MAX_ROWS} plus récentes ; toutes dans '
+                        f'{spots_link(spots_href, "known=1", "Spots") or "Spots"}.</td></tr>')
+        for e in recent:
             h = e.hand
             line = "".join(
                 f'<div class="st"><span class="sn">{street[0].upper() if street != "preflop" else "PF"}</span>{html}</div>'
@@ -1044,6 +1076,9 @@ TEMPLATE = """<!doctype html>
 SCRIPT = """
 document.querySelectorAll('.chart').forEach(function (chart) {
   var pts = JSON.parse(chart.dataset.points);
+  // Longue série : seuls certains points sont dans la page (data-idx : leur numéro de main, data-n : le total).
+  var idx = chart.dataset.idx ? JSON.parse(chart.dataset.idx) : null, N = idx ? +chart.dataset.n : pts.length;
+  function at(k) { return idx ? idx[k] : k; }
   var svg = chart.querySelector('svg'), hit = chart.querySelector('.hit');
   var cross = chart.querySelector('.cross'), tip = chart.querySelector('.tooltip');
   var x0 = +chart.dataset.x0, x1 = +chart.dataset.x1, y0 = +chart.dataset.y0, y1 = +chart.dataset.y1;
@@ -1069,7 +1104,7 @@ document.querySelectorAll('.chart').forEach(function (chart) {
     var step = niceStep((hi - lo) / 5 || 1);
     lo = step * Math.floor(lo / step); hi = step * Math.ceil(hi / step);
     var y = function (v) { return y0 + (y1 - y0) * (1 - (v - lo) / ((hi - lo) || 1)); };
-    var x = function (i) { return x0 + (x1 - x0) * (i / Math.max(pts.length - 1, 1)); };
+    var x = function (k) { return x0 + (x1 - x0) * (at(k) / Math.max(N - 1, 1)); };
     var axis = svg.querySelector('.yaxis'), ns = 'http://www.w3.org/2000/svg';
     axis.textContent = '';
     for (var t = lo; t <= hi + 1e-9; t += step) {
@@ -1103,10 +1138,10 @@ document.querySelectorAll('.chart').forEach(function (chart) {
   });
   if (shown.some(function (v) { return !v; })) redraw();
   function show(i) {
-    var x = x0 + (x1 - x0) * i / Math.max(pts.length - 1, 1);
+    var x = x0 + (x1 - x0) * at(i) / Math.max(N - 1, 1);
     cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('visibility', 'visible');
     tip.textContent = '';
-    var head = document.createElement('div'); head.textContent = 'Main ' + (i + 1); head.style.color = 'var(--muted)';
+    var head = document.createElement('div'); head.textContent = 'Main ' + (at(i) + 1); head.style.color = 'var(--muted)';
     tip.appendChild(head);
     pts[i].forEach(function (v, s) {
       if (!shown[s]) return;
@@ -1123,7 +1158,11 @@ document.querySelectorAll('.chart').forEach(function (chart) {
   function index(evt) {
     var rect = svg.getBoundingClientRect();
     var x = (evt.clientX - rect.left) * svg.viewBox.baseVal.width / rect.width;
-    return Math.round(Math.min(Math.max((x - x0) / (x1 - x0), 0), 1) * (pts.length - 1));
+    var t = Math.min(Math.max((x - x0) / (x1 - x0), 0), 1) * (N - 1);
+    if (!idx) return Math.round(t);
+    var lo = 0, hi = idx.length - 1;  // le point gardé le plus proche
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (idx[mid] < t) lo = mid + 1; else hi = mid; }
+    return lo > 0 && t - idx[lo - 1] < idx[lo] - t ? lo - 1 : lo;
   }
   hit.addEventListener('pointermove', function (e) { show(index(e)); });
   hit.addEventListener('pointerleave', function () { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); });

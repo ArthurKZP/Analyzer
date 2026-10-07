@@ -3,7 +3,9 @@ import re
 import unittest
 from pathlib import Path
 
+from analyzer import spots
 from analyzer.parsers import load_hands
+from analyzer.report import chart_sample
 from analyzer.spots import line_options, line_tag, spot_records
 from analyzer.viewer import _json_for_script, build_viewer
 
@@ -69,6 +71,52 @@ class ViewerTest(unittest.TestCase):
         self.assertEqual(len(data["records"]), 4)
         self.assertEqual(data["hero"], "Hero")
         self.assertFalse(data["solver"])  # fichier autonome : pas de serveur pour résoudre
+
+    def test_page_without_hands(self):
+        html = build_viewer(load_hands([FIXTURES]), "Hero", None, embed=True, solver=True, api="/api/coups")
+        data = json.loads(re.search(r'id="data">(.*?)</script>', html, re.S).group(1))
+        self.assertNotIn("records", data)  # application : les mains restent sur le serveur
+        self.assertEqual((data["api"], data["count"], data["opponents"]), ("/api/coups", 4, ["Villain"]))
+        self.assertTrue(data["lines"])
+
+
+class SearchTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.records = [spots.list_record(r) for r in spot_records(load_hands([FIXTURES]), "Hero", "Villain")]
+
+    def ids(self, **filters):
+        return [r["id"] for r in spots.search(self.records, filters)["rows"]]
+
+    def test_filters_and_sorts(self):
+        self.assertNotIn("x", self.records[0])  # sans le détail pour rejouer
+        self.assertEqual(self.ids(), ["HAND04", "HAND03", "HAND02", "HAND01"])  # plus récentes d'abord
+        self.assertEqual(self.ids(sort="old"), ["HAND01", "HAND02", "HAND03", "HAND04"])
+        self.assertEqual(self.ids(pot="3bp"), ["HAND02"])
+        self.assertEqual(self.ids(end="sd"), ["HAND03", "HAND02"])
+        self.assertEqual(self.ids(res="l", sort="loss")[0], "HAND03")
+        self.assertEqual(self.ids(q="qjs"), ["HAND02"])
+        self.assertEqual(self.ids(cb="1"), ["HAND02", "HAND01"])  # c-bet faite au flop
+        self.assertEqual(self.ids(v="xr"), ["HAND01"])
+        self.assertEqual(self.ids(l=line_tag("V", "flop", "Check-raise", "")), ["HAND01"])
+        page = spots.search(self.records, {}, offset=1, limit=2)
+        self.assertEqual((page["total"], [r["id"] for r in page["rows"]]), (4, ["HAND03", "HAND02"]))
+        self.assertEqual(set(page["rows"][0]), set(spots.ROW_FIELDS))
+        summary = spots.search(self.records, {"st": "f"})["summary"]
+        self.assertEqual((summary["n"], summary["sd"], summary["st"]), (4, 2, "f"))
+        self.assertEqual(summary["reached"], 2)
+
+
+class ChartTest(unittest.TestCase):
+    def test_sample_keeps_shape(self):
+        curve = [(float(i % 97 - (i // 500) * 3), float(-i), 0.0, 0.0) for i in range(8000)]
+        kept = chart_sample(curve)
+        self.assertLess(len(kept), 1501)
+        self.assertEqual((kept[0], kept[-1]), (0, 7999))
+        self.assertEqual(kept, sorted(set(kept)))
+        lowest = min(range(8000), key=lambda i: curve[i][0])
+        self.assertIn(curve[lowest][0], [curve[i][0] for i in kept])  # le creux du résultat reste
+        self.assertEqual(chart_sample(curve[:100]), list(range(100)))  # courte série : tout
 
 
 if __name__ == "__main__":

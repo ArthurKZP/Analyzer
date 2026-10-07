@@ -9,7 +9,7 @@ from html import escape
 from pathlib import Path
 from typing import Optional
 
-from .. import bluffs, handplay, leaks, players, ring, store, students
+from .. import bluffs, handplay, leaks, players, ring, spots, store, students
 from ..cli import detect_hero, slugify, unify_hero
 from ..lines import villain_lines
 from ..models import CALL, RAISE, Hand
@@ -208,7 +208,8 @@ class Library:
             if page == "bluffs":
                 return build_bluffs_page(bluffs.analyze(hands, [player], self.hero), f"de {player}",
                                          note=_note(f"{player} : {players.describe(kind)}."))
-            return build_viewer(hands, self.hero, player, embed=True, solver=True)
+            return build_viewer(hands, self.hero, player, embed=True, solver=True, api=f"{self.api}/coups",
+                                records=self._spot_index(player))
         return self._cached(("player", player, page) + ((kind["kind"],) if page == "preflop" else ()), build)
 
     def self_page(self, page: str) -> str:
@@ -238,7 +239,8 @@ class Library:
                                           note=_excluded_note(excluded))
             if page == "bluffs":
                 return self._population_bluffs()
-            return build_viewer(self.hands, self.hero, None, embed=True, solver=True)
+            return build_viewer(self.hands, self.hero, None, embed=True, solver=True, api=f"{self.api}/coups",
+                                records=self._spot_index(None))
         kinds = self._kinds_key() if page in ("bilan", "preflop", "bluffs") else ()
         return self._cached(("self", page) + kinds, build)
 
@@ -278,6 +280,32 @@ class Library:
         return handplay.detail(plays, self._kind_map() if query.get("fmt", "HU") == "HU" else None, name=name,
                                kind=query.get("kind") or "", position=query.get("pos") or "", situation=situation,
                                actions=actions)
+
+    # --- visualiseur de spots : recherche côté serveur -----------------------------------
+    SPOT_FILTERS = ("opp", "pot", "pfa", "pos", "reach", "st", "cb", "h", "v", "l", "end", "known", "res", "sort", "q")
+
+    def _spot_index(self, villain: Optional[str]) -> list[dict]:
+        """Les fiches de tes mains (sans le détail), contre cet adversaire ou tous."""
+        def build():
+            hands = self.hands_against(villain) if villain else self.hands
+            return spots.list_records(hands, self.hero, villain) if self.hero else []
+        return self._cached(("spot_index", villain or ""), build)
+
+    def spots_search(self, query: dict[str, str]) -> dict:
+        """Une page de mains du visualiseur : filtres (ceux de la page), tri, offset, limit ; adversaire : ses mains."""
+        index = self._spot_index(query.get("adversaire") or None)
+        filters = {k: query[k] for k in self.SPOT_FILTERS if query.get(k)}
+        if "reach" in filters and not filters["reach"].isdigit():
+            del filters["reach"]
+        number = lambda key, default: int(query[key]) if (query.get(key) or "").isdigit() else default  # noqa: E731
+        return spots.search(index, filters, number("offset", 0), number("limit", 150))
+
+    def hand_fiche(self, hand_id: str) -> dict:
+        """La fiche complète d'une de tes mains heads-up (pour la rejouer)."""
+        hand = self.by_id.get(hand_id)
+        if hand is None or not self.hero or self.hero not in hand.seats or len(hand.seats) != 2 or not hand.button:
+            raise KeyError(hand_id)
+        return spots.hand_record(hand, self.hero, hand.opponent_of(self.hero))
 
     def _population_bluffs(self) -> str:
         """Les bluffs des réguliers, ensemble puis un par un."""

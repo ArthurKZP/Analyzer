@@ -805,8 +805,14 @@ Les calculs longs et toujours identiques sont gardés dans `~/.analyzer/cache/an
 (par fichier d'historique : un fichier inchangé ne se relit pas), les équités (abattages, tapis préflop) et les clés
 du spot postflop de chaque main (pour savoir si elle est déjà analysée sans reconstruire son arbre). Ce cache n'est
 pas sauvegardé : il se reconstruit tout seul, et on peut l'effacer sans rien perdre. `ANALYZER_CACHE=0` le coupe.
-Ordre de grandeur (793 mains, 4 cœurs) : les douze pages de *Mon jeu* et d'un adversaire se calculent en
-1 seconde environ, au lieu de 45 ; avec 8 000 mains, une dizaine de secondes.
+Ordre de grandeur (4 cœurs) : les douze pages de *Mon jeu* et d'un adversaire se calculent en 1 seconde environ
+avec 793 mains (au lieu de 45) et en 6 à 7 secondes avec 8 000 mains, puis restent en mémoire.
+
+Les pages restent légères quel que soit le nombre de mains : dans l'application, *Spots* ne contient plus les
+mains (le serveur filtre, trie et envoie la liste par pages de 150, puis le détail d'une main quand on l'ouvre :
+50 Ko au lieu de 9 Mo pour 8 000 mains) ; la courbe de résultats garde la forme de la série avec au plus
+1 500 points ; les tableaux de mains montrées du rapport s'arrêtent aux 40 plus récentes (toutes dans *Spots*).
+Les fichiers autonomes (`python -m analyzer`, rapport téléchargé) gardent toutes les mains dans la page.
 
 ## Contenu du rapport
 

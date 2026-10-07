@@ -5,8 +5,10 @@ Montants exprimés en big blinds. « H » = toi, « V » = l'adversaire.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
+from . import store
 from .cards import combo_notation, describe_holding, equity
 from .lines import BOARD_SIZE, line_label
 from .models import BET, CALL, CHECK, FOLD, POSTFLOP, RAISE, VOLUNTARY, Hand
@@ -142,6 +144,47 @@ def hand_record(hand: Hand, hero: str, villain: str) -> dict:
     return record
 
 
+# Champs de la fiche qui ne servent qu'à rejouer la main : chargés à la demande dans l'application (detail).
+DETAIL_FIELDS = ("x", "hs", "vs", "win", "ret", "rake", "hd", "vd", "eq", "g", "bb")
+
+
+def list_record(record: dict) -> dict:
+    """La fiche sans ce qui ne sert qu'à rejouer la main (pour filtrer et lister)."""
+    return {k: v for k, v in record.items() if k not in DETAIL_FIELDS}
+
+
+_CODE: Optional[str] = None
+
+
+def _code() -> str:
+    """Empreinte du code qui fait les fiches : le changer les refait (cache analyzer.store) ; les anciennes s'effacent."""
+    global _CODE
+    if _CODE is None:
+        root = Path(__file__).parent
+        _CODE = store.fingerprint(*(root / name for name in ("spots.py", "lines.py", "stats.py", "cards.py", "models.py")))
+        store.retain("fiches", lambda key: key.endswith("|" + _CODE))
+    return _CODE
+
+
+def list_records(hands: list[Hand], hero: str, villain: Optional[str] = None) -> list[dict]:
+    """Les fiches sans le détail (list_record), contre `villain` ou tous : gardées sur disque d'une session à l'autre."""
+    code = _code()
+    out = []
+    for h in hands:
+        if hero not in h.seats or len(h.seats) != 2 or not h.button or not h.bb:
+            continue
+        opponent = h.opponent_of(hero)
+        if villain is not None and opponent != villain:
+            continue
+        key = f"{h.site}:{h.hand_id}|{hero}|{code}"
+        record = store.get("fiches", key)
+        if record is None:
+            record = list_record(hand_record(h, hero, opponent))
+            store.put("fiches", key, record)
+        out.append(record)
+    return out
+
+
 def spot_records(hands: list[Hand], hero: str, villain: Optional[str] = None) -> list[dict]:
     """Fiches des mains contre `villain`, ou contre tous tes adversaires si villain=None."""
     records = []
@@ -171,3 +214,93 @@ def line_options(records: list[dict]) -> list[tuple[str, int]]:
 
 def find_hand(records: list[dict], hand_id: str) -> Optional[dict]:
     return next((r for r in records if r["id"] == hand_id), None)
+
+
+# --- Recherche (application) : les filtres, tris et le résumé du visualiseur, côté serveur --------------------
+
+REACH = {"f": 1, "t": 2, "r": 3}
+STREET_OF_TAG = {"flop": "f", "turn": "t", "river": "r"}
+SORTS = {
+    "date": (lambda r: r["ts"], True),
+    "old": (lambda r: r["ts"], False),
+    "pot": (lambda r: r["tot"], True),
+    "loss": (lambda r: r["net"], False),
+    "win": (lambda r: r["net"], True),
+}
+ROW_FIELDS = ("id", "opp", "d", "hp", "hc", "vc", "b", "pt", "hl", "vl", "end", "net")
+
+
+def matches(r: dict, f: dict) -> bool:
+    """Le filtre du visualiseur (viewer.py, matches) : mêmes règles."""
+    st = f.get("st") or "f"
+    if f.get("opp") and r["opp"] != f["opp"]:
+        return False
+    if f.get("pot") and r["pt"] != f["pot"]:
+        return False
+    if f.get("pfa") and r["pfa"] != f["pfa"]:
+        return False
+    if f.get("pos") and r["hp"] != f["pos"]:
+        return False
+    if f.get("reach") and r["reach"] < int(f["reach"]):
+        return False
+    if f.get("cb"):
+        c = r["cb"].get(st)
+        if c is None or (f["cb"] != "any" and str(c) != f["cb"]):
+            return False
+    sa = r["sa"].get(st)
+    if f.get("h") and not (sa and f["h"] in sa["H"]):
+        return False
+    if f.get("v") and not (sa and f["v"] in sa["V"]):
+        return False
+    if f.get("l") and f["l"] not in r["tags"]:
+        return False
+    end = f.get("end")
+    if end:
+        if end == "ai":
+            if not r["ai"]:
+                return False
+        elif end in ("hf", "vf"):
+            if not r["end"].startswith(end):
+                return False
+        elif r["end"] != end:
+            return False
+    if f.get("known") and not r["vc"]:
+        return False
+    if f.get("res") == "w" and not r["net"] > 0:
+        return False
+    if f.get("res") == "l" and not r["net"] < 0:
+        return False
+    if f.get("q"):
+        hay = " ".join([r["id"], r["hn"], r["vn"], "".join(r["hc"]), "".join(r["vc"])]).lower()
+        if f["q"].lower() not in hay:
+            return False
+    return True
+
+
+def summary(visible: list[dict], f: dict) -> dict:
+    """Le résumé de la sélection (viewer.py, renderSummary) : résultat, fins de coup, actions à une street."""
+    st = STREET_OF_TAG.get(f["l"].split("|")[1], "f") if f.get("l") else (f.get("st") or "f")
+    reached = [r for r in visible if r["reach"] >= REACH[st] and r["sa"].get(st)
+               and (r["sa"][st]["H"] or r["sa"][st]["V"])]
+
+    def freq(who: str) -> list[list]:
+        counts: dict[str, int] = {}
+        for r in reached:
+            for code in r["sa"][st][who]:
+                counts[code] = counts.get(code, 0) + 1
+        return [[c, k] for c, k in sorted(counts.items(), key=lambda item: -item[1])[:4]]
+
+    return {"n": len(visible), "net": round(sum(r["net"] for r in visible), 2),
+            "sd": sum(r["end"] == "sd" for r in visible), "hf": sum(r["end"].startswith("hf") for r in visible),
+            "vf": sum(r["end"].startswith("vf") for r in visible), "st": st, "reached": len(reached),
+            "H": freq("H"), "V": freq("V")}
+
+
+def search(records: list[dict], f: dict, offset: int = 0, limit: int = 150) -> dict:
+    """Les mains qui passent les filtres, triées : le résumé et une page de lignes (champs de la liste seulement)."""
+    visible = [r for r in records if matches(r, f)]
+    key, reverse = SORTS.get(f.get("sort") or "date", SORTS["date"])
+    visible.sort(key=key, reverse=reverse)
+    page = visible[max(offset, 0): max(offset, 0) + max(min(limit, 500), 1)]
+    return {"total": len(visible), "summary": summary(visible, f),
+            "rows": [{k: r[k] for k in ROW_FIELDS} for r in page]}
