@@ -1,6 +1,7 @@
 """Détection du format et chargement des historiques."""
 from __future__ import annotations
 
+import hashlib
 import io
 import zipfile
 import zlib
@@ -8,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 
+from .. import store
 from ..models import Hand
 from . import betclic, unibet, winamax
 
@@ -107,15 +109,52 @@ def _texts(file: Path) -> Iterable[str]:
         return
 
 
+def _code_version() -> str:
+    """Empreinte du code de lecture : le changer relit tous les fichiers (cache des mains lues)."""
+    root = Path(__file__).parent
+    digest = hashlib.sha1()
+    for source in sorted(root.glob("*.py")) + [root.parent / "models.py"]:
+        digest.update(source.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+def _parse_file(file: Path) -> list[Hand]:
+    out: list[Hand] = []
+    for text in _texts(file):
+        try:
+            out += parse_text(text)
+        except ValueError:
+            continue
+    return out
+
+
+def _cached_file(file: Path) -> list[Hand]:
+    """Les mains d'un fichier, relues seulement s'il a changé (taille, date) ou si le code de lecture a changé."""
+    global _CODE
+    try:
+        stat = file.stat()
+    except OSError:
+        return []
+    if _CODE is None:
+        _CODE = _code_version()
+    key = str(file.resolve())
+    stamp = [_CODE, stat.st_size, stat.st_mtime_ns]
+    known = store.get("mains", key)
+    if known is not None and known[0] == stamp:
+        return known[1]
+    hands = _parse_file(file)
+    store.put("mains", key, (stamp, hands))
+    return hands
+
+
+_CODE = None
+
+
 def load_hands(paths: Iterable[str | Path]) -> list[Hand]:
-    """Charge fichiers, dossiers et archives zip, dédoublonne par Hand ID et trie chronologiquement."""
+    """Charge fichiers, dossiers et archives zip, dédoublonne par Hand ID et trie chronologiquement. Les mains lues
+    sont gardées par fichier (analyzer.store) : un fichier déjà lu et inchangé ne se relit pas."""
     hands: dict[str, Hand] = {}
     for file in _iter_files(paths):
-        for text in _texts(file):
-            try:
-                parsed = parse_text(text)
-            except ValueError:
-                continue
-            for hand in parsed:
-                hands.setdefault(f"{hand.site}:{hand.hand_id}", hand)
+        for hand in _cached_file(file):
+            hands.setdefault(f"{hand.site}:{hand.hand_id}", hand)
     return sorted(hands.values(), key=lambda h: (h.date, h.hand_id))

@@ -180,7 +180,7 @@ def solver_review(hands: list[Hand], hero: str) -> dict:
 
 def line_of(hand: Hand, hero: str) -> Optional[str]:
     """« SRP · BTN · river » : type de pot, position, dernière street jouée (abattage compris)."""
-    reader = HandReader(hand)
+    reader = HandReader.of(hand)
     family = exploit.hand_family(reader)
     if family is None or len(hand.board) < 3:
         return None

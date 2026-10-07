@@ -398,12 +398,43 @@ def _current(meta: dict) -> Optional[bool]:
     return meta.get("key") == postflop.study_key(request)
 
 
+_SPOT_STUDIES: dict[tuple, dict[str, dict]] = {}
+
+
+def _studies_signature() -> tuple:
+    """Ce dont dépend la liste des spots d'étude à jour : les fiches d'études, les tailles choisies, les ranges et
+    la précision (date et taille de chaque fichier)."""
+    home = postflop.home()
+    out = []
+    for folder in (postflop.studies_dir(), home / "tailles", home / "ranges"):
+        if folder.is_dir():
+            for f in folder.iterdir():
+                if f.suffix in (".json", ".etude"):
+                    try:
+                        st = f.stat()
+                    except OSError:
+                        continue
+                    out.append((f.name, st.st_mtime_ns, st.st_size))
+    try:
+        st = postflop.settings_path().stat()
+        out.append(("reglages", st.st_mtime_ns, st.st_size))
+    except OSError:
+        pass
+    return (str(home), tuple(sorted(out)))
+
+
 def spot_studies(families: Optional[tuple[str, ...]] = None) -> dict[str, dict]:
     """Fiches des spots d'étude enregistrés avec l'arbre actuel de leur spot, par identifiant ; par défaut ceux
-    des familles heads-up (plans de jeu, entraîneur, coach et leakfinding ne connaissent qu'elles)."""
+    des familles heads-up (plans de jeu, entraîneur, coach et leakfinding ne connaissent qu'elles). Recalculées
+    seulement quand une étude, un choix de tailles, une range ou la précision change."""
     wanted = families or tuple(FAMILIES)
-    return {m["id"]: m for m in postflop.list_studies()
-            if m.get("kind") == "spot" and m.get("family") in wanted and _current(m)}
+    key = (wanted, _studies_signature())
+    if key not in _SPOT_STUDIES:
+        if len(_SPOT_STUDIES) > 32:
+            _SPOT_STUDIES.clear()
+        _SPOT_STUDIES[key] = {m["id"]: m for m in postflop.list_studies()
+                              if m.get("kind") == "spot" and m.get("family") in wanted and _current(m)}
+    return {k: dict(v) for k, v in _SPOT_STUDIES[key].items()}
 
 
 def stale_spot_studies() -> list[dict]:
@@ -421,31 +452,44 @@ def shipped_path(family: str) -> Path:
     return Path(__file__).parent / "data" / f"{family}_tailles.json"
 
 
+_JSON: dict[Path, tuple[tuple[int, int], object]] = {}
+
+
+def _read_json(path: Path) -> Optional[object]:
+    """Un fichier JSON (relu seulement quand il change) ; None s'il manque ou ne se lit pas."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    known = _JSON.get(path)
+    if known is None or known[0] != stamp:
+        try:
+            known = (stamp, json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            known = (stamp, None)
+        _JSON[path] = known
+    return known[1]
+
+
 def load_selection(family: str, board: str) -> Optional[dict]:
     """Choix des tailles d'un flop : fait sur cet ordinateur, sinon livré avec Analyzer ; None sinon."""
-    path = selection_path(family, board)
-    if path.is_file():
-        try:
-            return dict(json.loads(path.read_text(encoding="utf-8")), source="local")
-        except ValueError:
-            pass
-    shipped = shipped_path(family)
-    if shipped.is_file():
-        chosen = json.loads(shipped.read_text(encoding="utf-8")).get("flops", {}).get(board)
-        if chosen:
-            return dict(chosen, source="livré")
+    local = _read_json(selection_path(family, board))
+    if isinstance(local, dict):
+        return dict(local, source="local")
+    shipped = _read_json(shipped_path(family))
+    chosen = shipped.get("flops", {}).get(board) if isinstance(shipped, dict) else None
+    if chosen:
+        return dict(chosen, source="livré")
     return None
 
 
 def selection_boards(family: str) -> list[str]:
     """Flops dont les tailles sont choisies : sur cet ordinateur ou livrées avec Analyzer."""
     boards = {path.stem.split("-", 1)[1] for path in (postflop.home() / "tailles").glob(f"{family}-*.json")}
-    shipped = shipped_path(family)
-    if shipped.is_file():
-        try:
-            boards |= set(json.loads(shipped.read_text(encoding="utf-8")).get("flops", {}))
-        except ValueError:
-            pass
+    shipped = _read_json(shipped_path(family))
+    if isinstance(shipped, dict):
+        boards |= set(shipped.get("flops", {}))
     return sorted(b for b in boards if re.fullmatch(r"(?:[2-9TJQKA][cdhs]){3}", b))
 
 

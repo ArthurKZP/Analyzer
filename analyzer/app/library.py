@@ -9,7 +9,7 @@ from html import escape
 from pathlib import Path
 from typing import Optional
 
-from .. import bluffs, handplay, leaks, players, ring, students
+from .. import bluffs, handplay, leaks, players, ring, store, students
 from ..cli import detect_hero, slugify, unify_hero
 from ..lines import villain_lines
 from ..models import CALL, RAISE, Hand
@@ -179,6 +179,7 @@ class Library:
         with lock:
             if full_key not in self._cache:
                 self._cache[full_key] = build()
+                store.flush()  # les calculs gardés sur disque (équités, spots…) sont écrits tout de suite
             return self._cache[full_key]
 
     def _analysis(self, player: str):
@@ -718,26 +719,23 @@ class Library:
         hands = self.hands_against(villain) if villain else self.regular_hands()[0]
         done, todo = review.collect(hands, self.hero)
         ready = postflop.status()["ready"]
-        busy, current = 0, None
-        for spot in todo:
-            view = self.solves.lookup(spot)
-            if start and ready and view["state"] not in ("waiting", "running"):
-                view = self.solves.analyze(spot, review.save_digest)
-            if view["state"] in ("waiting", "running"):
-                busy += 1
-                if view["state"] == "running":
-                    current = {"hand": spot.hand.hand_id, "progress": view.get("progress"),
-                               "max_iterations": view.get("max_iterations"), "job": view.get("job")}
-        return {"total": len(done) + len(todo), "done": len(done), "busy": busy, "current": current,
-                "ready": ready}
+        if start and ready:  # les spots ne se construisent qu'ici, pour les mettre en file
+            active = {v["hand"] for v in self.solves.active_for(todo.hand_ids)}
+            for spot in todo:
+                if spot.ident not in active:
+                    self.solves.analyze(spot, review.save_digest)
+        jobs = self.solves.active_for(todo.hand_ids)
+        running = next((v for v in jobs if v["state"] == "running"), None)
+        current = None if running is None else {"hand": running["hand"], "progress": running.get("progress"),
+                                                "max_iterations": running.get("max_iterations"), "job": running["job"]}
+        return {"total": len(done) + len(todo), "done": len(done), "busy": len({v["hand"] for v in jobs}),
+                "current": current, "ready": ready}
 
     def review_cancel(self, villain: Optional[str] = None) -> dict:
         hands = self.hands_against(villain) if villain else self.regular_hands()[0]
         _, todo = review.collect(hands, self.hero)
-        for spot in todo:
-            view = self.solves.lookup(spot)
-            if view["state"] in ("waiting", "running"):
-                self.solves.cancel(view["job"])
+        for view in self.solves.active_for(todo.hand_ids):
+            self.solves.cancel(view["job"])
         return self.review_state(villain)
 
     # --- import -----------------------------------------------------------------

@@ -15,11 +15,13 @@ main (~/.analyzer/revue), qu'on regroupe ensuite par situation de la ligne : c-b
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from pathlib import Path
 from typing import Optional
 
+from .. import store
 from ..models import Hand
 from . import postflop, sizing
 from .preflop import MIXED_THRESHOLD
@@ -134,38 +136,188 @@ def save_digest(spot: postflop.PostflopSpot, raw: dict) -> dict:
     return data
 
 
-def _done(spot: postflop.PostflopSpot) -> Optional[dict]:
-    """Le résumé de la main pour cet arbre, s'il est déjà fait (ou son résultat en cache)."""
-    path = digest_path(spot)
-    if path.is_file():
+_DIGESTS: dict[Path, tuple[tuple[int, int], dict]] = {}  # résumé lu -> (date et taille du fichier, contenu)
+
+
+def _read_digest(path: Path) -> Optional[dict]:
+    """Un résumé enregistré (relu seulement quand le fichier change)."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    known = _DIGESTS.get(path)
+    if known is None or known[0] != stamp:
         try:
-            return upgrade(json.loads(path.read_text(encoding="utf-8")))
-        except ValueError:
-            pass
-    request = postflop.solved_request(spot.request())  # résolu à n'importe quelle précision
+            known = (stamp, upgrade(json.loads(path.read_text(encoding="utf-8"))))
+        except (OSError, ValueError):
+            return None
+        _DIGESTS[path] = known
+    return known[1]
+
+
+def _done(spot: postflop.PostflopSpot, listed: Optional[set[str]] = None,
+          solved: Optional[set[str]] = None) -> Optional[dict]:
+    """Le résumé de la main pour cet arbre, s'il est déjà fait (ou son résultat en cache). listed, solved : les noms
+    des résumés et des résultats déjà sur le disque (une seule lecture de dossier pour toutes les mains)."""
+    path = digest_path(spot)
+    if listed is None or path.name in listed:
+        data = _read_digest(path)
+        if data is not None:
+            return data
+    request = postflop.solved_request(spot.request(), solved)  # résolu à n'importe quelle précision
     raw = postflop.cached(request) if request else None
     return save_digest(spot, raw) if raw is not None else None
 
 
-def collect(hands: list[Hand], hero: str) -> tuple[list[dict], list[postflop.PostflopSpot]]:
+# --- Les clés du spot de chaque main, gardées ----------------------------------------------------------
+# Construire le spot d'une main (ranges, tailles) coûte ; pour savoir si elle est déjà analysée, il suffit de ses
+# clés (nom du résumé, du résultat, de l'étude). On les garde par main, tant que rien de ce dont le spot dépend
+# ne change (signature des réglages : tailles choisies, ranges, précision). Les spots des mains à analyser ne se
+# construisent qu'au besoin (PendingSpots).
+
+_KEYS: dict[tuple, Optional[list[dict]]] = {}
+_KEYS_LIMIT = 300_000
+
+
+def _signature() -> tuple:
+    """Ce dont dépend le spot d'une main, hors la main : fichiers des tailles choisies, des ranges (charts, ranges
+    ajustées) et réglage de précision (date et taille de chacun)."""
+    home = postflop.home()
+    files = []
+    for folder in (home / "tailles", home / "ranges"):
+        if folder.is_dir():
+            files += sorted(folder.iterdir())
+    files.append(postflop.settings_path())
+    out = []
+    for f in files:
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        out.append((f.name, st.st_mtime_ns, st.st_size))
+    return (str(home), tuple(out))
+
+
+def _variant(spot: postflop.PostflopSpot) -> dict:
+    request = spot.request()
+    default = dict(request, max_iterations=postflop.DEFAULT_ITERATIONS, target_exploit_pct=postflop.DEFAULT_TARGET)
+    return {"theory": spot.plan is not None, "digest": digest_path(spot).name, "base": postflop.base_key(request),
+            "solved": (postflop.cache_path(default).name, postflop.study_path(default).name),
+            "pot_type": spot.pot_type}
+
+
+def _spot_keys(hand: Hand, hero: str, signature: tuple) -> Optional[list[dict]]:
+    """Les clés des arbres de la main (tailles théoriques, puis celui d'avant) ; None : pas de spot postflop.
+    Gardées en mémoire, et sur disque (analyzer.store) d'une session à l'autre."""
+    key = (hand.hand_id, hero, signature)
+    if key in _KEYS:
+        return _KEYS[key]
+    stored_key = f"{hand.site}:{hand.hand_id}|{hero}|{_signature_hash(signature)}"
+    stored = store.get("spots", stored_key)
+    if stored is not None:
+        variants = stored["variants"]
+    else:
+        try:
+            spot = postflop.build_spot(hand, hero)
+        except postflop.Unsupported:
+            variants = None
+        else:
+            variants = [_variant(spot)]
+            if spot.plan is not None:
+                variants.append(_variant(postflop.build_spot(hand, hero, theory=False)))
+        store.put("spots", stored_key, {"variants": variants})
+    if len(_KEYS) >= _KEYS_LIMIT:
+        _KEYS.clear()
+    _KEYS[key] = variants
+    return variants
+
+
+_SIGNATURES: dict[tuple, str] = {}
+
+
+def _signature_hash(signature: tuple) -> str:
+    """L'empreinte des réglages ; à chaque nouvelle empreinte, les clés gardées pour les anciennes s'effacent."""
+    if signature not in _SIGNATURES:
+        _SIGNATURES.clear()
+        digest = _SIGNATURES[signature] = hashlib.sha1(repr(signature).encode()).hexdigest()[:12]
+        store.retain("spots", lambda key: key.endswith("|" + digest))
+    return _SIGNATURES[signature]
+
+
+def _done_by_keys(hand: Hand, hero: str, variants: list[dict], listed: set[str], solved: set[str],
+                  precisions: dict) -> Optional[dict]:
+    """Comme _done, avec les clés gardées : le spot ne se reconstruit que si un résultat attend son résumé."""
+    for variant in variants:
+        if variant["digest"] in listed:
+            data = _read_digest(review_dir() / variant["digest"])
+            if data is not None:
+                return data
+        if variant["base"] in precisions or any(name in solved for name in variant["solved"]):
+            spot = postflop.build_spot(hand, hero, theory=variant["theory"])
+            data = _done(spot, listed, solved)
+            if data is not None:
+                return data
+    return None
+
+
+def _pot_size(hand: Hand) -> float:
+    return sum(a.amount for a in hand.actions) / hand.bb
+
+
+class PendingSpots:
+    """Les mains à analyser, les plus gros pots d'abord : leurs spots se construisent quand on les parcourt.
+    pot_types : le type de pot de chacune (SRP, pot 3bet…), connu sans construire le spot."""
+
+    def __init__(self, hands: list[Hand], hero: str, pot_types: Optional[list[str]] = None):
+        self.hands, self.hero = hands, hero
+        self.pot_types = pot_types if pot_types is not None else []
+
+    def __len__(self) -> int:
+        return len(self.hands)
+
+    def __bool__(self) -> bool:
+        return bool(self.hands)
+
+    def __iter__(self):
+        for hand in self.hands:
+            try:
+                yield postflop.build_spot(hand, self.hero)
+            except postflop.Unsupported:
+                continue
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return PendingSpots(self.hands[index], self.hero, self.pot_types[index])
+        return postflop.build_spot(self.hands[index], self.hero)
+
+    @property
+    def hand_ids(self) -> list[str]:
+        return [h.hand_id for h in self.hands]
+
+
+def collect(hands: list[Hand], hero: str) -> tuple[list[dict], PendingSpots]:
     """Résumés des mains déjà résolues, et mains à résoudre (les plus gros pots d'abord).
 
     Une main analysée avec l'arbre d'avant les tailles théoriques (tailles fixes) garde son analyse."""
     done, todo = [], []
+    folder = review_dir()
+    listed = {p.name for p in folder.iterdir()} if folder.is_dir() else set()
+    solved = {p.name for d in (postflop.home() / "resolutions", postflop.studies_dir()) if d.is_dir()
+              for p in d.iterdir()}
+    signature = _signature()
+    precisions = postflop.precision_entries()
     for hand in hands:
-        try:
-            spot = postflop.build_spot(hand, hero)
-        except postflop.Unsupported:
+        variants = _spot_keys(hand, hero, signature)
+        if variants is None:
             continue
-        data = _done(spot)
-        if data is None and spot.plan is not None:
-            data = _done(postflop.build_spot(hand, hero, theory=False))
+        data = _done_by_keys(hand, hero, variants, listed, solved, precisions)
         if data is not None:
             done.append(data)
         else:
-            todo.append(spot)
-    todo.sort(key=lambda s: -sum(a.amount for a in s.hand.actions) / s.hand.bb)
-    return done, todo
+            todo.append((hand, variants[0].get("pot_type", "SRP")))
+    todo.sort(key=lambda t: -_pot_size(t[0]))
+    return done, PendingSpots([h for h, _ in todo], hero, [t for _, t in todo])
 
 
 def analyze(hands: list[Hand], hero: str, log=print, limit: Optional[int] = None) -> int:

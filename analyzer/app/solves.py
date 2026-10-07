@@ -356,6 +356,13 @@ class SolveQueue:
             raise NeedSession(spot.ident)
         return {"node": postflop.settle(node, postflop.weights_of(spot)), "live": False}
 
+    def active_for(self, hand_ids) -> list[dict]:
+        """Les résolutions en file ou en cours de ces mains (sans reconstruire leurs spots)."""
+        wanted = set(hand_ids)
+        with self._lock:
+            jobs = [j for j in self._jobs.values() if j.hand_id in wanted and j.state in ("waiting", "running")]
+        return [j.view() for j in jobs]
+
     def get(self, key: str) -> Optional[dict]:
         with self._lock:
             job = self._jobs.get(key)

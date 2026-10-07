@@ -161,7 +161,7 @@ def villain_lines(hands: list[Hand], villain: str, hero: str) -> list[Line]:
     for h in hands:
         if villain not in h.seats or hero not in h.seats:
             continue
-        pfa = HandReader(h).pfa
+        pfa = HandReader.of(h).pfa
         times = think_times(h)
         known = h.showdown and len(h.hole_cards.get(villain, [])) == 2 and len(h.hole_cards.get(hero, [])) == 2
         for i, a in enumerate(h.actions):

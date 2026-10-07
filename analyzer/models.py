@@ -65,6 +65,11 @@ class Hand:
     put: dict[str, float] = field(default_factory=dict)
     uncalled: dict[str, float] = field(default_factory=dict)
 
+    def __getstate__(self) -> dict:
+        """Sans les lectures gardées sur la main (attributs « _… », comme HandReader.of) : le cache des mains lues
+        (analyzer.store) n'enregistre que la main."""
+        return {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
+
     # --- Accès pratiques -------------------------------------------------
     @property
     def players(self) -> list[str]:

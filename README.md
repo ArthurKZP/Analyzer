@@ -799,6 +799,15 @@ Les tailles choisies et les synthèses de référence peuvent aussi rejoindre le
 `analyzer/theory/data/*_tailles.json` et `*_reference.json`, voir plus haut) : elles sont alors livrées avec
 Analyzer.
 
+### Cache des calculs
+
+Les calculs longs et toujours identiques sont gardés dans `~/.analyzer/cache/analyses.sqlite` : les mains lues
+(par fichier d'historique : un fichier inchangé ne se relit pas), les équités (abattages, tapis préflop) et les clés
+du spot postflop de chaque main (pour savoir si elle est déjà analysée sans reconstruire son arbre). Ce cache n'est
+pas sauvegardé : il se reconstruit tout seul, et on peut l'effacer sans rien perdre. `ANALYZER_CACHE=0` le coupe.
+Ordre de grandeur (793 mains, 4 cœurs) : les douze pages de *Mon jeu* et d'un adversaire se calculent en
+1 seconde environ, au lieu de 45 ; avec 8 000 mains, une dizaine de secondes.
+
 ## Contenu du rapport
 
 | Section | Ce qu'on y trouve |
@@ -867,6 +876,7 @@ analyzer/
                        (mcp_server.py), sauvegardes en arrière-plan (backups.py), interface
                        (static/, dont l'explorateur explorer.*)
   backup.py            sauvegarde et restauration de ~/.analyzer (commande `sauvegarde`)
+  store.py             cache sur disque des calculs longs (SQLite : mains lues, équités, clés des spots)
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
   leaks.py             leakfinding : stats face à la théorie, revue du solveur, mains à revoir, leaks prioritaires
   handplay.py          mains de départ : résultat de chaque main, décisions préflop face au fold et à la théorie,

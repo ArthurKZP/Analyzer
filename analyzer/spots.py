@@ -79,7 +79,7 @@ def _descriptions(cards: list[str], board: list[str]) -> dict[str, str]:
 def hand_record(hand: Hand, hero: str, villain: str) -> dict:
     tags = {hero: "H", villain: "V"}
     bb = hand.bb
-    reader = HandReader(hand)
+    reader = HandReader.of(hand)
     times = think_times(hand)
     hero_cards = hand.hole_cards.get(hero, [])
     villain_cards = hand.hole_cards.get(villain, []) if hand.showdown else []

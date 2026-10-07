@@ -272,12 +272,26 @@ def save_plan(data: dict) -> Path:
     return path
 
 
+_PLANS: dict[Path, tuple[tuple[int, int], Optional[dict]]] = {}  # fichier -> (date et taille, plan lu)
+
+
 def load_plan(key: str) -> Optional[dict]:
+    """Le plan de jeu enregistré (relu seulement quand le fichier change)."""
+    path = plan_path(key)
     try:
-        data = json.loads(plan_path(key).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        stat = path.stat()
+    except OSError:
         return None
-    return data if data.get("version") == VERSION else None
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    known = _PLANS.get(path)
+    if known is None or known[0] != stamp:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        known = (stamp, data if isinstance(data, dict) and data.get("version") == VERSION else None)
+        _PLANS[path] = known
+    return known[1]
 
 
 def extract_and_save(session: postflop.Session, spot: studyspots.StudySpot) -> dict:

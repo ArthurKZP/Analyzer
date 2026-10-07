@@ -203,7 +203,7 @@ def build_review_page(hands: list[Hand], hero: str, villain: Optional[str] = Non
         f'<div class="tile"><div class="label">EV perdue</div><div class="value">−{num(lost, 1)} bb</div>'
         f'<div class="sub">{num(lost / len(digests), 2) if digests else "–"} bb par main analysée</div></div>'
         '</div>')
-    eta = sum(MINUTES.get(s.pot_type, 3) for s in todo)
+    eta = sum(MINUTES.get(pot_type, 3) for pot_type in todo.pot_types)
     head = (f'<div class="rv-head" data-villain="{escape(villain or "")}" data-done="{len(digests)}" '
             f'data-api="{escape(api)}">'
             f'<span><b>{len(digests)} / {total}</b> mains analysées</span>'

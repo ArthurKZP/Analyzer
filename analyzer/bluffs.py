@@ -153,7 +153,7 @@ def frequencies(hands: Iterable[Hand], names: Iterable[str]) -> list[Freq]:
         players = names & set(hand.seats)
         if not players:
             continue
-        reader = HandReader(hand)
+        reader = HandReader.of(hand)
         family = exploit.hand_family(reader)
         for player in players:
             for key, made in _spot_events(reader, player).items():
@@ -258,7 +258,7 @@ def shown_bets(hands: Iterable[Hand], names: Iterable[str], hero: str) -> list[S
         players = [p for p in names & set(hand.seats) if len(hand.hole_cards.get(p, [])) == 2]
         if not players:
             continue
-        pfa = HandReader(hand).pfa
+        pfa = HandReader.of(hand).pfa
         times = think_times(hand)
         for i, a in enumerate(hand.actions):
             if a.player not in players or a.street == "preflop" or a.kind not in (BET, RAISE):

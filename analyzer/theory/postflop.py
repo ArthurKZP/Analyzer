@@ -98,8 +98,16 @@ class Unsupported(ValueError):
 
 # --- Installation ------------------------------------------------------------------------
 
+_HOMES: dict[str, Path] = {}
+
+
 def home() -> Path:
-    return Path(os.environ.get("ANALYZER_HOME") or Path.home() / ".analyzer")
+    """~/.analyzer, ou ANALYZER_HOME (appelé très souvent : le chemin est gardé)."""
+    env = os.environ.get("ANALYZER_HOME") or ""
+    found = _HOMES.get(env)
+    if found is None:
+        found = _HOMES[env] = Path(env) if env else Path.home() / ".analyzer"
+    return found
 
 
 def build_dir() -> Path:
@@ -111,11 +119,20 @@ def binary_path() -> Path:
     return Path(env) if env else build_dir() / "target" / "release" / EXE
 
 
+_NATIVE: dict[tuple, str] = {}
+
+
 def _native_hash() -> str:
-    digest = hashlib.sha256()
-    for path in sorted(NATIVE_DIR.glob("*.rs")):
-        digest.update(path.name.encode() + b"\0" + path.read_bytes())
-    return digest.hexdigest()[:16]
+    """Empreinte des sources du pont (recalculée seulement quand elles changent)."""
+    files = sorted(NATIVE_DIR.glob("*.rs"))
+    stamp = tuple((p.name, p.stat().st_mtime_ns, p.stat().st_size) for p in files)
+    if stamp not in _NATIVE:
+        digest = hashlib.sha256()
+        for path in files:
+            digest.update(path.name.encode() + b"\0" + path.read_bytes())
+        _NATIVE.clear()
+        _NATIVE[stamp] = digest.hexdigest()[:16]
+    return _NATIVE[stamp]
 
 
 def _valid_source(path: Path) -> bool:
@@ -221,8 +238,28 @@ def clone(dest: Path, log: Callable[[str], None] = print) -> Path:
 
 
 def gpu_enabled() -> bool:
-    flag = build_dir() / "gpu.txt"
-    return flag.is_file() and flag.read_text(encoding="utf-8").strip() == "1"
+    return _read_small(build_dir() / "gpu.txt").strip() == "1"
+
+
+_SMALL: dict[Path, tuple[tuple[int, int], str]] = {}
+
+
+def _read_small(path: Path) -> str:
+    """Un petit fichier de réglage (relu seulement quand il change) ; vide s'il n'existe pas."""
+    try:
+        stat = path.stat()
+    except OSError:
+        _SMALL.pop(path, None)
+        return ""
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    known = _SMALL.get(path)
+    if known is None or known[0] != stamp:
+        try:
+            known = (stamp, path.read_text(encoding="utf-8"))
+        except OSError:
+            return ""
+        _SMALL[path] = known
+    return known[1]
 
 
 def install(source: Optional[str] = None, log: Callable[[str], None] = print, gpu: bool = False) -> Path:
@@ -253,22 +290,28 @@ def install(source: Optional[str] = None, log: Callable[[str], None] = print, gp
          log, cwd=root)
     (root / "native.sha").write_text(_native_hash(), encoding="utf-8")
     (root / "gpu.txt").write_text("1" if gpu else "0", encoding="utf-8")
+    _SMALL.pop(root / "gpu.txt", None)
     return build_dir() / "target" / "release" / EXE
 
 
 # --- Spot d'une main -----------------------------------------------------------------------
 
 def range_weights(solution: Solution, node_key: str, action: str) -> dict[str, float]:
-    """Part de chaque main (AKs, 72o…) qui prend cette action à ce nœud de la solution."""
-    node = solution.nodes[node_key]
-    out = {}
-    for i in range(13):
-        for j in range(13):
-            hand = hand_at(i, j)
-            weight = solution.weight(node_key, hand) * (node.strategy(hand) or {}).get(action, 0.0)
-            if weight >= 0.001:
-                out[hand] = round(weight, 3)
-    return out
+    """Part de chaque main (AKs, 72o…) qui prend cette action à ce nœud de la solution (calculée une fois par
+    solution chargée ; chaque appel reçoit sa copie)."""
+    memo = solution.__dict__.setdefault("_range_weights", {})
+    key = (node_key, action)
+    if key not in memo:
+        node = solution.nodes[node_key]
+        out = {}
+        for i in range(13):
+            for j in range(13):
+                hand = hand_at(i, j)
+                weight = solution.weight(node_key, hand) * (node.strategy(hand) or {}).get(action, 0.0)
+                if weight >= 0.001:
+                    out[hand] = round(weight, 3)
+        memo[key] = out
+    return dict(memo[key])
 
 
 def range_text(weights: dict[str, float]) -> str:
@@ -774,9 +817,15 @@ def _precisions_path() -> Path:
 
 def _precisions() -> dict:
     try:
-        return json.loads(_precisions_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        data = json.loads(_read_small(_precisions_path()) or "{}")
+    except ValueError:
         return {}
+    return data if isinstance(data, dict) else {}
+
+
+def precision_entries() -> dict:
+    """Les spots résolus à une autre précision que celle par défaut : base_key -> {iterations, target}."""
+    return _precisions()
 
 
 def _remember_precision(request: dict) -> None:
@@ -792,15 +841,20 @@ def _remember_precision(request: dict) -> None:
             data[key] = entry
         _precisions_path().parent.mkdir(parents=True, exist_ok=True)
         _precisions_path().write_text(json.dumps(data), encoding="utf-8")
+        _SMALL.pop(_precisions_path(), None)  # relu au prochain appel, même si la date n'a pas bougé
 
 
-def solved_request(request: dict) -> Optional[dict]:
-    """La requête de ce spot dont le résultat ou l'étude existe, quelle que soit sa précision ; None sinon."""
+def solved_request(request: dict, existing: Optional[set[str]] = None) -> Optional[dict]:
+    """La requête de ce spot dont le résultat ou l'étude existe, quelle que soit sa précision ; None sinon.
+    existing : les noms des fichiers de résultats et d'études déjà listés (évite un accès disque par spot)."""
     entry = _precisions().get(base_key(request))
     candidates = [dict(request, max_iterations=entry["iterations"], target_exploit_pct=entry["target"])] if entry else []
     candidates.append(dict(request, max_iterations=DEFAULT_ITERATIONS, target_exploit_pct=DEFAULT_TARGET))
     for candidate in candidates:
-        if cache_path(candidate).is_file() or study_path(candidate).is_file():
+        if existing is not None:
+            if cache_path(candidate).name in existing or study_path(candidate).name in existing:
+                return candidate
+        elif cache_path(candidate).is_file() or study_path(candidate).is_file():
             return candidate
     return None
 

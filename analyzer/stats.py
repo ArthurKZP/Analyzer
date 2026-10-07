@@ -93,7 +93,15 @@ class PlayerStats:
 
 
 class HandReader:
-    """Lit une main HU et produit, pour chaque joueur, ses situations et décisions."""
+    """Lit une main HU et produit, pour chaque joueur, ses situations et décisions. HandReader.of(main) : la lecture
+    faite une fois par main (gardée sur la main), à préférer quand on ne la modifie pas."""
+
+    @classmethod
+    def of(cls, hand: Hand) -> "HandReader":
+        reader = hand.__dict__.get("_reader")
+        if reader is None:
+            reader = hand.__dict__["_reader"] = cls(hand)
+        return reader
 
     def __init__(self, hand: Hand):
         self.h = hand
@@ -271,7 +279,14 @@ class HandReader:
 
 
 def think_times(hand: Hand) -> list[Optional[float]]:
-    """Temps de réflexion (s) de chaque action, mesuré depuis l'action précédente."""
+    """Temps de réflexion (s) de chaque action, mesuré depuis l'action précédente (calculé une fois par main)."""
+    known = hand.__dict__.get("_think_times")
+    if known is None:
+        known = hand.__dict__["_think_times"] = _think_times(hand)
+    return known
+
+
+def _think_times(hand: Hand) -> list[Optional[float]]:
     out: list[Optional[float]] = []
     prev = None
     for a in hand.actions:
@@ -284,7 +299,13 @@ def think_times(hand: Hand) -> list[Optional[float]]:
 
 
 def allin_ev(hand: Hand) -> Optional[dict[str, float]]:
-    """Gain net espéré (en monnaie) de chaque joueur pour un all-in payé avant la river."""
+    """Gain net espéré (en monnaie) de chaque joueur pour un all-in payé avant la river (calculé une fois par main)."""
+    if "_allin_ev" not in hand.__dict__:
+        hand.__dict__["_allin_ev"] = _allin_ev(hand)
+    return hand.__dict__["_allin_ev"]
+
+
+def _allin_ev(hand: Hand) -> Optional[dict[str, float]]:
     if not hand.showdown or not any(a.all_in for a in hand.actions):
         return None
     if any(len(hand.hole_cards.get(p, [])) != 2 for p in hand.seats):
@@ -306,7 +327,7 @@ def analyze(hands: list[Hand]) -> dict[str, PlayerStats]:
     for hand in hands:
         if not hand.button or not hand.big_blind or not hand.bb:
             continue
-        reader = HandReader(hand)
+        reader = HandReader.of(hand)
         times = think_times(hand)
         ev = allin_ev(hand)
         eff_bb = hand.effective_stack() / hand.bb
