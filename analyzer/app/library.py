@@ -292,8 +292,18 @@ class Library:
         note = ("Les réguliers ensemble : " + ", ".join(regs) + "." if regs else "Aucun adversaire classé régulier.")
         if recs:
             note += f" Les récréatifs ({', '.join(recs)}) ont chacun leur page, dans leur fiche."
-        return build_bluffs_page(bluffs.analyze(self.hands, regs, self.hero), "des réguliers", note=_note(note),
-                                 players=sorted(rows, key=lambda r: -r["hands"]))
+        report = bluffs.analyze(self.hands, regs, self.hero)
+        profile = {p.name: p for p in report.profiles}
+        for row in rows:
+            prof = profile.get(row["name"])
+            row.update(weight=prof.weight if prof else None, share=prof.share if prof else None,
+                       group=prof.group if prof else None)
+        groups = []
+        for cluster in report.clusters:  # ce qui ressort de chaque groupe, ses membres pesant chacun au plus 1
+            sub = bluffs.analyze(self.hands, cluster.names, self.hero) if len(cluster.members) > 1 else None
+            groups.append({"cluster": cluster, "patterns": (sub.patterns if sub else [])[:3]})
+        return build_bluffs_page(report, "des réguliers", note=_note(note),
+                                 players=sorted(rows, key=lambda r: -r["hands"]), groups=groups)
 
     # --- élèves -----------------------------------------------------------------------
     def student(self, ident: str) -> "Library":

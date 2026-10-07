@@ -616,6 +616,17 @@ sur peu de mains. Exemple sur un régulier : c-bet de 100 % sur les flops As-hau
 (65 % et 62 % pour le solveur), mais 33 % sur les flops Dix-hauts (72 %) ; mise river 62 % quand le board se paire
 contre 42 % sur les autres cartes. Le coach a le même outil (« Dans quelles lignes Villain bluffe-t-il ? »).
 
+**Les réguliers ensemble** : un régulier à gros volume ne fait pas la moyenne à lui seul. Chaque fréquence (et chaque
+part de bluffs montrés) est la moyenne des joueurs, chacun pesant n / (n + 20) selon ses occasions n (n / (n + 5) pour
+les mises montrées) : au plus autant qu'un autre, et peu quand il a peu de mains. L'intervalle de confiance suit
+l'effectif efficace de cette moyenne. Le tableau *Adversaire par adversaire* montre, pour chacun, sa part des
+occasions et son poids réel. **Profils des réguliers** : les réguliers regroupés par façon de bluffer. Le profil d'un
+joueur est son écart au solveur dans chaque situation (fréquence de mise à cartes égales) et sa part de bluffs
+montrés à la river face à la théorie, rapproché de la moyenne des réguliers quand il a peu d'occasions (au moins 40
+occasions pour avoir un profil). Deux groupes se réunissent tant que leurs profils diffèrent de moins de 7 points en
+moyenne. Chaque groupe a son titre (ce qui le distingue des autres réguliers), ses écarts situation par situation et
+ce qui ressort de ses mains.
+
 ## Plan de jeu suggéré
 
 Onglet *Plan de jeu suggéré* de *Études du solveur* : les études résolues réduites à des règles simples, du

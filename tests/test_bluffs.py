@@ -95,3 +95,56 @@ class PatternTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def freq(spot, players, solver=0.5, feature="over", family="srp"):
+    f = bluffs.Freq(family, bluffs.SPOT[spot], feature, solver=solver)
+    for name, (hits, opps) in players.items():
+        f.players[name] = Ratio(hits, opps)
+        f.ratio = Ratio(f.ratio.hits + hits, f.ratio.opps + opps)
+    f.sample = bluffs.pooled(f.players, bluffs.PLAYER_K)
+    return f
+
+
+class PopulationTest(unittest.TestCase):
+    def test_pooled(self):
+        one = bluffs.pooled({"A": Ratio(9, 10)}, bluffs.PLAYER_K)
+        self.assertEqual((one.hits, one.opps), (9, 10))  # un seul joueur : tel quel
+        # un régulier à 1000 occasions qui mise 90 %, trois à 40 occasions qui misent 30 % : en tout 82 %,
+        # mais la moyenne des joueurs ne laisse pas le gros volume décider seul
+        many = bluffs.pooled({"Gros": Ratio(900, 1000), "B": Ratio(12, 40), "C": Ratio(12, 40), "D": Ratio(12, 40)},
+                             bluffs.PLAYER_K)
+        rate = many.hits / many.opps
+        self.assertLess(rate, 0.5)
+        self.assertAlmostEqual(rate, (0.98 * 0.9 + 3 * (2 / 3) * 0.3) / (0.98 + 2), places=2)
+        self.assertLess(many.opps, 1120)  # l'intervalle suit l'effectif efficace, pas les 1120 occasions
+        self.assertEqual(bluffs.pooled({}, 5).opps, 0)
+
+    def test_profiles_and_clusters(self):
+        # deux façons de jouer : les « barreleurs » (2e et 3e barrels bien plus que le solveur), les autres comme lui
+        heavy = {"A": (160, 200), "B": (80, 100), "C": (45, 60)}
+        normal = {"D": (100, 200), "E": (50, 100)}
+        freqs = [freq("cbet_turn", {**heavy, **normal}), freq("cbet_river", {**heavy, **normal}),
+                 freq("cbet_flop", {n: (o // 2, o) for n, (_, o) in {**heavy, **normal}.items()})]
+        freqs.append(freq("cbet_flop", {"F": (5, 10)}))  # trop peu de mains pour un profil
+        hands = {"A": 900, "B": 400, "C": 200, "D": 800, "E": 300, "F": 30}
+        profs = {p.name: p for p in bluffs.profiles(freqs, [], hands)}
+        pop = bluffs.pooled({n: Ratio(h, o) for n, (h, o) in {**heavy, **normal}.items()}, bluffs.PLAYER_K)
+        self.assertAlmostEqual(profs["A"].gaps["cbet_turn"], (60 + 15 * (pop.hits / pop.opps - 0.5)) / 215)
+        self.assertGreater(profs["A"].gaps["cbet_turn"], 0.2)
+        self.assertLess(abs(profs["D"].gaps["cbet_turn"]), 0.1)
+        self.assertGreater(profs["A"].share, profs["A"].weight)  # gros volume : moins de poids que d'occasions
+        groups = bluffs.clusters(list(profs.values()))
+        self.assertEqual([g.names for g in groups], [["A", "B", "C"], ["D", "E"]])  # F : pas de profil
+        self.assertEqual([p.group for p in (profs["A"], profs["D"], profs["F"])], [1, 2, None])
+        self.assertIn(groups[0].traits[0][0], ("cbet_turn", "cbet_river"))
+        self.assertTrue(groups[0].title.startswith(("2e barrel plus souvent", "3e barrel plus souvent")))
+        self.assertTrue(groups[1].title.endswith("moins souvent"))
+        report = bluffs.Report(list(hands), 2630, 0, freqs, [], [], [], [], list(profs.values()), groups)
+        page = build_bluffs_page(report, "des réguliers", groups=[{"cluster": g, "patterns": []} for g in groups],
+                                 players=[{"name": n, "hands": h, "shown": 0, "river": 0, "top": None,
+                                           "weight": profs[n].weight, "share": profs[n].share, "group": profs[n].group}
+                                          for n, h in hands.items()])
+        for text in ("Profils des réguliers", "A (900), B (400), C (200)", "Trop peu de mains pour un profil : F",
+                     "Part des occasions", "moyenne des joueurs"):
+            self.assertIn(text, page)

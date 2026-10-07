@@ -574,7 +574,7 @@ class Coach:
         report = bluffs.analyze(self.library.hands, names, self.library.hero)
         pct = lambda x: None if x is None else round(100 * x)  # noqa: E731
         freqs = [{"situation": f.spot.label, "pot": bluffs.FAMILY_NAMES.get(f.family, "autres pots"),
-                  "carte": bluffs.feature_label(f.spot.street, f.feature), "lui_pct": pct(f.ratio.hits / f.ratio.opps),
+                  "carte": bluffs.feature_label(f.spot.street, f.feature), "lui_pct": pct(f.rate),
                   "occasions": f.ratio.opps, "solveur_pct": pct(f.solver),
                   "ses_autres_cartes_pct": pct(f.average) if f.solver is None else None,
                   "ecart": f.verdict[0] if f.verdict else None, "confiance": f.verdict[1] if f.verdict else None}
@@ -582,7 +582,7 @@ class Coach:
         freqs = [{k: v for k, v in row.items() if v is not None} for row in freqs]
         shown = [{"street": g.street, "par": dict(bluffs.DIMENSIONS)[g.dimension].lower(),
                   "valeur": bluffs.feature_label(g.street, g.value) if g.dimension == "feature" else g.value,
-                  "intentions": {k: v for k, v in g.intents.items()}, "part_bluffs_pct": pct(g.ratio.hits / g.ratio.opps),
+                  "intentions": {k: v for k, v in g.intents.items()}, "part_bluffs_pct": pct(g.sample.hits / g.sample.opps),
                   "reference_pct": pct(g.reference), "reference": "théorie" if g.street == "river" else "sa moyenne",
                   "ecart": g.verdict[0] if g.verdict else None} for g in report.groups if len(g.items) >= bluffs.MIN_SHOWN]
         return {"adversaire": label, "type": kind, "mains": report.hands, "mises_postflop": report.bets,
@@ -590,8 +590,13 @@ class Coach:
                 "patterns": [{"titre": p.title, "preuve": p.evidence, "conseil": p.advice, "confiance": p.confidence,
                               "source": p.source} for p in report.patterns[:15]],
                 "frequences_par_carte": freqs, "mains_montrees": shown,
+                "profils": [{"groupe": k, "titre": c.title, "joueurs": c.names, "mains": c.hands,
+                             "ecarts_au_solveur_pts": {bluffs.DIMENSION_LABELS[d]: round(100 * g) for d, g in c.gaps.items()}}
+                            for k, c in enumerate(report.clusters, 1)],
                 "lecture": ("Intentions : value = top paire ou mieux, thin = value fine (paire moyenne ou faible), semi = "
-                            "semi-bluff, bluff. À la river, la référence est la part de bluffs de la théorie pour la taille.")}
+                            "semi-bluff, bluff. À la river, la référence est la part de bluffs de la théorie pour la taille. "
+                            "Plusieurs joueurs : fréquences = moyenne des joueurs (un gros volume ne compte pas plus) ; "
+                            "profils = groupes de joueurs aux écarts au solveur proches.")}
 
     def _exploit(self, args: dict) -> dict:
         spot = self._spot(args.get("spot"))
