@@ -1,6 +1,7 @@
 """Spots d'étude 6-max : un autre jeu que le heads-up (ranges des charts 6-max), sur les mêmes flops."""
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -116,6 +117,7 @@ class RingSpotTest(RingHome):
         from analyzer.app.studies import build_studies_page
         page = build_studies_page(section="6max")
         self.assertIn("6-max · SB contre BB · SRP", page)
+        self.assertIn("Résoudre tous les flops 6-max manquants", page)
         self.assertIn("spot:6max_sb_bb_srp:KsKd4c", page)
 
     def test_ring_hand_uses_ring_sizes(self):
@@ -147,6 +149,56 @@ class RingSpotTest(RingHome):
                          (["BB", "BTN"], "BB contre BTN", "6-max"))
         with self.assertRaises(KeyError):
             lib.spot_set("6max_bb_utg_srp")
+
+    def test_solve_all_six_max(self):
+        """Le bouton « Résoudre tous les flops 6-max manquants » : toutes les séries couvertes par tes charts, un flop
+        de chaque série à tour de rôle, les pots les plus rapides d'abord."""
+        from analyzer.app.library import Library
+        folder = self.home / "mains"
+        folder.mkdir()
+        lib = Library(folder)
+        self.addCleanup(lib.solves.shutdown)
+        state = lib.ring_spot_sets()
+        self.assertEqual((state["total"], state["covered"], state["current"]), (0, 0, None))  # pas encore de charts
+        self.write_charts()  # cinq lignes : SB contre BB (trois pots), BB contre BTN (SRP, pot 3bet)
+        state = lib.ring_spot_sets()
+        self.assertEqual((state["total"], state["done"], state["covered"], state["busy"]), (120, 0, 5, 0))
+        self.assertEqual(state["seconds"], 24 * (2 * (4200 + 600) + 2 * (1500 + 150) + (120 + 45)))
+        self.assertIn("Pas de ranges 6-max", next(f for f in state["families"] if f["family"] == "6max_bb_co_3bet")["error"])
+        queued = []
+
+        def queue(self, family, board, spot, view, series):
+            queued.append((family, board, series))
+            return view
+        with mock.patch.object(Library, "_queue_flop", queue), \
+                mock.patch.dict(os.environ, {"ANALYZER_SOLVER": str(FAKE_SOLVER)}):  # « installé »
+            lib.ring_spot_sets(start=True)
+        self.assertEqual(len(queued), 120)
+        self.assertEqual([f for f, _, _ in queued[:5]], ["6max_sb_bb_4bet", "6max_sb_bb_3bet", "6max_bb_btn_3bet",
+                                                         "6max_sb_bb_srp", "6max_bb_btn_srp"])
+        first = studyspots.flop_set("6max_sb_bb_4bet")[:2]
+        self.assertEqual({b for _, b, _ in queued[:5]}, {first[0]})  # le premier flop de chaque série…
+        self.assertEqual(queued[5][1], first[1])  # … puis le deuxième
+        self.assertTrue(all(series for _, _, series in queued))
+
+    @unittest.skipIf(os.name == "nt", "faux solveur : script exécutable POSIX")
+    def test_solve_all_then_stop(self):
+        from analyzer.app.library import Library
+        folder = self.home / "mains"
+        folder.mkdir()
+        self.write_charts()
+        lib = Library(folder)
+        self.addCleanup(lib.solves.shutdown)
+        with mock.patch.dict(os.environ, {"ANALYZER_SOLVER": str(FAKE_SOLVER)}):
+            state = lib.ring_spot_sets(start=True)
+            self.assertEqual(state["busy"], 120)
+            self.assertEqual(lib.ring_spot_sets(start=True)["busy"], 120)  # déjà en file : rien en double
+            state = lib.ring_spot_cancel()
+            deadline = time.time() + 30
+            while state["busy"] and time.time() < deadline:
+                time.sleep(0.1)
+                state = lib.ring_spot_sets()
+        self.assertEqual(state["busy"], 0)
 
 
 if __name__ == "__main__":

@@ -30,11 +30,13 @@ STYLE = """
 .stxt { font-size: 11px; color: var(--ink-2); margin-top: 2px; white-space: nowrap; }
 .k-fold { background: #2a78d6; } .k-pass { background: #1baf7a; } .k-bet { background: #eb6834; }
 .k-raise { background: #c4441c; } .k-allin { background: #4a3aa7; }
-.spot-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 4px 0 6px; }
-.spot-head button, .spot-other button { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
-  border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
-.spot-head button.go { background: var(--series-1); border-color: var(--series-1); color: #fff; font-weight: 600; }
-.spot-head button:disabled { opacity: .5; cursor: default; }
+.spot-head, .ring-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 4px 0 6px; }
+.spot-head button, .ring-head button, .spot-other button { font: inherit; font-size: 13px; padding: 5px 12px;
+  border-radius: 6px; cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
+.spot-head button.go, .ring-head button.go { background: var(--series-1); border-color: var(--series-1); color: #fff;
+  font-weight: 600; }
+.spot-head button:disabled, .ring-head button:disabled { opacity: .5; cursor: default; }
+.ring-count { font-weight: 600; font-size: 14px; }
 .spot-status { font-size: 12px; color: var(--ink-2); }
 .spot-prec { font-size: 13px; color: var(--ink-2); display: inline-flex; gap: 6px; align-items: center; }
 .spot-prec select { font: inherit; font-size: 13px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border);
@@ -64,6 +66,12 @@ STYLE = """
 """
 
 SCRIPT = """
+function duration(sec) {
+  if (sec < 60) return Math.max(5, Math.round(sec / 5) * 5) + ' s';
+  if (sec < 3600) return Math.round(sec / 60) + ' min';
+  if (sec < 86400) return Math.floor(sec / 3600) + ' h ' + String(Math.round((sec % 3600) / 60)).padStart(2, '0');
+  return Math.floor(sec / 86400) + ' j ' + Math.round((sec % 86400) / 3600) + ' h';
+}
 document.querySelectorAll('.fam-switch button').forEach(function (b) {
   b.addEventListener('click', function () {
     document.querySelectorAll('.fam-switch button').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
@@ -162,6 +170,50 @@ document.querySelectorAll('.spot-head').forEach(function (box) {
     window.open('/explorateur/spot:' + family + ':' + board.join(''), '_blank', 'noopener');
   });
 });
+// Toutes les séries 6-max : un bouton pour mettre en file tous les flops manquants.
+(function () {
+  var box = document.querySelector('.ring-head');
+  if (!box) return;
+  var run = box.querySelector('.ring-run'), stop = box.querySelector('.ring-stop'), status = box.querySelector('.ring-status');
+  var count = box.querySelector('.ring-count'), done = null, timer = null, last = null;
+  function show(s) {
+    if (done !== null && s.done !== done) { location.reload(); return; }  // un flop de plus : les séries à jour
+    done = s.done;
+    last = s;
+    count.textContent = s.done + ' / ' + s.total + ' flops 6-max résolus';
+    stop.hidden = !s.busy;
+    run.disabled = !s.ready;
+    run.hidden = !!s.busy || s.done >= s.total;
+    status.textContent = '';
+    if (!s.ready) { status.textContent = 'Installe d\\'abord le solveur : python -m analyzer gtopen --installer'; return; }
+    var c = s.current, waiting = s.waiting ? ' · ' + s.waiting + ' flop(s) en attente' : '';
+    if (c) {
+      var p = c.progress || {};
+      status.textContent = (c.mode === 'choose' ? 'Choix des tailles' : 'Résolution') + ' : ' + c.title + ', ' + c.board
+        + (c.mode === 'choose' ? ' (' + (p.stage || 'démarrage') + ')'
+          : p.iteration ? ' (itération ' + p.iteration + ' / ' + c.max_iterations + ')' : ' (construction de l\\'arbre)')
+        + waiting;
+    } else if (s.waiting) {
+      status.textContent = s.waiting + ' flop(s) en attente (une autre résolution passe d\\'abord)';
+    } else if (s.done < s.total) {
+      status.textContent = 'Au plus ≈ ' + duration(s.seconds) + ' sur 4 cœurs pour les ' + (s.total - s.done)
+        + ' flops manquants (moins avec plus de cœurs).';
+    }
+    clearTimeout(timer);
+    if (s.busy) timer = setTimeout(refresh, 4000);
+  }
+  function refresh() { fetch('/api/spots/6max').then(function (r) { return r.json(); }).then(show); }
+  run.addEventListener('click', function () {
+    var n = last ? last.total - last.done : 0;
+    if (!confirm('Mettre en file les ' + n + ' flops 6-max manquants ? Chacun passe par le choix de ses tailles puis par '
+        + 'sa résolution : au plus ≈ ' + duration(last ? last.seconds : 0) + ' sur 4 cœurs. Tu peux tout arrêter à '
+        + 'tout moment ; les flops déjà résolus restent.')) return;
+    run.disabled = true;
+    post('/api/spots/6max/resoudre').then(show);
+  });
+  stop.addEventListener('click', function () { post('/api/spots/6max/arreter').then(show); });
+  refresh();
+})();
 """
 
 KIND_CLASS = {"fold": "k-fold", "check": "k-pass", "call": "k-pass", "bet": "k-bet", "raise": "k-raise"}
@@ -422,8 +474,22 @@ def _ring_section() -> str:
             f'{escape(studyspots.RING_FAMILIES[f]["name"])}</button>' for f in group) + "</div>"
         for pair, group in pairs.items())
     sections = "".join(_ring_family_section(f, f == families[0]) for f in families)
-    return (f'<h2>Spots d\'étude 6-max</h2>{intro}<div class="fam-switch" role="group" '
+    return (f'<h2>Spots d\'étude 6-max</h2>{intro}{_ring_all()}<div class="fam-switch" role="group" '
             f'aria-label="Paire de positions et type de pot">{switch}</div>{sections}')
+
+
+def _ring_all() -> str:
+    """Le bouton qui met en file tous les flops 6-max manquants (état lu par la page : /api/spots/6max)."""
+    return ('<div class="card"><div class="ring-head">'
+            '<span class="ring-count"></span>'
+            '<button type="button" class="go ring-run" hidden>Résoudre tous les flops 6-max manquants</button>'
+            '<button type="button" class="ring-stop" hidden>Tout arrêter</button>'
+            '<span class="spot-status ring-status"></span></div>'
+            '<p class="note">Toutes les séries que tes charts couvrent, un flop de chaque série à tour de rôle (pots 4bet '
+            'et 3bet d\'abord, les plus rapides) : chaque plan de jeu se dessine vite au lieu d\'attendre la fin des '
+            'séries précédentes. Chaque flop passe d\'abord par le choix de ses tailles, puis par sa résolution, à la '
+            'précision réglée ; son plan de jeu est lu aussitôt. La file vit dans l\'application : si elle s\'arrête, '
+            'relance le bouton, il reprend avec les flops qui manquent.</p></div>')
 
 
 ADJUSTED = ' <span class="muted small" title="Résolu avec tes ranges préflop ajustées">· tes ranges</span>'

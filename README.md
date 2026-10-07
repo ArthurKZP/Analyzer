@@ -462,9 +462,18 @@ position>_<pot>` (`python -m analyzer gtopen --spots 6max_bb_btn_srp`, explorate
 `/explorateur/spot:6max_bb_btn_srp:KsKd4c`). Les ranges plus serrées raccourcissent les calculs : mesuré sur
 K♠K♦4♣ avec 4 cœurs, BB contre BTN en pot 3bet demande 12 minutes pour choisir les tailles et 81 secondes pour
 résoudre (26 minutes et 2 min 30 en heads-up), et les tailles changent (c-bet de la BB à 75 % au lieu de 33 %
-en heads-up). Les séries 6-max restent à part : plans de jeu, entraîneur,
-coach et leakfinding travaillent sur les séries heads-up. Leurs résultats viennent de tes charts et restent sur
-ta machine (rien n'est livré avec Analyzer).
+en heads-up). Le plan de jeu suggéré et le coach lisent aussi les séries 6-max ; l'entraîneur et le
+leakfinding travaillent sur les séries heads-up. Leurs résultats viennent de tes charts et restent sur ta machine
+(rien n'est livré avec Analyzer).
+
+**Toutes les séries d'un coup** : le bouton **Résoudre tous les flops 6-max manquants** (en haut de l'onglet 6-max de
+*Études du solveur*) met en file chaque flop manquant de toutes les séries que tes charts couvrent, un flop de
+chaque série à tour de rôle, les pots 4bet et 3bet d'abord (les plus rapides) : chaque plan de jeu se dessine vite
+au lieu d'attendre la fin des séries précédentes. Chaque flop passe par le choix de ses tailles puis par sa
+résolution, et son plan de jeu est lu aussitôt. Avant de lancer, la durée est annoncée (au plus 4 jours et demi
+environ sur 4 cœurs pour les 240 flops) ; on suit le flop en cours et la file, et **Tout arrêter** vide la file (les
+flops déjà résolus restent). La file vit dans l'application : après un redémarrage, le bouton reprend avec les
+flops qui manquent.
 
 **Limites** : les tailles et la profondeur de l'arbre simplifient le jeu réel ; une main que la range du
 solveur ne contient pas (par exemple un open que le solveur ne fait jamais) y est ajoutée avec un poids

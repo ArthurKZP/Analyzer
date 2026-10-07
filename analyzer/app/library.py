@@ -683,12 +683,7 @@ class Library:
             if not row["done"]:
                 view = self.solves.lookup(spot)
                 if start and ready and view["state"] not in ("waiting", "running"):
-                    if board in series and not spot.plan:
-                        view = self.solves.choose_and_solve(
-                            spot.ident, lambda job, b=board: self._choose(family, b, job),
-                            lambda b=board: studyspots.StudySpot(family, studyspots.cards_of(b)))
-                    else:
-                        view = self.solves.start(spot, force=view["state"] == "done", keep_live=False)
+                    view = self._queue_flop(family, board, spot, view, board in series)
                 row.update(state=view["state"], progress=view.get("progress"), job=view.get("job"),
                            max_iterations=view.get("max_iterations"), mode=view.get("mode"))
             rows.append(row)
@@ -696,6 +691,59 @@ class Library:
                 "precision": self.solves.precision()[1],
                 "total": len(rows), "done": sum(r["done"] for r in rows),
                 "busy": sum(r.get("state") in ("waiting", "running") for r in rows), "rows": rows}
+
+    def _queue_flop(self, family: str, board: str, spot, view: dict, series: bool) -> dict:
+        """Met un flop d'une série en file : le choix de ses tailles d'abord s'il n'en a pas, puis sa résolution."""
+        if series and not spot.plan:
+            return self.solves.choose_and_solve(
+                spot.ident, lambda job: self._choose(family, board, job),
+                lambda: studyspots.StudySpot(family, studyspots.cards_of(board)))
+        return self.solves.start(spot, force=view["state"] == "done", keep_live=False)
+
+    RING_ORDER = ("4bet", "3bet", "srp")  # les pots les plus rapides à résoudre d'abord
+
+    def ring_spot_sets(self, start: bool = False) -> dict:
+        """Toutes les séries 6-max (celles que tes charts couvrent) : leur état et la durée de ce qui manque ;
+        start=True met en file tous les flops manquants, un flop de chaque série à tour de rôle (pots 4bet et 3bet
+        d'abord) : chaque plan de jeu se dessine vite, au lieu d'une série après l'autre."""
+        sets = {family: self.spot_set(family) for family in studyspots.RING_FAMILIES}
+        ready = postflop.status()["ready"]
+        if start and ready:
+            order = sorted(sets, key=lambda f: self.RING_ORDER.index(studyspots.RING_FAMILIES[f]["kind"]))
+            todo = {f: [r for r in sets[f]["rows"] if not r["done"] and r.get("state") not in ("waiting", "running")]
+                    for f in order}
+            for k in range(max(map(len, todo.values()), default=0)):
+                for family in order:
+                    if k < len(todo[family]):
+                        row = todo[family][k]
+                        board = "".join(row["board"])
+                        spot = studyspots.StudySpot(family, studyspots.cards_of(board))
+                        self._queue_flop(family, board, spot, self.solves.lookup(spot), row["series"])
+            sets = {family: self.spot_set(family) for family in studyspots.RING_FAMILIES}
+        rows = [(f, r) for f, state in sets.items() for r in state["rows"]]
+        current = next(((f, r) for f, r in rows if r.get("state") == "running"), None)
+        seconds = sum(studyspots.SOLVE_SECONDS[f] + (0 if r["sizes"] or not r["series"] else studyspots.CHOOSE_SECONDS[f])
+                      for f, r in rows if not r["done"])
+        families = [{"family": f, "title": studyspots.family_title(f), "total": state["total"], "done": state["done"],
+                     "busy": state["busy"], "error": state.get("error")} for f, state in sets.items()]
+        out = {"ready": ready, "total": len(rows), "done": sum(r["done"] for _, r in rows),
+               "busy": sum(r.get("state") in ("waiting", "running") for _, r in rows),
+               "waiting": sum(r.get("state") == "waiting" for _, r in rows), "seconds": seconds,
+               "covered": sum(1 for x in families if not x["error"]), "families": families, "current": None}
+        if current:
+            family, row = current
+            out["current"] = {"family": family, "title": studyspots.family_title(family), "board": "".join(row["board"]),
+                              "texture": row["texture"], "mode": row.get("mode"), "progress": row.get("progress") or {},
+                              "max_iterations": row.get("max_iterations")}
+        return out
+
+    def ring_spot_cancel(self) -> dict:
+        """Arrête toutes les résolutions des séries 6-max (en attente ou en cours)."""
+        for family in studyspots.RING_FAMILIES:
+            for row in self.spot_set(family)["rows"]:
+                if row.get("state") in ("waiting", "running"):
+                    self.solves.cancel(row["job"])
+        return self.ring_spot_sets()
 
     @staticmethod
     def _choose(family: str, board: str, job) -> None:

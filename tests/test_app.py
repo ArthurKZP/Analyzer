@@ -382,6 +382,10 @@ class ServerTest(unittest.TestCase):
         headers = {"Content-Type": "application/json"}
         status, _, body = self.request("POST", "/api/etudes/supprimer", json.dumps({"key": "../x"}), headers)
         self.assertEqual((status, json.loads(body)), (200, {"ok": False}))
+        status, _, body = self.request("GET", "/api/spots/6max")  # toutes les séries 6-max (sans charts : aucune)
+        self.assertEqual((status, json.loads(body)["total"], json.loads(body)["covered"]), (200, 0, 0))
+        status, _, body = self.request("POST", "/api/spots/6max/arreter", "{}", headers)
+        self.assertEqual((status, json.loads(body)["busy"]), (200, 0))
 
     def test_study_spots(self):
         status, _, body = self.request("GET", "/explorateur/spot:srp:KsKd4c")

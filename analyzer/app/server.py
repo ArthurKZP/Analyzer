@@ -189,6 +189,8 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["api", "revue"]:
                 villain = parse_qs(urlsplit(self.path).query).get("adversaire", [None])[0]
                 return self._json(library.review_state(villain))
+            if parts == ["api", "spots", "6max"]:  # toutes les séries 6-max
+                return self._json(library.ring_spot_sets())
             if len(parts) == 3 and parts[:2] == ["api", "spots"]:
                 return self._json(library.spot_set(parts[2]))
             if len(parts) == 2 and parts[0] == "explorateur" and (parts[1] == "preflop" or library.find_hand(parts[1])
@@ -385,6 +387,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.review_state(villain, start=True))
             except UnknownPlayer:
                 return self._error(404, "Adversaire inconnu.")
+        if parts[:3] == ["api", "spots", "6max"] and len(parts) == 4 and parts[3] in ("resoudre", "arreter"):
+            return self._json(library.ring_spot_cancel() if parts[3] == "arreter" else library.ring_spot_sets(start=True))
         if len(parts) == 4 and parts[:2] == ["api", "spots"] and parts[3] in ("resoudre", "arreter"):
             if not studyspots.known_family(parts[2]):
                 return self._error(404, "Série inconnue.")

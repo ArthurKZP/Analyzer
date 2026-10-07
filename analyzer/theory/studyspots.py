@@ -180,11 +180,15 @@ FLOPS.update({family: SRP_FLOPS for family in RING_FAMILIES})  # et en 6-max, po
 
 # Durée d'une résolution sur 4 cœurs, tailles déjà choisies (mesurée sur K♠K♦4♣).
 SOLVE_TIME = {"srp": "une dizaine de minutes", "3bet": "2 à 3 minutes", "4bet": "moins d'une minute"}
+SOLVE_SECONDS = {"srp": 600, "3bet": 150, "4bet": 45}
 # Durée du choix des tailles d'un flop sur 4 cœurs (mesurée sur K♠K♦4♣).
 CHOOSE_TIME = {"srp": "1 h 10 environ", "3bet": "25 minutes environ", "4bet": "2 minutes environ"}
+CHOOSE_SECONDS = {"srp": 4200, "3bet": 1500, "4bet": 120}
 for _family, _info in RING_FAMILIES.items():  # ranges plus serrées qu'en heads-up : au plus aussi long
     SOLVE_TIME[_family] = "au plus " + SOLVE_TIME[_info["kind"]]
     CHOOSE_TIME[_family] = "au plus " + CHOOSE_TIME[_info["kind"]].replace(" environ", "")
+    SOLVE_SECONDS[_family] = SOLVE_SECONDS[_info["kind"]]
+    CHOOSE_SECONDS[_family] = CHOOSE_SECONDS[_info["kind"]]
 
 
 def board_text(board: list[str]) -> str:
