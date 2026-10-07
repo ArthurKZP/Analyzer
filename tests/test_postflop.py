@@ -14,6 +14,19 @@ from analyzer.parsers import load_hands
 from analyzer.theory import coach, postflop
 from analyzer.theory.preflop import load_solution
 
+try:
+    from .base import isolate_module, release_module
+except ImportError:  # lancé par « unittest discover -s tests »
+    from base import isolate_module, release_module
+
+
+def setUpModule():
+    isolate_module()
+
+
+def tearDownModule():
+    release_module()
+
 FIXTURES = Path(__file__).parent / "fixtures"
 FAKE_SOLVER = FIXTURES / "fake_solver.py"
 POSIX = os.name != "nt"  # le faux solveur est un script exécutable
@@ -206,8 +219,7 @@ class SolveTest(unittest.TestCase):
         self.assertIn("Flop · Toi (QhJh) — mise 4 bb (25 %)", text)
         self.assertIn("pot 3bet, toi en BB (hors position)", text)
 
-        cached = postflop.cache_path(self.spot.request())
-        self.assertTrue(cached.is_file())
+        self.assertEqual(postflop.cached(self.spot.request()), raw)
         with mock.patch.dict(os.environ, {"ANALYZER_SOLVER": "/introuvable"}):
             self.assertEqual(postflop.solve(self.spot.request()), raw)  # servi par le cache
             with self.assertRaises(postflop.SolverError):
@@ -229,7 +241,7 @@ class SolveTest(unittest.TestCase):
         session = postflop.Session(self.spot.request())
         raw = session.start()
         self.assertTrue(session.alive)
-        self.assertTrue(postflop.cache_path(self.spot.request()).is_file())  # ligne jouée mise en cache
+        self.assertIsNotNone(postflop.cached(self.spot.request()))  # ligne jouée mise en cache
         node = session.node([{"type": "action", "index": 0}])
         self.assertEqual((node["type"], node["player"]), ("action", 1))
         with self.assertRaisesRegex(postflop.SolverError, "out of range"):

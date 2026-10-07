@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from .. import db, store
-from ..db import analyses as db_analyses
+from ..db import analyses as db_analyses, documents
 from ..models import Hand
 from . import postflop, sizing
 from .preflop import MIXED_THRESHOLD
@@ -160,9 +160,10 @@ def digest_keys() -> set[str]:
 
 
 def _done(spot: postflop.PostflopSpot, listed: Optional[set[str]] = None,
-          solved: Optional[set[str]] = None) -> Optional[dict]:
+          solved: Optional[tuple[set[str], set[str]]] = None) -> Optional[dict]:
     """Le résumé de la main pour cet arbre, s'il est déjà fait (ou son résultat en cache). listed : les clés des
-    résumés de la base ; solved : les noms des résultats et études sur le disque (une lecture pour toutes les mains)."""
+    résumés de la base ; solved : les clés des résultats et des études (postflop.solved_keys : une lecture pour
+    toutes les mains)."""
     key = digest_key(spot)
     if listed is None or key in listed:
         data = _read_digest(key)
@@ -184,30 +185,17 @@ _KEYS_LIMIT = 300_000
 
 
 def _signature() -> tuple:
-    """Ce dont dépend le spot d'une main, hors la main : fichiers des tailles choisies, des ranges (charts, ranges
-    ajustées) et réglage de précision (date et taille de chacun)."""
-    home = postflop.home()
-    files = []
-    for folder in (home / "tailles", home / "ranges"):
-        if folder.is_dir():
-            files += sorted(folder.iterdir())
-    files.append(postflop.settings_path())
-    out = []
-    for f in files:
-        try:
-            st = f.stat()
-        except OSError:
-            continue
-        out.append((f.name, st.st_mtime_ns, st.st_size))
-    return (str(home), tuple(out))
+    """Ce dont dépend le spot d'une main, hors la main : tailles choisies, ranges (charts, ranges ajustées) et
+    réglage de précision (leurs révisions dans la base)."""
+    from .studyspots import DEPENDS
+    return documents.revision(db.current(), *DEPENDS)
 
 
 def _variant(spot: postflop.PostflopSpot) -> dict:
     request = spot.request()
     default = dict(request, max_iterations=postflop.DEFAULT_ITERATIONS, target_exploit_pct=postflop.DEFAULT_TARGET)
     return {"theory": spot.plan is not None, "digest": digest_key(spot), "base": postflop.base_key(request),
-            "solved": (postflop.cache_path(default).name, postflop.study_path(default).name),
-            "pot_type": spot.pot_type}
+            "solved": (postflop.cache_key(default), postflop.study_key(default)), "pot_type": spot.pot_type}
 
 
 def _spot_keys(hand: Hand, hero: str, signature: tuple) -> Optional[list[dict]]:
@@ -248,15 +236,16 @@ def _signature_hash(signature: tuple) -> str:
     return _SIGNATURES[signature]
 
 
-def _done_by_keys(hand: Hand, hero: str, variants: list[dict], listed: set[str], solved: set[str],
-                  precisions: dict) -> Optional[dict]:
+def _done_by_keys(hand: Hand, hero: str, variants: list[dict], listed: set[str],
+                  solved: tuple[set[str], set[str]], precisions: dict) -> Optional[dict]:
     """Comme _done, avec les clés gardées : le spot ne se reconstruit que si un résultat attend son résumé."""
     for variant in variants:
         if variant["digest"] in listed:
             data = _read_digest(variant["digest"])
             if data is not None:
                 return data
-        if variant["base"] in precisions or any(name in solved for name in variant["solved"]):
+        result, study = variant["solved"]
+        if variant["base"] in precisions or result in solved[0] or study in solved[1]:
             spot = postflop.build_spot(hand, hero, theory=variant["theory"])
             data = _done(spot, listed, solved)
             if data is not None:
@@ -305,8 +294,7 @@ def collect(hands: list[Hand], hero: str) -> tuple[list[dict], PendingSpots]:
     Une main analysée avec l'arbre d'avant les tailles théoriques (tailles fixes) garde son analyse."""
     done, todo = [], []
     listed = digest_keys()
-    solved = {p.name for d in (postflop.home() / "resolutions", postflop.studies_dir()) if d.is_dir()
-              for p in d.iterdir()}
+    solved = postflop.solved_keys()
     signature = _signature()
     precisions = postflop.precision_entries()
     for hand in hands:

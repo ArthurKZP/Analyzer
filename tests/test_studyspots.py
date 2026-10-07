@@ -5,12 +5,27 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from analyzer import db
 from analyzer.app.library import Library
 from analyzer.app.solves import NeedSession
 from analyzer.app.studies import build_studies_page
+from analyzer.db import documents
 from analyzer.theory import postflop, sizing, studyspots
 from analyzer.theory.preflop import load_solution
 from analyzer.theory.studyspots import SRP_FLOPS, TEXTURES, StudySpot, cards_of, flop_texture
+
+try:
+    from .base import isolate_module, release_module
+except ImportError:  # lancé par « unittest discover -s tests »
+    from base import isolate_module, release_module
+
+
+def setUpModule():
+    isolate_module()
+
+
+def tearDownModule():
+    release_module()
 
 FAKE_SOLVER = Path(__file__).parent / "fixtures" / "fake_solver.py"
 POSIX = os.name != "nt"
@@ -258,7 +273,7 @@ class SolveSpotsTest(unittest.TestCase):
         self.assertEqual((report["raise:ti:x:1"]["method"], plan["raise:ti:x:1"]), ("rare", [33]))
         self.assertNotIn("bet:ti:i", report)  # ligne absente de l'arbre : choix de départ gardé
         self.assertEqual(plan["bet:ti:i"], [100])
-        self.assertTrue(studyspots.selection_path("srp", "KsKd4c").is_file())
+        self.assertIn("KsKd4c", studyspots.selection_boards("srp"))
         # le spot utilise désormais ces tailles
         spot = StudySpot("srp", cards_of("KsKd4c"))
         self.assertEqual(spot.request()["plan"]["bet:fi:"], [75.0])
@@ -269,7 +284,7 @@ class SolveSpotsTest(unittest.TestCase):
         shipped = studyspots.export_selections("srp", self.folder / "livre.json")
         self.shipped.stop()
         with mock.patch.object(studyspots, "shipped_path", lambda family: shipped):
-            studyspots.selection_path("srp", "KsKd4c").unlink()
+            documents.delete(db.current(), "tailles", studyspots.selection_key("srp", "KsKd4c"))
             self.assertEqual(studyspots.load_selection("srp", "KsKd4c")["source"], "livré")
             self.assertEqual(StudySpot("srp", cards_of("KsKd4c")).plan["bet:fi:"], [75])
         self.shipped.start()

@@ -10,7 +10,8 @@ from unittest import mock
 
 from analyzer import backup, db, players
 from analyzer.app import backups as app_backups
-from analyzer.db import analyses
+from analyzer.db import analyses, documents, training
+from analyzer.theory import postflop
 
 POSIX = os.name != "nt"
 
@@ -49,7 +50,8 @@ class BackupTest(unittest.TestCase):
         self.home = self.root / "home"
         self.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.home)})
         self.env.start()
-        self.write("tailles/srp-KsKd4c.json", '{"choix": 1}')
+        old = time.time() - 86400
+        os.utime(self.write("tailles/srp-KsKd4c.json", '{"choix": 1}'), (old, old))  # repris dans la base, daté
         self.write("revue/abc.json", '{"hand": "H1"}')
         self.write("resolutions/r.json", "{}")
         self.write("entrainement/journal.jsonl", '{"n": 1}\n{"n": 2}\n')
@@ -81,27 +83,28 @@ class BackupTest(unittest.TestCase):
         archives = list((dest / "archives").glob("analyzer-*.zip"))
         self.assertEqual(len(archives), 1)
         names = set(zipfile.ZipFile(archives[0]).namelist())
-        self.assertEqual(names, {"tailles/srp-KsKd4c.json", "resolutions/r.json", "entrainement/journal.jsonl",
-                                 "etudes/k1.json", "analyzer.db"})  # type des adversaires et résumés : dans la base
+        self.assertEqual(names, {"analyzer.db"})  # tout est dans la base (les anciens fichiers y ont été repris)
         self.assertEqual((dest / "etudes" / "k1.etude").stat().st_size, 1000)
         self.assertEqual(backup.load_config()["last"]["archive"], archives[0].name)
         self.assertEqual(backup.backup(log=lambda m: None)["studies"], 0)  # rien de neuf à copier
 
-        # Autre ordinateur : rien en local, puis restauration.
+        # Autre ordinateur, qui a déjà servi : la restauration complète sa base sans rien remplacer par plus ancien.
         other = self.root / "autre"
         with mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(other)}):
-            self.write("tailles/srp-KsKd4c.json", '{"choix": "local plus récent"}', home=other)
-            future = time.time() + 3600
-            os.utime(other / "tailles/srp-KsKd4c.json", (future, future))
-            self.write("entrainement/journal.jsonl", '{"n": 2}\n{"n": 3}\n', home=other)
+            here = db.current()
+            documents.put(here, "tailles", "srp:KsKd4c", {"choix": "local plus récent"})
+            training.add(here, [{"n": 2}, {"n": 3}])
+            players.set_kind("Autre", "reg")
             result = backup.restore(str(dest), log=lambda m: None)
-            self.assertEqual((result["kept"], result["studies"]), (1, 1))
-            self.assertIn("local plus récent", (other / "tailles/srp-KsKd4c.json").read_text())
-            self.assertEqual(players.load(), {"Lui": "rec"})  # la base de l'archive (celle d'ici était vide)
-            self.assertEqual(analyses.get(db.current(), "abc"), {"hand": "H1"})
-            journal = (other / "entrainement/journal.jsonl").read_text().splitlines()
-            self.assertEqual(journal, ['{"n": 2}', '{"n": 3}', '{"n": 1}'])  # fusionné, sans doublon
+            self.assertEqual((result["restored"], result["studies"]), (1, 1))
+            self.assertEqual(documents.get(here, "tailles", "srp:KsKd4c"), {"choix": "local plus récent"})
+            self.assertEqual(documents.get(here, "resolution", "r"), {})
+            self.assertEqual(players.load(), {"Lui": "rec", "Autre": "reg"})
+            self.assertEqual(analyses.get(here, "abc"), {"hand": "H1"})
+            self.assertEqual(training.every(here), [{"n": 2}, {"n": 3}, {"n": 1}])  # fusionné, sans doublon
             self.assertTrue((other / "etudes/k1.etude").is_file())
+            self.assertEqual([(m["key"], m["size"]) for m in postflop.list_studies()], [("k1", 1000)])
+            self.assertEqual(backup.restore(str(dest), log=lambda m: None)["restored"], 0)  # déjà à jour
 
     def test_keeps_last_archives_and_ignores_unsafe_members(self):
         dest = self.root / "bk"
@@ -114,10 +117,12 @@ class BackupTest(unittest.TestCase):
         evil = dest / "archives" / "analyzer-99999999-000000.zip"
         with zipfile.ZipFile(evil, "w") as z:
             z.writestr("../evade.txt", "non")
-            z.writestr("tailles/neuf.json", "{}")
+            z.writestr("solveur/x.rs", "// hors de la sauvegarde")
+            z.writestr("tailles/srp-AsKd4c.json", "{}")  # archive d'avant la base
         backup.restore(str(dest), studies=False, log=lambda m: None)
         self.assertFalse((self.root / "evade.txt").exists())
-        self.assertTrue((self.home / "tailles/neuf.json").is_file())
+        self.assertFalse((self.home / "solveur/x.rs").exists())
+        self.assertEqual(documents.get(db.current(), "tailles", "srp:AsKd4c"), {})
 
     def test_restore_archive_from_before_the_database(self):
         dest = self.root / "ancienne"
@@ -125,11 +130,15 @@ class BackupTest(unittest.TestCase):
         with zipfile.ZipFile(dest / "archives" / "analyzer-20260101-000000.zip", "w") as z:
             z.writestr("joueurs.json", '{"Ancien": "rec"}')
             z.writestr("revue/k9.json", '{"hand": "H9"}')
+            z.writestr("plans/p1.json", '{"version": 1, "key": "p1"}')
+            z.writestr("entrainement/journal.jsonl", '{"n": 1}\n{"n": 9}\n')
         db.current()  # la base existe déjà (reprise des fichiers faite) : l'archive la complète quand même
         (self.home / "joueurs.json").unlink()  # sinon, plus récent ici, il serait gardé
         backup.restore(str(dest), studies=False, log=lambda m: None)
         self.assertEqual(players.load()["Ancien"], "rec")
         self.assertEqual(analyses.get(db.current(), "k9"), {"hand": "H9"})
+        self.assertEqual(documents.get(db.current(), "plan", "p1"), {"version": 1, "key": "p1"})
+        self.assertEqual(training.every(db.current()), [{"n": 1}, {"n": 2}, {"n": 9}])
 
     def test_remote_detection(self):
         for dest in ("gdrive:Analyzer", "s3:bucket/analyzer", "mon serveur:"):

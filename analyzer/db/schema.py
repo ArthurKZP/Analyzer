@@ -14,8 +14,9 @@ TYPES = {
 }
 
 # Tables dans l'ordre de leurs dépendances (copie d'une base à l'autre), et celles qui ont une clé automatique.
-TABLES = ("comptes", "espaces", "fichiers", "mains", "participants", "adversaires", "analyses", "reglages")
-IDENTITY = ("comptes", "espaces", "fichiers", "mains")
+TABLES = ("comptes", "espaces", "fichiers", "mains", "participants", "adversaires", "analyses", "reglages",
+          "documents", "etudes", "entrainement", "revisions")
+IDENTITY = ("comptes", "espaces", "fichiers", "mains", "entrainement")
 
 MIGRATIONS: list[tuple[int, str, list[str]]] = [
     (1, "Comptes, espaces, historiques, mains, adversaires, analyses du solveur, réglages", [
@@ -94,6 +95,38 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             cle TEXT NOT NULL,
             valeur TEXT NOT NULL,              -- JSON
             PRIMARY KEY (compte_id, cle)
+        )""",
+    ]),
+    (2, "Documents du solveur (tailles, plans, résolutions, ranges…), études, journal de l'entraîneur, révisions", [
+        """CREATE TABLE documents (
+            compte_id {REF} NOT NULL REFERENCES comptes(id) ON DELETE CASCADE,
+            type TEXT NOT NULL,                -- tailles, plan, resolution, precision, ranges… (db/documents.py)
+            cle TEXT NOT NULL,
+            donnees {BLOB} NOT NULL,           -- JSON compressé (zlib)
+            maj_le TEXT NOT NULL,
+            PRIMARY KEY (compte_id, type, cle)
+        )""",
+        """CREATE TABLE etudes (
+            compte_id {REF} NOT NULL REFERENCES comptes(id) ON DELETE CASCADE,
+            cle TEXT NOT NULL,                 -- clé de l'étude (postflop.study_key) ; l'arbre : fichier <cle>.etude
+            type TEXT NOT NULL,                -- hand | spot | spot-ajuste
+            fiche {BLOB} NOT NULL,             -- la fiche de l'étude, JSON compressé
+            taille {BIG} NOT NULL,             -- octets du fichier de l'arbre
+            maj_le TEXT NOT NULL,
+            PRIMARY KEY (compte_id, cle)
+        )""",
+        """CREATE TABLE entrainement (
+            id {ID},
+            compte_id {REF} NOT NULL REFERENCES comptes(id) ON DELETE CASCADE,
+            le {BIG} NOT NULL,                 -- moment de la décision (secondes depuis 1970)
+            donnees TEXT NOT NULL              -- la décision jugée, JSON (app/trainer.py)
+        )""",
+        "CREATE INDEX entrainement_compte ON entrainement (compte_id, le)",
+        """CREATE TABLE revisions (
+            compte_id {REF} NOT NULL REFERENCES comptes(id) ON DELETE CASCADE,
+            type TEXT NOT NULL,                -- un type de document, « etudes », « reglages »…
+            numero {BIG} NOT NULL,             -- change à chaque écriture : les calculs qui en dépendent se refont
+            PRIMARY KEY (compte_id, type)
         )""",
     ]),
 ]

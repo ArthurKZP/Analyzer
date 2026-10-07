@@ -13,6 +13,19 @@ from analyzer.app.library import Library
 from analyzer.app.server import STATIC, start
 from analyzer.theory import preflop_tree
 
+try:
+    from .base import isolate_module, release_module
+except ImportError:  # lancé par « unittest discover -s tests »
+    from base import isolate_module, release_module
+
+
+def setUpModule():
+    isolate_module()
+
+
+def tearDownModule():
+    release_module()
+
 FIXTURE = Path(__file__).parent / "fixtures" / "betclic_sample.txt"
 
 

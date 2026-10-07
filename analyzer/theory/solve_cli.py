@@ -130,7 +130,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     try:
         raw = postflop.solve(request, on_progress=progress, use_cache=not args.sans_cache, save_study=True)
-        if postflop.study_path(request).is_file():
+        if postflop.has_study(request):
             postflop.write_study_meta(spot, request, raw)  # visible dans « Études du solveur »
     except postflop.SolverError as exc:
         print(f"\n{exc}", file=sys.stderr)

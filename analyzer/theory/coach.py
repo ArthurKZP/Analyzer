@@ -4,7 +4,7 @@
    principale (c-bet, réponse à la c-bet, 2e barrel à chaque turn, 3e barrel sur un échantillon de rivers,
    c-bet retardée, probe…), la stratégie de toute la range regroupée par famille de mains (deux paires et
    mieux, overpair, top pair…, tirage couleur, air) et, à la turn et à la river, par type de carte
-   (overcard, brique, board pairé, couleur ou quinte possible). Gardée dans ~/.analyzer/plans.
+   (overcard, brique, board pairé, couleur ou quinte possible). Gardée dans la base (documents « plan »).
 2. Synthèse, à l'affichage : les flops regroupés par catégorie (hauteur haut, moyen ou bas ; structure
    sèche, deux couleurs ou connectée ; pairé ; monotone), chacune avec son niveau de c-bet (mise presque
    tout, mise souvent, checke souvent), des règles pour quatre familles de mains (fortes, moyennes, tirages,
@@ -14,10 +14,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from .. import db
 from ..cards import RANK_VALUE
+from ..db import documents
 from . import postflop, studyspots
 from .handclass import DRAW_BIT, MADE, MADE_INDEX, classify
 
@@ -73,14 +74,6 @@ RIVER_TURNS = 12  # turns gardées pour les nœuds de river (toutes les rivers d
 
 def lines(family: str) -> tuple:
     return LINES_OOP if studyspots.FAMILIES[family]["oop_initiative"] else LINES_IP
-
-
-def plans_dir() -> Path:
-    return postflop.home() / "plans"
-
-
-def plan_path(key: str) -> Path:
-    return plans_dir() / f"{key}.json"
 
 
 # --- Familles de mains et types de cartes ----------------------------------------------------------
@@ -265,38 +258,21 @@ def _flop_path(query: Callable[[list], dict], family: str) -> list:
     return path
 
 
-def save_plan(data: dict) -> Path:
-    path = plan_path(data["key"])
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    return path
-
-
-_PLANS: dict[Path, tuple[tuple[int, int], Optional[dict]]] = {}  # fichier -> (date et taille, plan lu)
+def save_plan(data: dict) -> None:
+    documents.put(db.current(), "plan", data["key"], data)
 
 
 def load_plan(key: str) -> Optional[dict]:
-    """Le plan de jeu enregistré (relu seulement quand le fichier change)."""
-    path = plan_path(key)
-    try:
-        stat = path.stat()
-    except OSError:
-        return None
-    stamp = (stat.st_mtime_ns, stat.st_size)
-    known = _PLANS.get(path)
-    if known is None or known[0] != stamp:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            data = None
-        known = (stamp, data if isinstance(data, dict) and data.get("version") == VERSION else None)
-        _PLANS[path] = known
-    return known[1]
+    """Le plan de jeu enregistré (dans la base ; gardé en mémoire tant qu'aucun plan ne change)."""
+    data = documents.get(db.current(), "plan", key)
+    return data if isinstance(data, dict) and data.get("version") == VERSION else None
 
 
 def extract_and_save(session: postflop.Session, spot: studyspots.StudySpot) -> dict:
     key = postflop.study_key(session.request)  # l'étude ouverte, à sa précision
-    return json.loads(save_plan(extract(session.node, spot, key)).read_text(encoding="utf-8"))
+    data = extract(session.node, spot, key)
+    save_plan(data)
+    return json.loads(json.dumps(data))  # tel qu'il sera relu
 
 
 def missing(family: Optional[str] = None) -> list[str]:

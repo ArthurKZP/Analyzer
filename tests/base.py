@@ -24,3 +24,23 @@ class IsolatedHome(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.addCleanup(close_storage)
+
+
+_MODULE: list = []
+
+
+def isolate_module() -> None:
+    """Pour setUpModule : un dossier d'Analyzer à part pour tout le module (ses tests qui n'en ont pas à eux)."""
+    tmp = tempfile.TemporaryDirectory()
+    patcher = mock.patch.dict(os.environ, {"ANALYZER_HOME": str(Path(tmp.name) / "home"), "ANALYZER_DB": ""})
+    patcher.start()
+    _MODULE.append((tmp, patcher))
+
+
+def release_module() -> None:
+    """Pour tearDownModule."""
+    close_storage()
+    while _MODULE:
+        tmp, patcher = _MODULE.pop()
+        patcher.stop()
+        tmp.cleanup()

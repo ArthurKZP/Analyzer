@@ -1,6 +1,5 @@
 """Précision visée des résolutions (réglable dans l'application), résultats retrouvés à toute précision, durée
 estimée ; et le graphique des résultats aux courbes masquables."""
-import json
 import os
 import tempfile
 import time
@@ -48,7 +47,7 @@ class SettingTest(HomeTest):
         self.assertEqual(postflop.solved_request(default)["target_exploit_pct"], 0.5)  # la dernière précision
         postflop._save_cache(default, {"decisions": []})  # de retour à la précision par défaut : la note s'efface
         self.assertEqual(postflop.solved_request(fine)["target_exploit_pct"], 1.5)
-        self.assertEqual(json.loads((self.home / "precisions.json").read_text()), {})
+        self.assertEqual(postflop.precision_entries(), {})
 
 
 class EstimateTest(HomeTest):

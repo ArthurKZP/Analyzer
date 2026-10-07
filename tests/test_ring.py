@@ -1,4 +1,3 @@
-import json
 import os
 import tempfile
 import unittest
@@ -85,11 +84,8 @@ class HeadsUpPotTest(unittest.TestCase):
         self.hand = hand("winamax.txt")  # 3-max : toi en BB, 3bet contre l'open du bouton, la SB folde
 
     def write_ranges(self):
-        folder = ring_ranges.folder()
-        folder.mkdir(parents=True)
-        (folder / "3-max.json").write_text(json.dumps({"format": "3-max", "lines": {
-            "BTN:raise BB:raise BTN:call": {"ranges": {"BTN": "AA,KK:0.5,AQs,A9s", "BB": "AA,KK,QQ,AKs"}}}}),
-            encoding="utf-8")
+        ring_ranges.save_solution("3-max", {"format": "3-max", "lines": {
+            "BTN:raise BB:raise BTN:call": {"ranges": {"BTN": "AA,KK:0.5,AQs,A9s", "BB": "AA,KK,QQ,AKs"}}}})
 
     def test_line_and_missing_ranges(self):
         self.assertEqual(postflop.flop_pair(self.hand), ("Hero", "Incognito-a1b2c3d4"))
@@ -169,6 +165,7 @@ class Hand2NoteTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name)
         env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": tmp.name})
         env.start()
         self.addCleanup(env.stop)
@@ -193,9 +190,24 @@ class Hand2NoteTest(unittest.TestCase):
         reference = ring_ranges.vs4bet_reference()  # la capture mesurée : AQs paie, AKs part à tapis
         self.assertEqual((reference["AQs"], "AKs" in reference), ({"C": 1.0}, False))
 
+    def test_import_a_solution_file(self):
+        path = self.home / "ma-solution.json"
+        path.write_text('{"format": "3-max", "lines": {"BTN:raise BB:call": {"ranges": {"BTN": "AA", "BB": "KK"}}}}',
+                        encoding="utf-8")
+        with mock.patch("sys.stdout"):
+            self.assertEqual(ring_ranges.main(["--importer", str(path)]), 0)
+        self.assertEqual(ring_ranges.available(), {"3-max": 1})
+        path.write_text('{"lines": {}}', encoding="utf-8")
+        self.assertEqual(ring_ranges.import_file(path, "6-max"), "6-max")  # format donné à part
+        with self.assertRaises(ValueError):
+            ring_ranges.import_file(path)  # ni dans le fichier, ni dans son nom
+        path.write_text('["pas une solution"]', encoding="utf-8")
+        with self.assertRaises(ValueError):
+            ring_ranges.import_file(path, "6-max")
+
     def test_install_and_solve_a_six_max_pot(self):
-        paths = ring_ranges.install_hand2note(log=lambda message: None, js=H2N_SAMPLE)
-        self.assertEqual([p.name for p in paths], ["6-max.json"])  # pas de chart BTN/SB/BB : pas de 3-max
+        formats = ring_ranges.install_hand2note(log=lambda message: None, js=H2N_SAMPLE)
+        self.assertEqual(formats, ["6-max"])  # pas de chart BTN/SB/BB : pas de 3-max
         self.assertEqual(ring_ranges.available(), {"6-max": 3})  # pot simple, pot 3bet, pot 4bet
         six = hand("betclic_6max.txt")  # le CO ouvre, la BB 3bet, le CO paie
         spot = postflop.build_spot(six, "Joueur6")

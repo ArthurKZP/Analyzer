@@ -1,7 +1,7 @@
 """Tes ranges préflop ajustées pour le solveur : à la place de celles de la référence (solution heads-up, charts des
 tables à plusieurs), pour un coup ou un spot d'étude précis, ou par défaut pour toute une ligne.
 
-Fichier ~/.analyzer/ranges/perso.json (sauvegardé) :
+Gardées dans la base (document « ranges-ajustees », clé « perso ») :
 
     {"lignes": {"6-max|CO:raise BB:call": {"CO": "AA,KK,…", "BB": "…"}},
      "coups": {"<numéro de main ou spot:srp:KsKd4c>": {"BB": "…", "BTN": "…"}}}
@@ -18,6 +18,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from .. import db
+from ..db import documents
 from . import postflop
 from .ring_ranges import line_key, parse_range
 
@@ -28,21 +30,17 @@ RANKS = "AKQJT98765432"
 STEP = 0.10  # « plus serré » / « plus large » : environ 10 % des combos de la range
 
 
-def path() -> Path:
-    return postflop.home() / "ranges" / "perso.json"
+KIND, KEY = "ranges-ajustees", "perso"
 
 
 def load() -> dict:
-    try:
-        data = json.loads(path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        data = {}
+    data = documents.get(db.current(), KIND, KEY)
+    data = data if isinstance(data, dict) else {}
     return {"lignes": dict(data.get("lignes") or {}), "coups": dict(data.get("coups") or {})}
 
 
 def _save(data: dict) -> None:
-    path().parent.mkdir(parents=True, exist_ok=True)
-    path().write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    documents.put(db.current(), KIND, KEY, data)
 
 
 def context(table_format: str, steps: list[tuple[str, str]]) -> str:

@@ -170,8 +170,7 @@ GTOpen pour les bibliothèques CUDA nécessaires).
 **Utilisation** : dans l'application, ouvre un coup dans *Spots* et clique sur **Résoudre ce coup**. Le calcul
 tourne en arrière-plan (une résolution à la fois) ; tu peux continuer à naviguer et revenir plus tard. En
 ligne de commande : `python -m analyzer gtopen -m <numéro de main>` (options `--precision`, `--iterations`,
-`--threads`). Chaque résolution est enregistrée dans `~/.analyzer/resolutions` : un coup déjà résolu
-s'affiche tout de suite.
+`--threads`). Chaque résolution est enregistrée dans la base : un coup déjà résolu s'affiche tout de suite.
 
 **Le spot** construit pour une main :
 
@@ -242,8 +241,8 @@ elle s'applique alors à tes autres coups de cette ligne, à leur analyse et au 
 passe avant celui de sa ligne. *Résoudre avec ces ranges* relance le solveur sur une étude à part : celle de la
 référence reste, et *Revenir à la référence* la rouvre en quelques secondes. Un badge *tes ranges* le rappelle en
 haut de l'explorateur, et la page *Études du solveur* marque ces études. Les séries de spots d'étude, leurs plans de
-jeu et la référence livrée restent faits avec la théorie. Tes ranges sont gardées dans
-`~/.analyzer/ranges/perso.json` (sauvegardé) ; code : `theory/custom_ranges.py`.
+jeu et la référence livrée restent faits avec la théorie. Tes ranges sont gardées dans la base (sauvegardée) ;
+code : `theory/custom_ranges.py`.
 
 **L'EV** est en bb, à partir du moment du coup affiché : un fold vaut 0, le pot déjà au milieu est à gagner
 et les mises à venir sont dépensées. Pour une action (au survol), c'est ce que rapporte cette action puis la
@@ -260,8 +259,9 @@ selon l'EV (nom de la case en italique, note dans le détail du combo), et la re
 l'EV perdue. Quand c'est la range entière qui n'arrive presque jamais à un nœud (moins de 0,5 %), un
 avertissement le signale : la suite du coup n'y est pas optimisée.
 
-**Études du solveur** : chaque coup résolu est gardé sur disque (`~/.analyzer/etudes`, 50 à 170 Mo selon
-l'arbre) sous une forme compacte : la stratégie de chaque nœud sur 8 bits, compressée.
+**Études du solveur** : chaque coup résolu est gardé : sa fiche dans la base, son arbre dans un fichier
+(`~/.analyzer/etudes`, 50 à 170 Mo selon l'arbre) sous une forme compacte : la stratégie de chaque nœud sur 8 bits,
+compressée.
 L'explorateur rouvre une étude en une quinzaine de secondes au lieu de la recalculer (les fréquences
 restent à 1 point près, les EV à quelques centièmes de bb). La page *Études du solveur* de l'application
 liste les études (onglet *Coups joués*), avec leur précision et leur taille, et permet de les rouvrir ou
@@ -279,10 +279,10 @@ dans l'explorateur, à côté de *Résoudre*, et en tête de chaque série de sp
 résolutions suivantes (explorateur, séries, analyse des mains, leakfinding). Chaque choix affiche sa durée
 estimée pour ce spot : la taille de l'arbre (`analyzer-solve --taille`, sans résoudre) × la vitesse de cet
 ordinateur × les itérations qu'il faut pour descendre à cette précision. Vitesse et itérations viennent des
-dernières résolutions faites ici (`~/.analyzer/durees.json`) ; avant la première, de repères mesurés sur 4 cœurs
+dernières résolutions faites ici (notées dans la base) ; avant la première, de repères mesurés sur 4 cœurs
 (environ 3 milliardièmes de seconde par itération, par nœud et par combo ; 1,5 % vers 45 itérations, 0,5 % vers
-70). Un spot déjà résolu se rouvre à sa précision, quelle qu'elle soit (la dernière employée est notée dans
-`~/.analyzer/precisions.json`) ; s'il est moins précis que le réglage, *Affiner* le résout à nouveau. Le choix
+70). Un spot déjà résolu se rouvre à sa précision, quelle qu'elle soit (la dernière employée est notée dans la
+base) ; s'il est moins précis que le réglage, *Affiner* le résout à nouveau. Le choix
 des tailles d'un flop garde sa propre précision (0,4 % du pot au flop).
 
 Ce qui joue sur la durée, mesuré sur 4 cœurs :
@@ -393,7 +393,7 @@ Méthode, street par street, chaque situation à son tour (les autres gardent le
 Mesuré sur K♠K♦4♣ avec 4 cœurs : 35 minutes pour le flop, 5 pour la turn, une demi-heure pour la river,
 puis une dizaine de minutes pour résoudre le flop avec ses tailles (arbre d'environ 1,2 million de nœuds,
 4 Go de mémoire, étude de 430 Mo) : compter une nuit pour une dizaine de flops, moins avec plus de cœurs. Le
-choix est gardé dans `~/.analyzer/tailles` ; ceux calculés à l'avance sont livrés avec Analyzer
+choix est gardé dans la base ; ceux calculés à l'avance sont livrés avec Analyzer
 (`analyzer/theory/data/srp_tailles.json`) et ne se refont pas. La page *Études du solveur* montre sous
 chaque flop ses tailles et, en dépliant, l'EV de chaque taille comparée. Le bouton **Résoudre les flops
 manquants** choisit les tailles qui manquent avant de résoudre ; en ligne de commande, `--spots srp` fait
@@ -443,7 +443,7 @@ livrées (`analyzer/theory/data/4bet_tailles.json`, `4bet_reference.json`).
 **Spots d'étude 6-max** (onglet *6-max* de *Études du solveur*) : les tables à plusieurs sont un autre jeu que
 le heads-up, aux ranges bien plus serrées (la BB défend environ 350 combos contre l'open du bouton en 6-max, bien
 plus en heads-up). Ces séries reprennent les 24 flops des séries heads-up, pour comparer les deux jeux flop par
-flop, avec les ranges de tes charts 6-max (`~/.analyzer/ranges/6-max.json`, voir *Tables à plusieurs*) :
+flop, avec les ranges de tes charts 6-max (dans la base, voir *Tables à plusieurs*) :
 
 | Positions | Pots | Structure (qui a l'initiative) |
 | --- | --- | --- |
@@ -641,7 +641,7 @@ flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de fl
   couleur, tirage quinte, gutshot ou backdoor, hauteur As ou Roi, rien), les turns et rivers par effet sur le
   board (overcard, brique, board pairé, couleur possible, quinte possible). Une étude résolue est lue tout de
   suite ; les anciennes, avec **Préparer le plan** (quelques secondes en pot 4bet, une minute environ en SRP).
-  Résultats dans `~/.analyzer/plans/` (sauvegardés).
+  Résultats dans la base (sauvegardée).
 - **Selon le flop** : une grille par catégorie de flop, la hauteur (haut : As ou Roi ; moyen : Dame à Dix ;
   bas : 9 ou moins) en lignes et la structure (sec ; deux couleurs ; connecté, quintes possibles) en colonnes,
   plus les flops pairés et monotones. Chaque case donne le niveau de c-bet de celui qui a l'initiative
@@ -762,7 +762,7 @@ Menu **Entraîneur** de l'application : tu joues des mains sur les spots d'étud
   stratégie de toute la range, l'EV perdue, et un lien vers l'explorateur à ce nœud. Mêmes règles que
   « Face au solveur » : une action jouée au moins 10 % du temps avec ta main ne coûte rien ; une erreur, c'est
   plus de 0,25 bb d'EV perdue. Par défaut, on enchaîne sans attendre quand l'action est juste.
-- **Tes progrès** : chaque décision est gardée (`~/.analyzer/entrainement/journal.jsonl`) ; la page de
+- **Tes progrès** : chaque décision est gardée (dans la base) ; la page de
   réglages montre, situation par situation, ton taux de décisions justes et l'EV perdue (en tout et sur
   7 jours), les plus coûteuses en tête, avec **S'entraîner** pour les retravailler.
 
@@ -772,8 +772,9 @@ situation où tu perds de l'EV.
 
 ## Sauvegarde
 
-Tout ce qu'Analyzer calcule est dans `~/.analyzer` (ou le dossier de `ANALYZER_HOME`). Menu **Sauvegarde** de
-l'application, ou en ligne de commande :
+Tout ce qu'Analyzer garde est dans la base de données (`~/.analyzer/analyzer.db`, voir plus bas), sauf les arbres
+des études (`~/.analyzer/etudes`) ; `ANALYZER_HOME` change de dossier. Menu **Sauvegarde** de l'application, ou en
+ligne de commande :
 
 ```bash
 python -m analyzer sauvegarde "C:\Users\toi\OneDrive\Analyzer"   # dossier synchronisé ; retenu ensuite
@@ -787,15 +788,18 @@ python -m analyzer sauvegarde --restaurer   # sur un autre ordinateur : reprend 
   application l'envoie sur leurs serveurs), ou un stockage en ligne configuré avec
   [rclone](https://rclone.org) (`rclone config` une fois, puis `nom:dossier` : Google Drive, OneDrive, S3,
   SFTP…). Aucun mot de passe n'est gardé par Analyzer.
-- **L'essentiel** (quelques Mo) : la base de données (tes mains et celles de tes élèves, type des adversaires,
-  résumés des mains analysées), tailles de mise choisies (les plus longues à recalculer : une heure et demie par
-  flop SRP), résolutions en cache, journal de l'entraîneur, fiches des études. Une archive datée par sauvegarde dans `archives/`, les 10 dernières gardées.
+- **L'essentiel** (quelques Mo) : la base de données, copiée de façon cohérente même application ouverte (tes
+  mains et celles de tes élèves, type des adversaires, résumés des mains analysées, tailles de mise choisies — les
+  plus longues à recalculer : une heure et demie par flop SRP —, plans de jeu, résolutions, ranges, réglages,
+  journal de l'entraîneur, fiches des études). Une archive datée par sauvegarde dans `archives/`, les 10 dernières
+  gardées.
 - **Les études** (`--etudes`, option de la page) : les fichiers des arbres résolus (20 Mo à quelques
-  centaines de Mo chacun) dans `etudes/` ; seules les nouvelles ou modifiées sont copiées ensuite.
+  centaines de Mo chacun) dans `etudes/` ; seuls les nouveaux ou modifiés sont copiés ensuite.
 - **Automatique** : après une résolution, un choix de tailles ou une main analysée, au plus une fois par
   quart d'heure.
-- **Restaurer** : la dernière archive, sans écraser un fichier local plus récent (le journal de l'entraîneur
-  est fusionné), puis les études absentes.
+- **Restaurer** : la base de la dernière archive est **fusionnée** dans celle de l'ordinateur : ce qui manque est
+  ajouté, ce qui est plus récent dans l'archive remplace l'ancien, rien n'est effacé ; puis les arbres d'études
+  absents. Une archive plus ancienne, faite de fichiers (d'avant la base), est reprise de la même façon.
 
 Les tailles choisies et les synthèses de référence peuvent aussi rejoindre le dépôt (fichiers
 `analyzer/theory/data/*_tailles.json` et `*_reference.json`, voir plus haut) : elles sont alors livrées avec
@@ -803,30 +807,43 @@ Analyzer.
 
 ### Base de données
 
-Tes mains et celles de tes élèves sont dans une base de données, avec le texte d'origine de chaque historique,
-le type de tes adversaires et les résumés des mains passées au solveur :
+Tout ce qu'Analyzer garde est dans une base de données : tes mains et celles de tes élèves (avec le texte d'origine
+de chaque historique), le type de tes adversaires, les résumés des mains passées au solveur, et les données du
+solveur — tailles de mise choisies, plans de jeu, résultats des résolutions et précision de chaque spot, solutions
+préflop des tables à plusieurs et ranges ajustées, réglages et durées des résolutions, journal de l'entraîneur,
+fiches des études :
 
 - **Sur ton ordinateur** : SQLite, `~/.analyzer/analyzer.db` (rien à installer). Elle est créée au premier
-  lancement et reprend ce qui était dans des fichiers (`joueurs.json`, `revue/`, les élèves de `eleves/` et leurs
-  historiques) ; ces fichiers restent en place mais ne servent plus.
+  lancement et reprend, une seule fois, ce qui était dans des fichiers (`joueurs.json`, `revue/`, les élèves de
+  `eleves/` et leurs historiques, `tailles/`, `plans/`, `resolutions/`, `ranges/`, `entrainement/`,
+  `reglages.json`, `precisions.json`, `durees.json`, les fiches `etudes/*.json`) ; ces fichiers restent en place
+  mais ne servent plus (tu peux les effacer, sauf les arbres `etudes/*.etude`).
 - **En ligne** : PostgreSQL, avec la même structure. `pip install "psycopg[binary]"` puis
   `ANALYZER_DB=postgresql://utilisateur:motdepasse@hôte:5432/base` avant de lancer l'application.
 - **Organisation** : un compte (« local » ici, un client en ligne), ses espaces (toi, chaque élève), et dans chaque
   espace ses historiques (texte d'origine compressé, importé une seule fois) et ses mains (une seule fois chacune,
-  même si deux historiques la contiennent). Le type des adversaires et les résumés du solveur appartiennent au
-  compte. Si le code de lecture des historiques change, les mains sont relues depuis le texte gardé.
+  même si deux historiques la contiennent). Le type des adversaires, les résumés et les données du solveur
+  appartiennent au compte. Si le code de lecture des historiques change, les mains sont relues depuis le texte
+  gardé.
+- **À jour partout** : chaque écriture d'un type de données (tailles, ranges, études…) change sa révision dans la
+  base ; les calculs qui en dépendent (spots d'étude à jour, clés des spots des mains) se refont alors, même quand
+  l'écriture vient d'un autre programme (la ligne de commande pendant que l'application tourne, un autre serveur).
 - **Évolutions** : le schéma est versionné (`analyzer/db/schema.py`) ; les nouvelles versions s'appliquent seules
   à l'ouverture.
-- **Sauvegarde** : la base fait partie de l'archive (copie cohérente, même application ouverte). À la
-  restauration, elle n'est reprise que si celle de l'ordinateur est encore vide. Une base PostgreSQL est
-  sauvegardée par son hébergeur.
-- Les études du solveur (fichiers `.etude`, jusqu'à quelques centaines de Mo) restent des fichiers.
+- **Sauvegarde** : la base est l'archive (copie cohérente, même application ouverte) ; la restauration la fusionne
+  dans celle de l'ordinateur (`analyzer/db/merge.py`). Une base PostgreSQL est sauvegardée par son hébergeur.
+- **Les arbres des études** (fichiers `.etude`, jusqu'à quelques centaines de Mo) restent des fichiers, derrière
+  une interface de stockage (`analyzer/blobs.py`) : un dossier sur ton ordinateur ; en ligne, un stockage objet
+  (S3 ou compatible, hébergé en UE) prendra le relais sans toucher au reste, le dossier local servant de cache au
+  solveur.
 
 ```bash
 python -m analyzer base                                   # état : espaces, mains, historiques, analyses
 python -m analyzer base --importer ~/Historiques          # importe un dossier (et ses .zip) dans ton espace
 python -m analyzer base --importer ~/Paul --eleve paul    # … dans l'espace d'un élève
 python -m analyzer base --copier-vers postgresql://moi:motdepasse@hote:5432/analyzer   # vers une base vide
+python -m analyzer base --fusionner-depuis sqlite:///chemin/analyzer.db   # ajoute ce qui manque d'une autre base
+python -m analyzer base --fusionner-depuis sqlite:///… --compte client-1  # … dans un compte précis
 ```
 
 Ordre de grandeur : 8 000 mains s'importent en 4 secondes et se rechargent en moins d'une seconde ; la base
@@ -914,7 +931,8 @@ analyzer/
                        (coach_chat.py, static/coach.*) et son serveur MCP pour l'abonnement Claude
                        (mcp_server.py), sauvegardes en arrière-plan (backups.py), interface
                        (static/, dont l'explorateur explorer.*)
-  backup.py            sauvegarde et restauration de ~/.analyzer (commande `sauvegarde`)
+  backup.py            sauvegarde et restauration de la base et des études (commande `sauvegarde`)
+  blobs.py             stockage des gros fichiers (arbres des études) : un dossier ici, un stockage objet en ligne
   store.py             cache sur disque des calculs longs (SQLite : mains lues, équités, clés des spots)
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
   leaks.py             leakfinding : stats face à la théorie, revue du solveur, mains à revoir, leaks prioritaires
@@ -922,8 +940,10 @@ analyzer/
                        d'où vient la perte (suite du coup, main au flop, fin du coup, solveur)
   students.py          les élèves : un espace de la base par élève
   db/                  base de données : connexion SQLite ou PostgreSQL et schéma versionné (__init__.py,
-                       schema.py), historiques et mains (hands.py), résumés du solveur (analyses.py), reprise des
-                       anciens fichiers (legacy.py), commande `base` (cli.py)
+                       schema.py), historiques et mains (hands.py), résumés du solveur (analyses.py), documents
+                       du solveur et révisions (documents.py), fiches des études (studies.py), journal de
+                       l'entraîneur (training.py), reprise des anciens fichiers (legacy.py), fusion de deux bases
+                       (merge.py), commande `base` (cli.py)
   cli.py               ligne de commande
 tests/                 tests unitaires (python -m unittest)
 hands/                 tes historiques (ignorés par git)
@@ -954,7 +974,8 @@ pas encore de repère en 3-max. Code : `analyzer/ring.py` (lecture des mains) et
 **Pots à deux joueurs au flop** (3-max, 6-max) : quand il ne reste que deux joueurs au flop, le coup se résout au
 solveur postflop comme un coup heads-up — hors de position celui qui parle le premier après le flop, pot avec
 l'argent mort des joueurs qui ont foldé, tapis effectif des deux joueurs. Leurs ranges viennent de **ta solution
-préflop** du format, à déposer dans `~/.analyzer/ranges/<format>.json` (`6-max.json`, `3-max.json`, sauvegardé) :
+préflop** du format, un fichier JSON à importer dans la base (`python -m analyzer ranges --importer 6-max.json`,
+sauvegardé ; son format est lu dans le fichier, sinon dans son nom, ou donné avec `--format`) :
 
 ```json
 {"format": "6-max", "stack_bb": 100, "source": "…",
@@ -973,8 +994,7 @@ l'ouvreur garde les mains qu'il ouvre *et* paie le 3bet) et 15 pots 4bet (open, 
 site ne publiant pas la réponse au 4bet, celle du 3bettor vient d'une réponse type mesurée sur une capture de solveur
 (la SB face au 4bet du bouton, `theory/data/vs4bet_reference.json`), appliquée à toutes les positions. Le **3-max**
 reprend les charts du BTN, de la SB et de la BB (8 lignes). Les conditions d'utilisation du site réservent ces charts
-à un usage personnel : ils sont téléchargés sur ta machine (`~/.analyzer/ranges/6-max.json` et `3-max.json`), jamais
-dans le dépôt. `python -m analyzer ranges` liste les solutions présentes. L'onglet *Tables à plusieurs* liste ces
+à un usage personnel : ils sont téléchargés pour toi, dans ta base, jamais dans le dépôt. `python -m analyzer ranges` liste les solutions présentes. L'onglet *Tables à plusieurs* liste ces
 coups (les plus gros pots d'abord) avec *Ouvrir au solveur ↗*, ou la raison s'ils ne se résolvent pas encore :
 pas de range pour la ligne, troisième joueur qui a mis de l'argent avant de se coucher (call puis fold, squeeze),
 tapis préflop. L'explorateur montre le préflop de toute la table et les vraies positions (`theory/ring_ranges.py`).

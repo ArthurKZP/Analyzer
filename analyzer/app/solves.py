@@ -130,7 +130,7 @@ class SolveQueue:
         key = postflop.cache_key(request)
         hand_id = spot.ident
         live = self.live_session(hand_id, request) is not None
-        study = postflop.study_path(request).is_file()
+        study = postflop.has_study(request)
         with self._lock:
             job = self._jobs.get(key)
             refine = self._jobs.get(postflop.cache_key(fresh))  # la même, affinée à la précision réglée
@@ -163,7 +163,7 @@ class SolveQueue:
         elif view["state"] == "done" and (view["live"] or not force):
             return view
         job = Job(view["job"], spot.ident, request["max_iterations"], request["target_exploit_pct"],
-                  mode="load" if postflop.study_path(request).is_file() else "solve")
+                  mode="load" if postflop.has_study(request) else "solve")
         with self._lock:
             self._jobs[job.key] = job
         (self._loader if job.mode == "load" else self._executor).submit(self._run, job, spot, request, keep_live)
@@ -268,7 +268,7 @@ class SolveQueue:
                 proc.terminate()
         try:
             raw = session.start(on_progress=job.progress.update, on_start=on_start)
-            if session.study.is_file() and (not session.loading or not session.study.with_suffix(".json").is_file()):
+            if postflop.has_study(request) and (not session.loading or postflop.study_meta(request) is None):
                 spot.write_meta(request, raw, session)
             after = getattr(spot, "after_solve", None)
             if after is not None and not session.loading:  # ex. le plan de jeu d'un spot d'étude
@@ -317,7 +317,7 @@ class SolveQueue:
     def _run_plan(self, job: Job, spot, request: dict, extract: Callable[[postflop.Session, object], None]) -> None:
         if job.cancelled:
             return
-        if not postflop.study_path(request).is_file():
+        if not postflop.has_study(request):
             job.state, job.error = "error", "Étude introuvable."
             return
         self._set_live("", None)  # une étude à la fois en mémoire

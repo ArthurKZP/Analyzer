@@ -1,4 +1,3 @@
-import json
 import os
 import shutil
 import tempfile
@@ -51,8 +50,7 @@ class StoreTest(HomeTest):
         self.assertTrue(custom_ranges.clear("coup", "H1"))
         self.assertFalse(custom_ranges.clear("coup", "H1"))
         self.assertEqual(custom_ranges.lookup("H1", "HU|BTN:raise BB:call")[0], "ligne")
-        self.assertEqual(custom_ranges.path(), self.home / "ranges" / "perso.json")
-        self.assertEqual(ring_ranges.available(), {})  # le fichier n'est pas une solution de format
+        self.assertEqual(ring_ranges.available(), {})  # tes ranges ajustées ne sont pas une solution de format
         with self.assertRaises(ValueError):
             custom_ranges.save("tout", "H1", {"BB": "AA"})
 
@@ -84,11 +82,8 @@ class SpotTest(HomeTest):
         self.assertIn("ajustées pour ce coup", postflop.result_text(result, "Hero"))
 
     def test_ring_hand(self):
-        folder = ring_ranges.folder()
-        folder.mkdir(parents=True)
-        (folder / "3-max.json").write_text(json.dumps({"format": "3-max", "lines": {
-            "BTN:raise BB:raise BTN:call": {"ranges": {"BTN": "AA,KK:0.5,AQs,A9s", "BB": "AA,KK,QQ,AKs"}}}}),
-            encoding="utf-8")
+        ring_ranges.save_solution("3-max", {"format": "3-max", "lines": {
+            "BTN:raise BB:raise BTN:call": {"ranges": {"BTN": "AA,KK:0.5,AQs,A9s", "BB": "AA,KK,QQ,AKs"}}}})
         hand = parse_text((SITES / "winamax.txt").read_text(encoding="utf-8"))[0]
         spot = postflop.build_spot(hand, "Hero")
         self.assertEqual(spot.context, "3-max|BTN:raise BB:raise BTN:call")  # le fold de la SB ne compte pas
@@ -114,7 +109,7 @@ class SpotTest(HomeTest):
         study.parent.mkdir(parents=True, exist_ok=True)
         study.write_bytes(b"x")
         spot.write_meta(request, {"iterations": 10, "exploit_pct": 0.5, "seconds": 3})
-        meta = json.loads(study.with_suffix(".json").read_text(encoding="utf-8"))
+        meta = postflop.study_meta(request)
         self.assertEqual((meta["kind"], meta["hand"], meta["adjusted"]), ("spot-ajuste", ident, "coup"))
         self.assertEqual(studyspots.spot_studies(), {})  # ni dans la série…
         self.assertEqual(studyspots.stale_spot_studies(), [])  # …ni parmi les études à refaire

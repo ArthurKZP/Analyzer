@@ -1,4 +1,3 @@
-import json
 import os
 import tempfile
 import unittest
@@ -10,20 +9,17 @@ from analyzer.theory.studyspots import StudySpot, canonical, cards_of, flop_dist
 
 
 def write_selection(home: Path, family: str, board: str, plan: dict) -> None:
-    path = home / "tailles" / f"{family}-{board}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"plan": plan, "family": family, "board": board}), encoding="utf-8")
+    studyspots.save_selection(family, board, {"plan": plan})
 
 
 def write_study(home: Path, spot: StudySpot) -> None:
-    """Fiche d'étude « résolue » pour ce spot (sans arbre réel : un fichier vide suffit à la liste)."""
+    """Fiche d'étude « résolue » pour ce spot (sans arbre réel : un fichier presque vide suffit à la liste)."""
     request = spot.request()
     path = postflop.study_path(request)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"x")
-    meta = {"kind": "spot", "key": postflop.study_key(request), "id": spot.ident, "family": spot.family,
-            "board": spot.board, "texture": spot.texture}
-    path.with_suffix(".json").write_text(json.dumps(meta), encoding="utf-8")
+    postflop.save_study_meta(request, {"kind": "spot", "key": postflop.study_key(request), "id": spot.ident,
+                                       "family": spot.family, "board": spot.board, "texture": spot.texture})
 
 
 class FlopHelpersTest(unittest.TestCase):

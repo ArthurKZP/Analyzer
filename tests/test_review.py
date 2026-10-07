@@ -157,8 +157,8 @@ class AnalyzeTest(unittest.TestCase):
             self.assertIn("Face au solveur", lib.player_page("Villain", "solveur"))
             self.assertIn("2 / 2</b>", lib.self_page("solveur"))
             # le résumé survit au cache des résultats (clé du spot seul)
-            for path in (Path(os.environ["ANALYZER_HOME"]) / "resolutions").glob("*.json"):
-                path.unlink()
+            from analyzer import db
+            db.current().execute("DELETE FROM documents WHERE type = 'resolution'")
             self.assertEqual(review.collect(self.hands, "Hero")[0][0]["hand"] in ("HAND01", "HAND02"), True)
             self.assertEqual(len(review.collect(self.hands, "Hero")[1]), 0)
             json.dumps(lib.review_cancel())

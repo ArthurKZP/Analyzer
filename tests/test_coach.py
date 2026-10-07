@@ -1,4 +1,3 @@
-import json
 import os
 import tempfile
 import unittest
@@ -121,7 +120,7 @@ class ExtractTest(unittest.TestCase):
 
         coach.save_plan(data)
         self.assertEqual(coach.load_plan("cle")["id"], "spot:srp:Ks7d2c")
-        coach.plan_path("cle").write_text(json.dumps(dict(data, version=0)), encoding="utf-8")
+        coach.save_plan(dict(data, version=0))
         self.assertIsNone(coach.load_plan("cle"))  # extraction d'une autre version : à refaire
 
 

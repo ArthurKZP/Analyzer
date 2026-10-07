@@ -1,5 +1,4 @@
 """Spots d'étude 6-max : un autre jeu que le heads-up (ranges des charts 6-max), sur les mêmes flops."""
-import json
 import os
 import tempfile
 import unittest
@@ -32,11 +31,8 @@ class RingHome(unittest.TestCase):
         self.addCleanup(env.stop)
 
     def write_charts(self):
-        folder = ring_ranges.folder()
-        folder.mkdir(parents=True, exist_ok=True)
-        (folder / "6-max.json").write_text(json.dumps({"format": "6-max", "source": "Charts de test — synthétiques",
-                                                       "lines": {k: {"ranges": v} for k, v in LINES.items()}}),
-                                           encoding="utf-8")
+        ring_ranges.save_solution("6-max", {"format": "6-max", "source": "Charts de test — synthétiques",
+                                            "lines": {k: {"ranges": v} for k, v in LINES.items()}})
 
 
 class FamiliesTest(unittest.TestCase):
@@ -124,11 +120,8 @@ class RingSpotTest(RingHome):
 
     def test_ring_hand_uses_ring_sizes(self):
         hand = parse_text((SITES / "winamax.txt").read_text(encoding="utf-8"))[0]  # 3-max : BB 3bette le bouton
-        folder = ring_ranges.folder()
-        folder.mkdir(parents=True)
-        (folder / "3-max.json").write_text(json.dumps({"format": "3-max", "lines": {
-            "BTN:raise BB:raise BTN:call": {"ranges": {"BTN": "AA,KK:0.5,AQs,A9s", "BB": "AA,KK,QQ,AKs"}}}}),
-            encoding="utf-8")
+        ring_ranges.save_solution("3-max", {"format": "3-max", "lines": {
+            "BTN:raise BB:raise BTN:call": {"ranges": {"BTN": "AA,KK:0.5,AQs,A9s", "BB": "AA,KK,QQ,AKs"}}}})
         spot = postflop.build_spot(hand, "Hero")
         self.assertEqual((spot.family, spot.size_target), ("3bet", "6max_bb_btn_3bet"))  # pas encore de 6-max
         info = spot.sizes_info()

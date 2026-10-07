@@ -1,7 +1,8 @@
 """Ranges préflop des tables à plusieurs (3-max, 6-max), tirées de tes solutions : de quoi résoudre au postflop les
 coups où il ne reste que deux joueurs au flop.
 
-Une solution par format de table, dans ~/.analyzer/ranges/<format>.json (« 6-max.json », « 3-max.json ») :
+Une solution par format de table (« 6-max », « 3-max »), gardée dans la base (documents « ranges ») ; importée
+d'un fichier JSON (python -m analyzer ranges --importer FICHIER) ou des charts de Hand2Note Guide (--hand2note) :
 
     {"format": "6-max", "stack_bb": 100, "source": "…",
      "lines": {"CO:raise BB:call": {"pot_type": "SRP", "ranges": {"CO": "AA,AKs,KQo:0.5,…", "BB": "…"}},
@@ -16,17 +17,20 @@ from __future__ import annotations
 import json
 import re
 import urllib.request
-from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import postflop
+from .. import db
+from ..db import documents
 
 POT_TYPES = {1: "SRP", 2: "pot 3bet", 3: "pot 4bet"}
 
 
-def folder() -> Path:
-    return postflop.home() / "ranges"
+def missing_hint(table_format: str) -> str:
+    """Comment donner sa solution d'un format de table."""
+    return (f"importe ta solution {table_format} (python -m analyzer ranges --importer FICHIER.json"
+            + (", ou --hand2note pour les charts de Hand2Note Guide" if table_format in ("6-max", "3-max") else "")
+            + ")")
 
 
 def line_key(steps: list[tuple[str, str]]) -> str:
@@ -59,20 +63,30 @@ def parse_range(text: str) -> dict[str, float]:
     return out
 
 
-@lru_cache(maxsize=8)
-def _load(path: str, mtime: float) -> Optional[dict]:
-    try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) and isinstance(data.get("lines"), dict) else None
+def _valid(data) -> bool:
+    return isinstance(data, dict) and isinstance(data.get("lines"), dict)
 
 
 def solution(table_format: str) -> Optional[dict]:
-    path = folder() / f"{table_format}.json"
-    if not path.is_file():
-        return None
-    return _load(str(path), path.stat().st_mtime)
+    """Ta solution pour ce format de table (dans la base), ou None."""
+    data = documents.get(db.current(), "ranges", table_format)
+    return data if _valid(data) else None
+
+
+def save_solution(table_format: str, data: dict) -> None:
+    if not _valid(data):
+        raise ValueError("Solution illisible : il faut un objet JSON avec ses lignes (« lines »).")
+    documents.put(db.current(), "ranges", table_format, dict(data, format=table_format))
+
+
+def import_file(path: Path, table_format: Optional[str] = None) -> str:
+    """Importe une solution (fichier JSON au format ci-dessus) ; renvoie son format de table."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    table_format = table_format or (data.get("format") if isinstance(data, dict) else None) or Path(path).stem
+    if not re.fullmatch(r"(HU|[2-9]-max)", str(table_format)):
+        raise ValueError(f"Format de table inconnu : {table_format} (« 6-max », « 3-max »…).")
+    save_solution(table_format, data)
+    return table_format
 
 
 def lookup(table_format: str, steps: list[tuple[str, str]]) -> Optional[tuple[str, dict[str, dict[str, float]]]]:
@@ -89,10 +103,10 @@ def lookup(table_format: str, steps: list[tuple[str, str]]) -> Optional[tuple[st
 def available() -> dict[str, int]:
     """Formats dont tu as donné une solution, avec leur nombre de lignes."""
     out = {}
-    for path in sorted(folder().glob("*.json")) if folder().is_dir() else []:
-        data = solution(path.stem)
+    for table_format in documents.keys(db.current(), "ranges"):
+        data = solution(table_format)
         if data:
-            out[path.stem] = len(data["lines"])
+            out[table_format] = len(data["lines"])
     return out
 
 
@@ -100,7 +114,7 @@ def available() -> dict[str, int]:
 #
 # Le site publie ses charts dans un fichier de données (open de chaque position, réponse à un open, réponse au 3bet
 # de l'ouvreur ; fréquences en %, arrondies à 25 %). Ses conditions d'utilisation les réservent à un usage
-# personnel : on les télécharge sur ta machine, dans ~/.analyzer/ranges, jamais dans le dépôt.
+# personnel : on les télécharge pour toi, dans ta base, jamais dans le dépôt.
 # Pots couverts : pots simples (open, call), pots 3bet (open, 3bet, call) et pots 4bet (open, 3bet, 4bet, call) :
 # le site ne publiant pas la réponse au 4bet, celle du 3bettor vient d'une réponse type (data/vs4bet_reference.json,
 # la SB face au 4bet du bouton) appliquée à toutes les positions. Le 3-max reprend les charts du BTN, de la SB et
@@ -195,9 +209,9 @@ def lines_from_charts(charts: dict[str, dict[str, dict]], positions: tuple[str, 
     return {key: entry for key, entry in lines.items() if all(entry["ranges"].values())}
 
 
-def install_hand2note(log: Callable[[str], None] = print, js: Optional[str] = None) -> list[Path]:
-    """Télécharge les charts 6-max de Hand2Note Guide et écrit ~/.analyzer/ranges/6-max.json et 3-max.json (ce
-    dernier : les charts du BTN, de la SB et de la BB), pour ton usage personnel."""
+def install_hand2note(log: Callable[[str], None] = print, js: Optional[str] = None) -> list[str]:
+    """Télécharge les charts 6-max de Hand2Note Guide et en tire tes solutions 6-max et 3-max (cette dernière : les
+    charts du BTN, de la SB et de la BB), pour ton usage personnel ; renvoie les formats enregistrés."""
     if js is None:
         log(f"Téléchargement des charts préflop de Hand2Note Guide ({HAND2NOTE_PAGE})…")
         request = urllib.request.Request(HAND2NOTE_URL, headers={"User-Agent": "Mozilla/5.0 (Analyzer)"})
@@ -207,23 +221,21 @@ def install_hand2note(log: Callable[[str], None] = print, js: Optional[str] = No
     vs4bet = vs4bet_reference()
     source = ("Hand2Note Guide — charts préflop GTO 6-max 100 bb (PioSolver, fréquences arrondies à 25 %), usage "
               "personnel ; réponse au 4bet : capture de solveur (SB face au 4bet du bouton), pour toutes les positions")
-    paths = []
-    folder().mkdir(parents=True, exist_ok=True)
+    formats = []
     for table_format, positions in (("6-max", SIX_MAX), ("3-max", THREE_MAX)):
         lines = lines_from_charts(charts, positions, vs4bet)
         if not lines:
             continue
         data = {"format": table_format, "stack_bb": 100, "url": HAND2NOTE_PAGE, "lines": lines,
                 "source": source + ("" if table_format == "6-max" else " ; 3-max : charts 6-max du BTN, de la SB et de la BB")}
-        path = folder() / f"{table_format}.json"
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        save_solution(table_format, data)
         counts = {t: sum(1 for e in lines.values() if e["pot_type"] == t) for t in ("SRP", "pot 3bet", "pot 4bet")}
         log(f"{table_format} : {len(lines)} lignes ({counts['SRP']} pots simples, {counts['pot 3bet']} pots 3bet, "
-            f"{counts['pot 4bet']} pots 4bet) dans {path}")
-        paths.append(path)
-    if not paths:
+            f"{counts['pot 4bet']} pots 4bet)")
+        formats.append(table_format)
+    if not formats:
         raise ValueError("Format des charts de Hand2Note Guide non reconnu : aucune ligne lue.")
-    return paths
+    return formats
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -235,14 +247,19 @@ def main(argv: Optional[list[str]] = None) -> int:
                     "les solutions présentes.")
     parser.add_argument("--hand2note", action="store_true",
                         help="télécharge les charts 6-max 100 bb de Hand2Note Guide (usage personnel)")
+    parser.add_argument("--importer", metavar="FICHIER",
+                        help="importe ta solution d'un format de table (JSON, voir l'aide du module)")
+    parser.add_argument("--format", metavar="FORMAT", help="avec --importer : son format (« 6-max »…), s'il n'y "
+                                                           "est pas écrit")
     args = parser.parse_args(argv)
-    if args.hand2note:
-        try:
+    try:
+        if args.hand2note:
             install_hand2note()
-        except (OSError, ValueError) as exc:
-            print(f"Échec : {exc}", file=sys.stderr)
-            return 1
+        if args.importer:
+            print(f"Solution {import_file(Path(args.importer).expanduser(), args.format)} importée.")
+    except (OSError, ValueError) as exc:
+        print(f"Échec : {exc}", file=sys.stderr)
+        return 1
     found = available()
-    print("Solutions : " + (", ".join(f"{fmt} ({n} lignes)" for fmt, n in found.items()) if found else "aucune")
-          + f" — dossier {folder()}")
+    print("Solutions : " + (", ".join(f"{fmt} ({n} lignes)" for fmt, n in found.items()) if found else "aucune"))
     return 0

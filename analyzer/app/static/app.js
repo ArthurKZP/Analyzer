@@ -434,7 +434,7 @@
       try {
         await backupApi('/reglages', settings());
         if (path === '/restaurer' && !window.confirm('Restaurer la dernière sauvegarde de ' + dest.value + ' ? '
-          + 'Les fichiers plus récents sur cet ordinateur sont gardés.')) return showBackup();
+          + 'Elle est fusionnée avec ce qui est sur cet ordinateur : rien n\'est effacé ni remplacé par plus ancien.')) return showBackup();
         await backupApi(path, {});
       } catch (err) { status.textContent = err.message; return; }
       showBackup();
@@ -449,7 +449,7 @@
         v.running === 'restore' ? 'Restauration en cours…' : 'Sauvegarde en cours…'));
     } else if (v.error) status.append(el('p', { class: 'error' }, v.error));
     else if (v.result && v.result.restored !== undefined) {
-      status.append(el('p', {}, 'Restauré : ' + v.result.restored + ' fichier(s) de ' + v.result.archive
+      status.append(el('p', {}, (v.result.restored ? 'Restauré depuis ' : 'Déjà à jour avec ') + v.result.archive
         + (v.result.studies ? ', ' + v.result.studies + ' étude(s)' : '') + '.'));
     }
     if (v.last) {

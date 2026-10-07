@@ -27,7 +27,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from .. import blobs, db
 from ..cards import combo_notation
+from ..db import documents, studies as db_studies
 from ..models import BET, CALL, CHECK, FOLD, RAISE, VOLUNTARY, Hand
 from .extract import hand_at
 from .preflop import MAIN_THRESHOLD, MIXED_THRESHOLD, Solution, load_solution
@@ -675,7 +677,7 @@ def _ring_ranges(hand: Hand, hero: str, pre: list) -> tuple[str, str, str, dict]
     found = ring_ranges.lookup(hand.table_format, steps)
     if found is None:
         raise Unsupported(f"Pas de range préflop pour « {ring_ranges.describe(steps)} » en {hand.table_format} : "
-                          f"ajoute ta solution ({ring_ranges.folder() / (hand.table_format + '.json')}).")
+                          f"{ring_ranges.missing_hint(hand.table_format)}.")
     pot_type, by_position = found
     if any(pos not in by_position for pos in positions.values()):
         raise Unsupported(f"Ta solution ne donne pas les deux ranges de « {ring_ranges.describe(steps)} ».")
@@ -739,32 +741,27 @@ def study_key(request: dict) -> str:
     return hashlib.sha256(_identity(request).encode()).hexdigest()[:20]
 
 
-def cache_path(request: dict) -> Path:
-    return home() / "resolutions" / f"{cache_key(request)}.json"
-
-
 def cached(request: dict) -> Optional[dict]:
-    path = cache_path(request)
-    if path.is_file():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except ValueError:
-            return None
-    return None
+    """Le résultat de la ligne jouée, gardé dans la base (documents « resolution »), ou None."""
+    return documents.get(db.current(), "resolution", cache_key(request), memo=False)
 
 
 def _save_cache(request: dict, result: dict) -> None:
-    path = cache_path(request)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result), encoding="utf-8")
+    documents.put(db.current(), "resolution", cache_key(request), result)
     _remember_precision(request)
+
+
+def solved_keys() -> tuple[set[str], set[str]]:
+    """Les clés des résultats gardés et des études enregistrées (une lecture pour toutes les mains)."""
+    base = db.current()
+    return set(documents.keys(base, "resolution")), db_studies.keys(base)
 
 
 # --- Précision des résolutions et durée ----------------------------------------------------------
 #
 # La précision visée (exploitabilité, en % du pot) se règle dans l'application ; elle fait partie de la requête
 # (et donc de la clé d'un résultat). Pour retrouver un spot déjà résolu quelle que soit sa précision, la dernière
-# précision employée pour chaque spot est notée (precisions.json) ; sans note, celle par défaut.
+# précision employée pour chaque spot est notée (documents « precision ») ; sans note, celle par défaut.
 
 PRECISIONS = (3.0, 2.0, 1.5, 1.0, 0.5)
 ITERATION_CAP = {3.0: 120, 2.0: 120, 1.5: 120, 1.0: 250, 0.5: 600}  # garde-fou si l'objectif n'est pas atteint
@@ -775,15 +772,14 @@ def iterations_for(target: float) -> int:
     return ITERATION_CAP.get(target, DEFAULT_ITERATIONS if target >= DEFAULT_TARGET else 600)
 
 
-def settings_path() -> Path:
-    return home() / "reglages.json"
+SETTINGS = "reglages"  # type de révision des réglages du solveur (la précision)
 
 
 def precision() -> float:
-    """La précision visée des nouvelles résolutions (réglage de l'application)."""
+    """La précision visée des nouvelles résolutions (réglage de l'application, dans la base)."""
     try:
-        value = float(json.loads(settings_path().read_text(encoding="utf-8")).get("precision", DEFAULT_TARGET))
-    except (OSError, ValueError, TypeError, AttributeError):
+        value = float(db.current().setting("precision", DEFAULT_TARGET))
+    except (TypeError, ValueError):
         return DEFAULT_TARGET
     return value if value in PRECISIONS else DEFAULT_TARGET
 
@@ -791,14 +787,10 @@ def precision() -> float:
 def set_precision(target: float) -> float:
     if target not in PRECISIONS:
         raise ValueError(f"Précision inconnue : {target}")
-    with _lock:
-        try:
-            data = json.loads(settings_path().read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            data = {}
-        data["precision"] = target
-        settings_path().parent.mkdir(parents=True, exist_ok=True)
-        settings_path().write_text(json.dumps(data), encoding="utf-8")
+    base = db.current()
+    with base.transaction():
+        base.set_setting("precision", target)
+        documents.bump(base, SETTINGS)
     return target
 
 
@@ -811,63 +803,40 @@ def base_key(request: dict) -> str:
     return hashlib.sha256(json.dumps(rest, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:20]
 
 
-def _precisions_path() -> Path:
-    return home() / "precisions.json"
-
-
-def _precisions() -> dict:
-    try:
-        data = json.loads(_read_small(_precisions_path()) or "{}")
-    except ValueError:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
 def precision_entries() -> dict:
     """Les spots résolus à une autre précision que celle par défaut : base_key -> {iterations, target}."""
-    return _precisions()
+    return dict(documents.items(db.current(), "precision"))
 
 
 def _remember_precision(request: dict) -> None:
     """Note la précision du dernier résultat de ce spot (celle par défaut n'a pas besoin de note)."""
     entry = {"iterations": request.get("max_iterations"), "target": request.get("target_exploit_pct")}
-    with _lock:
-        data = _precisions()
-        key = base_key(request)
-        if entry == {"iterations": DEFAULT_ITERATIONS, "target": DEFAULT_TARGET}:
-            if data.pop(key, None) is None:
-                return
-        else:
-            data[key] = entry
-        _precisions_path().parent.mkdir(parents=True, exist_ok=True)
-        _precisions_path().write_text(json.dumps(data), encoding="utf-8")
-        _SMALL.pop(_precisions_path(), None)  # relu au prochain appel, même si la date n'a pas bougé
+    base = db.current()
+    if entry == {"iterations": DEFAULT_ITERATIONS, "target": DEFAULT_TARGET}:
+        documents.delete(base, "precision", base_key(request))
+    elif documents.get(base, "precision", base_key(request)) != entry:
+        documents.put(base, "precision", base_key(request), entry)
 
 
-def solved_request(request: dict, existing: Optional[set[str]] = None) -> Optional[dict]:
+def solved_request(request: dict, existing: Optional[tuple[set[str], set[str]]] = None) -> Optional[dict]:
     """La requête de ce spot dont le résultat ou l'étude existe, quelle que soit sa précision ; None sinon.
-    existing : les noms des fichiers de résultats et d'études déjà listés (évite un accès disque par spot)."""
-    entry = _precisions().get(base_key(request))
+    existing : les clés des résultats et des études déjà listées (solved_keys : une lecture pour tous les spots)."""
+    entry = documents.get(db.current(), "precision", base_key(request))
     candidates = [dict(request, max_iterations=entry["iterations"], target_exploit_pct=entry["target"])] if entry else []
     candidates.append(dict(request, max_iterations=DEFAULT_ITERATIONS, target_exploit_pct=DEFAULT_TARGET))
+    results, studies = existing if existing is not None else (None, None)
     for candidate in candidates:
         if existing is not None:
-            if cache_path(candidate).name in existing or study_path(candidate).name in existing:
+            if cache_key(candidate) in results or study_key(candidate) in studies:
                 return candidate
-        elif cache_path(candidate).is_file() or study_path(candidate).is_file():
+        elif cached(candidate) is not None or has_study(candidate):
             return candidate
     return None
 
 
-def durations_path() -> Path:
-    return home() / "durees.json"
-
-
 def _durations() -> list[dict]:
-    try:
-        data = json.loads(durations_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
+    """Les dernières résolutions faites ici (taille de l'arbre, exploitabilité par itération), dans la base."""
+    data = db.current().setting("durees", [])
     return data if isinstance(data, list) else []
 
 
@@ -891,9 +860,7 @@ class _Tracker:
             return
         entry = {"nodes": self.size["tree_nodes"], "hands": sum(self.size["hands"]), "curve": self.curve[-60:]}
         with _lock:
-            data = _durations()[-(MAX_DURATIONS - 1):] + [entry]
-            durations_path().parent.mkdir(parents=True, exist_ok=True)
-            durations_path().write_text(json.dumps(data), encoding="utf-8")
+            db.current().set_setting("durees", _durations()[-(MAX_DURATIONS - 1):] + [entry])
 
 
 MAX_DURATIONS = 100
@@ -1028,18 +995,36 @@ def solve(request: dict, on_progress: Optional[Callable[[dict], None]] = None,
     return result
 
 
-# --- Études : arbres résolus gardés sur disque ------------------------------------------------
+# --- Études : arbres résolus gardés (fichiers, analyzer/blobs.py), fiches dans la base ------------------
 
 def studies_dir() -> Path:
-    return home() / "etudes"
+    """Le dossier local des arbres (où le solveur les écrit et les relit)."""
+    return blobs.studies().root
 
 
 def study_path(request: dict) -> Path:
-    return studies_dir() / f"{study_key(request)}.etude"
+    """Le chemin local de l'arbre de cette étude (pour analyzer-solve --save)."""
+    return blobs.studies().path(study_key(request))
+
+
+def has_study(request: dict) -> bool:
+    """L'arbre de cette étude est-il enregistré ?"""
+    return blobs.studies().exists(study_key(request))
+
+
+def study_meta(request: dict) -> Optional[dict]:
+    return db_studies.get(db.current(), study_key(request))
+
+
+def save_study_meta(request: dict, meta: dict) -> None:
+    """Enregistre la fiche d'une étude dont l'arbre vient d'être écrit (et confie l'arbre au stockage)."""
+    files, key = blobs.studies(), study_key(request)
+    files.stored(key)
+    db_studies.save(db.current(), key, meta, files.size(key) or 0)
 
 
 def write_study_meta(spot: PostflopSpot, request: dict, raw: dict) -> None:
-    """Fiche de l'étude (pour la bibliothèque), à côté du fichier de l'arbre."""
+    """Fiche de l'étude (pour la bibliothèque)."""
     hand = spot.hand
     meta = {
         "kind": "hand", "key": study_key(request), "base": base_key(request), "hand": hand.hand_id,
@@ -1051,40 +1036,22 @@ def write_study_meta(spot: PostflopSpot, request: dict, raw: dict) -> None:
         "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"), "seconds": raw.get("seconds"),
         "menu": spot.menu_text(), "created": time.strftime("%d/%m/%Y %H:%M"), "adjusted": spot.adjusted,
     }
-    path = study_path(request).with_suffix(".json")
-    path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    save_study_meta(request, meta)
 
 
 def list_studies() -> list[dict]:
-    """Études enregistrées, de la plus récente à la plus ancienne, avec la taille de leur fichier."""
-    out = []
-    folder = studies_dir()
-    if not folder.is_dir():
-        return out
-    for meta_path in folder.glob("*.json"):
-        tree = meta_path.with_suffix(".etude")
-        if not tree.is_file():
-            continue
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except ValueError:
-            continue
-        meta["size"] = tree.stat().st_size
-        meta["mtime"] = tree.stat().st_mtime
-        out.append(meta)
+    """Études enregistrées (fiche dans la base et arbre présent), de la plus récente à la plus ancienne, avec la
+    taille de leur arbre."""
+    present = blobs.studies().keys()
+    out = [m for m in db_studies.every(db.current()) if m["key"] in present]
     return sorted(out, key=lambda m: -m["mtime"])
 
 
 def delete_study(key: str) -> bool:
     if not re.fullmatch(r"[0-9a-f]{20}", key):
         return False
-    removed = False
-    for suffix in (".etude", ".json"):
-        path = studies_dir() / f"{key}{suffix}"
-        if path.is_file():
-            path.unlink()
-            removed = True
-    return removed
+    removed = db_studies.delete(db.current(), key)
+    return blobs.studies().delete(key) or removed
 
 
 class Session:
@@ -1098,7 +1065,7 @@ class Session:
         self.request = request
         self.save = save
         self.study = study_path(request)
-        self.loading = save and self.study.is_file()
+        self.loading = save and has_study(request)
         self.result: Optional[dict] = None
         self.proc: Optional[subprocess.Popen] = None
         self.last_used = time.time()
@@ -1114,7 +1081,7 @@ class Session:
         if not exe.is_file():
             raise SolverError(status()["message"])
         if self.loading:
-            cmd = [str(exe), "--load", str(self.study), "--serve"]
+            cmd = [str(exe), "--load", str(blobs.studies().fetch(study_key(self.request))), "--serve"]
         else:
             req_path = Path(self._tmp.name) / "requete.json"
             req_path.write_text(json.dumps(self.request), encoding="utf-8")

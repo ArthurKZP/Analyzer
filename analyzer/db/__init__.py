@@ -1,5 +1,6 @@
 """La base de données d'Analyzer : tes mains et celles de tes élèves (avec leurs historiques d'origine), le type de
-tes adversaires et les résumés des mains passées au solveur.
+tes adversaires, les résumés des mains passées au solveur et les données du solveur (tailles choisies, plans de jeu,
+résultats, ranges, réglages, journal de l'entraîneur, fiches des études).
 
 - SQLite par défaut : ~/.analyzer/analyzer.db (ANALYZER_HOME pour changer de dossier), rien à installer.
 - PostgreSQL pour la version en ligne : ANALYZER_DB=postgresql://utilisateur:motdepasse@hôte:5432/base
@@ -7,7 +8,8 @@ tes adversaires et les résumés des mains passées au solveur.
 
 Le même code sert aux deux : les requêtes s'écrivent avec des « ? » (convertis pour PostgreSQL) et la syntaxe
 commune (ON CONFLICT, RETURNING). Le schéma évolue par migrations numérotées (schema.py), appliquées à l'ouverture.
-Les études du solveur (fichiers .etude, jusqu'à quelques centaines de Mo) restent des fichiers.
+Les arbres des études du solveur (fichiers .etude, jusqu'à quelques centaines de Mo) restent des fichiers
+(analyzer/blobs.py).
 
 Tout appartient à un compte (« local » sur ton ordinateur ; un client, en ligne) ; un compte a ses espaces (toi,
 tes élèves), chacun avec ses historiques et ses mains.

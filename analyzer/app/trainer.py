@@ -1,26 +1,22 @@
 """Entraîneur : jouer des mains face au solveur sur les spots d'étude résolus (static/trainer.js).
 
 Le jeu tourne dans la page, sur les nœuds de l'explorateur (session de l'étude ouverte) ; le serveur
-donne la liste des spots et des situations, juge les abattages et tient le journal des décisions
-(~/.analyzer/entrainement/journal.jsonl) pour suivre les progrès situation par situation.
+donne la liste des spots et des situations, juge les abattages et tient le journal des décisions (dans la base,
+table entrainement) pour suivre les progrès situation par situation.
 """
 from __future__ import annotations
 
-import json
 import re
 import time
-from pathlib import Path
 from typing import Optional
 
+from .. import db
 from ..cards import describe_holding, evaluate, parse_card
+from ..db import training
 from ..theory import postflop, review, sizing, studyspots
 
 MAX_ENTRIES = 40  # décisions enregistrées par envoi (une main en a bien moins)
 RECENT_DAYS = 7
-
-
-def journal_path() -> Path:
-    return postflop.home() / "entrainement" / "journal.jsonl"
 
 
 def situation_labels(family: str) -> dict[str, str]:
@@ -100,27 +96,12 @@ def clean(entry) -> Optional[dict]:
 def record(entries) -> dict:
     rows = [e for e in (clean(x) for x in (entries if isinstance(entries, list) else [])[:MAX_ENTRIES]) if e]
     if rows:
-        path = journal_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            for row in rows:
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        training.add(db.current(), rows)
     return {"saved": len(rows), "progress": progress()}
 
 
 def read_journal() -> list[dict]:
-    path = journal_path()
-    if not path.is_file():
-        return []
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(row, dict) and clean(row) is not None:
-            rows.append(row)
-    return rows
+    return [row for row in training.every(db.current()) if isinstance(row, dict) and clean(row) is not None]
 
 
 def progress() -> dict:
@@ -149,7 +130,5 @@ def progress() -> dict:
 
 
 def clear() -> dict:
-    path = journal_path()
-    if path.is_file():
-        path.unlink()
+    training.clear(db.current())
     return progress()

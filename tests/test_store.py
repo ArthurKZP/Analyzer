@@ -105,9 +105,8 @@ class SpotKeysTest(TempHome):
             self.assertEqual(len(review.collect(hands, "Hero")[1]), 2)  # clés gardées
             review._KEYS.clear()
             self.assertEqual(len(review.collect(hands, "Hero")[1]), 2)  # … et sur disque
-        sizes = self.home / "tailles"
-        sizes.mkdir()
-        (sizes / "srp-KsKd4c.json").write_text("{}", encoding="utf-8")  # un réglage change : on recalcule
+        from analyzer.theory import studyspots
+        studyspots.save_selection("srp", "KsKd4c", {})  # un réglage change : on recalcule
         calls = []
         real = review.postflop.build_spot
         with mock.patch.object(review.postflop, "build_spot", side_effect=lambda *a, **k: calls.append(1) or real(*a, **k)):

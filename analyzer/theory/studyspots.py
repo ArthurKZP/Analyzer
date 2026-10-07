@@ -4,8 +4,8 @@ Une famille fixe le préflop (ex. SRP : open du bouton à 2,5 bb, call de la BB,
 viennent de la solution préflop, l'arbre est le même que pour les mains jouées (sans tailles jouées).
 Chaque flop est classé par texture : pairé, monotone, sinon par sa plus haute carte.
 
-Les tailles de mise d'un flop se choisissent par situation (voir sizing.py) ; le choix est gardé dans
-~/.analyzer/tailles, ou livré avec Analyzer (data/<famille>_tailles.json), et le spot l'utilise.
+Les tailles de mise d'un flop se choisissent par situation (voir sizing.py) ; le choix est gardé dans la base
+(documents « tailles »), ou livré avec Analyzer (data/<famille>_tailles.json), et le spot l'utilise.
 """
 from __future__ import annotations
 
@@ -18,7 +18,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from .. import db
 from ..cards import RANK_VALUE
+from ..db import documents
 from . import postflop, sizing
 from .preflop import Solution, load_solution
 
@@ -44,7 +46,7 @@ FAMILIES = {
 }
 
 # Spots d'étude des tables à plusieurs (6-max, 100 bb) : un autre jeu que le heads-up, aux ranges bien plus serrées.
-# Ranges : tes charts 6-max (ring_ranges, ~/.analyzer/ranges/6-max.json). Tailles préflop : open à 2,5 bb (celui des
+# Ranges : tes charts 6-max (ring_ranges, dans la base). Tailles préflop : open à 2,5 bb (celui des
 # charts), 3bet à 3 fois l'open en position (7,5 bb) et 4 fois hors de position (10 bb), 4bet à 22 bb en position et
 # 20 bb hors de position ; la blinde d'un joueur qui a foldé reste au pot.
 RING_FORMAT = "6-max"
@@ -98,8 +100,8 @@ def ring_spot_ranges(family: str) -> dict[str, dict[str, float]]:
     found = ring_ranges.lookup(RING_FORMAT, list(info["steps"]))
     if found is None or any(p not in found[1] for p in (info["oop"], info["ip"])):
         raise postflop.Unsupported(f"Pas de ranges 6-max pour « {ring_ranges.describe(list(info['steps']))} » : "
-                                   "charge les charts 6-max (onglet Tables à plusieurs de Mon jeu) ou ajoute ta "
-                                   f"solution ({ring_ranges.folder() / (RING_FORMAT + '.json')}).")
+                                   "charge les charts 6-max (onglet Tables à plusieurs de Mon jeu) ou "
+                                   f"{ring_ranges.missing_hint(RING_FORMAT)}.")
     return {p: dict(found[1][p]) for p in (info["oop"], info["ip"])}
 
 
@@ -315,8 +317,7 @@ class StudySpot(postflop.SpotTree):
                 "seconds": raw.get("seconds"), "menu": self.menu_text(), "created": time.strftime("%d/%m/%Y %H:%M"),
                 "adjusted": self.adjusted,
             }
-            postflop.study_path(request).with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False),
-                                                                         encoding="utf-8")
+            postflop.save_study_meta(request, meta)
             return
         meta = {
             "kind": "spot", "key": postflop.study_key(request), "base": postflop.base_key(request), "id": self.ident,
@@ -328,8 +329,7 @@ class StudySpot(postflop.SpotTree):
         }
         if session is not None:
             meta["summary"] = flop_summary(session, self.family)
-        path = postflop.study_path(request).with_suffix(".json")
-        path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        postflop.save_study_meta(request, meta)
 
 
 def _entry(title: str, node: dict, path: list) -> dict:
@@ -401,26 +401,18 @@ def _current(meta: dict) -> Optional[bool]:
 _SPOT_STUDIES: dict[tuple, dict[str, dict]] = {}
 
 
+DEPENDS = ("tailles", "ranges", "ranges-ajustees", postflop.SETTINGS)  # ce dont dépend l'arbre d'un spot
+
+
 def _studies_signature() -> tuple:
-    """Ce dont dépend la liste des spots d'étude à jour : les fiches d'études, les tailles choisies, les ranges et
-    la précision (date et taille de chaque fichier)."""
-    home = postflop.home()
-    out = []
-    for folder in (postflop.studies_dir(), home / "tailles", home / "ranges"):
-        if folder.is_dir():
-            for f in folder.iterdir():
-                if f.suffix in (".json", ".etude"):
-                    try:
-                        st = f.stat()
-                    except OSError:
-                        continue
-                    out.append((f.name, st.st_mtime_ns, st.st_size))
+    """Ce dont dépend la liste des spots d'étude à jour : les études, les tailles choisies, les ranges et la
+    précision (leurs révisions dans la base), et les arbres présents dans le dossier des études."""
+    folder = postflop.studies_dir()
     try:
-        st = postflop.settings_path().stat()
-        out.append(("reglages", st.st_mtime_ns, st.st_size))
+        stamp = folder.stat().st_mtime_ns  # un arbre ajouté ou effacé à la main
     except OSError:
-        pass
-    return (str(home), tuple(sorted(out)))
+        stamp = 0
+    return documents.revision(db.current(), "etudes", *DEPENDS) + (str(folder), stamp)
 
 
 def spot_studies(families: Optional[tuple[str, ...]] = None) -> dict[str, dict]:
@@ -444,8 +436,8 @@ def stale_spot_studies() -> list[dict]:
 
 # --- Tailles choisies ------------------------------------------------------------------------
 
-def selection_path(family: str, board: str) -> Path:
-    return postflop.home() / "tailles" / f"{family}-{board}.json"
+def selection_key(family: str, board: str) -> str:
+    return f"{family}:{board}"
 
 
 def shipped_path(family: str) -> Path:
@@ -473,8 +465,8 @@ def _read_json(path: Path) -> Optional[object]:
 
 
 def load_selection(family: str, board: str) -> Optional[dict]:
-    """Choix des tailles d'un flop : fait sur cet ordinateur, sinon livré avec Analyzer ; None sinon."""
-    local = _read_json(selection_path(family, board))
+    """Choix des tailles d'un flop : fait ici (dans la base), sinon livré avec Analyzer ; None sinon."""
+    local = documents.get(db.current(), "tailles", selection_key(family, board))
     if isinstance(local, dict):
         return dict(local, source="local")
     shipped = _read_json(shipped_path(family))
@@ -485,8 +477,8 @@ def load_selection(family: str, board: str) -> Optional[dict]:
 
 
 def selection_boards(family: str) -> list[str]:
-    """Flops dont les tailles sont choisies : sur cet ordinateur ou livrées avec Analyzer."""
-    boards = {path.stem.split("-", 1)[1] for path in (postflop.home() / "tailles").glob(f"{family}-*.json")}
+    """Flops dont les tailles sont choisies : ici (dans la base) ou livrées avec Analyzer."""
+    boards = {key.split(":", 1)[1] for key in documents.keys(db.current(), "tailles", family + ":")}
     shipped = _read_json(shipped_path(family))
     if isinstance(shipped, dict):
         boards |= set(shipped.get("flops", {}))
@@ -504,14 +496,14 @@ def closest_selection(family: str, board: list[str]) -> Optional[tuple[str, dict
     return None
 
 
-_CHOICES: dict[str, tuple] = {}  # famille -> (signature des fichiers, {flop: choix})
+_CHOICES: dict[str, tuple] = {}  # famille -> (signature, {flop: choix})
 
 
 def _choices(family: str) -> dict[str, dict]:
-    """Les choix de tailles d'une famille (sur cet ordinateur ou livrés), par flop ; relus quand un fichier
-    change (les analyses en lot construisent un spot par main)."""
-    files = sorted((postflop.home() / "tailles").glob(f"{family}-*.json")) + [shipped_path(family)]
-    signature = tuple((str(f), f.stat().st_mtime_ns) for f in files if f.is_file())
+    """Les choix de tailles d'une famille (faits ici ou livrés), par flop ; relus quand un choix change (les
+    analyses en lot construisent un spot par main)."""
+    shipped = shipped_path(family)
+    signature = documents.revision(db.current(), "tailles") + ((shipped.stat().st_mtime_ns,) if shipped.is_file() else ())
     cached = _CHOICES.get(family)
     if cached and cached[0] == signature:
         return cached[1]
@@ -616,21 +608,17 @@ def flop_options(family: str, board: list[str]) -> dict:
             "sizes": target.menu_text(), "sizes_from": target.sizes_from, "cost": cost}
 
 
-def save_selection(family: str, board: str, result: dict) -> Path:
-    path = selection_path(family, board)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(dict(result, family=family, board=board), ensure_ascii=False, indent=1),
-                    encoding="utf-8")
-    return path
+def save_selection(family: str, board: str, result: dict) -> None:
+    documents.put(db.current(), "tailles", selection_key(family, board), dict(result, family=family, board=board))
 
 
 def export_selections(family: str = "srp", path: Optional[Path] = None) -> Path:
-    """Rassemble les choix de tailles faits sur cet ordinateur dans le fichier livré avec Analyzer."""
+    """Rassemble les choix de tailles faits ici (dans la base) dans le fichier livré avec Analyzer."""
     flops = {}
     for board in flop_set(family):
-        local = selection_path(family, board)
-        if local.is_file():
-            flops[board] = json.loads(local.read_text(encoding="utf-8"))
+        local = documents.get(db.current(), "tailles", selection_key(family, board), memo=False)
+        if isinstance(local, dict):
+            flops[board] = local
     path = path or shipped_path(family)
     # Une ligne par flop : le fichier reste lisible sans grossir (le détail de chaque comparaison y est).
     lines = [f"  {json.dumps(board)}: {json.dumps(chosen, ensure_ascii=False, separators=(',', ':'))}"

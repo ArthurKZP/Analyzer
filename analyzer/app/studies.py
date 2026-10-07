@@ -412,7 +412,7 @@ def _ring_section() -> str:
     if ring_ranges.solution(studyspots.RING_FORMAT) is None:
         return (f"<h2>Spots d'étude 6-max</h2><div class=\"card\">{intro}<p class=\"note\">Charge d'abord tes "
                 "charts 6-max : onglet <b>Tables à plusieurs</b> de <i>Mon jeu</i> (charts de Hand2Note Guide), ou "
-                f"ta solution dans <code>{escape(str(ring_ranges.folder() / '6-max.json'))}</code>.</p></div>")
+                "ta solution : <code>python -m analyzer ranges --importer FICHIER.json</code>.</p></div>")
     pairs: dict[str, list[str]] = {}
     for family in families:
         pairs.setdefault(studyspots.RING_FAMILIES[family]["pair"], []).append(family)

@@ -19,7 +19,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-VERSIONS = {"equite": 1, "mains": 1, "spots": 3, "fiches": 1}
+VERSIONS = {"equite": 1, "mains": 1, "spots": 4, "fiches": 1}
 PICKLED = {"mains"}  # espaces gardés en pickle (objets Python)
 BY_KEY = {"mains"}  # espaces volumineux : lus clé par clé, pas chargés en entier
 WRITE_BATCH = 500
