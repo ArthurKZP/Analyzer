@@ -10,6 +10,10 @@
    tout, mise souvent, checke souvent), des règles pour quatre familles de mains (fortes, moyennes, tirages,
    rien), la suite selon la carte de turn et de river, et le pourquoi (avantage d'équité, avantage de nuts).
    Plus il y a de flops résolus, plus le plan est précis.
+
+Un plan par famille de spots d'étude : heads-up (SRP, pot 3bet, pot 4bet) et tables à plusieurs (6-max, une famille
+par paire de positions et type de pot, avec tes charts). Les arbres 6-max ont la forme du heads-up de même structure
+(celui qui a l'initiative, hors de position ou en position) : mêmes lignes, avec les vraies positions.
 """
 from __future__ import annotations
 
@@ -19,7 +23,7 @@ from typing import Callable, Iterable, Optional
 from .. import db
 from ..cards import RANK_VALUE
 from ..db import documents
-from . import postflop, studyspots
+from . import postflop, sizing, studyspots
 from .handclass import DRAW_BIT, MADE, MADE_INDEX, classify
 
 VERSION = 1  # change quand l'extraction change : les plans plus anciens sont refaits
@@ -47,6 +51,7 @@ CARD_LABEL = dict(CARDS)
 # Nœuds extraits : (clé, titre, actions depuis la racine). « * » : chaque carte de la turn ou de la river ;
 # « bet » prend la mise la plus jouée par la range quand il y en a plusieurs. Un nœud forcé (la BB qui ne
 # peut que checker) est traversé par son action unique.
+# Titres écrits pour le heads-up (BB hors de position, bouton en position) ; en 6-max, renommés avec les vraies positions.
 LINES_IP = (  # le bouton à l'initiative : SRP, pot 4bet
     ("cbet", "C-bet du bouton", ["check"]),
     ("vs_cbet", "BB face à la c-bet", ["check", "bet"]),
@@ -73,7 +78,30 @@ RIVER_TURNS = 12  # turns gardées pour les nœuds de river (toutes les rivers d
 
 
 def lines(family: str) -> tuple:
-    return LINES_OOP if studyspots.FAMILIES[family]["oop_initiative"] else LINES_IP
+    info = studyspots.family_info(family)
+    base = LINES_OOP if info["oop_initiative"] else LINES_IP
+    if family in studyspots.FAMILIES:
+        return base
+    return tuple((name, sizing.rename_roles(title.replace("Bouton", "BTN"), info["oop"], info["ip"]), steps)
+                 for name, title, steps in base)
+
+
+def plan_families() -> tuple[str, ...]:
+    """Les familles qui ont un plan de jeu : heads-up, puis 6-max."""
+    return tuple(studyspots.FAMILIES) + tuple(studyspots.RING_FAMILIES)
+
+
+def seat_names(family: Optional[str]) -> tuple[str, str]:
+    """Les positions des deux joueurs (hors de position, en position) : BB et BTN en heads-up."""
+    info = studyspots.RING_FAMILIES.get(family or "")
+    return (info["oop"], info["ip"]) if info else ("BB", "BTN")
+
+
+def seat_words(family: str) -> tuple[str, str]:
+    """Les deux joueurs avec leur article, pour les phrases : « la BB », « le bouton », « le CO »…"""
+    if family in studyspots.FAMILIES:
+        return "la BB", "le bouton"
+    return tuple(("la " if pos in ("SB", "BB") else "le ") + pos for pos in seat_names(family))
 
 
 # --- Familles de mains et types de cartes ----------------------------------------------------------
@@ -276,21 +304,23 @@ def extract_and_save(session: postflop.Session, spot: studyspots.StudySpot) -> d
 
 
 def missing(family: Optional[str] = None) -> list[str]:
-    """Spots résolus (arbre actuel) sans plan extrait."""
+    """Spots résolus (arbre actuel) sans plan extrait : ceux d'une famille, ou de toutes (heads-up et 6-max)."""
+    wanted = (family,) if family else plan_families()
     out = []
-    for ident, meta in studyspots.spot_studies().items():
-        if (family is None or meta.get("family") == family) and load_plan(meta["key"]) is None:
+    for ident, meta in studyspots.spot_studies(wanted).items():
+        if meta.get("family") in wanted and load_plan(meta["key"]) is None:
             out.append(ident)
     return sorted(out)
 
 
 def plans(family: str) -> list[dict]:
     out = []
-    for meta in studyspots.spot_studies().values():
-        if meta.get("family") == family:
-            data = load_plan(meta["key"])
-            if data:
-                out.append(data)
+    for meta in studyspots.spot_studies((family,)).values():
+        if meta.get("family") != family:
+            continue
+        data = load_plan(meta["key"])
+        if data:
+            out.append(data)
     return sorted(out, key=lambda d: (studyspots.TEXTURES.index(d["texture"]), d["id"]))
 
 
@@ -352,8 +382,9 @@ def pattern_of(share: float) -> str:
 
 
 def aggressor_of(family: str) -> int:
-    """Joueur à l'initiative : 0 = BB (pot 3bet), 1 = bouton (SRP, pot 4bet)."""
-    return 0 if studyspots.FAMILIES[family]["oop_initiative"] else 1
+    """Joueur à l'initiative : 0 = hors de position (la BB en pot 3bet heads-up), 1 = en position (le bouton en SRP
+    et en pot 4bet heads-up)."""
+    return 0 if studyspots.family_info(family)["oop_initiative"] else 1
 
 
 def flop_row(data: dict) -> dict:
@@ -521,10 +552,12 @@ def family_plan(family: str) -> dict:
     """Le plan d'une famille de pots, à partir des plans extraits de ses flops résolus : une entrée par catégorie
     de flop (hauteur et structure, pairé, monotone)."""
     data = plans(family)
-    info = studyspots.FAMILIES[family]
+    info = studyspots.family_info(family)
     a = aggressor_of(family)
-    who, other = ("la BB", "le bouton") if a == 0 else ("le bouton", "la BB")
-    out = {"family": family, "name": info["name"], "label": info["label"], "count": len(data),
+    oop, ip = seat_words(family)
+    who, other = (oop, ip) if a == 0 else (ip, oop)
+    out = {"family": family, "name": info["name"], "label": info["label"], "title": studyspots.family_title(family),
+           "ring": family in studyspots.RING_FAMILIES, "pair": info.get("pair"), "count": len(data),
            "missing": len(missing(family)), "who": who, "other": other, "groups": []}
     rows = [flop_row(d) for d in data]
     out["flops"] = rows
@@ -575,14 +608,14 @@ def _class(combo: str) -> str:
     return postflop.class_of(combo)
 
 
-def node_brief(node: dict, examples: int = 6) -> dict:
+def node_brief(node: dict, examples: int = 6, names: tuple[str, str] = ("BB", "BTN")) -> dict:
     """Un nœud d'étude résumé pour une explication : qui agit, les actions et leurs fréquences dans toute la
     range, puis par famille de mains (part de la range, fréquences, équité et EV moyennes), et des exemples
-    de mains pour chaque action."""
+    de mains pour chaque action. names : les positions des joueurs 0 (hors de position) et 1."""
     out = {"type": node["type"], "board": node.get("board"), "pot": node.get("pot")}
     if node.get("rare"):
         out["avertissement"] = ("Ligne que le solveur ne prend presque jamais ("
-                                + ", ".join(f"{'BB' if p == 0 else 'BTN'} y arrive avec {round(100 * node['presence'][p], 2)} % "
+                                + ", ".join(f"{names[p]} y arrive avec {round(100 * node['presence'][p], 2)} % "
                                             "de sa range" for p in node["rare"])
                                 + ") : les stratégies qui suivent n'y sont pas optimisées, lis les EV plutôt que les fréquences.")
     if node["type"] != "action":
@@ -633,14 +666,15 @@ def node_brief(node: dict, examples: int = 6) -> dict:
         known = [r for r in node["hands"][p] if r[2] is not None]
         w = sum(r[1] for r in known)
         eqs.append(round(sum(r[1] * r[2] for r in known) / w, 3) if w else None)
-    out.update({"joueur": "BB" if actor == 0 else "BTN", "tapis": node.get("stacks"),
+    out.update({"joueur": names[actor], "tapis": node.get("stacks"),
                 "actions": labels, "frequences_range": {labels[k]: round(freqs[k], 3) for k in range(na)},
                 "par_famille": by_family, "exemples": samples,
-                "equite_ranges": {"BB": eqs[0], "BTN": eqs[1]}})
+                "equite_ranges": {names[0]: eqs[0], names[1]: eqs[1]}})
     return out
 
 
-def combo_brief(node: dict, combo: str, player: Optional[int] = None) -> Optional[dict]:
+def combo_brief(node: dict, combo: str, player: Optional[int] = None,
+                names: tuple[str, str] = ("BB", "BTN")) -> Optional[dict]:
     """Une main précise à ce nœud : sa famille, son équité (et son rang dans la range), et pour le joueur qui
     agit sa stratégie et l'EV de chaque action. Sans joueur précisé : celui qui agit d'abord."""
     combo = combo.strip()
@@ -655,7 +689,7 @@ def combo_brief(node: dict, combo: str, player: Optional[int] = None) -> Optiona
         rows = node["hands"][p]
         better = sum(r[1] for r in rows if r[2] is not None and row[2] is not None and r[2] > row[2])
         total = sum(r[1] for r in rows) or 1.0
-        out = {"main": combo, "joueur": "BB" if p == 0 else "BTN", "famille": BUCKET_LABEL[bucket(combo, node["board"])],
+        out = {"main": combo, "joueur": names[p], "famille": BUCKET_LABEL[bucket(combo, node["board"])],
                "presence": round(row[1], 3), "equite": row[2], "ev_bb": row[3],
                "rang_equite": f"meilleure que {round(100 * (1 - better / total))} % de la range" if row[2] is not None else None}
         if node["type"] == "action" and node["player"] == p:

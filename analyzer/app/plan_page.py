@@ -1,4 +1,5 @@
-"""Page « Plan de jeu suggéré » : les études résolues réduites à des règles simples (voir theory/coach.py)."""
+"""Page « Plan de jeu suggéré » : les études résolues réduites à des règles simples (voir theory/coach.py), en
+heads-up et aux tables à plusieurs (6-max, une famille par paire de positions et type de pot)."""
 from __future__ import annotations
 
 import json
@@ -6,13 +7,19 @@ from html import escape
 from urllib.parse import quote
 
 from ..report import cards_html, html_page
-from ..theory import coach, studyspots
+from ..theory import coach, postflop, ring_ranges, studyspots
 
 SIZE_TEXT = {"small": "petite mise", "medium": "mise moyenne", "big": "grosse mise", "overbet": "overbet",
              "raise": "relance", "allin": "tapis"}
 
 STYLE = """
-.pl-fams { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; width: fit-content; margin: 4px 0 12px; }
+.pl-switch { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 12px; }
+.pl-row { display: flex; align-items: flex-start; gap: 6px 14px; }
+.pl-fmt { font-weight: 600; font-size: 13px; min-width: 70px; padding-top: 6px; }
+.pl-pairs { display: flex; flex-wrap: wrap; gap: 8px 16px; flex: 1; }
+.pl-pair { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pl-pair > span { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.pl-fams { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; width: fit-content; }
 .pl-fams button { font: inherit; font-size: 13px; padding: 5px 14px; border: 0; border-right: 1px solid var(--border);
   background: var(--surface); color: var(--ink); cursor: pointer; }
 .pl-fams button:last-child { border-right: 0; }
@@ -275,11 +282,18 @@ def _legend() -> str:
 
 
 def _family(plan: dict) -> str:
+    if plan["ring"]:
+        try:
+            studyspots.ring_spot_ranges(plan["family"])
+        except postflop.Unsupported as exc:  # tes charts n'ont pas cette ligne
+            return f'<div class="card"><p class="note">{escape(str(exc))}</p></div>'
     if not plan["count"]:
+        where = ("Études du solveur › 6-max" if plan["ring"] else "l'onglet de la série dans Études du solveur")
         hint = (f"{plan['missing']} étude(s) attendent leur lecture : clique sur <b>Préparer le plan</b>."
-                if plan["missing"] else "Résous des flops de cette série (onglet de la série, ou l'explorateur) : le plan se "
+                if plan["missing"] else f"Résous des flops de cette série ({where}, ou l'explorateur) : le plan se "
                 "construit à partir des études.")
-        return f'<div class="card"><p class="muted">Pas encore de plan pour les {escape(plan["name"])}. {hint}</p></div>'
+        return (f'<div class="card"><p class="muted">Pas encore de plan pour : {escape(plan["title"])}. {hint}</p>'
+                "</div>")
     total = len(studyspots.flop_set(plan["family"]))
     return f"""
 <p class="note">{escape(plan["label"])}. D'après <b>{plan["count"]}</b> flop(s) résolu(s) sur {total} dans la série ; plus
@@ -298,11 +312,29 @@ de part de deux paires et mieux. Un clic ouvre le flop dans l'explorateur.</p></
 def build_coach_page(state: dict, embed: bool = True, villains: tuple = ()) -> str:
     """state : bilan des plans (Library.plan_state) pour le bandeau de préparation ; villains : adversaires
     proposés dans les questions d'exemple du coach."""
-    plans = [coach.family_plan(f) for f in studyspots.FAMILIES]
+    charts = ring_ranges.solution(studyspots.RING_FORMAT) is not None
+    families = coach.plan_families() if charts else tuple(studyspots.FAMILIES)
+    plans = [coach.family_plan(f) for f in families]
     default = max(plans, key=lambda p: p["count"])["family"] if plans else "srp"
-    tabs = "".join(
-        f'<button type="button" data-fam="{p["family"]}"{" data-default" if p["family"] == default else ""}>'
-        f'{escape(p["name"])} <span class="muted">({p["count"]})</span></button>' for p in plans)
+
+    def tab(p: dict) -> str:
+        return (f'<button type="button" data-fam="{p["family"]}"{" data-default" if p["family"] == default else ""}>'
+                f'{escape(p["name"])} <span class="muted">({p["count"]})</span></button>')
+    hu = [p for p in plans if not p["ring"]]
+    rows = [f'<div class="pl-row"><span class="pl-fmt">Heads-up</span><div class="pl-fams">{"".join(map(tab, hu))}</div></div>']
+    if charts:
+        pairs: dict[str, list[dict]] = {}
+        for p in plans:
+            if p["ring"]:
+                pairs.setdefault(p["pair"], []).append(p)
+        rows.append('<div class="pl-row"><span class="pl-fmt">6-max</span><div class="pl-pairs">' + "".join(
+            f'<div class="pl-pair"><span>{escape(pair)}</span><div class="pl-fams">{"".join(map(tab, group))}</div></div>'
+            for pair, group in pairs.items()) + "</div></div>")
+    else:
+        rows.append('<div class="pl-row"><span class="pl-fmt">6-max</span><span class="muted small" '
+                    'style="padding-top:6px">charge d\'abord tes charts 6-max (onglet <b>Tables à plusieurs</b> de '
+                    '<i>Mon jeu</i>) puis résous des flops dans <i>Études du solveur › 6-max</i>.</span></div>')
+    tabs = "".join(rows)
     missing = state.get("missing", 0)
     head = (f'<div class="card"><div class="pl-head" data-missing="{missing}">'
             f'<span>{"<b>" + str(missing) + "</b> étude(s) pas encore lue(s) par le coach" if missing else "Toutes les études sont lues."}</span>'
@@ -313,6 +345,9 @@ def build_coach_page(state: dict, embed: bool = True, villains: tuple = ()) -> s
     sections = "".join(f'<section class="pl-fam" data-fam="{p["family"]}" hidden>{_family(p)}</section>' for p in plans)
     suggestions = ["Résume-moi le plan de jeu en SRP", "Sur quels flops puis-je c-better toute ma range ?",
                    "Comment continuer à la turn après une c-bet payée ?"]
+    ring = max((p for p in plans if p["ring"] and p["count"]), key=lambda p: p["count"], default=None)
+    if ring:
+        suggestions.insert(1, f"Résume-moi le plan de jeu {ring['title']}")
     suggestions += [q.format(v=v) for v in villains[:1] for q in ("Comment exploiter {v} ?",
                                                                     "Dans quelles lignes {v} bluffe-t-il ?")]
     chat = (f'<details class="card pl-chat" open><summary><b>Discuter avec le coach</b> '
@@ -321,10 +356,10 @@ def build_coach_page(state: dict, embed: bool = True, villains: tuple = ()) -> s
             '<link rel="stylesheet" href="/static/coach.css"><script src="/static/coach.js"></script>')
     body = f"""
 <div class="meta">Un plan de jeu simple, du flop à la river, tiré des études résolues : ce que le solveur fait, regroupé
-en règles qu'un humain peut appliquer.</div>
+en règles qu'un humain peut appliquer. En heads-up et aux tables à plusieurs (6-max, avec tes charts).</div>
 {head}
 {chat}
-<div class="pl-fams" role="group" aria-label="Type de pot">{tabs}</div>
+<div class="pl-switch" role="group" aria-label="Format et type de pot">{tabs}</div>
 {sections}
 """
     return html_page("Plan de jeu suggéré", f"<style>{STYLE}</style>{body}", embed, script=SCRIPT)

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from analyzer.app import coach_chat
-from analyzer.app.coach_chat import Coach, CoachError
+from analyzer.app.coach_chat import TOOLS, Coach, CoachError
 from analyzer.theory import coach, exploit, postflop
 from analyzer.theory.studyspots import StudySpot
 from tests.test_coach import BOARD, make_query
@@ -116,9 +116,11 @@ class FakeLibrary:
         return {"Villain": {"kind": "reg"}, "Fish": {"kind": "rec"}}
 
     def _spot(self, ident):
+        if ident.startswith("spot:6max_bb_co_4bet:"):  # 6-max : le CO à l'initiative, comme le bouton en heads-up
+            return SimpleNamespace(ident=ident, family="6max_bb_co_4bet", board=list(BOARD), oop="BB", ip="CO")
         if not ident.startswith("spot:srp:"):
             raise KeyError(ident)
-        return SimpleNamespace(ident=ident, family="srp", board=list(BOARD))
+        return SimpleNamespace(ident=ident, family="srp", board=list(BOARD), oop="BB", ip="BTN")
 
 
 def wait(c, conv_id):
@@ -137,7 +139,7 @@ class CoachChatTest(unittest.TestCase):
         key = postflop.study_key(spot.request())
         coach.save_plan(coach.extract(make_query(), spot, key))
         studies = {spot.ident: {"id": spot.ident, "key": key, "family": "srp", "board": BOARD, "texture": "King high"}}
-        self.studies = mock.patch.object(coach.studyspots, "spot_studies", lambda: studies)
+        self.studies = mock.patch.object(coach.studyspots, "spot_studies", lambda families=None: studies)
         self.studies.start()
 
     def tearDown(self):
@@ -188,6 +190,30 @@ class CoachChatTest(unittest.TestCase):
         error = client.calls[3]["messages"][-1]["content"][0]
         self.assertTrue(error["is_error"])
         self.assertIn("BTN a le choix entre check, mise 33 %", error["content"])
+
+    def test_six_max(self):
+        c = Coach(FakeLibrary())
+        enum = next(t for t in TOOLS if t["name"] == "plan_de_jeu")["input_schema"]["properties"]["famille"]["enum"]
+        self.assertIn("6max_bb_co_4bet", enum)
+        text, error = c._run_tool("plan_de_jeu", {"famille": "6max_bb_co_4bet"})
+        self.assertTrue(error)
+        self.assertIn("Pas encore de plan pour : 6-max, BB contre CO, pot 4bet", text)
+        text, error = c._run_tool("plan_de_jeu", {"famille": "6max"})
+        self.assertTrue(error)
+        self.assertIn("6max_bb_btn_srp", text)
+        text, error = c._run_tool("strategie_noeud", {"spot": "spot:6max_bb_co_4bet:Ks7d2c", "ligne": ["bet"]})
+        self.assertFalse(error, text)
+        self.assertEqual(json.loads(text)["joueur"], "BB")  # la BB face à la c-bet du CO
+        self.assertIn('"CO"', text)
+        text, error = c._run_tool("strategie_main", {"spot": "spot:6max_bb_co_4bet:Ks7d2c", "ligne": [],
+                                                     "main": "AhAd", "joueur": "CO"})
+        self.assertEqual((error, json.loads(text)["joueur"]), (False, "CO"))
+        text, error = c._run_tool("strategie_noeud", {"spot": "spot:6max_bb_co_4bet:Ks7d2c", "ligne": ["fold"]})
+        self.assertTrue(error)
+        self.assertIn("CO a le choix entre", text)  # les vraies positions, jusque dans les erreurs
+        text, error = c._run_tool("exploiter", {"spot": "spot:6max_bb_co_4bet:Ks7d2c"})
+        self.assertTrue(error)
+        self.assertIn("ne couvre que les spots heads-up", text)
 
     def test_exploit_tool(self):
         profile = {"family": "srp", "role": "defenseur", "hands": 120, "bridge": {"villain": 0, "aggressor": 1,

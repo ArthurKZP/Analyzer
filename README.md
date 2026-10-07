@@ -634,6 +634,13 @@ ce qui ressort de ses mains.
 Onglet *Plan de jeu suggéré* de *Études du solveur* : les études résolues réduites à des règles simples, du
 flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de flops résolus, plus il est précis.
 
+- **Heads-up et tables à plusieurs** : un plan pour chaque série de spots d'étude, les trois du heads-up et les
+  dix du 6-max (une par paire de positions et type de pot : SB contre BB, SB contre BTN, BB contre BTN, BB contre
+  CO ; voir *Spots d'étude 6-max*). Les arbres 6-max ont la forme du heads-up de même structure (celui qui a
+  l'initiative est hors de position ou en position) : mêmes lignes et mêmes règles, avec les vraies positions
+  (« C-bet de la SB », « BB face à la c-bet », « CO face au check-raise »…). Les onglets 6-max apparaissent une
+  fois tes charts 6-max chargés ; une famille que tes charts ne couvrent pas dit pourquoi.
+
 - **Lecture des études** : chaque étude est ouverte une fois pour lire ses stratégies aux nœuds clés : c-bet,
   réponse à la c-bet et au check-raise, 2e barrel à chaque turn, 3e barrel sur un échantillon de rivers (13
   turns, toutes leurs rivers), c-bet retardée et probe après un flop checké. Les mains y sont regroupées par
@@ -662,8 +669,8 @@ flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de fl
 Un coach avec qui discuter de stratégie. C'est Claude, l'IA d'Anthropic : il consulte tes données avant de
 répondre (le plan de jeu suggéré, la liste des études, la stratégie du solveur à un nœud par famille de mains
 avec équités et EV, une main précise, les écarts et les bluffs d'un adversaire réel) et explique pourquoi le
-solveur choisit une action, en règles simples. Il sait aussi faire lui-même un node-lock contre un adversaire
-réel (voir plus bas). Deux façons de lui parler :
+solveur choisit une action, en règles simples. Il lit aussi les plans et les études 6-max, avec les vraies
+positions. Il sait faire lui-même un node-lock contre un adversaire réel, en heads-up (voir plus bas). Deux façons de lui parler :
 
 ### Dans ton abonnement Claude (sans clé API)
 

@@ -303,7 +303,7 @@ class StudySpot(postflop.SpotTree):
     def after_solve(self, session: postflop.Session) -> None:
         """Juste après la résolution, l'étude encore ouverte : son plan de jeu (quelques secondes)."""
         from . import coach
-        if not self.adjusted and self.family in FAMILIES:  # les plans de jeu : la théorie, en heads-up
+        if not self.adjusted:  # les plans de jeu (heads-up et 6-max) : la théorie, sans tes ranges ajustées
             coach.extract_and_save(session, self)
 
     def write_meta(self, request: dict, raw: dict, session: Optional[postflop.Session] = None) -> None:
@@ -398,7 +398,7 @@ def _current(meta: dict) -> Optional[bool]:
     return meta.get("key") == postflop.study_key(request)
 
 
-_SPOT_STUDIES: dict[tuple, dict[str, dict]] = {}
+_SPOT_STUDIES: dict[tuple, dict[str, dict]] = {}  # signature -> études à jour de toutes les familles
 
 
 DEPENDS = ("tailles", "ranges", "ranges-ajustees", postflop.SETTINGS)  # ce dont dépend l'arbre d'un spot
@@ -418,15 +418,17 @@ def _studies_signature() -> tuple:
 def spot_studies(families: Optional[tuple[str, ...]] = None) -> dict[str, dict]:
     """Fiches des spots d'étude enregistrés avec l'arbre actuel de leur spot, par identifiant ; par défaut ceux
     des familles heads-up (plans de jeu, entraîneur, coach et leakfinding ne connaissent qu'elles). Recalculées
-    seulement quand une étude, un choix de tailles, une range ou la précision change."""
+    seulement quand une étude, un choix de tailles, une range ou la précision change (toutes les familles à la
+    fois : la page du plan de jeu en demande treize)."""
     wanted = families or tuple(FAMILIES)
-    key = (wanted, _studies_signature())
-    if key not in _SPOT_STUDIES:
-        if len(_SPOT_STUDIES) > 32:
-            _SPOT_STUDIES.clear()
-        _SPOT_STUDIES[key] = {m["id"]: m for m in postflop.list_studies()
-                              if m.get("kind") == "spot" and m.get("family") in wanted and _current(m)}
-    return {k: dict(v) for k, v in _SPOT_STUDIES[key].items()}
+    signature = _studies_signature()
+    found = _SPOT_STUDIES.get(signature)
+    if found is None:
+        _SPOT_STUDIES.clear()
+        found = _SPOT_STUDIES[signature] = {
+            m["id"]: m for m in postflop.list_studies()
+            if m.get("kind") == "spot" and known_family(str(m.get("family", ""))) and _current(m)}
+    return {k: dict(v) for k, v in found.items() if v.get("family") in wanted}
 
 
 def stale_spot_studies() -> list[dict]:

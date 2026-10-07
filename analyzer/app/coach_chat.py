@@ -44,10 +44,10 @@ SETUP = ("Le coach utilise Claude, l'IA d'Anthropic, par son API : installe le m
          "« python -m analyzer mcp --config » et suis les indications, puis pose tes questions dans Claude "
          "(« Copier pour Claude » ici reprend ce que tu regardes dans l'explorateur).")
 
-SYSTEM = """Tu es le coach de poker intégré à Analyzer, un outil d'étude du heads-up No Limit Hold'em (100 bb, salle Betclic). Ton élève est un joueur régulier qui étudie la théorie pour simplifier son jeu et mieux exploiter ses adversaires.
+SYSTEM = """Tu es le coach de poker intégré à Analyzer, un outil d'étude du No Limit Hold'em en heads-up et aux tables à plusieurs (6-max), 100 bb. Ton élève est un joueur régulier qui étudie la théorie pour simplifier son jeu et mieux exploiter ses adversaires.
 
 Tu consultes ses données avec des outils :
-- plan_de_jeu : la synthèse de ses études résolues pour un type de pot (catégories de flop : haut, moyen ou bas, sec, deux couleurs ou connecté, pairé, monotone ; niveau de c-bet ; règles pour quatre familles de mains : fortes, moyennes, tirages, rien ; suite à la turn et à la river selon la carte ; jeu de l'autre joueur).
+- plan_de_jeu : la synthèse de ses études résolues pour un type de pot, en heads-up ou en 6-max pour une paire de positions (catégories de flop : haut, moyen ou bas, sec, deux couleurs ou connecté, pairé, monotone ; niveau de c-bet ; règles pour quatre familles de mains : fortes, moyennes, tirages, rien ; suite à la turn et à la river selon la carte ; jeu de l'autre joueur).
 - liste_etudes : les flops résolus disponibles, avec leur schéma de c-bet.
 - strategie_noeud : la stratégie du solveur à un moment précis d'un spot résolu (fréquences de toute la range, par famille de mains, équités, EV, exemples de mains).
 - strategie_main : une main précise à ce moment (sa stratégie, l'EV de chaque action, son équité).
@@ -61,17 +61,20 @@ Comment répondre :
 - Explique le pourquoi avec les notions du jeu : avantage de range et de nuts, équité et sa réalisation, position, protection, blockers, polarisation, SPR, valeur et bluff.
 - Une action que le solveur mélange a une EV presque égale aux autres : dis-le plutôt que de lui chercher une raison forte. Un écart d'EV de moins de 0,1 bb est négligeable.
 - Privilégie des règles simples et applicables par un humain (par exemple « mise toutes tes top pairs et tes tirages couleur, checke les paires moyennes »), avec les fréquences quand elles éclairent.
-- L'arbre du solveur est simplifié : une taille de mise par situation au flop et à la turn, deux à la river, et les ranges préflop de la solution HU 100 bb. Rappelle-le si une question dépend d'une taille absente.
+- L'arbre du solveur est simplifié : une taille de mise par situation au flop et à la turn, deux à la river, et les ranges préflop de la solution HU 100 bb (en 6-max, celles des charts de l'élève). Rappelle-le si une question dépend d'une taille absente.
 - Contre un adversaire réel, sépare la théorie de l'exploitation : un écart « solide » justifie de s'adapter, un écart « indicatif » appelle de la prudence. Contre un récréatif, l'exploitation prime.
 - Pour proposer une stratégie exploitante, appuie-toi sur exploiter (un ou plusieurs flops représentatifs, puis les nœuds clés : c-bet, défense face à la c-bet, turn, river). Décris d'abord le type de joueur que dessine son profil, puis les ajustements, du plus rentable au moins rentable. La meilleure réponse est maximale : elle suppose qu'il ne s'adapte pas et pousse les mains vers des actions pures. Retiens la direction (quelles familles de mains changent d'action, où est le gain) et conseille une version tempérée, plus forte quand l'écart est solide.
 - Réponds en français, de façon concise et structurée (listes courtes), montants en bb, cartes notées comme A♠K♦ ou AKs.
 
-Repères : BTN = bouton (petite blinde, en position après le flop), BB = grosse blinde (hors de position). SRP : open du BTN à 2,5 bb payé par la BB (pot 5 bb, 97,5 bb derrière) ; pot 3bet : 3bet de la BB à 11,5 bb payé (pot 23 bb) ; pot 4bet : 4bet du BTN à 26 bb payé (pot 52 bb). Un spot se nomme « spot:<famille>:<flop> », par exemple spot:srp:KsKd4c. Une ligne d'actions est une liste : "check", "bet" (ou "bet 75" pour la taille la plus proche de 75 % du pot), "call", "raise", "fold", "allin", et les cartes de turn et de river ("Qh"). En SRP et en pot 4bet, la BB ne mène pas au flop : la ligne commence par "check"."""
+Repères : BTN = bouton (petite blinde, en position après le flop), BB = grosse blinde (hors de position). SRP : open du BTN à 2,5 bb payé par la BB (pot 5 bb, 97,5 bb derrière) ; pot 3bet : 3bet de la BB à 11,5 bb payé (pot 23 bb) ; pot 4bet : 4bet du BTN à 26 bb payé (pot 52 bb). Un spot se nomme « spot:<famille>:<flop> », par exemple spot:srp:KsKd4c. Une ligne d'actions est une liste : "check", "bet" (ou "bet 75" pour la taille la plus proche de 75 % du pot), "call", "raise", "fold", "allin", et les cartes de turn et de river ("Qh"). En SRP et en pot 4bet, la BB ne mène pas au flop : la ligne commence par "check".
+
+Tables à plusieurs (6-max, 100 bb) : un autre jeu, aux ranges bien plus serrées, tirées des charts 6-max de l'élève. Une famille par paire de positions (hors de position puis en position) et type de pot : 6max_<hors de position>_<en position>_<srp|3bet|4bet>, par exemple 6max_bb_btn_srp ou 6max_bb_co_3bet (spot:6max_bb_co_3bet:KsKd4c). Tailles préflop : open à 2,5 bb, 3bet à 7,5 bb en position et 10 bb hors de position, 4bet à 22 bb en position et 20 bb hors de position. Les outils y nomment les vraies positions (SB, BB, CO, BTN). Celui qui a l'initiative hors de position (SB qui ouvre contre la BB, BB qui 3bette) fait la première vraie décision du flop ; quand elle est en position, le joueur hors de position ne mène pas au flop et la ligne commence par "check". Le node-lock (exploiter) ne couvre que le heads-up."""
 
 LINE_HELP = ("actions déjà jouées depuis le début du flop, dans l'ordre : \"check\", \"bet\" (ou \"bet 75\" pour la "
              "taille la plus proche de 75 % du pot), \"call\", \"raise\", \"fold\", \"allin\", et les cartes de turn et "
              "de river (\"Qh\"). L'outil renvoie la décision qui suit ; liste vide : la première vraie décision du flop "
              "(la c-bet du bouton en SRP et en pot 4bet, celle de la BB en pot 3bet)")
+PLAN_FAMILIES = coach.plan_families()
 TOOLS = [
     {"name": "plan_de_jeu",
      "description": ("Plan de jeu suggéré d'un type de pot, tiré des études résolues : les flops regroupés par catégorie "
@@ -81,14 +84,16 @@ TOOLS = [
                      "suite à la turn et à la river selon le type de carte, et le jeu de l'autre joueur. Consulte-le pour "
                      "toute question générale de stratégie."),
      "input_schema": {"type": "object", "properties": {
-         "famille": {"type": "string", "enum": ["srp", "3bet", "4bet"],
-                     "description": "srp (pot simple), 3bet (pot 3bet) ou 4bet (pot 4bet)"}},
+         "famille": {"type": "string", "enum": list(PLAN_FAMILIES),
+                     "description": ("heads-up : srp (pot simple), 3bet (pot 3bet) ou 4bet (pot 4bet) ; 6-max : "
+                                     "6max_<hors de position>_<en position>_<srp|3bet|4bet>, ex. 6max_bb_btn_srp")}},
          "required": ["famille"]}},
     {"name": "liste_etudes",
      "description": ("Les flops résolus disponibles (identifiant de spot, texture, structure de couleurs, c-bet et schéma "
                      "quand ils sont lus). Consulte-le pour trouver un spot à examiner ou le flop résolu le plus proche."),
      "input_schema": {"type": "object", "properties": {
-         "famille": {"type": "string", "enum": ["srp", "3bet", "4bet"], "description": "type de pot (tous si absent)"}}}},
+         "famille": {"type": "string", "enum": list(PLAN_FAMILIES),
+                     "description": "type de pot, heads-up ou 6-max (tous si absent)"}}}},
     {"name": "strategie_noeud",
      "description": ("Stratégie du solveur à un moment précis d'un spot résolu : qui agit, pot et tapis, fréquence de chaque "
                      "action dans toute la range, puis par famille de mains (part de range, fréquences, équité et EV "
@@ -106,7 +111,8 @@ TOOLS = [
          "spot": {"type": "string", "description": "identifiant du spot, ex. spot:srp:KsKd4c"},
          "ligne": {"type": "array", "items": {"type": "string"}, "description": LINE_HELP},
          "main": {"type": "string", "description": "les deux cartes, ex. AhKd"},
-         "joueur": {"type": "string", "enum": ["BB", "BTN"], "description": "joueur qui tient la main (par défaut celui qui agit)"}},
+         "joueur": {"type": "string", "enum": ["BB", "BTN", "SB", "CO"],
+                    "description": "position du joueur qui tient la main (par défaut celui qui agit)"}},
          "required": ["spot", "ligne", "main"]}},
     {"name": "bluffs_adversaire",
      "description": ("Les bluffs d'un adversaire réel ou d'un groupe : les patterns qui ressortent (ligne, carte qui tombe, "
@@ -418,11 +424,13 @@ class Coach:
                 data = self._studies(args.get("famille"))
             elif name == "strategie_noeud":
                 path, node, steps = self._resolve(args.get("spot"), args.get("ligne"))
-                data = dict(coach.node_brief(node), spot=args["spot"], ligne=steps)
+                names = self._names(self._spot(args.get("spot")))
+                data = dict(coach.node_brief(node, names=names), spot=args["spot"], ligne=steps)
             elif name == "strategie_main":
                 path, node, steps = self._resolve(args.get("spot"), args.get("ligne"))
-                player = {"BB": 0, "BTN": 1}.get(args.get("joueur"))
-                data = coach.combo_brief(node, str(args.get("main", "")), player)
+                names = self._names(self._spot(args.get("spot")))
+                player = names.index(args["joueur"]) if args.get("joueur") in names else None
+                data = coach.combo_brief(node, str(args.get("main", "")), player, names)
                 if data is None:
                     raise CoachError(f"La main {args.get('main')} n'est pas dans les ranges à ce moment du coup.")
                 data["ligne"] = steps
@@ -444,12 +452,23 @@ class Coach:
         return json.dumps(data, ensure_ascii=False), False
 
     @staticmethod
+    def _names(spot) -> tuple[str, str]:
+        """Les positions des joueurs 0 (hors de position) et 1 : celles du spot d'étude, ou de la main jouée."""
+        hand = getattr(spot, "hand", None)
+        if hand is None:
+            return spot.oop, spot.ip
+        if len(hand.seats) > 2:
+            return hand.position(spot.oop) or "BB", hand.position(spot.ip) or "BTN"
+        return "BB", "BTN"
+
+    @staticmethod
     def _plan(family) -> dict:
-        if family not in studyspots.FAMILIES:
-            raise CoachError("Famille inconnue : srp, 3bet ou 4bet.")
+        if family not in PLAN_FAMILIES:
+            raise CoachError("Famille inconnue : srp, 3bet, 4bet, ou une famille 6-max (" + ", ".join(
+                studyspots.RING_FAMILIES) + ").")
         plan = coach.family_plan(family)
         if not plan["count"]:
-            raise CoachError(f"Pas encore de plan pour les {plan['name']} : aucun flop résolu n'a été lu "
+            raise CoachError(f"Pas encore de plan pour : {plan['title']}. Aucun flop résolu n'a été lu "
                              "(onglet « Plan de jeu suggéré », bouton « Préparer le plan »).")
         pct = lambda x: round(100 * x)  # noqa: E731
 
@@ -480,7 +499,7 @@ class Coach:
                     "stab": {"mise_pct": pct(d["stab"]["aggr"]), "regles": rules(d["stab"]["rules"])} if d["stab"] else None,
                     "face_2e_barrel": cards(d["vs_barrel"], True), "face_3e_barrel": cards(d["vs_barrel3"], True),
                     "probe": cards(d["probe"])}})
-        return {"famille": plan["name"], "description": plan["label"], "flops_lus": plan["count"],
+        return {"famille": plan["title"], "description": plan["label"], "flops_lus": plan["count"],
                 "initiative": plan["who"], "adversaire": plan["other"],
                 "familles_de_mains": {label: text for _, label, _, text in coach.GROUPS},
                 "categories": groups}
@@ -488,9 +507,7 @@ class Coach:
     @staticmethod
     def _studies(family) -> dict:
         out = []
-        for meta in studyspots.spot_studies().values():
-            if family and meta.get("family") != family:
-                continue
+        for meta in studyspots.spot_studies((family,) if family else PLAN_FAMILIES).values():
             row = {"spot": meta["id"], "flop": studyspots.board_text(meta["board"]), "texture": meta.get("texture"),
                    "couleurs": studyspots.suit_pattern(meta["board"])}
             plan = coach.load_plan(meta["key"])
@@ -600,6 +617,9 @@ class Coach:
 
     def _exploit(self, args: dict) -> dict:
         spot = self._spot(args.get("spot"))
+        if spot.family not in studyspots.FAMILIES:
+            raise CoachError("Le node-lock contre un adversaire réel ne couvre que les spots heads-up pour l'instant "
+                             "(spot:srp:…, spot:3bet:…, spot:4bet:…) : en 6-max, appuie-toi sur strategie_noeud.")
         label, names, kind = self._targets(args.get("adversaire"))
         solves = self.library.solves
         if solves.live_for(spot) is None:
@@ -680,6 +700,7 @@ class Coach:
         if not isinstance(line, list):
             raise CoachError("La ligne est une liste d'actions, par exemple [\"check\", \"bet\", \"call\", \"Qh\"].")
         get = fetch or (lambda p: self._node(spot, p))
+        names = self._names(spot)
         path: list = []
         node = get(path)
         shown: list[str] = []
@@ -688,19 +709,19 @@ class Coach:
             card = re.fullmatch(r"([2-9tjqkaTJQKA])([cdhsCDHS])", token)
             while node["type"] == "action" and len(node["actions"]) == 1 and \
                     (card or node["actions"][0]["kind"] != self._kind(token)[0]):
-                path = path + [{"type": "action", "index": 0}]  # check forcé : la BB ne mène pas
+                path = path + [{"type": "action", "index": 0}]  # check forcé : hors de position, il ne mène pas
                 shown.append("check (forcé)")
                 node = get(path)
             if card:
                 value = card.group(1).upper() + card.group(2).lower()
                 if node["type"] != "chance":
-                    raise CoachError(f"Pas de carte à tirer ici (« {token} ») : {self._options(node)}.")
+                    raise CoachError(f"Pas de carte à tirer ici (« {token} ») : {self._options(node, names)}.")
                 if value not in (node.get("cards") or []):
                     raise CoachError(f"La carte {value} n'est pas possible ici (déjà sur le board ?).")
                 path = path + [{"type": "card", "card": value}]
                 shown.append(value)
             else:
-                index = self._find(node, token)
+                index = self._find(node, token, names)
                 path = path + [{"type": "action", "index": index}]
                 shown.append(postflop.action_labels(node)[index])
             node = get(path)
@@ -727,9 +748,9 @@ class Coach:
                 size = None
         return kind, size
 
-    def _find(self, node: dict, token: str) -> int:
+    def _find(self, node: dict, token: str, names: tuple[str, str] = ("BB", "BTN")) -> int:
         if node["type"] != "action":
-            raise CoachError(f"Pas d'action possible ici (« {token} ») : {self._options(node)}.")
+            raise CoachError(f"Pas d'action possible ici (« {token} ») : {self._options(node, names)}.")
         kind, size = self._kind(token)
         actions = node["actions"]
         if kind == "allin":
@@ -741,7 +762,7 @@ class Coach:
         else:
             hits = [i for i, a in enumerate(actions) if a["kind"] == kind]
         if not hits:
-            raise CoachError(f"Action « {token} » impossible ici : {self._options(node)}.")
+            raise CoachError(f"Action « {token} » impossible ici : {self._options(node, names)}.")
         if len(hits) == 1:
             return hits[0]
         if size is not None and node.get("pot"):
@@ -750,13 +771,12 @@ class Coach:
         return max(hits, key=lambda i: freqs[i])  # sans taille : la plus jouée
 
     @staticmethod
-    def _options(node: dict) -> str:
+    def _options(node: dict, names: tuple[str, str] = ("BB", "BTN")) -> str:
         if node["type"] == "chance":
             return "il faut une carte (turn ou river)"
         if node["type"] != "action":
             return "le coup est fini"
-        who = "BB" if node["player"] == 0 else "BTN"
-        return f"{who} a le choix entre " + ", ".join(postflop.action_labels(node))
+        return f"{names[node['player']]} a le choix entre " + ", ".join(postflop.action_labels(node))
 
     def _describe(self, ident: str, path: list) -> Optional[list[str]]:
         """La ligne de l'explorateur en mots que le coach peut reprendre dans ses appels d'outil."""
