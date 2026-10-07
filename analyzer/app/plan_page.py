@@ -1,16 +1,18 @@
 """Page « Plan de jeu suggéré » : les études résolues réduites à des règles simples (voir theory/coach.py), en
-heads-up et aux tables à plusieurs (6-max, une famille par paire de positions et type de pot)."""
+heads-up et aux tables à plusieurs (6-max, une famille par paire de positions et type de pot).
+
+Pour chaque famille : en attaque, les flops regroupés en trois stratégies de c-bet (miser range, stratégie mixte,
+checker range) et par taille, avec des flops en exemple (ouverts dans l'explorateur) ; en défense, la réponse de
+l'autre joueur à chacun de ces groupes."""
 from __future__ import annotations
 
 import json
 from html import escape
+from typing import Optional
 from urllib.parse import quote
 
 from ..report import cards_html, html_page
 from ..theory import coach, postflop, ring_ranges, studyspots
-
-SIZE_TEXT = {"small": "petite mise", "medium": "mise moyenne", "big": "grosse mise", "overbet": "overbet",
-             "raise": "relance", "allin": "tapis"}
 
 STYLE = """
 .pl-switch { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 12px; }
@@ -49,21 +51,27 @@ ul.rules b { font-weight: 600; }
 table.pl-cards td { vertical-align: top; font-size: 13px; }
 table.pl-cards td.rules-cell { min-width: 280px; }
 table.pl-cards ul.rules { margin: 0; padding-left: 16px; }
-.pl-grid { display: grid; grid-template-columns: minmax(90px, auto) repeat(3, minmax(170px, 1fr)); gap: 6px; min-width: 640px; }
-.pl-gh, .pl-rh { font-weight: 600; font-size: 14px; display: flex; flex-direction: column; justify-content: center; }
-.pl-gh small, .pl-rh small { font-weight: 400; font-size: 11px; color: var(--muted); }
-.pl-gh { padding: 2px 4px; }
-.pl-cell { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 8px; text-decoration: none;
-  color: var(--ink); border: 1px solid var(--border); min-height: 74px; }
-a.pl-cell:hover { border-color: var(--series-1); }
-.pl-cell .lvl { font-weight: 700; font-size: 14px; }
-.pl-cell.empty { background: var(--page); justify-content: center; font-size: 12px; }
-.lvl-range { background: var(--hi-bg); }
-.lvl-often { background: color-mix(in srgb, var(--hi-bg) 45%, transparent); }
-.lvl-check { background: var(--lo-bg); }
-.pl-ex .cards { margin-right: 6px; }
-.pl-specials { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.pl-special { flex: 1 1 260px; display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 6px; }
+.pl-strats { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; margin: 6px 0 4px; }
+.pl-strat { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface);
+  display: flex; flex-direction: column; gap: 8px; }
+.pl-strat .st-head { display: flex; flex-direction: column; gap: 2px; }
+.pl-strat .st-head b { font-size: 15px; }
+.pl-strat .st-head small { font-size: 12px; color: var(--ink-2); }
+.st-size { display: block; text-decoration: none; color: var(--ink); border-radius: 8px; padding: 6px 8px; }
+a.st-size:hover { outline: 1px solid var(--series-1); }
+.st-size b { font-weight: 600; }
+.st-size span { display: block; font-size: 12px; color: var(--ink-2); }
+.pl-ex { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.pl-ex a { text-decoration: none; border: 1px solid var(--border); border-radius: 6px; padding: 1px 3px; background: var(--surface); }
+.pl-ex a:hover { border-color: var(--series-1); }
+.st-range { background: var(--hi-bg); }
+.st-mixte { background: color-mix(in srgb, var(--hi-bg) 45%, transparent); }
+.st-check { background: var(--lo-bg); }
+.pl-sides { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; width: fit-content; margin: 8px 0 4px; }
+.pl-sides button { font: inherit; font-size: 14px; padding: 6px 16px; border: 0; border-right: 1px solid var(--border);
+  background: var(--surface); color: var(--ink); cursor: pointer; }
+.pl-sides button:last-child { border-right: 0; }
+.pl-sides button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
 .pl-lvl { font-size: 12px; font-weight: 600; border-radius: 6px; padding: 1px 8px; }
 .pl-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
 .pl-chip { font-size: 13px; border-radius: 999px; padding: 3px 10px; border: 1px solid var(--border); white-space: nowrap; }
@@ -93,7 +101,15 @@ SCRIPT = """
   var first = document.querySelector('.pl-fams button[data-default]') || buttons[0];
   show(saved && document.querySelector('.pl-fams button[data-fam="' + saved + '"]') ? saved : first.dataset.fam);
 
-  // « En bref » : un clic ouvre le schéma et y descend
+  // Attaque ou défense, dans chaque famille
+  document.querySelectorAll('.pl-sides button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var fam = b.closest('section.pl-fam');
+      fam.querySelectorAll('.pl-sides button').forEach(function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
+      fam.querySelectorAll('.pl-side').forEach(function (s) { s.hidden = s.dataset.side !== b.dataset.side; });
+    });
+  });
+  // Un clic sur un groupe ouvre son détail et y descend
   document.querySelectorAll('a.pl-jump').forEach(function (a) {
     a.addEventListener('click', function () {
       var target = document.querySelector(a.getAttribute('href'));
@@ -128,12 +144,13 @@ def _cap(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
+def _de(who: str) -> str:
+    """« le bouton » -> « du bouton », « la BB » -> « de la BB »."""
+    return "du " + who[3:] if who.startswith("le ") else "de " + who
+
+
 def _pct(x: float) -> str:
     return f"{round(100 * x)} %"
-
-
-def _size(group: dict) -> str:
-    return SIZE_TEXT.get(group.get("size") or "", "")
 
 
 def _chip(rule: dict, defender: bool = False, label: bool = True) -> str:
@@ -186,99 +203,141 @@ def _details_rules(rules: list[tuple[str, str]]) -> str:
     return '<ul class="rules">' + "".join(f"<li><b>{escape(what)}</b> : {escape(who)}</li>" for what, who in rules) + "</ul>"
 
 
-def _boards(rows: list[dict], links: bool = True) -> str:
-    if not links:
-        return '<span class="pl-ex">' + "".join(cards_html(r["board"]) for r in rows[:3]) + "</span>"
-    return '<div class="pl-flops">' + "".join(
+def _examples(rows: list[dict], n: int = 4) -> list[dict]:
+    """Des flops en exemple, de catégories différentes d'abord."""
+    seen, first, rest = set(), [], []
+    for r in rows:
+        (rest if r["category"] in seen else first).append(r)
+        seen.add(r["category"])
+    return (first + rest)[:n]
+
+
+def _links(rows: list[dict], cls: str = "pl-flops") -> str:
+    """Les flops, chacun ouvrant son étude dans l'explorateur."""
+    return f'<div class="{cls}">' + "".join(
         f'<a href="/explorateur/{quote(r["id"], safe="")}" target="_blank" rel="noopener" '
-        f'title="c-bet {_pct(r["cbet"])} · ouvrir dans l\'explorateur">{cards_html(r["board"])}</a>' for r in rows) + "</div>"
+        f'title="c-bet {_pct(r["cbet"])} · ouvrir l\'étude dans l\'explorateur">{cards_html(r["board"])}</a>'
+        for r in rows) + "</div>"
 
 
-def _cell(plan: dict, category: str) -> str:
-    g = next((g for g in plan["groups"] if g["category"] == category), None)
-    label = coach.CATEGORY_LABEL[category]
-    if g is None:
-        return f'<div class="pl-cell empty"><span class="muted">{escape(label)} : pas encore de flop résolu</span></div>'
-    size = f" · {escape(_size(g))}" if g.get("size") else ""
-    return (f'<a class="pl-cell lvl-{g["pattern"]} pl-jump" href="#cat-{plan["family"]}-{category}">'
-            f'<span class="lvl">{escape(g["level"])}</span><span class="small">c-bet {_pct(g["cbet"])}{size}</span>'
-            f'{_boards(g["flops"], links=False)}</a>')
+def _categories(g: dict) -> str:
+    return ", ".join(f"{label.lower()} ({n})" if n > 1 else label.lower() for label, n in g["categories"])
 
 
-def _grid(plan: dict) -> str:
-    head = '<div></div>' + "".join(f'<div class="pl-gh">{escape(label)}<small>{escape(text)}</small></div>'
-                                   for _, label, text in coach.SHAPES)
-    rows = "".join(f'<div class="pl-rh">{escape(label)}<small>{escape(text)}</small></div>'
-                   + "".join(_cell(plan, f"{h}-{s}") for s, _, _ in coach.SHAPES) for h, label, text in coach.HEIGHTS)
-    specials = "".join(f'<div class="pl-special"><div class="pl-gh">{escape(label)}<small>{escape(text)}</small></div>'
-                       f'{_cell(plan, key)}</div>' for key, label, text in coach.SPECIALS)
-    return f'<div class="scroll"><div class="pl-grid">{head}{rows}</div></div><div class="pl-specials">{specials}</div>'
+def _facing_text(d: Optional[dict]) -> str:
+    if not d:
+        return "pas encore de données"
+    return f'folde {_pct(d["fold"])} · paie {_pct(d["call"])} · relance {_pct(d["raise"])}'
 
 
-def _group(plan: dict, g: dict) -> str:
-    who, other = plan["who"], plan["other"]
-    d = g["defense"]
-    defense = []
-    if d["vs_cbet"]:
-        defense.append(f'<h3>Face à la c-bet : {escape(other)} folde {_pct(d["vs_cbet"]["fold"])}, '
-                       f'relance {_pct(d["vs_cbet"]["raise"])}</h3>' + _chips(d["vs_cbet"]["rules"], defender=True))
-    if d["vs_barrel"]:
-        defense.append("<h3>Face au 2e barrel, selon la turn</h3>" + _matrix(d["vs_barrel"], "Turn", "Folde", True))
-    if d["vs_barrel3"]:
-        defense.append("<h3>Face au 3e barrel, selon la river</h3>" + _matrix(d["vs_barrel3"], "River", "Folde", True))
-    others = []
-    if g["delayed"]:
-        others.append(f"<h3>Flop checké par {escape(who)} : c-bet retardée à la turn</h3>"
-                      + _matrix(g["delayed"], "Turn", "Mise"))
-    if d["probe"]:
-        others.append(f"<h3>Flop checké : {escape(other)} mène à la turn (probe)</h3>" + _matrix(d["probe"], "Turn", "Mise"))
-    if d["stab"]:
-        others.append(f'<h3>Quand {escape(who)} checke : {escape(other)} mise {_pct(d["stab"]["aggr"])}</h3>'
-                      + _chips(d["stab"]["rules"]))
-    if d["vs_xr"]:
-        others.append(f'<h3>{escape(_cap(who))} face à la relance : folde {_pct(d["vs_xr"]["fold"])}, '
-                      f'sur-relance {_pct(d["vs_xr"]["raise"])}</h3>' + _chips(d["vs_xr"]["rules"], defender=True))
+def _overview(plan: dict, side: str) -> str:
+    """Les trois stratégies de c-bet, chacune avec ses tailles, leurs chiffres et des flops en exemple."""
+    by_key = {g["key"]: g for g in plan["groups"]}
+    cards = []
+    for st in plan["strategies"]:
+        items = []
+        for key in st["groups"]:
+            g = by_key[key]
+            figures = (f'c-bet {_pct(g["cbet"])}' if side == "attaque" else _facing_text(g["defense"]["vs_cbet"]))
+            items.append(f'<div><a class="st-size st-{st["key"]} pl-jump" href="#{side[:3]}-{plan["family"]}-{key}">'
+                         f'<b>{escape(_cap(g["size_text"]))}</b><span>{escape(figures)} · {len(g["flops"])} flop(s)'
+                         f'</span></a>{_links(_examples(g["flops"]), "pl-ex")}</div>')
+        if not items:
+            shares = [r["cbet"] for r in plan["flops"]]
+            why = ""
+            if shares and st["key"] == "check":
+                why = f" : sur ces flops, {plan['who']} mise toujours au moins {_pct(min(shares))}"
+            elif shares and st["key"] == "range":
+                why = f" : sur ces flops, {plan['who']} mise au plus {_pct(max(shares))}"
+            items.append(f'<p class="muted small">Aucun flop résolu ne s\'y range{escape(why)}.</p>')
+        title = st["label"] if side == "attaque" else "Face à : " + st["label"].lower()
+        cards.append(f'<div class="pl-strat"><div class="st-head"><b>{escape(title)}</b>'
+                     f'<small>{escape(st["text"])}</small></div>{"".join(items)}</div>')
+    return f'<div class="pl-strats">{"".join(cards)}</div>'
 
-    def sub(title: str, content: str) -> str:
-        return f'<details class="pl-sub"><summary>{escape(title)}</summary><div>{content}</div></details>'
 
-    size = f" en {escape(_size(g))}" if g.get("size") else ""
-    summary = (f'{escape(g["label"])} <span class="pl-lvl lvl-{g["pattern"]}">{escape(g["level"])}</span>'
-               f'<span class="sub">c-bet {_pct(g["cbet"])}{size} · {len(g["flops"])} flop(s)</span>')
+def _sub(title: str, content: str) -> str:
+    return f'<details class="pl-sub"><summary>{escape(title)}</summary><div>{content}</div></details>'
+
+
+def _attack(plan: dict, g: dict) -> str:
+    who = plan["who"]
+    at = g["attack"]
+    facing_raise = "face à la relance" if coach.aggressor_of(plan["family"]) == 0 else "face au check-raise"
+    vs_xr = (f'<h3>{escape(_cap(who))} {facing_raise} : folde {_pct(at["vs_xr"]["fold"])}, '
+             f'sur-relance {_pct(at["vs_xr"]["raise"])}</h3>' + _chips(at["vs_xr"]["rules"], defender=True)
+             if at["vs_xr"] else "")
+    summary = (f'<span class="pl-lvl st-{g["strategy"]}">{escape(g["strategy_label"])}</span> {escape(g["size_text"])}'
+               f'<span class="sub">c-bet {_pct(g["cbet"])} · {len(g["flops"])} flop(s) : {escape(_categories(g))}</span>')
+    delayed = _matrix(at["delayed"], "Turn", "Mise") if at["delayed"] else ""
     return f"""
-<details class="pl-group" id="cat-{plan["family"]}-{g["category"]}"><summary>{summary}</summary><div class="pl-body">
-{_boards(g["flops"])}
+<details class="pl-group" id="att-{plan["family"]}-{g["key"]}"><summary>{summary}</summary><div class="pl-body">
+{_links(g["flops"])}
 <div class="pl-why">{escape(g["why"])}</div>
-<h3>Au flop, {escape(who)} c-bette {_pct(g["cbet"])}{size}</h3>
-{_chips(g["flop"])}
+<h3>Au flop, {escape(who)} mise {_pct(g["cbet"])} en {escape(g["size_text"])}</h3>
+{_chips(at["flop"])}
 <h3>À la turn, si la c-bet est payée</h3>
-{_matrix(g["turn"], "Turn", "Continue")}
+{_matrix(at["turn"], "Turn", "Continue")}
 <h3>À la river, après deux mises payées</h3>
-{_matrix(g["river"], "River", "Mise")}
-{sub("En face : " + other, "".join(defense) or '<p class="muted">Pas encore de données.</p>')}
-{sub("Autres lignes", "".join(others) or '<p class="muted">Pas encore de données.</p>')}
-{sub("Détail par famille de mains (onze familles)", _details_rules(g["flop_detail"]))}
+{_matrix(at["river"], "River", "Mise")}
+{_sub(f"Quand {who} checke le flop : c-bet retardée à la turn", delayed) if delayed else ""}
+{_sub(_cap(facing_raise), vs_xr) if vs_xr else ""}
+{_sub("Détail par famille de mains (onze familles)", _details_rules(at["flop_detail"]))}
+</div></details>"""
+
+
+def _defense(plan: dict, g: dict) -> str:
+    who, other = plan["who"], plan["other"]
+    de = g["defense"]
+    facing = de["vs_cbet"]
+    summary = (f'Face à : <span class="pl-lvl st-{g["strategy"]}">{escape(g["strategy_label"])}</span> '
+               f'{escape(g["size_text"])}<span class="sub">{escape(_facing_text(facing))} · {len(g["flops"])} flop(s) : '
+               f'{escape(_categories(g))}</span>')
+    checked = ""
+    if de["stab"]:
+        checked = (f'<h3>Quand {escape(who)} checke : {escape(other)} mise {_pct(de["stab"]["aggr"])}</h3>'
+                   + _chips(de["stab"]["rules"]))
+    elif de["probe"]:
+        checked = (f"<h3>Flop checké par {escape(who)} : {escape(other)} mène à la turn (probe)</h3>"
+                   + _matrix(de["probe"], "Turn", "Mise"))
+    detail = _details_rules(facing["detail"]) if facing else '<p class="muted">Pas assez de données.</p>'
+    return f"""
+<details class="pl-group" id="def-{plan["family"]}-{g["key"]}"><summary>{summary}</summary><div class="pl-body">
+{_links(g["flops"])}
+{f'<div class="pl-why">{escape(de["text"])}</div>' if de["text"] else ""}
+<h3>Face à la c-bet</h3>
+{_chips(facing["rules"], defender=True) if facing else '<p class="muted">Pas encore de données.</p>'}
+<h3>Face au 2e barrel, selon la turn</h3>
+{_matrix(de["vs_barrel"], "Turn", "Folde", True)}
+<h3>Face au 3e barrel, selon la river</h3>
+{_matrix(de["vs_barrel3"], "River", "Folde", True)}
+{checked}
+{_sub("Détail par famille de mains face à la c-bet (onze familles)", detail)}
 </div></details>"""
 
 
 def _table(plan: dict) -> str:
+    order = [k for k, _, _ in coach.STRATEGIES]
+
+    def size(r: dict) -> str:
+        return coach.SIZE_LABEL[r["size_group"]] + (" " + " / ".join(str(x) for x in r["sizes"]) + " %" if r["sizes"] else "")
     rows = "".join(
         f'<tr><td><a href="/explorateur/{quote(r["id"], safe="")}" target="_blank" rel="noopener">{cards_html(r["board"])}</a></td>'
         f'<td>{escape(coach.CATEGORY_LABEL[r["category"]])}</td>'
-        f'<td>{escape(coach.PATTERN_LABEL[r["pattern"]])}</td><td class="num">{_pct(r["cbet"])}</td>'
-        f'<td>{escape(SIZE_TEXT.get(r["size"] or "", "–"))}</td>'
+        f'<td>{escape(coach.STRATEGY_LABEL[r["strategy"]])}</td><td class="num">{_pct(r["cbet"])}</td>'
+        f'<td>{escape(size(r))}</td><td class="num">{_pct(r["fold"]) if r["fold"] is not None else "–"}</td>'
         f'<td class="num">{coach._pts(r["eq_adv"])}</td><td class="num">{coach._pts(r["nut_adv"])}</td></tr>'
-        for r in sorted(plan["flops"], key=lambda r: [c for c, _ in coach.CATEGORIES].index(r["category"])))
-    return ('<div class="scroll"><table class="stats"><thead><tr><th>Flop</th><th>Catégorie</th><th>Niveau</th>'
-            '<th class="num">C-bet</th><th>Taille</th><th class="num">Équité</th>'
+        for r in sorted(plan["flops"], key=lambda r: (order.index(r["strategy"]), -r["cbet"])))
+    return ('<div class="scroll"><table class="stats"><thead><tr><th>Flop</th><th>Catégorie</th><th>Stratégie</th>'
+            '<th class="num">C-bet</th><th>Taille</th><th class="num">Fold face à la c-bet</th><th class="num">Équité</th>'
             f'<th class="num">Nuts</th></tr></thead><tbody>{rows}</tbody></table></div>')
 
 
 def _legend() -> str:
     groups = " ; ".join(f"<b>{escape(label)}</b> : {escape(text)}" for _, label, _, text in coach.GROUPS)
-    return (f'<p class="note">Niveaux : <b>mise presque tout</b> (c-bet d\'au moins 75 %, en général petite), '
-            f'<b>mise souvent</b> (50 à 75 %), <b>checke souvent</b> (moins de 50 %). Les mains en quatre familles : {groups}. '
-            '« Mélange » : le solveur joue les deux selon la main exacte ; le pourcentage est sa fréquence de mise.</p>')
+    return (f'<p class="note">Les mains en quatre familles : {groups}. « Mélange » : le solveur joue les deux selon la '
+            'main exacte ; le pourcentage est sa fréquence de mise. Un flop en exemple ouvre son étude dans '
+            "l'explorateur, pour entrer dans le détail.</p>")
 
 
 def _family(plan: dict) -> str:
@@ -295,17 +354,32 @@ def _family(plan: dict) -> str:
         return (f'<div class="card"><p class="muted">Pas encore de plan pour : {escape(plan["title"])}. {hint}</p>'
                 "</div>")
     total = len(studyspots.flop_set(plan["family"]))
+    who, other = plan["who"], plan["other"]
+    attack = "".join(_attack(plan, g) for g in plan["groups"])
+    defense = "".join(_defense(plan, g) for g in plan["groups"])
     return f"""
 <p class="note">{escape(plan["label"])}. D'après <b>{plan["count"]}</b> flop(s) résolu(s) sur {total} dans la série ; plus
-il y en a, plus le plan est précis. {escape(_cap(plan["who"]))} a l'initiative.</p>
-<h2>Selon le flop</h2>
-<div class="card">{_grid(plan)}{_legend()}</div>
-<h2>Catégorie par catégorie</h2>
-{"".join(_group(plan, g) for g in plan["groups"])}
+il y en a, plus le plan est précis. {escape(_cap(who))} a l'initiative et attaque, {escape(other)} défend.</p>
+<div class="pl-sides" role="group" aria-label="Attaque ou défense">
+<button type="button" data-side="attaque" aria-pressed="true">En attaque · {escape(who)}</button>
+<button type="button" data-side="defense" aria-pressed="false">En défense · {escape(other)}</button></div>
+<div class="pl-side" data-side="attaque">
+<h2>Au flop : trois stratégies de c-bet</h2>
+<div class="card">{_overview(plan, "attaque")}{_legend()}</div>
+<h2>Stratégie par stratégie</h2>
+{attack}
+</div>
+<div class="pl-side" data-side="defense" hidden>
+<h2>Face à la c-bet, selon la stratégie {escape(_de(who))}</h2>
+<div class="card">{_overview(plan, "defense")}{_legend()}</div>
+<h2>Stratégie par stratégie</h2>
+{defense}
+</div>
 <h2>Les flops résolus</h2>
 <div class="card">{_table(plan)}
-<p class="note">Équité : écart d'équité moyenne entre les deux ranges au flop, pour celui qui a l'initiative ; nuts : écart
-de part de deux paires et mieux. Un clic ouvre le flop dans l'explorateur.</p></div>
+<p class="note">Fold face à la c-bet : la défense {escape(_de(other))} ; équité : écart d'équité moyenne entre les deux
+ranges au flop, pour celui qui a l'initiative ; nuts : écart de part de deux paires et mieux. Un clic ouvre le flop dans
+l'explorateur.</p></div>
 """
 
 

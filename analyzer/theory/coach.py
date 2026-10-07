@@ -5,11 +5,12 @@
    c-bet retardée, probe…), la stratégie de toute la range regroupée par famille de mains (deux paires et
    mieux, overpair, top pair…, tirage couleur, air) et, à la turn et à la river, par type de carte
    (overcard, brique, board pairé, couleur ou quinte possible). Gardée dans la base (documents « plan »).
-2. Synthèse, à l'affichage : les flops regroupés par catégorie (hauteur haut, moyen ou bas ; structure
-   sèche, deux couleurs ou connectée ; pairé ; monotone), chacune avec son niveau de c-bet (mise presque
-   tout, mise souvent, checke souvent), des règles pour quatre familles de mains (fortes, moyennes, tirages,
-   rien), la suite selon la carte de turn et de river, et le pourquoi (avantage d'équité, avantage de nuts).
-   Plus il y a de flops résolus, plus le plan est précis.
+2. Synthèse, à l'affichage : les flops regroupés en trois stratégies de c-bet (miser range, stratégie mixte,
+   checker range) et, dans chacune, par taille de mise (petite, moyenne, grosse, tapis). Pour chaque groupe :
+   ses flops (des exemples, chacun ouvrable dans l'explorateur), le pourquoi (avantage d'équité, avantage de
+   nuts), des règles pour quatre familles de mains (fortes, moyennes, tirages, rien) et la suite à la turn et
+   à la river selon la carte ; en attaque pour celui qui a l'initiative, en défense pour l'autre (face à la
+   c-bet et aux barrels, et quand l'attaquant checke). Plus il y a de flops résolus, plus le plan est précis.
 
 Un plan par famille de spots d'étude : heads-up (SRP, pot 3bet, pot 4bet) et tables à plusieurs (6-max, une famille
 par paire de positions et type de pot, avec tes charts). Les arbres 6-max ont la forme du heads-up de même structure
@@ -326,10 +327,19 @@ def plans(family: str) -> list[dict]:
 
 # --- Synthèse ----------------------------------------------------------------------------------------
 
-# Trois niveaux de c-bet, du plus simple à jouer au plus délicat.
-LEVELS = (("range", "Mise presque tout", 0.75), ("often", "Mise souvent", 0.5), ("check", "Checke souvent", 0.0))
-PATTERNS = tuple((key, label) for key, label, _ in LEVELS)
-PATTERN_LABEL = dict(PATTERNS)
+# Trois stratégies de c-bet, selon la fréquence de mise du solveur au flop.
+RANGE_BET, CHECK_RANGE = 0.70, 0.35
+STRATEGIES = (
+    ("range", "Miser range", f"c-bet d'au moins {round(100 * RANGE_BET)} % : une mise avec presque toute la range"),
+    ("mixte", "Stratégie mixte", f"c-bet de {round(100 * CHECK_RANGE)} à {round(100 * RANGE_BET)} % : on mise une partie "
+                                 "des mains, on checke les autres"),
+    ("check", "Checker range", f"c-bet de {round(100 * CHECK_RANGE)} % ou moins : on checke presque tout"),
+)
+STRATEGY_LABEL = {key: label for key, label, _ in STRATEGIES}
+# Tailles de la c-bet, regroupées (classes de action_class).
+SIZE_GROUPS = (("petite", "petite mise", ("small",)), ("moyenne", "mise moyenne", ("medium",)),
+               ("grosse", "grosse mise", ("big", "overbet")), ("tapis", "tapis", ("allin",)))
+SIZE_LABEL = {key: label for key, label, _ in SIZE_GROUPS}
 MIN_SHARE = 0.02  # une famille de mains sous 2 % de la range n'apparaît pas dans les règles
 
 # Catégories de flop : hauteur (carte la plus haute) et structure, plus les flops pairés et monotones.
@@ -377,8 +387,23 @@ def main_size(freqs: dict) -> Optional[str]:
     return max(sized, key=sized.get) if sized else None
 
 
-def pattern_of(share: float) -> str:
-    return next(key for key, _, low in LEVELS if share >= low)
+def strategy_of(share: float) -> str:
+    """La stratégie d'une fréquence de c-bet, lue au pour cent près (comme elle s'affiche)."""
+    pct = round(100 * share)
+    return "range" if pct >= round(100 * RANGE_BET) else "check" if pct <= round(100 * CHECK_RANGE) else "mixte"
+
+
+def size_group(size: Optional[str]) -> str:
+    """La taille regroupée d'une classe de mise (small… allin) ; sans mise, « petite »."""
+    return next((key for key, _, classes in SIZE_GROUPS if size in classes), "petite")
+
+
+def max_fold(sizes: list[int]) -> Optional[float]:
+    """Le fold au-delà duquel une mise de cette taille (% du pot) rapporte d'elle-même : taille / (pot + taille)."""
+    if not sizes:
+        return None
+    size = sorted(sizes)[len(sizes) // 2] / 100
+    return size / (1 + size)
 
 
 def aggressor_of(family: str) -> int:
@@ -388,14 +413,18 @@ def aggressor_of(family: str) -> int:
 
 
 def flop_row(data: dict) -> dict:
-    """Une ligne du tableau des flops : catégorie, c-bet, taille, avantages, niveau."""
+    """Une ligne du tableau des flops : catégorie, stratégie, c-bet et sa taille, avantages, défense face à la
+    c-bet."""
     cbet = data["nodes"].get("cbet", {}).get("groups", {}).get("flop", {"f": {}})
+    facing = data["nodes"].get("vs_cbet", {}).get("groups", {}).get("flop", {"f": {}})["f"]
     share = aggression(cbet["f"])
+    size = main_size(cbet["f"])
     adv = data.get("advantages") or {"eq": [0.5, 0.5], "nuts": [0.0, 0.0]}
     a = aggressor_of(data["family"])
-    return {"id": data["id"], "board": data["board"], "texture": data["texture"], "pattern": pattern_of(share),
+    return {"id": data["id"], "board": data["board"], "texture": data["texture"], "strategy": strategy_of(share),
             "category": board_category(data["board"]), "suit_pattern": data["pattern"], "cbet": share,
-            "size": main_size(cbet["f"]), "sizes": data["nodes"].get("cbet", {}).get("sizes", []),
+            "size": size, "size_group": size_group(size), "sizes": data["nodes"].get("cbet", {}).get("sizes", []),
+            "fold": facing.get("fold", 0.0) if facing else None, "raise": aggression(facing) if facing else None,
             "eq_adv": adv["eq"][a] - adv["eq"][1 - a], "nut_adv": adv["nuts"][a] - adv["nuts"][1 - a]}
 
 
@@ -504,8 +533,8 @@ def _pts(x: float) -> str:
     return f"{100 * x:+.0f} pts".replace("-", "−")
 
 
-def why(pattern: str, eq_adv: float, nut_adv: float, who: str, other: str) -> str:
-    """Pourquoi ce niveau de c-bet, en deux phrases, d'après l'avantage d'équité et de nuts de celui qui a
+def why(strategy: str, eq_adv: float, nut_adv: float, who: str, other: str) -> str:
+    """Pourquoi cette stratégie de c-bet, en deux phrases, d'après l'avantage d'équité et de nuts de celui qui a
     l'initiative."""
     cap = lambda text: text[0].upper() + text[1:]  # noqa: E731
     equity = ("un avantage d'équité" if eq_adv >= 0.05 else "moins d'équité" if eq_adv <= -0.05
@@ -513,15 +542,28 @@ def why(pattern: str, eq_adv: float, nut_adv: float, who: str, other: str) -> st
     nuts = ("plus de mains très fortes" if nut_adv >= 0.02 else "moins de mains très fortes" if nut_adv <= -0.02
             else "autant de mains très fortes")
     facts = f"{cap(who)} a {equity} ({_pts(eq_adv)}) et {nuts} ({_pts(nut_adv)}) que {other}."
-    if pattern == "range":
-        reason = f"{cap(other)} a peu de mains qui supportent une mise : une petite mise avec tout coûte peu et rapporte."
+    if strategy == "range":
+        reason = f"{cap(other)} a peu de mains qui supportent une mise : une mise avec tout coûte peu et rapporte."
     elif nut_adv <= -0.02:
         reason = f"{cap(other)} a plus de mains très fortes : on mise moins et on garde des mains fortes dans les checks."
-    elif pattern == "often":
-        reason = "On mise souvent, mais on checke une partie des mains moyennes qui préfèrent aller à l'abattage."
+    elif strategy == "mixte":
+        reason = ("On mise les mains fortes, des tirages et une partie de l'air, et on checke une partie des mains "
+                  "moyennes qui préfèrent aller à l'abattage.")
     else:
-        reason = "Sans avantage net, on mise surtout les mains fortes et des tirages, et on checke le reste."
+        reason = "Sans avantage net, on checke presque tout : les rares mises sont des mains très fortes et quelques bluffs."
     return facts + " " + reason
+
+
+def defense_text(fold: float, raise_: float, limit: Optional[float], defender: str, size: str) -> str:
+    """La défense face à la c-bet en une phrase, avec le fold au-delà duquel la mise rapporte d'elle-même."""
+    cap = lambda text: text[0].upper() + text[1:]  # noqa: E731
+    text = f"{cap(defender)} folde {round(100 * fold)} % et relance {round(100 * raise_)} %"
+    if limit is None:
+        return text + "."
+    verdict = ("défense large" if fold <= limit - 0.03 else "défense serrée" if fold >= limit + 0.08
+               else "à peu près la défense minimale")
+    return (text + f" : {verdict} (face à une {size}, la mise rapporte d'elle-même dès que la défense folde plus de "
+            f"{round(100 * limit)} %).")
 
 
 def card_rules(node: Optional[dict], defender: bool = False, river: bool = False) -> list[dict]:
@@ -544,13 +586,13 @@ def card_rules(node: Optional[dict], defender: bool = False, river: bool = False
 def _facing(merged: dict) -> Optional[dict]:
     if not merged["flops"]:
         return None
-    return {"fold": merged["f"].get("fold", 0.0), "raise": aggression(merged["f"]),
+    return {"fold": merged["f"].get("fold", 0.0), "call": merged["f"].get("call", 0.0), "raise": aggression(merged["f"]),
             "rules": simple_rules(merged, defender=True), "detail": defender_rules(merged)}
 
 
 def family_plan(family: str) -> dict:
-    """Le plan d'une famille de pots, à partir des plans extraits de ses flops résolus : une entrée par catégorie
-    de flop (hauteur et structure, pairé, monotone)."""
+    """Le plan d'une famille de pots, à partir des plans extraits de ses flops résolus : les flops regroupés par
+    stratégie de c-bet et taille de mise ; pour chaque groupe, l'attaque (celui qui a l'initiative) et la défense."""
     data = plans(family)
     info = studyspots.family_info(family)
     a = aggressor_of(family)
@@ -558,48 +600,69 @@ def family_plan(family: str) -> dict:
     who, other = (oop, ip) if a == 0 else (ip, oop)
     out = {"family": family, "name": info["name"], "label": info["label"], "title": studyspots.family_title(family),
            "ring": family in studyspots.RING_FAMILIES, "pair": info.get("pair"), "count": len(data),
-           "missing": len(missing(family)), "who": who, "other": other, "groups": []}
+           "missing": len(missing(family)), "who": who, "other": other, "groups": [], "strategies": []}
     rows = [flop_row(d) for d in data]
     out["flops"] = rows
-    for category, label in CATEGORIES:
-        members = [(d, r) for d, r in zip(data, rows) if r["category"] == category]
-        if not members:
-            continue
+    order = [c for c, _ in CATEGORIES]
+    for strategy, label, text in STRATEGIES:
+        keys = []
+        for size, size_label, _ in SIZE_GROUPS:
+            members = [(d, r) for d, r in zip(data, rows) if r["strategy"] == strategy and r["size_group"] == size]
+            if not members:
+                continue
+            group = _group(members, strategy, size, who, other)
+            out["groups"].append(group)
+            keys.append(group["key"])
+        out["strategies"].append({"key": strategy, "label": label, "text": text, "groups": keys,
+                                  "flops": sum(1 for r in rows if r["strategy"] == strategy)})
+    for group in out["groups"]:
+        group["flops"].sort(key=lambda r: (order.index(r["category"]), -r["cbet"]))
+    return out
 
-        def gather(name: str, members=members) -> dict:
-            """Les groupes de ce nœud, flop par flop, rangés par type de carte."""
-            by_card: dict[str, list] = {}
-            for d, _ in members:
-                for group, g in d["nodes"].get(name, {}).get("groups", {}).items():
-                    by_card.setdefault(group, []).append(g)
-            return by_card
 
-        cbet = merge(gather("cbet").get("flop", []))
-        share = aggression(cbet["f"])
-        pattern = pattern_of(share)
-        eq_adv = sum(r["eq_adv"] for _, r in members) / len(members)
-        nut_adv = sum(r["nut_adv"] for _, r in members) / len(members)
-        group = {
-            "category": category, "label": label, "pattern": pattern, "level": PATTERN_LABEL[pattern],
-            "flops": [r for _, r in members], "cbet": share, "size": main_size(cbet["f"]),
-            "sizes": sorted({s for _, r in members for s in r["sizes"]}),
-            "eq_adv": eq_adv, "nut_adv": nut_adv, "why": why(pattern, eq_adv, nut_adv, who, other),
+def _group(members: list[tuple[dict, dict]], strategy: str, size: str, who: str, other: str) -> dict:
+    """Un groupe de flops (même stratégie, même taille) : attaque et défense, flop par flop puis moyennées."""
+    def gather(name: str) -> dict:
+        """Les groupes de ce nœud, flop par flop, rangés par type de carte."""
+        by_card: dict[str, list] = {}
+        for d, _ in members:
+            for card, g in d["nodes"].get(name, {}).get("groups", {}).items():
+                by_card.setdefault(card, []).append(g)
+        return by_card
+
+    rows = [r for _, r in members]
+    cbet = merge(gather("cbet").get("flop", []))
+    sizes = sorted({s for r in rows for s in r["sizes"]})
+    eq_adv = sum(r["eq_adv"] for r in rows) / len(rows)
+    nut_adv = sum(r["nut_adv"] for r in rows) / len(rows)
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["category"]] = counts.get(r["category"], 0) + 1
+    categories = [(CATEGORY_LABEL[c], counts[c]) for c, _ in CATEGORIES if c in counts]
+    facing = _facing(merge(gather("vs_cbet").get("flop", [])))
+    limit = max_fold(sizes)  # (un tapis n'a pas de taille dans la liste : pas de seuil)
+    size_text = SIZE_LABEL[size] + (f" ({' / '.join(str(x) for x in sizes)} % du pot)" if sizes else "")
+    stab = merge(gather("stab").get("flop", []))
+    return {
+        "key": f"{strategy}-{size}", "strategy": strategy, "strategy_label": STRATEGY_LABEL[strategy], "size": size,
+        "size_label": SIZE_LABEL[size], "size_text": size_text, "sizes": sizes, "flops": rows,
+        "categories": categories, "cbet": aggression(cbet["f"]), "eq_adv": eq_adv, "nut_adv": nut_adv,
+        "why": why(strategy, eq_adv, nut_adv, who, other),
+        "attack": {
             "flop": simple_rules(cbet), "flop_detail": bettor_rules(cbet),
             "turn": card_rules(gather("barrel")), "river": card_rules(gather("barrel3"), river=True),
-            "delayed": card_rules(gather("delayed")),
-            "defense": {
-                "vs_cbet": _facing(merge(gather("vs_cbet").get("flop", []))),
-                "vs_xr": _facing(merge(gather("vs_xr").get("flop", []))),
-                "vs_barrel": card_rules(gather("vs_barrel"), defender=True),
-                "vs_barrel3": card_rules(gather("vs_barrel3"), defender=True, river=True),
-                "probe": card_rules(gather("probe")), "stab": None,
-            },
-        }
-        stab = merge(gather("stab").get("flop", []))
-        if stab["flops"]:
-            group["defense"]["stab"] = {"aggr": aggression(stab["f"]), "rules": simple_rules(stab)}
-        out["groups"].append(group)
-    return out
+            "delayed": card_rules(gather("delayed")), "vs_xr": _facing(merge(gather("vs_xr").get("flop", []))),
+        },
+        "defense": {
+            "vs_cbet": facing, "max_fold": limit,
+            "text": defense_text(facing["fold"], facing["raise"], limit, other, SIZE_LABEL[size]) if facing else None,
+            "vs_barrel": card_rules(gather("vs_barrel"), defender=True),
+            "vs_barrel3": card_rules(gather("vs_barrel3"), defender=True, river=True),
+            "probe": card_rules(gather("probe")),
+            "stab": {"aggr": aggression(stab["f"]), "rules": simple_rules(stab), "detail": bettor_rules(stab)}
+            if stab["flops"] else None,
+        },
+    }
 
 
 # --- Lecture d'un nœud, pour le coach conversationnel --------------------------------------------------

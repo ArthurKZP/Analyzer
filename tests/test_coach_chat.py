@@ -165,7 +165,10 @@ class CoachChatTest(unittest.TestCase):
         self.assertEqual(second[1]["content"][0]["type"], "thinking")  # réflexion renvoyée telle quelle
         result = second[2]["content"][0]
         self.assertEqual(result["tool_use_id"], "t1")
-        self.assertIn("categories", json.loads(result["content"]))
+        plan = json.loads(result["content"])
+        self.assertEqual((plan["attaquant"], plan["defenseur"]), ("le bouton", "la BB"))
+        self.assertEqual(plan["groupes"][0]["strategie"], "Checker range")
+        self.assertIn("fold_au_dela_duquel_la_mise_rapporte_pct", plan["groupes"][0]["defense"]["face_cbet"])
         self.assertGreater(view["cost"], 0)
 
     def test_node_and_hand_tools(self):

@@ -649,20 +649,25 @@ flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de fl
   board (overcard, brique, board pairé, couleur possible, quinte possible). Une étude résolue est lue tout de
   suite ; les anciennes, avec **Préparer le plan** (quelques secondes en pot 4bet, une minute environ en SRP).
   Résultats dans la base (sauvegardée).
-- **Selon le flop** : une grille par catégorie de flop, la hauteur (haut : As ou Roi ; moyen : Dame à Dix ;
-  bas : 9 ou moins) en lignes et la structure (sec ; deux couleurs ; connecté, quintes possibles) en colonnes,
-  plus les flops pairés et monotones. Chaque case donne le niveau de c-bet de celui qui a l'initiative
-  (*mise presque tout* : 75 % et plus, en général petite ; *mise souvent* : 50 à 75 % ; *checke souvent* :
-  moins de 50 %), la c-bet et des flops résolus en exemple.
-- **Catégorie par catégorie** : ses flops, le pourquoi (avantage d'équité et de nuts), puis la stratégie pour
-  quatre familles de mains, *fortes* (deux paires et mieux, overpair, top pair bon kicker), *moyennes* (top
-  pair petit kicker, paires moyennes et petites), *tirages* (couleur, quinte) et *rien* (hauteur, gutshots,
-  backdoors) : au flop, à la turn et à la river selon la carte (overcard, brique, board pairé, couleur ou
-  quinte possible, chacune expliquée), avec la fréquence de mise. Le jeu de l'autre joueur (face à la c-bet
-  et aux barrels), les autres lignes (c-bet retardée, probe) et le détail en onze familles de mains sont
-  repliés.
-- **Les flops résolus** : chacun avec sa catégorie, son niveau, sa c-bet, sa taille et les deux avantages ; un
-  clic l'ouvre dans l'explorateur.
+- **En attaque** (celui qui a l'initiative) : au flop, **trois stratégies de c-bet**, chacune précisée par sa
+  **taille** (petite, moyenne, grosse mise ou tapis, avec le % du pot de l'arbre) : *miser range* (c-bet de 70 %
+  et plus : une mise avec presque toute la range), *stratégie mixte* (de 35 à 70 % : on mise une partie des mains,
+  on checke les autres) et *checker range* (35 % et moins). Chaque groupe (stratégie et taille) montre sa
+  fréquence de c-bet, son nombre de flops et des flops résolus en exemple, de catégories différentes (haut, moyen
+  ou bas ; sec, deux couleurs ou connecté ; pairé ; monotone) : un clic ouvre l'étude dans l'explorateur pour
+  entrer dans le détail. Une stratégie sans flop dit pourquoi (par exemple : le bouton mise toujours au moins 40 %). Le
+  détail d'un groupe : tous ses flops, le pourquoi (avantage d'équité et de nuts), la règle au flop pour quatre
+  familles de mains, *fortes* (deux paires et mieux, overpair, top pair bon kicker), *moyennes* (top pair petit
+  kicker, paires moyennes et petites), *tirages* (couleur, quinte) et *rien* (hauteur, gutshots, backdoors), puis
+  à la turn et à la river selon la carte (overcard, brique, board pairé, couleur ou quinte possible), avec la
+  fréquence de mise ; repliés : la c-bet retardée, le jeu face au check-raise et le détail en onze familles.
+- **En défense** (l'autre joueur), le même découpage vu d'en face : pour chaque groupe, ce que fait la défense
+  face à la c-bet (fold, call, relance, et le fold au-delà duquel la mise rapporte d'elle-même : 25 % face à une
+  mise de 33 % du pot), la règle par famille de mains, la défense face au 2e barrel selon la turn et au 3e barrel
+  selon la river, et ce qu'elle fait quand l'attaquant checke (probe à la turn quand elle est hors de position,
+  stab au flop quand elle est en position).
+- **Les flops résolus** : chacun avec sa catégorie, sa stratégie, sa c-bet et sa taille, le fold de la défense
+  face à la c-bet et les deux avantages ; un clic l'ouvre dans l'explorateur.
 
 ## Coach
 
