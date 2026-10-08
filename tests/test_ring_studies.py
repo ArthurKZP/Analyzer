@@ -82,7 +82,8 @@ class RingSpotTest(RingHome):
             studyspots.StudySpot("6max_bb_btn_srp", studyspots.cards_of("KsKd4c"))
         self.assertIn("Pas de ranges 6-max", str(err.exception))
         self.assertTrue(studyspots.is_ident("spot:6max_bb_btn_srp:KsKd4c"))
-        self.assertFalse(studyspots.is_ident("spot:6max_bb_utg_srp:KsKd4c"))
+        self.assertTrue(studyspots.is_ident("spot:6max_bb_utg_srp:KsKd4c"))  # hors des séries, depuis l'explorateur
+        self.assertFalse(studyspots.is_ident("spot:6max_btn_bb_srp:KsKd4c"))
         from analyzer.app.studies import build_studies_page
         self.assertIn("Charge d'abord tes charts 6-max", build_studies_page(section="6max"))
 

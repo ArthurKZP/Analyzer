@@ -169,7 +169,12 @@ def build_ring_page(scopes: list[tuple[str, str, list]], hero: str, embed: bool 
     if not shown:
         body = ('<p class="note">Aucune main à une table de 3 joueurs ou plus. Importe des historiques 3-max, 6-max ou de '
                 "7 à 9 joueurs (Betclic, Winamax, Unibet) : tes stats par position s'afficheront ici.</p>")
-        return html_page("Tables à plusieurs", body, embed)
+        if not ranges:  # les charts servent aussi à l'explorateur (coup à plusieurs), même sans mains
+            body += ('<p><button type="button" class="rg-load">Charger les charts 100 bb de Hand2Note Guide (6-max et '
+                     '3-max)</button> <span class="muted small">pour étudier les coups à plusieurs dans l\'explorateur ; '
+                     'téléchargés sur ta machine, pour ton usage personnel (conditions du site)</span> '
+                     '<span class="rg-load-msg small"></span></p>')
+        return html_page("Tables à plusieurs", body, embed, script=SCRIPT)
     labels = {"all": "Toutes tes mains", "reg": "Contre les réguliers", "rec": "Contre les récréatifs"}
     switch = ('<div class="rg-switch" role="group" aria-label="Adversaires">' + "".join(
         f'<button type="button" data-scope="{escape(scope)}" aria-pressed="{str(k == 0).lower()}">'

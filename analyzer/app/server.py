@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from ..theory import postflop, preflop_tree, studyspots
+from ..theory import postflop, preflop_tree, ring_tree, studyspots
 from . import trainer
 from .library import Library, UnknownPlayer
 from .solves import NeedSession
@@ -227,6 +227,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(500, "Erreur pendant l'analyse (détails dans le terminal).")
         return self._error(404, "Page introuvable.")
 
+    def _ring_preflop(self, payload: dict):
+        """Le nœud de l'arbre préflop 6-max (ring_tree) au bout de la ligne, ou de celle qui mène au flop d'une
+        famille 6-max (le début du déroulé d'un spot d'étude)."""
+        line = payload.get("line")
+        family = payload.get("family")
+        if isinstance(family, str):
+            if not studyspots.is_ring(family):
+                return self._error(400, "Requête invalide.")
+            line = ring_tree.line_for_family(family)
+        if not (isinstance(line, list) and len(line) <= 16 and all(a in ring_tree.ACTIONS for a in line)):
+            return self._error(400, "Requête invalide.")
+        try:
+            return self._json(ring_tree.node(line))
+        except ring_tree.NoCharts as exc:
+            return self._error(404, str(exc))
+        except ValueError:
+            return self._error(404, "Ligne préflop hors des charts.")
+
     # --- POST -------------------------------------------------------------------
     def do_POST(self):
         if not self._trusted():
@@ -271,6 +289,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = self._small_json()
             if not isinstance(payload, dict):
                 return self._error(400, "Requête invalide.")
+            if payload.get("table") == ring_tree.TABLE:  # un coup à plusieurs : l'arbre des charts 6-max
+                return self._ring_preflop(payload)
             line = payload.get("line")
             if payload.get("family") in preflop_tree.FAMILY_LINES:
                 line = list(preflop_tree.FAMILY_LINES[payload["family"]])
@@ -283,10 +303,13 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "explorateur", "flop"]:
             payload = self._small_json()
             board = payload.get("board") if isinstance(payload, dict) else None
-            if not (isinstance(payload, dict) and payload.get("family") in studyspots.FAMILIES
-                    and trainer.valid_cards(board, 3)):
+            if not (isinstance(payload, dict) and isinstance(payload.get("family"), str)
+                    and studyspots.known_family(payload["family"]) and trainer.valid_cards(board, 3)):
                 return self._error(400, "Requête invalide.")
-            return self._json(studyspots.flop_options(payload["family"], board))
+            try:
+                return self._json(studyspots.flop_options(payload["family"], board))
+            except postflop.Unsupported as exc:  # spot 6-max sans tes charts
+                return self._error(400, str(exc))
         if parts == ["api", "estimation"]:  # durée d'une résolution selon la précision
             payload = self._small_json()
             if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
@@ -409,7 +432,7 @@ class Handler(BaseHTTPRequestHandler):
         if parts[:3] == ["api", "spots", "6max"] and len(parts) == 4 and parts[3] in ("resoudre", "arreter"):
             return self._json(library.ring_spot_cancel() if parts[3] == "arreter" else library.ring_spot_sets(start=True))
         if len(parts) == 4 and parts[:2] == ["api", "spots"] and parts[3] in ("resoudre", "arreter"):
-            if not studyspots.known_family(parts[2]):
+            if not studyspots.is_series(parts[2]):
                 return self._error(404, "Série inconnue.")
             if parts[3] == "arreter":
                 return self._json(library.spot_cancel(parts[2]))

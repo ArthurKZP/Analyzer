@@ -94,7 +94,7 @@ def plan_families() -> tuple[str, ...]:
 
 def seat_names(family: Optional[str]) -> tuple[str, str]:
     """Les positions des deux joueurs (hors de position, en position) : BB et BTN en heads-up."""
-    info = studyspots.RING_FAMILIES.get(family or "")
+    info = studyspots.ring_family(family) if family and family not in studyspots.FAMILIES else None
     return (info["oop"], info["ip"]) if info else ("BB", "BTN")
 
 
@@ -102,7 +102,8 @@ def seat_words(family: str) -> tuple[str, str]:
     """Les deux joueurs avec leur article, pour les phrases : « la BB », « le bouton », « le CO »…"""
     if family in studyspots.FAMILIES:
         return "la BB", "le bouton"
-    return tuple(("la " if pos in ("SB", "BB") else "le ") + pos for pos in seat_names(family))
+    return tuple(("la " if pos in ("SB", "BB") else "l'" if pos.startswith("U") else "le ") + pos
+                 for pos in seat_names(family))
 
 
 # --- Familles de mains et types de cartes ----------------------------------------------------------
@@ -599,7 +600,7 @@ def family_plan(family: str) -> dict:
     oop, ip = seat_words(family)
     who, other = (oop, ip) if a == 0 else (ip, oop)
     out = {"family": family, "name": info["name"], "label": info["label"], "title": studyspots.family_title(family),
-           "ring": family in studyspots.RING_FAMILIES, "pair": info.get("pair"), "count": len(data),
+           "ring": family not in studyspots.FAMILIES, "pair": info.get("pair"), "count": len(data),
            "missing": len(missing(family)), "who": who, "other": other, "groups": [], "strategies": []}
     rows = [flop_row(d) for d in data]
     out["flops"] = rows

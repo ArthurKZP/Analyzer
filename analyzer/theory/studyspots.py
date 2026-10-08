@@ -55,7 +55,7 @@ POT_NAMES = {"srp": "SRP", "3bet": "pot 3bet", "4bet": "pot 4bet"}
 
 
 def _de(pos: str) -> str:
-    return ("de la " if pos in ("SB", "BB") else "du ") + pos
+    return ("de la " if pos in ("SB", "BB") else "de l'" if pos.startswith("U") else "du ") + pos
 
 
 def _ring_family(oop: str, ip: str, kind: str, opener: str) -> tuple[str, dict]:
@@ -83,6 +83,7 @@ def _ring_family(oop: str, ip: str, kind: str, opener: str) -> tuple[str, dict]:
     }
 
 
+# Les séries d'étude 6-max (Études du solveur › 6-max, plans de jeu, repères du Leakfinding).
 RING_FAMILIES = dict(_ring_family(*args) for args in (
     ("SB", "BB", "srp", "SB"), ("SB", "BB", "3bet", "SB"), ("SB", "BB", "4bet", "SB"),
     ("SB", "BTN", "3bet", "BTN"), ("SB", "BTN", "4bet", "BTN"),
@@ -92,11 +93,56 @@ RING_FAMILIES = dict(_ring_family(*args) for args in (
 for _family, _info in RING_FAMILIES.items():
     sizing.register(_family, _info["structure"], _info["oop"], _info["ip"])
 
+# Les autres paires de positions des charts 6-max (le HJ contre le BTN, l'UTG contre la BB…) : des familles hors des
+# séries, ouvertes depuis l'explorateur (ring_family) ; leurs tailles viennent des séries de même structure.
+SEATS_PREFLOP = ("UTG", "HJ", "CO", "BTN", "SB", "BB")   # l'ordre de parole avant le flop
+SEATS_POSTFLOP = ("SB", "BB", "UTG", "HJ", "CO", "BTN")  # après le flop : la SB parle la première
+_OTHER_FAMILIES: dict[str, dict] = {}
+_FAMILY_RE = re.compile(r"6max_(utg|hj|co|btn|sb|bb)_(utg|hj|co|btn|sb|bb)_(srp|3bet|4bet)")
+
+
+def ring_family(family: str) -> Optional[dict]:
+    """Une famille 6-max, « 6max_<hors de position>_<en position>_<pot> » : une série d'étude, ou deux autres
+    positions des charts (celle qui parle la première avant le flop a ouvert) ; None sinon."""
+    if family in RING_FAMILIES:
+        return RING_FAMILIES[family]
+    if family in _OTHER_FAMILIES:
+        return _OTHER_FAMILIES[family]
+    found = _FAMILY_RE.fullmatch(family)
+    if not found:
+        return None
+    oop, ip, kind = found.group(1).upper(), found.group(2).upper(), found.group(3)
+    if SEATS_POSTFLOP.index(oop) >= SEATS_POSTFLOP.index(ip):
+        return None
+    opener = min((oop, ip), key=SEATS_PREFLOP.index)
+    _, info = _ring_family(oop, ip, kind, opener)
+    sizing.register(family, info["structure"], oop, ip)
+    _OTHER_FAMILIES[family] = info
+    _register_times(family, info)
+    _register_summary(family, info)
+    return info
+
+
+def ring_family_of(oop: str, ip: str, kind: str) -> str:
+    """« 6max_bb_co_srp » : la famille des deux joueurs du flop (hors de position, en position) et du type de pot."""
+    return f"6max_{oop.lower()}_{ip.lower()}_{kind}"
+
+
+def is_ring(family: str) -> bool:
+    return family not in FAMILIES and ring_family(family) is not None
+
+
+def is_series(family: str) -> bool:
+    """Une série d'étude (ses flops, ses tailles choisies, son plan de jeu) : heads-up ou 6-max."""
+    return family in FAMILIES or family in RING_FAMILIES
+
 
 def ring_spot_ranges(family: str) -> dict[str, dict[str, float]]:
     """Les ranges d'une famille 6-max, tirées de tes charts ; postflop.Unsupported s'ils manquent."""
     from . import ring_ranges
-    info = RING_FAMILIES[family]
+    info = ring_family(family)
+    if info is None:
+        raise KeyError(family)
     found = ring_ranges.lookup(RING_FORMAT, list(info["steps"]))
     if found is None or any(p not in found[1] for p in (info["oop"], info["ip"])):
         raise postflop.Unsupported(f"Pas de ranges 6-max pour « {ring_ranges.describe(list(info['steps']))} » : "
@@ -106,6 +152,15 @@ def ring_spot_ranges(family: str) -> dict[str, dict[str, float]]:
 
 
 HU_STRUCTURES = {"srp": "srp_ip", "3bet": "3bet_oop", "4bet": "4bet_ip"}  # qui a l'initiative, hors de position ou non
+
+
+def size_models(family: str) -> list[str]:
+    """Les séries dont une famille 6-max hors des séries prend les tailles : les séries 6-max de même structure, puis
+    la famille heads-up de même structure."""
+    info = ring_family(family) or {}
+    structure = info.get("structure")
+    return ([f for f, other in RING_FAMILIES.items() if other["structure"] == structure and f != family]
+            + [f for f in FAMILIES if HU_STRUCTURES[f] == structure])
 
 
 def size_families(heads_up: bool, oop: str, ip: str, pot_type: str, oop_initiative: bool) -> list[str]:
@@ -127,7 +182,7 @@ def size_families(heads_up: bool, oop: str, ip: str, pot_type: str, oop_initiati
 def family_title(family: str) -> str:
     """« heads-up, SRP » ou « 6-max, BB contre BTN, pot 3bet »."""
     info = family_info(family)
-    return f"6-max, {info['pair']}, {info['name']}" if family in RING_FAMILIES else f"heads-up, {info['name']}"
+    return f"heads-up, {info['name']}" if family in FAMILIES else f"6-max, {info['pair']}, {info['name']}"
 
 
 def pot_name(family: str) -> str:
@@ -142,12 +197,17 @@ def pot_name(family: str) -> str:
 
 
 def family_info(family: str) -> dict:
-    """Une famille de spots : heads-up (FAMILIES) ou d'une table à plusieurs (RING_FAMILIES) ; KeyError sinon."""
-    return FAMILIES[family] if family in FAMILIES else RING_FAMILIES[family]
+    """Une famille de spots : heads-up (FAMILIES) ou d'une table à plusieurs (ring_family) ; KeyError sinon."""
+    if family in FAMILIES:
+        return FAMILIES[family]
+    info = ring_family(family)
+    if info is None:
+        raise KeyError(family)
+    return info
 
 
 def known_family(family: str) -> bool:
-    return family in FAMILIES or family in RING_FAMILIES
+    return family in FAMILIES or ring_family(family) is not None
 
 
 # Trois flops par texture : sec, connecté, deux couleurs (ou leurs équivalents pour pairé et monotone).
@@ -195,11 +255,18 @@ SOLVE_SECONDS = {"srp": 600, "3bet": 150, "4bet": 45}
 # Durée du choix des tailles d'un flop sur 4 cœurs (mesurée sur K♠K♦4♣).
 CHOOSE_TIME = {"srp": "1 h 10 environ", "3bet": "25 minutes environ", "4bet": "2 minutes environ"}
 CHOOSE_SECONDS = {"srp": 4200, "3bet": 1500, "4bet": 120}
-for _family, _info in RING_FAMILIES.items():  # ranges plus serrées qu'en heads-up : au plus aussi long
-    SOLVE_TIME[_family] = "au plus " + SOLVE_TIME[_info["kind"]]
-    CHOOSE_TIME[_family] = "au plus " + CHOOSE_TIME[_info["kind"]].replace(" environ", "")
-    SOLVE_SECONDS[_family] = SOLVE_SECONDS[_info["kind"]]
-    CHOOSE_SECONDS[_family] = CHOOSE_SECONDS[_info["kind"]]
+
+
+def _register_times(family: str, info: dict) -> None:
+    """Ranges plus serrées qu'en heads-up : au plus aussi long que la famille heads-up du même type de pot."""
+    SOLVE_TIME[family] = "au plus " + SOLVE_TIME[info["kind"]]
+    CHOOSE_TIME[family] = "au plus " + CHOOSE_TIME[info["kind"]].replace(" environ", "")
+    SOLVE_SECONDS[family] = SOLVE_SECONDS[info["kind"]]
+    CHOOSE_SECONDS[family] = CHOOSE_SECONDS[info["kind"]]
+
+
+for _family, _info in RING_FAMILIES.items():
+    _register_times(_family, _info)
 
 
 def board_text(board: list[str]) -> str:
@@ -236,8 +303,9 @@ def flop_distance(a: list[str], b: list[str]) -> int:
 
 
 def flop_set(family: str = "srp", textures: Optional[list[str]] = None) -> list[str]:
-    """Flops de la série, un par texture à tour de rôle : une série interrompue couvre déjà chaque texture."""
-    flops = FLOPS[family]
+    """Flops de la série, un par texture à tour de rôle : une série interrompue couvre déjà chaque texture (aucun
+    pour une famille 6-max hors des séries)."""
+    flops = FLOPS.get(family, {})
     wanted = [t for t in TEXTURES if t in flops and (not textures or t in textures)]
     rounds = max(len(flops[t]) for t in wanted) if wanted else 0
     return [flops[t][k] for k in range(rounds) for t in wanted if k < len(flops[t])]
@@ -256,6 +324,7 @@ class StudySpot(postflop.SpotTree):
     # {} : toujours l'arbre par défaut.
     plan: Optional[dict] = None
     sizes_from: Optional[str] = field(default=None, repr=False)  # flop dont les tailles sont empruntées
+    sizes_family: Optional[str] = field(default=None, repr=False)  # et sa famille, si c'en est une autre
     # True : tes ranges ajustées pour ce spot (custom_ranges, portée « coup ») ; les séries, plans et références
     # restent faits avec les ranges de la solution.
     custom: bool = field(default=False, repr=False)
@@ -265,7 +334,7 @@ class StudySpot(postflop.SpotTree):
         info = family_info(self.family)
         self.name, self.label = info["name"], info["label"]
         self.pot_bb, self.stack_bb = info["pot"], info["stack"]
-        if self.family in RING_FAMILIES:
+        if self.family not in FAMILIES:
             self.oop, self.ip = info["oop"], info["ip"]
             self.ranges = ring_spot_ranges(self.family)
             self.context = custom_ranges.context(RING_FORMAT, info["steps"])
@@ -291,12 +360,20 @@ class StudySpot(postflop.SpotTree):
                 near = closest_selection(self.family, self.board)
                 if near is not None:
                     self.sizes_from, chosen = near
+                elif self.family not in FAMILIES and self.family not in RING_FAMILIES:
+                    # hors des séries : les tailles du flop le plus proche d'une série de même structure
+                    for model in size_models(self.family):
+                        found = sizes_for(model, self.board)
+                        if found:
+                            chosen, self.sizes_from, self.sizes_family = {"plan": found[0]}, found[1], model
+                            break
             self.plan = dict(chosen["plan"]) if chosen else {}
 
     def menu_text(self) -> str:
         text = sizing.plan_text(self.plan, self.family) if self.plan else super().menu_text()
         if self.sizes_from:
-            text += " (tailles de " + board_text(cards_of(self.sizes_from)) + ")"
+            where = f", {family_title(self.sizes_family)}" if self.sizes_family else ""
+            text += " (tailles de " + board_text(cards_of(self.sizes_from)) + where + ")"
         return text
 
     @property
@@ -368,9 +445,16 @@ SUMMARY = {
     "3bet": (("C-bet de la BB", []), ("BTN face à la c-bet", ["bet"]), ("BB face à la relance", ["bet", "raise"]),
              ("Stab du BTN", ["check"]), ("BB face au stab", ["check", "bet"])),
 }
-for _family, _info in RING_FAMILIES.items():  # même synthèse que la famille heads-up de même structure
-    _model = SUMMARY["3bet" if _info["oop_initiative"] else "srp"]
-    SUMMARY[_family] = tuple((sizing.rename_roles(title, _info["oop"], _info["ip"]), kinds) for title, kinds in _model)
+
+
+def _register_summary(family: str, info: dict) -> None:
+    """La même synthèse que la famille heads-up de même structure, avec les vraies positions."""
+    model = SUMMARY["3bet" if info["oop_initiative"] else "srp"]
+    SUMMARY[family] = tuple((sizing.rename_roles(title, info["oop"], info["ip"]), kinds) for title, kinds in model)
+
+
+for _family, _info in RING_FAMILIES.items():
+    _register_summary(_family, _info)
 
 
 def flop_summary(session: postflop.Session, family: str = "srp") -> list[dict]:

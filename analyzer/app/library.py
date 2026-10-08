@@ -780,7 +780,7 @@ class Library:
         """Série de spots d'étude : état de chaque flop ; start=True met en file ceux qui manquent.
 
         Un flop de la série sans tailles choisies passe d'abord par le choix des tailles (long)."""
-        if not studyspots.known_family(family):
+        if not studyspots.is_series(family):
             raise KeyError(family)
         try:
             if family in studyspots.RING_FAMILIES:

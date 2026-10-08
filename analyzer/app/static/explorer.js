@@ -3,6 +3,21 @@
 
   const HAND = document.body.dataset.hand;
   const PRE = HAND === 'preflop';  // arbre préflop de la solution, jusqu'au choix du flop d'un spot d'étude
+  const TABLES = [['HU', 'Heads-up'], ['6-max', 'À plusieurs (6-max)']];
+  // Petites préférences gardées dans le navigateur (le format du préflop).
+  function store(key, value) {
+    try {
+      if (value === undefined) return localStorage.getItem('analyzer-' + key);
+      localStorage.setItem('analyzer-' + key, value);
+    } catch (e) { /* stockage indisponible : on fait sans */ }
+    return null;
+  }
+  // PRE : la solution heads-up, ou (#table=6-max) l'arbre des charts 6-max ; sans ligne donnée, le dernier choisi.
+  let TABLE = (() => {
+    const hash = new URLSearchParams(location.hash.slice(1));
+    const wanted = hash.get('table') || (hash.has('ligne') ? 'HU' : store('explorer-table'));
+    return TABLES.some(([id]) => id === wanted) ? wanted : 'HU';
+  })();
   const SPOT = HAND.startsWith('spot:');  // spot d'étude : pas de main jouée, les joueurs sont nommés par leur position
   const FAMILY = SPOT ? HAND.split(':')[1] : null;
   const $ = (id) => document.getElementById(id);
@@ -29,6 +44,7 @@
   let pollTimer = null;
   let rightTab = 'combos';
   let preLine = [];   // PRE : actions préflop depuis l'open du bouton
+  let noCharts = false;  // PRE à plusieurs : pas encore de charts 6-max
   let picked = [];    // PRE : cartes choisies pour le flop
   let flopInfo = null;  // PRE : le flop choisi et les flops résolus proches (/api/explorateur/flop)
   let prefix = null;  // SPOT : la ligne préflop de la famille (nœud « flop »), en tête du déroulé
@@ -65,7 +81,8 @@
   const playerOf = (role) => (roleOf(0) === role ? 0 : 1);
   const who = (p) => (SPOT || PRE ? POS[p] : POS[p] + ' · ' + NAME[roleOf(p)]);
   const streetName = (s) => (s < 0 ? 'Préflop' : STREET[s]);
-  const preHref = (line) => '/explorateur/preflop#ligne=' + line.join('.');
+  const tableHash = (table) => (table && table !== 'HU' ? 'table=' + encodeURIComponent(table) + '&' : '');
+  const preHref = (line, table) => '/explorateur/preflop#' + tableHash(table) + 'ligne=' + line.join('.');
 
   // Libellés des actions d'un nœud. Mise : % du pot ; relance : montant ajouté en % du pot après le
   // call (convention des solveurs : relancer à 4,5 sur une mise de 1,7 dans un pot de 5 = 33 %).
@@ -204,10 +221,10 @@
     const p = path.slice();
     for (;;) {
       while (p.length && p[p.length - 1].type === 'card') p.pop();
-      if (!p.length) { if (prefix) location.href = preHref(prefix.preflop.line); return; }  // retour au préflop
+      if (!p.length) { if (prefix) location.href = preHref(prefix.preflop.line, prefix.preflop.table); return; }  // retour au préflop
       p.pop();
       // au début d'un spot, un check forcé (la BB ne mène pas) ramène directement au préflop
-      if (SPOT && !p.length && prefix && nodes.has('[]') && forced(nodes.get('[]'))) { location.href = preHref(prefix.preflop.line); return; }
+      if (SPOT && !p.length && prefix && nodes.has('[]') && forced(nodes.get('[]'))) { location.href = preHref(prefix.preflop.line, prefix.preflop.table); return; }
       if (!SPOT || !p.length) break;
       // dans un spot, on remonte aussi au-delà d'un nœud forcé (sauf la racine)
       const n = nodes.get(JSON.stringify(p));
@@ -219,19 +236,38 @@
   async function goLine(line) {
     document.body.classList.add('busy');
     try {
-      node = await api('/api/explorateur/preflop', { line });
+      node = await api('/api/explorateur/preflop', TABLE === 'HU' ? { line } : { table: TABLE, line });
+      noCharts = false;
       if (preLine.join('.') !== line.join('.')) { picked = []; flopInfo = null; }
       preLine = line.slice();
-      history.replaceState(null, '', '#ligne=' + preLine.join('.'));
+      history.replaceState(null, '', '#' + tableHash(TABLE) + 'ligne=' + preLine.join('.'));
+      POS = node.positions || ['BB', 'BTN'];  // à plusieurs : les deux joueurs du nœud
       if (node.player !== null && node.player !== undefined) viewPlayer = node.player;
+      if (!node.hands[viewPlayer].length) viewPlayer = 0;
       selected = null;
       notice = '';
     } catch (e) {
       notice = e.message;
+      noCharts = TABLE !== 'HU' && e.status === 404 && /charts/.test(e.message);
     } finally {
       document.body.classList.remove('busy');
     }
     render();
+  }
+
+  // Les charts 6-max gratuits de Hand2Note Guide, téléchargés sur ta machine (comme dans Tables à plusieurs).
+  async function loadCharts(button) {
+    button.disabled = true;
+    button.textContent = 'Téléchargement…';
+    try {
+      await api('/api/ranges/hand2note', {});
+      notice = '';
+      await goLine([]);
+    } catch (e) {
+      notice = e.message;
+      button.disabled = false;
+      render();
+    }
   }
 
   async function loadState() {
@@ -403,13 +439,44 @@
     }, 'tes ranges' + (state.adjusted === 'ligne' ? ' (ligne)' : ''));
   }
 
+  // Heads-up ou coup à plusieurs : l'arbre préflop change, la ligne repart de zéro.
+  function tableSwitch() {
+    const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Format du coup' });
+    TABLES.forEach(([id, label]) => seg.append(el('button', {
+      type: 'button', 'aria-pressed': TABLE === id ? 'true' : 'false', onclick: () => setTable(id),
+    }, label)));
+    return seg;
+  }
+
+  function setTable(table) {
+    if (table === TABLE) return;
+    TABLE = table;
+    store('explorer-table', table);
+    node = null;
+    preLine = [];
+    picked = [];
+    flopInfo = null;
+    selected = null;
+    ['ribbon', 'grid', 'legend', 'overview', 'combos', 'players'].forEach((id) => { $(id).textContent = ''; });
+    document.title = 'Explorateur — préflop' + (TABLE !== 'HU' ? ' ' + TABLE : '');
+    goLine([]);
+  }
+
   function renderStatus() {
     const box = $('status');
     box.textContent = '';
     if (PRE) {
+      box.append(tableSwitch());
+      if (noCharts) {
+        box.append(el('button', { type: 'button', class: 'go', onclick: (e) => loadCharts(e.currentTarget) },
+          'Charger les charts 100 bb de Hand2Note Guide'),
+        el('span', { class: 'muted' }, 'téléchargés sur ta machine, pour ton usage personnel (conditions du site)'));
+      }
       if (node) box.append(el('span', {}, node.type === 'flop' ? 'Choisis le flop : les flops résolus s\'ouvrent en quelques secondes.'
         : node.type === 'allin' ? 'Tapis préflop : pas de jeu après le flop à étudier.'
-          : 'Solution préflop : choisis les actions dans le déroulé ; au call, tu choisis le flop et le coup continue au postflop.'));
+          : TABLE !== 'HU' ? 'Charts ' + TABLE + ' : choisis l\'action de chaque position dans le déroulé ; le premier qui paie '
+            + 'ou relance l\'open reste seul face à l\'ouvreur (les charts couvrent les pots à deux) ; au call, tu choisis le flop.'
+            : 'Solution préflop : choisis les actions dans le déroulé ; au call, tu choisis le flop et le coup continue au postflop.'));
       if (notice) box.append(el('span', { class: 'err' }, notice));
       return;
     }
@@ -509,7 +576,7 @@
   // Étape préflop : chaque action mène à son nœud (navigate reçoit la ligne jusqu'à cette action).
   function preStep(h, k, line, current, navigate) {
     const step = el('div', { class: 'step pre' + (current ? ' current' : ''), title: 'Préflop · pot ' + num(h.pot) + ' bb' },
-      el('div', { class: 'head' }, el('span', {}, POS[h.player]), stackOf(h.stack)));
+      el('div', { class: 'head' }, el('span', {}, h.position || POS[h.player]), stackOf(h.stack)));
     h.actions.forEach((a, j) => step.append(el('button', {
       type: 'button', class: 'act' + (h.chosen === j ? ' on' : ''), onclick: () => navigate(line.slice(0, k).concat([h.keys[j]])),
     }, el('span', {}, a.name))));
@@ -546,13 +613,13 @@
     }
     if (prefix) {
       prefix.history.forEach((h, k) => {
-        if (h.kind === 'action') box.append(preStep(h, k, prefix.preflop.line, false, (line) => { location.href = preHref(line); }));
+        if (h.kind === 'action') box.append(preStep(h, k, prefix.preflop.line, false, (line) => { location.href = preHref(line, prefix.preflop.table); }));
       });
     }
     (meta.preflop || []).forEach((s) => box.append(playedPreStep(s)));
     box.append(navStep(el('div', { class: 'step cards' },
       streetHead('Flop', state.result.pot), cards(meta.board.slice(0, 3)),
-      prefix ? el('a', { class: 'change', href: preHref(prefix.preflop.line), title: 'Choisir un autre flop' }, 'changer') : ''),
+      prefix ? el('a', { class: 'change', href: preHref(prefix.preflop.line, prefix.preflop.table), title: 'Choisir un autre flop' }, 'changer') : ''),
     [], path.length === 0));
     node.history.forEach((h, k) => {
       const current = k === node.history.length - 1;
@@ -648,10 +715,13 @@
     }, label)));
     const players = $('players');
     players.textContent = '';
-    [0, 1].forEach((p) => players.append(el('button', {
-      type: 'button', 'aria-pressed': viewPlayer === p ? 'true' : 'false',
-      onclick: () => { viewPlayer = p; viewAuto = actor && p === node.player; selected = null; render(); },
-    }, who(p) + (actor && node.player === p ? ' (agit)' : ''))));
+    [0, 1].forEach((p) => {
+      if (PRE && !node.hands[p].length && node.player !== p) return;  // à plusieurs : personne n'a encore ouvert
+      players.append(el('button', {
+        type: 'button', 'aria-pressed': viewPlayer === p ? 'true' : 'false',
+        onclick: () => { viewPlayer = p; viewAuto = actor && p === node.player; selected = null; render(); },
+      }, who(p) + (actor && node.player === p ? ' (agit)' : '')));
+    });
   }
 
   function renderGrid() {
@@ -827,7 +897,8 @@
       picked.length ? el('button', { type: 'button', class: 'linkish', onclick: () => { picked = []; flopInfo = null; renderOverview(); } }, 'Effacer') : ''),
     deck);
     if (picked.length === 3 && flopInfo) panel.append(flopResult());
-    panel.append(el('div', { class: 'fl-head' }, el('b', {}, 'Flops de la série et flops déjà résolus'),
+    panel.append(el('div', { class: 'fl-head' }, el('b', {}, info.series === false ? 'Flops types et flops déjà résolus'
+      : 'Flops de la série et flops déjà résolus'),
       el('span', { class: 'muted small' }, ' surlignés quand ils sont résolus')));
     const groups = el('div', { class: 'flops' });
     for (const t of info.textures) {
@@ -1348,10 +1419,11 @@
     $('b-train').hidden = true;
     $('tab-filters').hidden = true;  // les filtres (mains faites, tirages, équité) n'ont de sens qu'au postflop
     $('tab-ranges').hidden = true;
-    document.title = 'Explorateur — préflop';
+    document.title = 'Explorateur — préflop' + (TABLE !== 'HU' ? ' ' + TABLE : '');
   }
-  if (SPOT && !FAMILY.startsWith('6max_')) {  // ligne préflop du spot (solution heads-up), en tête du déroulé
-    api('/api/explorateur/preflop', { family: FAMILY }).then((n) => { prefix = n; if (node) render(); }).catch(() => {});
+  if (SPOT) {  // ligne préflop du spot (solution heads-up, ou charts 6-max), en tête du déroulé
+    api('/api/explorateur/preflop', FAMILY.startsWith('6max_') ? { table: '6-max', family: FAMILY } : { family: FAMILY })
+      .then((n) => { prefix = n; if (node) render(); }).catch(() => {});
   }
 
   (async () => {

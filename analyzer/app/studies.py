@@ -475,7 +475,28 @@ def _ring_section() -> str:
         for pair, group in pairs.items())
     sections = "".join(_ring_family_section(f, f == families[0]) for f in families)
     return (f'<h2>Spots d\'étude 6-max</h2>{intro}{_ring_all()}<div class="fam-switch" role="group" '
-            f'aria-label="Paire de positions et type de pot">{switch}</div>{sections}')
+            f'aria-label="Paire de positions et type de pot">{switch}</div>{sections}{_ring_others()}')
+
+
+def _ring_others() -> str:
+    """Les coups à plusieurs résolus depuis l'explorateur entre d'autres positions (le HJ contre le BTN…)."""
+    families = sorted({str(m.get("family")) for m in postflop.list_studies() if m.get("kind") == "spot"
+                       and str(m.get("family", "")) not in studyspots.RING_FAMILIES
+                       and studyspots.is_ring(str(m.get("family", "")))})
+    found = sorted(studyspots.spot_studies(tuple(families)).values(),
+                   key=lambda m: (m["family"], studyspots.TEXTURES.index(m.get("texture", "Low board")), m["id"]))
+    note = ("D'autres positions (l'UTG contre la BB, le HJ contre le BTN…) se travaillent depuis l'Explorateur, "
+            "en choisissant « À plusieurs (6-max) » : la ligne préflop des charts, puis le flop.")
+    if not found:
+        return f'<h3 style="margin-top:20px">Autres positions</h3><p class="note">{escape(note)}</p>'
+    rows = "".join(
+        f'<tr><td>{escape(studyspots.family_title(m["family"]))}</td><td class="flop">{cards_html(m["board"])}</td>'
+        f'<td>{escape(m.get("texture", ""))}</td><td class="muted small">{escape(m.get("created", ""))}</td>'
+        f'<td><a class="open" href="/explorateur/{quote(m["id"], safe=":")}" target="_blank" rel="noopener">Ouvrir ↗</a>'
+        "</td></tr>" for m in found)
+    return (f'<h3 style="margin-top:20px">Autres positions</h3><div class="card"><div class="scroll">'
+            f'<table class="stats"><thead><tr><th>Spot</th><th>Flop</th><th>Texture</th><th>Résolu le</th><th></th>'
+            f'</tr></thead><tbody>{rows}</tbody></table></div><p class="note">{escape(note)}</p></div>')
 
 
 def _ring_all() -> str:

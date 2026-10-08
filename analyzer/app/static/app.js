@@ -105,6 +105,7 @@
 
   async function render() {
     route = parseRoute();
+    if (route.view === 'field' && location.hash !== hashFor(route)) history.replaceState(null, '', hashFor(route));  // #/moi/bluffs
     if (route.view === 'eleves' || route.view === 'eleve') await loadStudents();
     closeDrawer();
     renderHeader();
