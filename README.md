@@ -54,6 +54,11 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   fiche rappelle ses pseudos, et « Défaire » les sépare à nouveau.
 - **Entraîneur** : joue des mains sur les spots résolus, le solveur juge chaque décision (voir plus bas).
 - **Sauvegarde** : tes calculs vers un dossier synchronisé ou un stockage en ligne (voir plus bas).
+- **Période d'analyse** (en haut de *Mon jeu*, de l'*Étude du field*, d'une fiche d'adversaire ou d'un élève) :
+  toutes les mains, les N dernières (de chaque format : heads-up, tables à plusieurs), les N derniers jours, ou
+  d'une date à une autre. Toutes les analyses de l'espace s'y limitent — bilan, Leakfinding, préflop, mains de
+  départ, adversaires et rapports (le rapport téléchargé la rappelle) ; chacun a la sienne (toi, chaque élève),
+  gardée dans la base. Une main hors de la période reste ouvrable dans l'explorateur.
 - **Importer des mains** : glisse tes historiques ou choisis-les — des fichiers `.txt`, un dossier (avec ses
   sous-dossiers) ou une **archive `.zip`** avec ses dossiers (et les archives qu'elle contient). Chaque historique
   qui apporte des mains entre dans la base de données (son texte d'origine compris, voir « Base de données ») ; les
@@ -77,10 +82,13 @@ Les analyses sont calculées à la première ouverture d'une page puis gardées 
 ```bash
 python -m analyzer                       # un rapport par adversaire (30 mains minimum)
 python -m analyzer --liste               # liste les adversaires trouvés
-python -m analyzer -a berserk            # un seul adversaire (nom partiel, accents ignorés)
-python -m analyzer -a berserk --plan     # seulement le plan de jeu, dans le terminal
-python -m analyzer ~/Downloads/Hand.txt -a "peste noire" -o rapports/
-python -m analyzer -a berserk --sans-spots   # rapport seul, plus rapide
+python -m analyzer -a villain            # un seul adversaire (nom partiel, accents ignorés)
+python -m analyzer -a villain --plan     # seulement le plan de jeu, dans le terminal
+python -m analyzer ~/Downloads/Hand.txt -a "joueur exemple" -o rapports/
+python -m analyzer -a villain --sans-spots   # rapport seul, plus rapide
+python -m analyzer --derniers 2000       # seulement tes 2 000 dernières mains
+python -m analyzer --jours 30            # … celles des 30 derniers jours
+python -m analyzer --depuis 2026-09-01 --jusqu-au 2026-09-30   # … d'une date à une autre (l'une suffit)
 ```
 
 Ton pseudo est détecté automatiquement (tag `Hero` de Betclic, « Dealt to » de Winamax, compte entre crochets
@@ -1040,6 +1048,7 @@ analyzer/
   store.py             cache sur disque des calculs longs (SQLite : mains lues, équités, clés des spots)
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
   aliases.py           alias : les pseudos d'un même joueur regroupés sous un nom (appliqué à la lecture des mains)
+  period.py            période d'analyse : toutes les mains, les N dernières, les N derniers jours, d'une date à une autre
   leaks.py             leakfinding : stats face à la théorie, revue du solveur, mains à revoir, leaks prioritaires
   ring_leaks.py        leakfinding aux tables à plusieurs : réguliers et récréatifs, préflop face aux charts, après le
                        flop face aux plans 6-max

@@ -19,7 +19,8 @@
   let state = null;
   let route = null;
   let students = [];
-  const hasHands = () => !!(state && (state.hands || state.ring_hands));  // heads-up ou tables à plusieurs
+  const hasHands = () => !!(state && (state.hands || state.ring_hands));  // heads-up ou tables à plusieurs, sur la période
+  const hasAnyHands = () => !!(state && state.period && (state.period.all_hands || state.period.all_ring));  // toutes
 
   // Petites préférences gardées dans le navigateur (tri des adversaires, format du Leakfinding).
   function pref(key, value) {
@@ -70,7 +71,7 @@
     if (parts[0] === 'field') return { view: 'field', tab: tabOf('field', parts[1], 'bluffs') };
     if (parts[0] === 'eleves') return { view: 'eleves' };
     if (parts[0] === 'eleve' && parts[1]) return { view: 'eleve', student: parts[1], tab: tabOf('eleve', parts[2], 'leaks') };
-    return hasHands() ? { view: 'moi', tab: 'bilan' } : { view: 'importer' };
+    return hasHands() || hasAnyHands() ? { view: 'moi', tab: 'bilan' } : { view: 'importer' };
   }
 
   function hashFor(r) {
@@ -105,6 +106,7 @@
 
   async function render() {
     route = parseRoute();
+    closePeriod();  // une autre page : le panneau de la période se ferme
     if (route.view === 'field' && location.hash !== hashFor(route)) history.replaceState(null, '', hashFor(route));  // #/moi/bluffs
     if (route.view === 'eleves' || route.view === 'eleve') await loadStudents();
     closeDrawer();
@@ -122,13 +124,16 @@
       }
       if (route.tab === 'importer') return showImport(route.student);
       const s = students.find((x) => x.id === route.student);
-      if (!s.hands && !s.ring_hands) return showImport(route.student);
+      if (!s.hands && !s.ring_hands) {
+        return s.period && (s.period.all_hands || s.period.all_ring) ? showEmptyPeriod() : showImport(route.student);
+      }
       return showFrame(srcFor(route));
     }
-    if (!hasHands()) return showWelcome();
+    if (!hasHands()) return hasAnyHands() ? showEmptyPeriod() : showWelcome();
     if (route.view === 'adv' && !state.opponents.some((o) => o.name === route.player)) {
       return showPanel(el('div', { class: 'welcome' }, el('h2', {}, 'Joueur introuvable'),
-        el('p', {}, 'Aucune main contre ce joueur dans ton dossier.')));
+        el('p', {}, state.period.kind === 'all' ? 'Aucune main contre ce joueur dans ton dossier.'
+          : 'Aucune main contre ce joueur sur la période choisie (' + state.period.label.toLowerCase() + ').')));
     }
     showFrame(srcFor(route));
   }
@@ -136,6 +141,7 @@
   function renderHeader() {
     const title = $('title'), subtitle = $('subtitle');
     renderKind(null);
+    renderPeriod();
     if (route.view === 'adv') {
       const o = state.opponents.find((x) => x.name === route.player);
       title.textContent = route.player;
@@ -207,7 +213,7 @@
     const tabs = $('tabs');
     tabs.textContent = '';
     const list = TABS[route.view] || [];
-    tabs.hidden = !list.length || (!hasHands() && route.view !== 'etudes' && route.view !== 'eleve');
+    tabs.hidden = !list.length || (!hasHands() && !hasAnyHands() && route.view !== 'etudes' && route.view !== 'eleve');
     for (const [id, label] of list) {
       const r = Object.assign({}, route, { tab: id });
       tabs.append(el('a', { href: hashFor(r), 'aria-current': id === route.tab ? 'page' : null }, label));
@@ -248,12 +254,119 @@
         el('span', { class: 'r ' + tone(o.net_bb) }, signed(o.net_bb) + ' bb'))));
     }
     if (!shown.length) {
-      list.append(el('li', { class: 'muted' }, state.opponents.length ? 'Aucun joueur ne correspond.' : 'Aucun adversaire pour l\'instant.'));
+      list.append(el('li', { class: 'muted' }, state.opponents.length ? 'Aucun joueur ne correspond.'
+        : state.period && state.period.kind !== 'all' ? 'Aucun adversaire sur cette période.' : 'Aucun adversaire pour l\'instant.'));
     }
     if (route) markActive();
   }
 
   function closeDrawer() { $('app').classList.remove('drawer-open'); }
+
+  // ---------- période d'analyse ----------
+  // Toutes les mains, les N dernières (de chaque format), les N derniers jours ou d'une date à une autre : le choix
+  // vaut pour toutes les analyses de l'espace (toi, ou l'élève affiché) et reste gardé.
+  const PERIOD_VIEWS = ['moi', 'field', 'adv', 'eleve'];
+
+  function periodOwner() {
+    if (route.view === 'eleve') {
+      const s = students.find((x) => x.id === route.student);
+      return s && s.period ? { api: '/api/eleves/' + encodeURIComponent(s.id) + '/periode', period: s.period, student: s.id } : null;
+    }
+    return state && state.period ? { api: '/api/periode', period: state.period } : null;
+  }
+
+  function renderPeriod() {
+    const box = $('period'), button = $('period-btn');
+    const owner = route && PERIOD_VIEWS.includes(route.view) ? periodOwner() : null;
+    const p = owner && owner.period;
+    if (!owner || $('period-pop').dataset.owner !== owner.api) closePeriod();  // un autre espace : le panneau se ferme
+    box.hidden = !p || !(p.all_hands || p.all_ring);
+    if (box.hidden) return;
+    button.textContent = '';
+    button.append(el('span', { class: 'muted' }, 'Période : '), p.label, ' ▾');
+    button.classList.toggle('on', p.kind !== 'all');
+    button.onclick = () => ($('period-pop').hidden ? openPeriod(owner) : closePeriod());
+  }
+
+  function closePeriod() {
+    $('period-pop').hidden = true;
+    $('period-btn').setAttribute('aria-expanded', 'false');
+  }
+
+  async function setPeriod(owner, body) {
+    const res = await fetch(owner.api, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Période impossible.');
+    if (owner.student) await loadStudents();
+    else { state = data; renderSidebar(); }
+    closePeriod();
+    frame.dataset.src = '';  // les pages se recalculent sur la période
+    render();
+  }
+
+  function openPeriod(owner) {
+    const p = owner.period, pop = $('period-pop');
+    const choice = (value, ...content) => {
+      const input = el('input', { type: 'radio', name: 'period-kind', value });
+      input.checked = p.kind === value;
+      const row = el('label', { class: 'period-row' }, input, el('span', {}, ...content));
+      row.addEventListener('focusin', (e) => { if (e.target !== input) input.checked = true; });  // un champ de la ligne : elle est choisie
+      return row;
+    };
+    const number = (value, max, label) => el('input', { type: 'number', min: '1', max: String(max), step: '1',
+      value: String(value), 'aria-label': label });
+    const n = number(p.kind === 'last' ? p.n : 1000, 10000000, 'Nombre de mains');
+    const days = number(p.kind === 'days' ? p.days : 30, 36500, 'Nombre de jours');
+    const day = (value, label) => el('input', { type: 'date', value: value || '', min: p.first, max: p.last, 'aria-label': label });
+    const from = day(p.kind === 'range' ? p.from : p.first, 'Premier jour');
+    const to = day(p.kind === 'range' ? p.to : p.last, 'Dernier jour');
+    const counts = [p.all_hands ? p.all_hands + ' en heads-up' : '', p.all_ring ? p.all_ring + ' aux tables à plusieurs' : '']
+      .filter(Boolean).join(', ');
+    const error = el('p', { class: 'period-err', hidden: true });
+    const apply = el('button', { type: 'button', class: 'primary' }, 'Appliquer');
+    pop.textContent = '';
+    pop.append(
+      el('div', { class: 'period-title' }, 'Analyser'),
+      choice('all', 'Toutes les mains', el('span', { class: 'muted small' }, '(' + counts + ')')),
+      choice('last', 'Les', n, 'dernières mains',
+        el('span', { class: 'muted small period-hint' }, 'de chaque format (heads-up, tables à plusieurs)')),
+      choice('days', 'Les', days, 'derniers jours'),
+      choice('range', 'Du', from, 'au', to),
+      el('p', { class: 'muted small' }, 'Pour toutes les analyses ' + (owner.student ? 'de l\'élève' : 'de ton jeu')
+        + ' : bilan, Leakfinding, préflop, mains de départ, adversaires, rapports. Le choix reste gardé.'),
+      error,
+      el('div', { class: 'period-actions' }, apply, el('button', { type: 'button', class: 'secondary', onclick: closePeriod }, 'Annuler')));
+    apply.addEventListener('click', () => {
+      const kind = (pop.querySelector('input[name="period-kind"]:checked') || { value: 'all' }).value;
+      const body = { kind };
+      if (kind === 'last') body.n = Number(n.value);
+      if (kind === 'days') body.days = Number(days.value);
+      if (kind === 'range') Object.assign(body, { from: from.value || null, to: to.value || null });
+      apply.disabled = true;
+      setPeriod(owner, body).catch((err) => {
+        error.textContent = err.message || String(err);
+        error.hidden = false;
+        apply.disabled = false;
+      });
+    });
+    pop.dataset.owner = owner.api;
+    pop.hidden = false;
+    $('period-btn').setAttribute('aria-expanded', 'true');
+    (pop.querySelector('input[name="period-kind"]:checked') || pop.querySelector('input')).focus();
+  }
+
+  // Aucune main sur la période choisie (il y en a ailleurs) : revenir à toutes, ou en choisir une autre.
+  function showEmptyPeriod() {
+    const owner = periodOwner();
+    showPanel(el('div', { class: 'welcome' }, el('h2', {}, 'Aucune main sur cette période'),
+      el('p', {}, 'Période choisie : ' + owner.period.label.toLowerCase() + '. Les mains importées sont ailleurs dans le temps.'),
+      el('button', { type: 'button', class: 'primary', onclick: (e) => {
+        e.target.disabled = true;
+        setPeriod(owner, { kind: 'all' }).catch((err) => { e.target.disabled = false; window.alert(err.message || String(err)); });
+      } }, 'Revenir à toutes les mains'), ' ',
+      el('button', { type: 'button', class: 'link', onclick: (e) => { e.stopPropagation(); openPeriod(owner); } },
+        'Choisir une autre période')));
+  }
 
   // ---------- contenu ----------
   function showFrame(src) {
@@ -492,9 +605,11 @@
     } }, nameInput, pseudoInput, el('button', { type: 'submit', class: 'primary' }, 'Ajouter un élève'));
     const cards = students.map((s) => el('a', { class: 'student', href: '#/eleve/' + encodeURIComponent(s.id) + '/leaks' },
       el('b', {}, s.name),
-      el('span', { class: 'muted small' }, s.hands ? s.hands + ' mains · ' + (s.hero || '') + ' · dernière le ' + s.last
+      el('span', { class: 'muted small' }, (s.hands ? s.hands + ' mains · ' + (s.hero || '') + ' · dernière le ' + s.last
         + (s.ring_hands ? ' · ' + s.ring_hands + ' aux tables à plusieurs' : '')
-        : s.ring_hands ? s.ring_hands + ' mains aux tables à plusieurs' : 'pas encore de mains')));
+        : s.ring_hands ? s.ring_hands + ' mains aux tables à plusieurs'
+          : s.period && (s.period.all_hands || s.period.all_ring) ? 'aucune main sur la période' : 'pas encore de mains')
+        + (s.period && s.period.kind !== 'all' ? ' · période : ' + s.period.label.toLowerCase() : ''))));
     showPanel(el('div', { class: 'students' },
       el('p', {}, 'Chaque élève a son dossier de mains et son rapport de leakfinding : ses stats face à la théorie, '
         + 'contre les réguliers et contre les récréatifs, les mains à revoir avec l\'avis du solveur, et les leaks à travailler.'),
@@ -623,6 +738,10 @@
     select.addEventListener('change', () => { pref(id, select.value); renderSidebar(); });
   });
   $('menu').addEventListener('click', () => $('app').classList.toggle('drawer-open'));
+  document.addEventListener('click', (e) => { if (!$('period').contains(e.target)) closePeriod(); });  // hors du panneau
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('period-pop').hidden) { closePeriod(); $('period-btn').focus(); }
+  });
   $('backdrop').addEventListener('click', closeDrawer);
   window.addEventListener('hashchange', render);
 

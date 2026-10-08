@@ -4,12 +4,14 @@ from __future__ import annotations
 import base64
 import binascii
 import threading
+from datetime import date
 from html import escape
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
 from .. import aliases, bluffs, db, handplay, leaks, players, ring, ring_leaks, spots, store, students
+from .. import period as periods
 from ..db import analyses as db_analyses
 from ..db import documents
 from ..db import hands as db_hands
@@ -102,13 +104,18 @@ class Library:
         self.folder.mkdir(parents=True, exist_ok=True)
         self.db = db.current()
         self.space_id = db_hands.space(self.db, space, space_name, hero)
+        self.space_key = space
+        self.period = periods.load(space)  # la période d'analyse de l'espace (toutes les mains par défaut)
+        self._period_day = date.today()
         self.hero_override = hero
         self.version = 0
         self._lock = threading.Lock()
         self._key_locks: dict[tuple, threading.Lock] = {}
         self._cache: dict[tuple, object] = {}
-        self.hands: list[Hand] = []
-        self.ring: list[Hand] = []
+        self.hands: list[Hand] = []  # tes mains heads-up de la période
+        self.ring: list[Hand] = []  # … et aux tables à plusieurs
+        self._all_hands: list[Hand] = []  # toutes, quelle que soit la période
+        self._all_ring: list[Hand] = []
         self.by_id: dict[str, Hand] = {}
         self.hero: Optional[str] = None
         self.api, self.pages = api, pages
@@ -133,13 +140,41 @@ class Library:
         heads_up = [h for h in hands if hero and hero in h.seats and len(h.seats) == 2 and h.button and h.bb]
         ring = [h for h in hands if hero and hero in h.seats and len(h.seats) > 2 and h.button and h.bb]
         with self._lock:
-            self.hands = heads_up
-            self.ring = ring  # tes mains aux tables à plusieurs (3-max, 6-max)
+            self._all_hands, self._all_ring = heads_up, ring
             self.by_id = {h.hand_id: h for h in heads_up + ring}  # le solveur résout aussi leurs pots à deux
             self.hero = hero
-            self.version += 1
-            self._cache.clear()
-            self._key_locks.clear()
+            self._select()
+
+    def _select(self) -> None:
+        """Les mains de la période (sous self._lock) ; les analyses se refont."""
+        self._period_day = date.today()
+        self.hands = periods.select(self._all_hands, self.period, self._period_day)
+        self.ring = periods.select(self._all_ring, self.period, self._period_day)  # tables à plusieurs (3 à 9 joueurs)
+        self.version += 1
+        self._cache.clear()
+        self._key_locks.clear()
+
+    # --- période d'analyse ----------------------------------------------------------------
+    def set_period(self, raw: object) -> dict:
+        """Choisit la période d'analyse de l'espace (period.clean ; ValueError si elle ne va pas) et la garde."""
+        chosen = periods.clean(raw)
+        periods.save(self.space_key, chosen)
+        with self._lock:
+            self.period = chosen
+            self._select()
+        return self.summary()
+
+    def period_view(self) -> dict:
+        """La période et de quoi la choisir : toutes tes mains (par format) et leurs dates."""
+        if self.period["kind"] == "days" and self._period_day != date.today():  # « 30 derniers jours » : un jour a passé
+            with self._lock:
+                self._select()
+        every = self._all_hands + self._all_ring
+        first = min((h.date for h in every), default=None)
+        last = max((h.date for h in every), default=None)
+        return dict(self.period, label=periods.label(self.period), text=periods.describe(self.period),
+                    all_hands=len(self._all_hands), all_ring=len(self._all_ring),
+                    first=first.date().isoformat() if first else None, last=last.date().isoformat() if last else None)
 
     def opponents(self) -> list[dict]:
         return self._cached(("opponents",), lambda: opponent_results(self.hands, self.hero) if self.hero else [])
@@ -174,8 +209,8 @@ class Library:
         return self.summary()
 
     def knows(self, player: str) -> bool:
-        """Un de tes adversaires, en heads-up ou à une table à plusieurs."""
-        return any(player in h.seats for h in self.hands) or any(player in h.seats for h in self.ring)
+        """Un de tes adversaires, en heads-up ou à une table à plusieurs (quelle que soit la période)."""
+        return any(player in h.seats for h in self._all_hands) or any(player in h.seats for h in self._all_ring)
 
     # --- tables à plusieurs : tes adversaires et leur type --------------------------------
     def ring_opponents(self) -> list[dict]:
@@ -208,10 +243,12 @@ class Library:
         return {h.hand_id: ring_leaks.versus(h, self.hero, kinds) for h in self.ring} if self.hero else {}
 
     def summary(self) -> dict:
+        period = self.period_view()
         opponents = self.opponents()
         kinds = self.kinds()
         return {
             "hero": self.hero,
+            "period": period,  # la période d'analyse ; hands, ring_hands, first, last : ceux de la période
             "folder": str(self.folder),
             "hands": len(self.hands),
             "ring_hands": len(self.ring),  # tables à plusieurs
@@ -573,7 +610,7 @@ class Library:
         return build_leaks_page(self.leaks_report(fmt), api=f"{self.api}/leaks", pages=self.pages,
                                 embed=not standalone, standalone=standalone, name=self.display_name,
                                 opponents=self.summary()["opponents"] if fmt == "HU" else self.ring_opponents_view(),
-                                formats=self.leak_formats())
+                                formats=self.leak_formats(), period=periods.describe(self.period))
 
     def leaks_state(self, start: bool = False, table_format: Optional[str] = None) -> dict:
         """Les mains choisies (contre les réguliers en heads-up) : analysées, à analyser, en cours ; start=True les

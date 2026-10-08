@@ -335,9 +335,10 @@ def _hints(report: leaks.Report, standalone: bool) -> str:
 
 def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = True, standalone: bool = False,
                      name: Optional[str] = None, opponents: Optional[list[dict]] = None,
-                     formats: Optional[list[tuple[str, int]]] = None) -> str:
+                     formats: Optional[list[tuple[str, int]]] = None, period: str = "") -> str:
     """api : adresse des actions (analyse de la sélection) ; pages : préfixe des pages du joueur (/moi, /eleve/x) ;
-    formats : les formats de table de ses mains, avec leur nombre (le choix en haut de la page)."""
+    formats : les formats de table de ses mains, avec leur nombre (le choix en haut de la page) ; period : la période
+    analysée, en une phrase (rien pour toutes les mains)."""
     who = name or report.hero
     ring = _ring(report)
     fmt = report.table_format
@@ -399,7 +400,7 @@ def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = T
     rec = "".join(f"<li>{escape(n)}</li>" for n in report.rec_notes)
     count = len(report.stats)
     body = f"""
-<div class="meta">{meta}</div>
+<div class="meta">{meta}{f" <b>{escape(period)}</b>" if period else ""}</div>
 {"" if standalone else format_switch(formats or [], fmt)}
 {download}
 {_tiles(report)}

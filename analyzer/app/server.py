@@ -146,6 +146,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.files_view())
             if parts == ["api", "alias"]:  # les pseudos regroupés sous un alias
                 return self._json(aliases.groups())
+            if parts == ["api", "periode"]:  # la période d'analyse
+                return self._json(library.period_view())
             if parts == ["api", "solveur"]:
                 return self._json(postflop.status())
             if len(parts) == 3 and parts[:2] == ["api", "resoudre"]:
@@ -174,10 +176,12 @@ class Handler(BaseHTTPRequestHandler):
                 if parts[2] == "leaks":
                     return self._html(student.leaks_page(table_format=self._format()))
                 return self._html(student.self_page(parts[2], table_format=self._format()))
-            if len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] in ("leaks", "revue", "fichiers"):
+            if len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] in ("leaks", "revue", "fichiers", "periode"):
                 student = library.student(parts[2])
                 if parts[3] == "fichiers":
                     return self._json(student.files_view())
+                if parts[3] == "periode":
+                    return self._json(student.period_view())
                 return self._json(student.leaks_state(table_format=self._format()) if parts[3] == "leaks"
                                   else student.review_state())
             if parts[:2] == ["api", "coups"] and len(parts) in (2, 3) or \
@@ -244,6 +248,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(owner.remove_file(file_id) if action == "retirer" else owner.restore_file(file_id))
         except KeyError:
             return self._error(404, "Historique inconnu.")
+
+    def _period(self, owner: Library):
+        """Choisir la période d'analyse (la tienne, ou celle d'un élève) : {"kind": "all" | "last" (n) | "days" (days)
+        | "range" (from, to)}."""
+        try:
+            return self._json(owner.set_period(self._small_json()))
+        except ValueError as exc:
+            return self._error(400, str(exc))
 
     def _ring_preflop(self, payload: dict):
         """Le nœud de l'arbre préflop 6-max (ring_tree) au bout de la ligne, ou de celle qui mène au flop d'une
@@ -463,6 +475,8 @@ class Handler(BaseHTTPRequestHandler):
             return files if files is None else self._json(library.import_files(files))
         if len(parts) == 3 and parts[:2] == ["api", "fichiers"] and parts[2] in ("retirer", "retablir"):
             return self._file_action(library, parts[2])
+        if parts == ["api", "periode"]:
+            return self._period(library)
         if parts in (["api", "alias"], ["api", "alias", "defaire"]):
             payload = self._small_json()
             alias = payload.get("alias") if isinstance(payload, dict) else None
@@ -500,6 +514,8 @@ class Handler(BaseHTTPRequestHandler):
                 return files if files is None else self._json(student.import_files(files))
             if len(parts) == 5 and parts[3] == "fichiers" and parts[4] in ("retirer", "retablir"):
                 return self._file_action(student, parts[4])
+            if parts[3:] == ["periode"]:
+                return self._period(student)
             if len(parts) == 5 and parts[3] == "leaks" and parts[4] in ("lancer", "arreter"):
                 try:
                     return self._json(student.leaks_cancel(self._format()) if parts[4] == "arreter"

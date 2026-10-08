@@ -44,6 +44,11 @@
       <label class="kind" id="kind" hidden title="Contre un récréatif, tes mains ne sont pas comparées à la théorie">
         Type <select id="kind-select" aria-label="Type de joueur"></select>
       </label>
+      <div class="period" id="period" hidden>
+        <button type="button" class="period-btn" id="period-btn" aria-haspopup="dialog" aria-expanded="false"
+          aria-controls="period-pop" title="Les mains analysées : toutes, les dernières, ou une période"></button>
+        <div class="period-pop" id="period-pop" role="dialog" aria-label="Période d'analyse" hidden></div>
+      </div>
     </header>
     <nav class="tabs" id="tabs" aria-label="Sections"></nav>
     <section class="content">

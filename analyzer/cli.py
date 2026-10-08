@@ -8,6 +8,7 @@ import unicodedata
 from collections import Counter
 from pathlib import Path
 
+from . import period as periods
 from .insights import DUELS, combined, duel_verdict, findings
 from .lines import fold_holdings_by_street, verdict, villain_lines
 from .models import Hand
@@ -104,6 +105,18 @@ def summary(villain: PlayerStats, hero: PlayerStats, hands: list[Hand], plan: st
     return "\n".join(lines)
 
 
+def cli_period(args: argparse.Namespace) -> dict:
+    """La période demandée en ligne de commande (period.clean) ; ValueError si deux sont demandées à la fois."""
+    asked = [kind for kind, on in (("last", args.derniers is not None), ("days", args.jours is not None),
+                                   ("range", bool(args.depuis or args.jusqu_au))) if on]
+    if len(asked) > 1:
+        raise ValueError("Une seule période à la fois : --derniers, --jours, ou --depuis / --jusqu-au.")
+    if not asked:
+        return dict(periods.ALL)
+    return periods.clean({"kind": asked[0], "n": args.derniers, "days": args.jours, "from": args.depuis,
+                          "to": args.jusqu_au})
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m analyzer",
@@ -117,7 +130,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-mains", type=int, default=30, help="nb de mains minimum pour générer un rapport")
     parser.add_argument("-p", "--plan", action="store_true", help="affiche seulement le plan de jeu")
     parser.add_argument("--sans-spots", action="store_true", help="ne génère pas le visualiseur de spots")
+    parser.add_argument("--derniers", type=int, metavar="N", help="seulement tes N dernières mains")
+    parser.add_argument("--jours", type=int, metavar="N", help="seulement les mains des N derniers jours")
+    parser.add_argument("--depuis", metavar="AAAA-MM-JJ", help="seulement les mains jouées depuis ce jour")
+    parser.add_argument("--jusqu-au", dest="jusqu_au", metavar="AAAA-MM-JJ", help="seulement jusqu'à ce jour (compris)")
     args = parser.parse_args(argv)
+    try:
+        chosen = cli_period(args)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
 
     try:
         hands = load_hands(args.paths)
@@ -129,11 +151,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     hero = args.hero or detect_hero(hands)
     unify_hero(hands, hero)
-    hands = [h for h in hands if hero in h.seats and len(h.seats) == 2]
+    hands = periods.select(sorted((h for h in hands if hero in h.seats and len(h.seats) == 2),
+                                  key=lambda h: (h.date, h.hand_id)), chosen)
+    if not hands:
+        when = "" if chosen["kind"] == "all" else f" sur la période ({periods.label(chosen).lower()})"
+        print(f"Aucune main heads-up{when}.", file=sys.stderr)
+        return 1
     opponents = Counter(h.opponent_of(hero) for h in hands)
 
     if args.liste:
-        print(f"Toi : {hero} — {len(hands)} mains HU")
+        when = "" if chosen["kind"] == "all" else f" ({periods.label(chosen).lower()})"
+        print(f"Toi : {hero} — {len(hands)} mains HU{when}")
         for name, n in opponents.most_common():
             print(f"  {n:6d}  {name}")
         return 0

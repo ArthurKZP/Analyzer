@@ -57,6 +57,30 @@ a { color: var(--accent); }
 .kind { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
 .kind[hidden] { display: none; }
 .kind select { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; max-width: 46vw; }
+.period { position: relative; }
+.period[hidden] { display: none; }
+.period-btn { font-size: 13px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--ink); cursor: pointer; white-space: nowrap; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; }
+.period-btn.on { border-color: var(--accent); background: var(--accent-bg); font-weight: 600; }
+.period-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: min(390px, calc(100vw - 32px));
+  display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface); box-shadow: 0 8px 28px rgba(0,0,0,0.18); }
+.period-pop[hidden] { display: none; }
+.period-pop p { margin: 0; }
+.period-title { font-weight: 600; }
+.period-row { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; cursor: pointer; }
+.period-row > input { margin-top: 4px; }
+.period-row > span { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.period-row input[type="number"], .period-row input[type="date"] { font: inherit; font-size: 13px; padding: 2px 6px;
+  border-radius: 6px; border: 1px solid var(--border); background: var(--page); color: var(--ink); }
+.period-row input[type="number"] { width: 92px; }
+.period-hint { flex-basis: 100%; }
+.period-actions { display: flex; gap: 8px; }
+.period-actions .secondary { background: var(--page); color: var(--ink); border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 14px; cursor: pointer; }
+.period-actions button:disabled { opacity: 0.5; cursor: default; }
+.period-err { color: var(--loss); font-size: 12px; }
+.welcome .link { margin-left: 10px; }
 .opps .k { font-size: 10px; font-weight: 600; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
 .topbar h1 { font-size: 20px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .subtitle { font-size: 13px; color: var(--muted); }
@@ -117,7 +141,10 @@ a.student:hover { border-color: var(--series-1); }
   .app.drawer-open .sidebar { transform: none; }
   .app.drawer-open .backdrop { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 10; }
   .menu { display: inline-block; }
-  .topbar { padding: 10px 16px 4px; }
+  .topbar { padding: 10px 16px 4px; flex-wrap: wrap; }
+  .kind, .period { order: 3; flex-basis: 100%; }  /* sous le titre */
+  .period-btn { max-width: 100%; }
+  .period-pop { left: 0; right: auto; }
   .tabs { padding: 0 16px; }
   .panel { padding: 16px; }
 }
