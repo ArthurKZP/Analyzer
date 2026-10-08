@@ -970,6 +970,23 @@ class Library:
             self.solves.cancel(view["job"])
         return self.review_state(villain)
 
+    # --- historiques importés : liste, retrait, rétablissement --------------------------
+    def files_view(self) -> list[dict]:
+        """Les historiques importés dans cet espace (db/hands.files)."""
+        return db_hands.files(self.db, self.space_id)
+
+    def remove_file(self, file_id: int) -> dict:
+        """Retire un historique (ses mains quittent les analyses) ; KeyError s'il n'est pas de cet espace."""
+        found = db_hands.remove_file(self.db, self.space_id, file_id)
+        self.reload()
+        return dict(found, files=self.files_view(), state=self.summary())
+
+    def restore_file(self, file_id: int) -> dict:
+        """Rétablit un historique retiré ; KeyError s'il n'est pas de cet espace."""
+        added = db_hands.restore_file(self.db, self.space_id, file_id)
+        self.reload()
+        return {"added": added, "files": self.files_view(), "state": self.summary()}
+
     # --- import -----------------------------------------------------------------
     def import_files(self, files: list[dict]) -> dict:
         """Importe dans la base les historiques reconnus (le texte d'origine est gardé ; un historique ou une main

@@ -7,6 +7,9 @@
   (un fichier inchangé, même taille et même date, n'est pas relu).
 - load : les mains d'un espace, dans l'ordre chronologique. Si le code de lecture a changé depuis l'import, les
   historiques concernés sont relus depuis le texte gardé.
+- files, remove_file, restore_file : les historiques importés ; en retirer un efface ses mains (celles qu'un autre
+  historique contient aussi restent) et le garde, marqué retiré : le dossier des mains ne le réimporte pas, et il se
+  rétablit d'un clic (ou en l'important à nouveau).
 """
 from __future__ import annotations
 
@@ -98,8 +101,10 @@ def import_text(db: Database, space_id: int, name: str, text: str, path: Optiona
     """Importe un historique : (ses mains, combien sont nouvelles, déjà importé ?). ValueError : format inconnu."""
     from ..parsers import parse_text
     digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
-    existing = db.one("SELECT id FROM fichiers WHERE espace_id = ? AND empreinte = ?", (space_id, digest))
+    existing = db.one("SELECT id, retire_le FROM fichiers WHERE espace_id = ? AND empreinte = ?", (space_id, digest))
     hands = parse_text(text)  # ValueError : format non reconnu
+    if existing is not None and existing[1] is not None and path is None:  # retiré, puis importé à nouveau
+        return hands, restore_file(db, space_id, existing[0]), False
     if existing is not None:
         if path is not None:  # le même historique, retrouvé dans le dossier : on note où, pour ne plus le relire
             db.execute("UPDATE fichiers SET chemin = ?, taille = ?, date_fichier = ? WHERE id = ?",
@@ -144,6 +149,81 @@ def sync_folder(db: Database, space_id: int, folder: Path) -> int:
             except ValueError:
                 continue
             added += new
+    return added
+
+
+# --- Historiques importés : liste, retrait, rétablissement --------------------------------------
+
+def files(db: Database, space_id: int) -> list[dict]:
+    """Les historiques de l'espace, du plus récent au plus ancien : nom, date d'import, mains dans la base (celles
+    qu'il a apportées), période, sites et formats, retiré ou non, venu du dossier des mains ou importé."""
+    rows = db.all("SELECT id, nom, chemin, mains, importe_le, retire_le FROM fichiers WHERE espace_id = ? "
+                  "ORDER BY id DESC", (space_id,))
+    stats: dict[int, dict] = {}
+    for file_id, site, fmt, n, first, last in db.all(
+            "SELECT fichier_id, site, format, COUNT(*), MIN(joue_le), MAX(joue_le) FROM mains WHERE espace_id = ? "
+            "AND fichier_id IS NOT NULL GROUP BY fichier_id, site, format", (space_id,)):
+        st = stats.setdefault(file_id, {"hands": 0, "sites": set(), "formats": {}, "first": first, "last": last})
+        st["hands"] += n
+        st["sites"].add(site)
+        st["formats"][fmt] = st["formats"].get(fmt, 0) + n
+        st["first"], st["last"] = min(st["first"], first), max(st["last"], last)
+    out = []
+    for file_id, name, path, total, imported, removed in rows:
+        st = stats.get(file_id, {"hands": 0, "sites": set(), "formats": {}, "first": None, "last": None})
+        out.append({"id": file_id, "name": name, "inbox": path is not None, "total": total, "hands": st["hands"],
+                    "sites": sorted(st["sites"]), "formats": st["formats"], "first": st["first"], "last": st["last"],
+                    "imported": imported, "removed": removed})
+    return out
+
+
+def _hands_of(text: str) -> list[Hand]:
+    from ..parsers import parse_text
+    try:
+        return parse_text(text)
+    except ValueError:
+        return []
+
+
+def _text(db: Database, file_id: int) -> str:
+    blob = db.value("SELECT contenu FROM fichiers WHERE id = ?", (file_id,))
+    return zlib.decompress(bytes(blob)).decode("utf-8", "replace") if blob is not None else ""
+
+
+def remove_file(db: Database, space_id: int, file_id: int) -> dict:
+    """Retire un historique : ses mains quittent la base, sauf celles qu'un autre historique (importé après lui, et
+    pas retiré) contient aussi ; il reste, marqué retiré. KeyError s'il n'est pas de cet espace."""
+    if db.value("SELECT 1 FROM fichiers WHERE id = ? AND espace_id = ?", (file_id, space_id)) is None:
+        raise KeyError(file_id)
+    version = reader_version()
+    with db.transaction():
+        gone = {(site, numero) for site, numero in
+                db.all("SELECT site, numero FROM mains WHERE fichier_id = ?", (file_id,))}
+        total = len(gone)
+        db.execute("DELETE FROM mains WHERE fichier_id = ?", (file_id,))
+        db.execute("UPDATE fichiers SET retire_le = ? WHERE id = ?", (now(), file_id))
+        kept = 0
+        later = [r[0] for r in db.all("SELECT id FROM fichiers WHERE espace_id = ? AND id > ? AND retire_le IS NULL "
+                                      "ORDER BY id", (space_id, file_id))]
+        for other in later:
+            if not gone:
+                break
+            again = [h for h in _hands_of(_text(db, other)) if (h.site, h.hand_id) in gone]
+            kept += _insert_hands(db, space_id, other, again, version)
+            gone -= {(h.site, h.hand_id) for h in again}
+    return {"removed": total - kept, "kept": kept}
+
+
+def restore_file(db: Database, space_id: int, file_id: int) -> int:
+    """Rétablit un historique retiré : ses mains qui manquent reviennent ; renvoie leur nombre."""
+    if db.value("SELECT 1 FROM fichiers WHERE id = ? AND espace_id = ?", (file_id, space_id)) is None:
+        raise KeyError(file_id)
+    hands = _hands_of(_text(db, file_id))
+    version = reader_version()
+    with db.transaction():
+        known = _known(db, space_id, hands)
+        added = _insert_hands(db, space_id, file_id, [h for h in hands if (h.site, h.hand_id) not in known], version)
+        db.execute("UPDATE fichiers SET retire_le = NULL WHERE id = ?", (file_id,))
     return added
 
 

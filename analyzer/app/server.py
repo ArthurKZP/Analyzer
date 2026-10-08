@@ -141,6 +141,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, STATIC_FILES[parts[1]], (STATIC / parts[1]).read_bytes())
             if parts == ["api", "state"]:
                 return self._json(library.summary())
+            if parts == ["api", "fichiers"]:  # tes historiques importés
+                return self._json(library.files_view())
             if parts == ["api", "solveur"]:
                 return self._json(postflop.status())
             if len(parts) == 3 and parts[:2] == ["api", "resoudre"]:
@@ -169,8 +171,10 @@ class Handler(BaseHTTPRequestHandler):
                 if parts[2] == "leaks":
                     return self._html(student.leaks_page(table_format=self._format()))
                 return self._html(student.self_page(parts[2], table_format=self._format()))
-            if len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] in ("leaks", "revue"):
+            if len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] in ("leaks", "revue", "fichiers"):
                 student = library.student(parts[2])
+                if parts[3] == "fichiers":
+                    return self._json(student.files_view())
                 return self._json(student.leaks_state(table_format=self._format()) if parts[3] == "leaks"
                                   else student.review_state())
             if parts[:2] == ["api", "coups"] and len(parts) in (2, 3) or \
@@ -226,6 +230,17 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc()
             return self._error(500, "Erreur pendant l'analyse (détails dans le terminal).")
         return self._error(404, "Page introuvable.")
+
+    def _file_action(self, owner: Library, action: str):
+        """Retirer ou rétablir un historique importé (le tien, ou celui d'un élève)."""
+        payload = self._small_json()
+        file_id = payload.get("id") if isinstance(payload, dict) else None
+        if not isinstance(file_id, int) or isinstance(file_id, bool):
+            return self._error(400, "Requête invalide.")
+        try:
+            return self._json(owner.remove_file(file_id) if action == "retirer" else owner.restore_file(file_id))
+        except KeyError:
+            return self._error(404, "Historique inconnu.")
 
     def _ring_preflop(self, payload: dict):
         """Le nœud de l'arbre préflop 6-max (ring_tree) au bout de la ligne, ou de celle qui mène au flop d'une
@@ -443,6 +458,8 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "import"]:
             files = self._import_files()
             return files if files is None else self._json(library.import_files(files))
+        if len(parts) == 3 and parts[:2] == ["api", "fichiers"] and parts[2] in ("retirer", "retablir"):
+            return self._file_action(library, parts[2])
         if len(parts) == 3 and parts[:2] == ["api", "leaks"] and parts[2] in ("lancer", "arreter"):
             try:
                 return self._json(library.leaks_cancel(self._format()) if parts[2] == "arreter"
@@ -468,6 +485,8 @@ class Handler(BaseHTTPRequestHandler):
             if parts[3:] == ["import"]:
                 files = self._import_files()
                 return files if files is None else self._json(student.import_files(files))
+            if len(parts) == 5 and parts[3] == "fichiers" and parts[4] in ("retirer", "retablir"):
+                return self._file_action(student, parts[4])
             if len(parts) == 5 and parts[3] == "leaks" and parts[4] in ("lancer", "arreter"):
                 try:
                     return self._json(student.leaks_cancel(self._format()) if parts[4] == "arreter"

@@ -81,6 +81,15 @@ a { color: var(--accent); }
 .primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 6px; padding: 7px 16px; font-weight: 600; cursor: pointer; }
 .link { background: none; border: 0; color: var(--accent); padding: 0; cursor: pointer; text-decoration: underline; }
 .result { margin-top: 16px; }
+.imported { margin-top: 28px; }
+.imported h3 { font-size: 15px; margin: 0 0 8px; }
+.imported table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.imported th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--grid); padding: 4px 6px; }
+.imported td { border-bottom: 1px solid var(--grid); padding: 5px 6px; vertical-align: top; }
+.imported .num { text-align: right; font-variant-numeric: tabular-nums; }
+.imported .nowrap { white-space: nowrap; }
+.imported tr.removed td { color: var(--muted); }
+.imported .scroll { overflow-x: auto; }
 .result table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .result th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--grid); padding: 4px 6px; }
 .result td { border-bottom: 1px solid var(--grid); padding: 5px 6px; }

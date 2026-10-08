@@ -305,7 +305,62 @@
         + state.folder + ' · ',
         el('button', { type: 'button', class: 'link', onclick: () => reload(result) }, 'Relire le dossier'),
         ' (si tu y as déposé des historiques à la main)');
-    showPanel(el('div', { class: 'import' }, drop, input, result, folder));
+    const imported = el('div', { class: 'imported' });
+    showPanel(el('div', { class: 'import' }, drop, input, result, folder, imported));
+    showFiles(imported, student);
+  }
+
+  // Les historiques importés : retirer les mains de l'un d'eux (il reste gardé, pour le rétablir).
+  const fileApi = (student) => (student ? '/api/eleves/' + encodeURIComponent(student) : '/api') + '/fichiers';
+  const day = (iso) => (iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '');
+
+  async function showFiles(box, student) {
+    let files;
+    try {
+      const res = await fetch(fileApi(student));
+      files = res.ok ? await res.json() : [];
+    } catch (e) { files = []; }
+    box.textContent = '';
+    if (!files.length) return;
+    const action = async (button, verb, f) => {
+      if (verb === 'retirer' && !window.confirm('Retirer les ' + f.hands + ' main(s) de « ' + f.name + ' » ? Elles ne '
+        + 'compteront plus dans les analyses. L\'historique reste gardé : tu pourras le rétablir.')) return;
+      button.disabled = true;
+      try {
+        const res = await fetch(fileApi(student) + '/' + verb, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: f.id }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Action impossible.');
+        frame.dataset.src = '';
+        if (student) { await loadStudents(); renderHeader(); } else { state = data.state; renderSidebar(); }
+        showFiles(box, student);
+      } catch (err) {
+        button.disabled = false;
+        window.alert(err.message || String(err));
+      }
+    };
+    const rows = files.map((f) => {
+      const formats = Object.entries(f.formats || {}).map(([k, n]) => n + ' ' + k).join(' · ');
+      const period = f.first ? (day(f.first) === day(f.last) ? day(f.first) : day(f.first) + ' → ' + day(f.last)) : '';
+      const button = el('button', { type: 'button', class: 'link' }, f.removed ? 'Rétablir' : 'Retirer');
+      button.addEventListener('click', () => action(button, f.removed ? 'retablir' : 'retirer', f));
+      return el('tr', { class: f.removed ? 'removed' : null },
+        el('td', {}, f.name, f.inbox ? el('span', { class: 'muted small' }, ' · dossier des mains') : ''),
+        el('td', {}, (f.sites || []).join(', ')),
+        el('td', { class: 'num' }, f.removed ? '–' : String(f.hands)),
+        el('td', {}, f.removed ? 'retiré le ' + day(f.removed) : formats),
+        el('td', { class: 'nowrap' }, period),
+        el('td', { class: 'muted nowrap' }, day(f.imported)),
+        el('td', {}, button));
+    });
+    box.append(el('h3', {}, 'Historiques importés (' + files.length + ')'),
+      el('div', { class: 'scroll' }, el('table', {},
+        el('thead', {}, el('tr', {}, el('th', {}, 'Fichier'), el('th', {}, 'Site'), el('th', { class: 'num' }, 'Mains'),
+          el('th', {}, 'Tables'), el('th', {}, 'Joué'), el('th', {}, 'Importé le'), el('th', {}, ''))),
+        el('tbody', {}, rows))),
+      el('p', { class: 'muted small' }, 'Retirer un historique enlève ses mains de toutes les analyses (celles qu\'un '
+        + 'autre historique contient aussi restent) ; il reste gardé, et le dossier des mains ne le réimporte pas. '
+        + '« Rétablir », ou l\'importer à nouveau, le remet.'));
   }
 
   const HISTORY = /\.(txt|log|hh|zip)$/i;
@@ -365,6 +420,8 @@
         renderSidebar();
       }
       showImportResult(data, result, student);
+      const box = document.querySelector('.import .imported');
+      if (box) showFiles(box, student);
     } catch (err) {
       result.textContent = '';
       result.append(el('p', { class: 'error' }, err.message || String(err)));

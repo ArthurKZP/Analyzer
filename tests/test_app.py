@@ -466,6 +466,18 @@ class ServerTest(unittest.TestCase):
                          (200, 'attachment; filename="leakfinding-anna.html"'))
         self.assertIn(b"Leakfinding de Anna", report)
         self.assertEqual(json.loads(self.request("GET", "/api/eleves/anna/leaks")[2])["ready"], False)
+        files = json.loads(self.request("GET", "/api/eleves/anna/fichiers")[2])  # ses historiques : en retirer un
+        self.assertEqual([(f["name"], f["hands"], f["removed"]) for f in files], [("s.txt", 4, None)])
+        status, _, data = self.request("POST", "/api/eleves/anna/fichiers/retirer", json.dumps({"id": files[0]["id"]}),
+                                       headers)
+        data = json.loads(data)
+        self.assertEqual((status, data["removed"], data["state"]["hands"], data["files"][0]["hands"]), (200, 4, 0, 0))
+        status, _, data = self.request("POST", "/api/eleves/anna/fichiers/retablir", json.dumps({"id": files[0]["id"]}),
+                                       headers)
+        self.assertEqual((status, json.loads(data)["added"]), (200, 4))
+        for bad, code in (({"id": "1"}, 400), ({"id": 99999}, 404)):
+            self.assertEqual(self.request("POST", "/api/eleves/anna/fichiers/retirer", json.dumps(bad), headers)[0],
+                             code, bad)
         self.assertEqual(self.request("GET", "/eleve/inconnu/leaks")[0], 404)
         self.assertEqual(self.request("POST", "/api/eleves/inconnu/import", body, headers)[0], 404)
         self.assertEqual(self.request("POST", "/api/eleves", json.dumps({"name": ""}), headers)[0], 400)

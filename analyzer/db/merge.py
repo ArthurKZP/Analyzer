@@ -79,15 +79,19 @@ def _hands(source: Database, target: Database, src_account: int, dst_account: in
             "SELECT id, cle, nom, pseudo, cree_le FROM espaces WHERE compte_id = ? ORDER BY id", (src_account,)):
         dst_space = make_space(target, key, name, pseudo, dst_account, created)
         files = {None: None}
-        for row in source.all("SELECT id, nom, chemin, taille, date_fichier, empreinte, contenu, mains, importe_le "
-                              "FROM fichiers WHERE espace_id = ?", (src_space,)):
-            found = target.value("SELECT id FROM fichiers WHERE espace_id = ? AND empreinte = ?", (dst_space, row[5]))
+        retired = set()  # historiques retirés ici (ou dans la source) : leurs mains ne reviennent pas
+        for row in source.all("SELECT id, nom, chemin, taille, date_fichier, empreinte, contenu, mains, importe_le, "
+                              "retire_le FROM fichiers WHERE espace_id = ?", (src_space,)):
+            found = target.one("SELECT id, retire_le FROM fichiers WHERE espace_id = ? AND empreinte = ?",
+                               (dst_space, row[5]))
             if found is None:
-                found = target.value("INSERT INTO fichiers (espace_id, nom, chemin, taille, date_fichier, empreinte, "
-                                     "contenu, mains, importe_le) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-                                     (dst_space, *(_blob(v) for v in row[1:])))
+                found = target.one("INSERT INTO fichiers (espace_id, nom, chemin, taille, date_fichier, empreinte, "
+                                   "contenu, mains, importe_le, retire_le) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                                   "RETURNING id, retire_le", (dst_space, *(_blob(v) for v in row[1:])))
                 out["historiques"] += 1
-            files[row[0]] = found
+            files[row[0]] = found[0]
+            if found[1] is not None:
+                retired.add(row[0])
         cur = source.execute("SELECT id, fichier_id, site, numero, joue_le, format, sb, bb, lecture, donnees "
                              "FROM mains WHERE espace_id = ? ORDER BY id", (src_space,))
         while True:
@@ -95,6 +99,8 @@ def _hands(source: Database, target: Database, src_account: int, dst_account: in
             if not rows:
                 break
             for row in rows:
+                if row[1] in retired:
+                    continue
                 new = target.value("INSERT INTO mains (espace_id, fichier_id, site, numero, joue_le, format, sb, bb, "
                                    "lecture, donnees) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                                    "ON CONFLICT (espace_id, site, numero) DO NOTHING RETURNING id",

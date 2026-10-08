@@ -82,6 +82,40 @@ class SchemaAndHandsTest(DatabaseCase):
         with self.assertRaises(ValueError):
             hands.import_text(self.db, me, "x.txt", "PokerStars Hand #1")
 
+    def test_remove_and_restore_files(self):
+        """Retirer un historique efface ses mains, sauf celles qu'un historique importé après lui contient aussi ; il reste
+        gardé : le dossier des mains ne le réimporte pas, et il se rétablit (ou s'importe à nouveau)."""
+        me = hands.space(self.db, "moi")
+        blocks = ["*** HEADER ***" + b for b in SAMPLE.split("*** HEADER ***")[1:]]
+        first, second = "".join(blocks[:3]), "".join(blocks[2:])  # la 3e main dans les deux
+        self.assertEqual(hands.import_text(self.db, me, "a.txt", first)[1], 3)
+        self.assertEqual(hands.import_text(self.db, me, "b.txt", second)[1], 1)
+        listed = {f["name"]: f for f in hands.files(self.db, me)}
+        self.assertEqual((listed["a.txt"]["hands"], listed["b.txt"]["hands"], listed["a.txt"]["sites"]),
+                         (3, 1, ["Betclic"]))
+        a = listed["a.txt"]["id"]
+        self.assertEqual(hands.remove_file(self.db, me, a), {"removed": 2, "kept": 1})
+        self.assertEqual(sorted(h.hand_id for h in hands.load(self.db, me)), ["HAND01", "HAND02"])  # le fichier : 4, 3, 2
+        listed = {f["name"]: f for f in hands.files(self.db, me)}
+        self.assertTrue(listed["a.txt"]["removed"])
+        self.assertEqual((listed["a.txt"]["hands"], listed["b.txt"]["hands"]), (0, 2))
+        self.assertEqual(hands.import_text(self.db, me, "a.txt", first)[1:], (2, False))  # importé à nouveau : rétabli
+        self.assertEqual(hands.count(self.db, me), 4)
+        self.assertEqual(hands.remove_file(self.db, me, a)["removed"], 2)
+        self.assertEqual(hands.restore_file(self.db, me, a), 2)
+        with self.assertRaises(KeyError):
+            hands.remove_file(self.db, hands.space(self.db, "eleve:paul"), a)  # pas son historique
+        folder = self.root / "mains"  # un historique de la boîte d'arrivée, retiré, n'y est pas relu
+        folder.mkdir()
+        (folder / "c.txt").write_text((SITES / "winamax.txt").read_text(encoding="utf-8"), encoding="utf-8")
+        self.assertEqual(hands.sync_folder(self.db, me, folder), 2)
+        c = next(f["id"] for f in hands.files(self.db, me) if f["name"] == "c.txt")
+        hands.remove_file(self.db, me, c)
+        self.assertEqual(hands.sync_folder(self.db, me, folder), 0)
+        (folder / "c.txt").touch()  # même contenu, date changée : toujours retiré
+        self.assertEqual(hands.sync_folder(self.db, me, folder), 0)
+        self.assertEqual(hands.count(self.db, me), 4)
+
     def test_folder_inbox_and_new_reader(self):
         me = hands.space(self.db, "moi")
         folder = self.root / "mains"
@@ -223,6 +257,10 @@ class AccountDataTest(DatabaseCase):
             self.assertEqual(target.value("SELECT type FROM adversaires WHERE nom = 'Lui'"), "rec")
             again = merge.merge(self.db, target, log=lambda m: None)
             self.assertEqual(sum(again.values()), 0)  # rien de neuf la deuxième fois
+            retired = next(f["id"] for f in hands.files(target, target_me) if f["name"] == "hu.txt")
+            hands.remove_file(target, target_me, retired)  # retiré ici : la sauvegarde ne le ramène pas
+            self.assertEqual(merge.merge(self.db, target, log=lambda m: None)["mains"], 0)
+            self.assertEqual(hands.count(target, target_me), 2)
             client = merge.merge(self.db, target, log=lambda m: None, account="client-1")  # dans un autre compte
             self.assertEqual(client["mains"], 4)
         finally:

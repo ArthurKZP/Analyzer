@@ -129,6 +129,9 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
             PRIMARY KEY (compte_id, type)
         )""",
     ]),
+    (3, "Historiques retirés (leurs mains effacées, l'historique gardé pour le rétablir)", [
+        "ALTER TABLE fichiers ADD COLUMN retire_le TEXT",  # NULL : ses mains sont dans la base
+    ]),
 ]
 
 
