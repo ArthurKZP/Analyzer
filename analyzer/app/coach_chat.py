@@ -24,7 +24,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from .. import bluffs, leaks, students
+from .. import NAME, bluffs, leaks, students
 from ..theory import coach, exploit, postflop, review, studyspots
 
 MODEL = os.environ.get("ANALYZER_COACH_MODEL", "")  # vide : choisi dans la liste des modèles de l'API
@@ -44,7 +44,7 @@ SETUP = ("Le coach utilise Claude, l'IA d'Anthropic, par son API : installe le m
          "« python -m analyzer mcp --config » et suis les indications, puis pose tes questions dans Claude "
          "(« Copier pour Claude » ici reprend ce que tu regardes dans l'explorateur).")
 
-SYSTEM = """Tu es le coach de poker intégré à Analyzer, un outil d'étude du No Limit Hold'em en heads-up et aux tables à plusieurs (6-max), 100 bb. Ton élève est un joueur régulier qui étudie la théorie pour simplifier son jeu et mieux exploiter ses adversaires.
+SYSTEM = "Tu es le coach de poker intégré à " + NAME + """, un outil d'étude du No Limit Hold'em en heads-up et aux tables à plusieurs (6-max), 100 bb. Ton élève est un joueur régulier qui étudie la théorie pour simplifier son jeu et mieux exploiter ses adversaires.
 
 Tu consultes ses données avec des outils :
 - plan_de_jeu : la synthèse de ses études résolues pour un type de pot, en heads-up ou en 6-max pour une paire de positions : les flops regroupés en trois stratégies de c-bet (miser range, stratégie mixte, checker range) et par taille de mise, avec des flops en exemple ; pour chaque groupe, l'attaque (règles pour quatre familles de mains : fortes, moyennes, tirages, rien ; suite à la turn et à la river selon la carte) et la défense de l'autre joueur (face à la c-bet et aux barrels, quand l'attaquant checke).

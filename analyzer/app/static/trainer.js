@@ -679,7 +679,7 @@
     box.append(el('h2', {}, 'Tes progrès'));
     if (!p.all.n) {
       box.append(el('p', { class: 'muted' }, 'Pas encore de décision enregistrée. Chaque décision jouée ici est gardée '
-        + '(dans la base d\'Analyzer) pour suivre tes progrès situation par situation.'));
+        + '(dans la base de Merlin) pour suivre tes progrès situation par situation.'));
       return;
     }
     const tile = (l, v, s) => el('div', { class: 'ptile' }, el('div', { class: 'l' }, l), el('div', { class: 'v' }, v), el('div', { class: 's' }, s));

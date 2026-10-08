@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .. import aliases
+from .. import NAME, aliases
 from ..theory import postflop, preflop_tree, ring_tree, studyspots
 from . import trainer
 from .library import Library, UnknownPlayer
@@ -57,7 +57,7 @@ class AppServer(ThreadingHTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     server: AppServer
-    server_version = "Analyzer"
+    server_version = NAME
 
     def log_message(self, fmt, *args):  # console silencieuse
         pass
@@ -621,7 +621,7 @@ def start(library: Library, port: int = 8765, tries: int = 10) -> AppServer:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m analyzer app", description="Lance l'application Analyzer HU.")
+    parser = argparse.ArgumentParser(prog="python -m analyzer app", description=f"Lance l'application {NAME}.")
     parser.add_argument("-d", "--dossier", default="hands", help="dossier des historiques (défaut : hands/)")
     parser.add_argument("--hero", help="ton pseudo (détecté automatiquement via le tag Hero)")
     parser.add_argument("--port", type=int, default=8765, help="port local (défaut : 8765)")
@@ -633,7 +633,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     server = start(library, args.port)
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     print(f"{len(library.hands)} mains, toi : {library.hero or 'inconnu'}")
-    print(f"Analyzer est ouvert sur {url}  (Ctrl+C pour arrêter)", flush=True)
+    print(f"{NAME} est ouvert sur {url}  (Ctrl+C pour arrêter)", flush=True)
     if not args.sans_navigateur:
         webbrowser.open(url)
     try:

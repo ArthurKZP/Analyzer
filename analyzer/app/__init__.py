@@ -1,1 +1,1 @@
-"""Application Analyzer HU : interface locale dans le navigateur."""
+"""L'application Merlin : interface locale dans le navigateur."""

@@ -15,7 +15,7 @@ from io import BytesIO
 from typing import Optional, Sequence
 from xml.sax.saxutils import escape
 
-from . import pdfwriter
+from . import NAME, pdfwriter
 
 EMU = 914400  # par pouce
 SLIDE_W, SLIDE_H = 13.333, 7.5
@@ -300,7 +300,7 @@ def _rels(items: Sequence[tuple[str, str, str]]) -> str:
 @dataclass
 class Presentation:
     title: str = ""
-    author: str = "Analyzer"
+    author: str = NAME
     colors: dict = field(default_factory=lambda: {
         "dk1": "1B1B1B", "lt1": "FFFFFF", "dk2": "0F3D2E", "lt2": "EEF3EF", "accent1": "0F6B4A", "accent2": "E0A526",
         "accent3": "D03B3B", "accent4": "2A78D6", "accent5": "1B8A4B", "accent6": "6B7280", "hlink": "2A78D6",
@@ -350,7 +350,7 @@ class Presentation:
         files["docProps/app.xml"] = (
             f'{XML}<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" '
             'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
-            f'<Application>Analyzer</Application><Slides>{n}</Slides><Notes>{n}</Notes>'
+            f'<Application>{escape(NAME)}</Application><Slides>{n}</Slides><Notes>{n}</Notes>'
             '<PresentationFormat>Grand écran</PresentationFormat></Properties>')
         rels = [("rId1", f"{REL}/slideMaster", "slideMasters/slideMaster1.xml")]
         rels += [(f"rId{i + 1}", f"{REL}/slide", f"slides/slide{i}.xml") for i in range(1, n + 1)]
@@ -371,8 +371,8 @@ class Presentation:
                                       '</p:viewPr>')
         files["ppt/tableStyles.xml"] = (f'{XML}<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/'
                                         'main" def="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"/>')
-        files["ppt/theme/theme1.xml"] = _theme("Analyzer", self.colors)
-        files["ppt/theme/theme2.xml"] = _theme("Analyzer notes", self.colors)
+        files["ppt/theme/theme1.xml"] = _theme(NAME, self.colors)
+        files["ppt/theme/theme2.xml"] = _theme(NAME + " notes", self.colors)
         files["ppt/slideMasters/slideMaster1.xml"] = _master()
         files["ppt/slideMasters/_rels/slideMaster1.xml.rels"] = _rels([
             ("rId1", f"{REL}/slideLayout", "../slideLayouts/slideLayout1.xml"),

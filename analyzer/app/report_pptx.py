@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from typing import Optional, Sequence
 
-from .. import leaks
+from .. import NAME, leaks
 from .. import pptxwriter as px
 from ..models import Hand
 from ..pptxwriter import Cell, Para, Run, para
@@ -121,7 +121,7 @@ def title_slide(deck: px.Presentation, s: Synthesis) -> None:
     y += text_block(slide, 0.8, y, 11.7, line, 20, ON_FELT_2, max_lines=2, min_size=16) + 0.1
     if s.period:
         text_block(slide, 0.8, y, 11.7, f"Période : {s.period}", 16, ON_FELT_2)
-    slide.text(0.8, 6.55, 11.7, 0.3, [para(f"Préparé avec Analyzer le {s.generated:%d/%m/%Y}", 12, "9DBFAF")])
+    slide.text(0.8, 6.55, 11.7, 0.3, [para(f"Préparé avec {NAME} le {s.generated:%d/%m/%Y}", 12, "9DBFAF")])
     slide.notes = (f"Objectif de la séance : repartir avec deux ou trois points précis à travailler.\n"
                    f"Ce bilan porte sur {num(s.report.hands, 0)} mains ({s.format_label}) "
                    + (f"{s.dates}" if s.dates else "") + (f", période : {s.period}" if s.period else "") + ".\n"

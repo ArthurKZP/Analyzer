@@ -300,7 +300,7 @@ class ServerTest(unittest.TestCase):
         status, ctype, body = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn("text/html", ctype)
-        self.assertIn(b"Analyzer", body)
+        self.assertIn(b"Merlin", body)
         self.assertEqual(self.request("GET", "/static/app.js")[0], 200)
         status, _, body = self.request("GET", "/api/state")
         self.assertEqual(json.loads(body)["hero"], "Hero")

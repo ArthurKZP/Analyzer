@@ -7,7 +7,7 @@ from __future__ import annotations
 import math
 from typing import Callable, Optional, Sequence
 
-from .. import leaks
+from .. import NAME, leaks
 from .. import pdfwriter as pw
 from ..report import num
 from .synthesis import Synthesis, pick_status, plural
@@ -97,7 +97,7 @@ class Flow:
         total = len(self.doc.pages)
         for i, page in enumerate(self.doc.pages, start=1):
             page.line(M, H - 40, W - M, H - 40, GRID, 0.6)
-            page.text(M, H - 28, f"Analyzer · Leakfinding de {self.s.who} · {self.s.generated:%d/%m/%Y}", "regular",
+            page.text(M, H - 28, f"{NAME} · Leakfinding de {self.s.who} · {self.s.generated:%d/%m/%Y}", "regular",
                       7.5, MUTED)
             page.text(W - M, H - 28, f"page {i} / {total}", "regular", 7.5, MUTED, align="right")
 

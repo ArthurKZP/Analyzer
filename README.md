@@ -1,11 +1,14 @@
-# Analyzer
+# Merlin
 
-Outil d'analyse de tes adversaires en **Heads-Up NLHE** à partir de tes historiques de mains.
-Il lit les historiques, calcule le profil complet de l'adversaire (et le tien dans le même
-match), détecte ses tendances exploitables et génère un **rapport HTML** autonome, un
-**visualiseur de spots** pour filtrer et rejouer les coups toi-même, une comparaison de tes
-décisions préflop à une **solution de solveur** HU, et la **résolution postflop** d'un coup avec le
-moteur de [GTOpen](https://github.com/MatthewPDingle/GTOpen).
+Outil d'étude du **NLHE** en cash game, en **heads-up** comme aux **tables à plusieurs**, à partir de tes historiques
+de mains : ton jeu, tes adversaires et tes élèves face à la théorie. Il lit les historiques, calcule le profil
+complet de chaque adversaire (et le tien), détecte ses tendances exploitables, trouve tes leaks et ceux de tes
+élèves (rapport PDF, présentation pour la séance de coaching), compare tes décisions préflop à une **solution de
+solveur** et à tes charts, et résout les coups postflop avec le moteur de
+[GTOpen](https://github.com/MatthewPDingle/GTOpen) (explorateur, nodelock, entraîneur, plans de jeu).
+
+Le paquet Python garde le nom `analyzer` : les commandes restent `python -m analyzer …` et tes données
+`~/.analyzer`.
 
 - Python 3.10+, **aucune dépendance** à installer (Pillow seulement pour lire de nouvelles captures de ranges ;
   Rust et git seulement pour installer le solveur postflop).
@@ -192,9 +195,9 @@ python -m analyzer gtopen                             # état du solveur
 ```
 
 L'installation fait une copie partielle de GTOpen dans `~/.analyzer/GTOpen` : le moteur et les quelques
-fichiers qu'il lit à la compilation, sans ses données de recherche, à la version testée avec Analyzer
+fichiers qu'il lit à la compilation, sans ses données de recherche, à la version testée avec Merlin
 (`GTOPEN_COMMIT` dans `postflop.py`). Relancer `--installer` complète ou remet à niveau une copie
-existante. Elle compile ensuite `analyzer-solve`, un petit programme d'Analyzer
+existante. Elle compile ensuite `analyzer-solve`, un petit programme de Merlin
 (`analyzer/theory/native/main.rs`) qui utilise ce moteur : il résout le spot et suit la ligne jouée.
 `--gpu` compile aussi le moteur CUDA de GTOpen pour une carte NVIDIA (expérimental, voir le README de
 GTOpen pour les bibliothèques CUDA nécessaires).
@@ -391,7 +394,7 @@ python -m analyzer gtopen --spots srp --texture Monotone --texture "Ace high"   
 La série alterne les textures (un flop de chaque, puis un deuxième…) : interrompue, elle couvre déjà
 toutes les textures, et une relance reprend où elle s'était arrêtée. Compter 30 secondes à 2 minutes par
 flop sur 4 cœurs (la série : une demi-heure) et 50 à 80 Mo sur le disque (1,6 Go pour les 24 flops).
-Sans attendre, la page montre déjà une synthèse de référence livrée avec Analyzer
+Sans attendre, la page montre déjà une synthèse de référence livrée avec Merlin
 (`analyzer/theory/data/srp_reference.json`, calculée avec le même arbre) pour les flops pas encore
 résolus ; il faut les résoudre sur ton ordinateur pour les explorer. La page *Études du solveur* montre ensuite, texture par texture
 (avec la moyenne de ses flops), la stratégie de toute la range : la c-bet du bouton après le check de la
@@ -406,7 +409,7 @@ texture dans la page.
 part de l'open du bouton. Le déroulé montre les actions préflop de la solution (fold, open 2,5, call, 3bet
 11,5, 4bet 26, tapis) et la grille leurs fréquences main par main, pour le joueur qui agit ou la range de
 l'autre. Au call, on choisit le flop : SRP après le call de l'open, pot 3bet après le call du 3bet, pot 4bet
-après le call du 4bet. On choisit ses trois cartes parmi les 52 : Analyzer propose alors les flops déjà
+après le call du 4bet. On choisit ses trois cartes parmi les 52 : Merlin propose alors les flops déjà
 résolus qui s'en approchent, à ouvrir tout de suite (le même flop aux couleurs près, qui a la même stratégie ;
 les mêmes hauteurs avec la même structure de couleurs, rainbow, deux couleurs ou monotone ; la même texture),
 ou résout ce flop (*Résoudre ce flop* : une dizaine de minutes en SRP, 2 à 3 en pot 3bet, moins d'une en pot
@@ -464,7 +467,7 @@ Méthode, street par street, chaque situation à son tour (les autres gardent le
 Mesuré sur K♠K♦4♣ avec 4 cœurs : 35 minutes pour le flop, 5 pour la turn, une demi-heure pour la river,
 puis une dizaine de minutes pour résoudre le flop avec ses tailles (arbre d'environ 1,2 million de nœuds,
 4 Go de mémoire, étude de 430 Mo) : compter une nuit pour une dizaine de flops, moins avec plus de cœurs. Le
-choix est gardé dans la base ; ceux calculés à l'avance sont livrés avec Analyzer
+choix est gardé dans la base ; ceux calculés à l'avance sont livrés avec Merlin
 (`analyzer/theory/data/srp_tailles.json`) et ne se refont pas. La page *Études du solveur* montre sous
 chaque flop ses tailles et, en dépliant, l'EV de chaque taille comparée. Le bouton **Résoudre les flops
 manquants** choisit les tailles qui manquent avant de résoudre ; en ligne de commande, `--spots srp` fait
@@ -536,7 +539,7 @@ K♠K♦4♣ avec 4 cœurs, BB contre BTN en pot 3bet demande 12 minutes pour ch
 résoudre (26 minutes et 2 min 30 en heads-up), et les tailles changent (c-bet de la BB à 75 % au lieu de 33 %
 en heads-up). Le plan de jeu suggéré, le coach et le leakfinding 6-max (ses repères après le flop) lisent aussi
 les séries 6-max ; l'entraîneur travaille sur les séries heads-up. Leurs résultats viennent de tes charts et restent
-sur ta machine (rien n'est livré avec Analyzer). Les autres paires de positions (l'UTG contre la BB, le CO
+sur ta machine (rien n'est livré avec Merlin). Les autres paires de positions (l'UTG contre la BB, le CO
 contre le BTN…) n'ont pas de série : elles se résolvent flop par flop depuis l'explorateur (*À plusieurs (6-max)*),
 et s'ajoutent à la liste *Autres positions* de l'onglet.
 
@@ -559,10 +562,10 @@ bouton à la turn après une c-bet payée ou après un flop checké). `analyzer-
 l'arbre (`analyzer/theory/native/arbre.rs`, mêmes règles que GTOpen) quand la requête porte un *plan* :
 une liste de tailles par situation, c-bet, 2e barrel, c-bet retardée, probe, bet/check/bet, check-raise…
 (clés décrites en tête du fichier). Sans plan, l'arbre est celui de GTOpen ; avec un plan vide, celui
-d'Analyzer lui est identique nœud pour nœud (`analyzer-solve --verifier-arbre requete.json`). C'est la
+de Merlin lui est identique nœud pour nœud (`analyzer-solve --verifier-arbre requete.json`). C'est la
 base du choix des tailles par situation et de la modification des tailles d'un spot (onglet *Arbre* de
 l'explorateur, où une relance peut aussi se donner en multiple de la mise : « x3 »).
-Après une mise à jour d'Analyzer qui touche ce pont, relance `python -m analyzer gtopen --installer`.
+Après une mise à jour de Merlin qui touche ce pont, relance `python -m analyzer gtopen --installer`.
 
 Variables d'environnement : `ANALYZER_HOME` (dossier de travail, `~/.analyzer` par défaut),
 `GTOPEN_DIR` (copie de GTOpen à utiliser), `ANALYZER_SOLVER` (chemin d'un `analyzer-solve` déjà compilé).
@@ -580,7 +583,7 @@ python -m analyzer gtopen --analyser --max 40   # les 40 plus gros pots seulemen
 ```
 
 **Réguliers et récréatifs** : contre un récréatif, le bon jeu est l'exploitation, pas la théorie. Le type de
-chaque adversaire se règle en haut de sa fiche (*Auto*, *Régulier*, *Récréatif*) ; en *Auto*, Analyzer le
+chaque adversaire se règle en haut de sa fiche (*Auto*, *Régulier*, *Récréatif*) ; en *Auto*, Merlin le
 suggère d'après ses stats (récréatif quand au moins deux signaux concordent : il limpe plus de 20 % de ses
 boutons, ouvre moins de la moitié, folde plus de 55 % de ses BB face à l'open, ne 3bette presque jamais,
 folde trop face au 3bet, très passif après le flop), sinon régulier. Les mains contre les récréatifs sortent
@@ -821,7 +824,7 @@ positions. Il sait faire lui-même un node-lock contre un adversaire réel, en h
 
 ### Dans ton abonnement Claude (sans clé API)
 
-Analyzer donne ses outils à l'application Claude (Claude Desktop) ou à Claude Code par un serveur MCP local : la
+Merlin donne ses outils à l'application Claude (Claude Desktop) ou à Claude Code par un serveur MCP local : la
 conversation tourne dans ton abonnement, sans coût par question (dans les limites d'usage de ton abonnement).
 
 ```bash
@@ -834,7 +837,7 @@ affiche, avec les chemins de ta machine :
   Modifier la configuration), puis redémarre l'application ;
 - pour **Claude Code** : la commande `claude mcp add …` à lancer une fois.
 
-Ensuite, pose tes questions **dans Claude** (pas dans le panneau du coach d'Analyzer, qui passe toujours par
+Ensuite, pose tes questions **dans Claude** (pas dans le panneau du coach de Merlin, qui passe toujours par
 l'API et sa facturation à part) : « Résume-moi le plan de jeu en SRP » ou « Dans quelles lignes Villain
 bluffe-t-il ? ». Depuis l'explorateur, *Copier pour Claude* (onglet Coach) copie ta question avec ce que tu
 regardes (spot ou main, ligne, case sélectionnée) : colle-la dans Claude, qui ouvre le même moment du coup.
@@ -844,10 +847,10 @@ dans une session) ; dans Claude Desktop, le serveur apparaît dans Réglages > D
 complet de l'application.
 Le prompt *coach* du serveur (menu des prompts de l'application) donne au modèle la façon de répondre du coach.
 Le serveur (`python -m analyzer mcp`) est lancé par l'application Claude : il charge tes mains au premier outil
-appelé et ouvre les études comme l'application d'Analyzer (les deux peuvent tourner en même temps, chacune avec sa
+appelé et ouvre les études comme l'application de Merlin (les deux peuvent tourner en même temps, chacune avec sa
 propre session du solveur). Il n'y a pas de dépendance à installer.
 
-### Dans l'application d'Analyzer (clé API)
+### Dans l'application de Merlin (clé API)
 
 Le même coach est intégré à l'application : onglet *Plan de jeu suggéré* (« Discuter avec le coach ») et
 explorateur (onglet *Coach* à droite, qui sait quel spot, quelle ligne et quelle case tu regardes).
@@ -926,13 +929,13 @@ situation où tu perds de l'EV.
 
 ## Sauvegarde
 
-Tout ce qu'Analyzer garde est dans la base de données (`~/.analyzer/analyzer.db`, voir plus bas), sauf les arbres
+Tout ce que Merlin garde est dans la base de données (`~/.analyzer/analyzer.db`, voir plus bas), sauf les arbres
 des études (`~/.analyzer/etudes`) ; `ANALYZER_HOME` change de dossier. Menu **Sauvegarde** de l'application, ou en
 ligne de commande :
 
 ```bash
-python -m analyzer sauvegarde "C:\Users\toi\OneDrive\Analyzer"   # dossier synchronisé ; retenu ensuite
-python -m analyzer sauvegarde gdrive:Analyzer --etudes                # stockage rclone, avec les études
+python -m analyzer sauvegarde "C:\Users\toi\OneDrive\Merlin"     # dossier synchronisé ; retenu ensuite
+python -m analyzer sauvegarde gdrive:Merlin --etudes                  # stockage rclone, avec les études
 python -m analyzer sauvegarde                                         # même destination que la dernière fois
 python -m analyzer sauvegarde --auto        # sauvegarde automatique après chaque calcul dans l'application
 python -m analyzer sauvegarde --restaurer   # sur un autre ordinateur : reprend la dernière sauvegarde
@@ -941,7 +944,7 @@ python -m analyzer sauvegarde --restaurer   # sur un autre ordinateur : reprend 
 - **Destination** : un dossier, de préférence synchronisé en ligne (OneDrive, Google Drive, Dropbox : leur
   application l'envoie sur leurs serveurs), ou un stockage en ligne configuré avec
   [rclone](https://rclone.org) (`rclone config` une fois, puis `nom:dossier` : Google Drive, OneDrive, S3,
-  SFTP…). Aucun mot de passe n'est gardé par Analyzer.
+  SFTP…). Aucun mot de passe n'est gardé par Merlin.
 - **L'essentiel** (quelques Mo) : la base de données, copiée de façon cohérente même application ouverte (tes
   mains et celles de tes élèves, type des adversaires, résumés des mains analysées, tailles de mise choisies — les
   plus longues à recalculer : une heure et demie par flop SRP —, plans de jeu, résolutions, ranges, réglages,
@@ -957,11 +960,11 @@ python -m analyzer sauvegarde --restaurer   # sur un autre ordinateur : reprend 
 
 Les tailles choisies et les synthèses de référence peuvent aussi rejoindre le dépôt (fichiers
 `analyzer/theory/data/*_tailles.json` et `*_reference.json`, voir plus haut) : elles sont alors livrées avec
-Analyzer.
+Merlin.
 
 ### Base de données
 
-Tout ce qu'Analyzer garde est dans une base de données : tes mains et celles de tes élèves (avec le texte d'origine
+Tout ce que Merlin garde est dans une base de données : tes mains et celles de tes élèves (avec le texte d'origine
 de chaque historique), le type de tes adversaires et leurs alias, les résumés des mains passées au solveur, et les données du
 solveur — tailles de mise choisies, plans de jeu, résultats des résolutions et précision de chaque spot, solutions
 préflop des tables à plusieurs et ranges ajustées, réglages et durées des résolutions, journal de l'entraîneur,

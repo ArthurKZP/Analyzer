@@ -12,6 +12,8 @@ import zlib
 from datetime import datetime
 from typing import Optional, Sequence
 
+from . import NAME
+
 A4 = (595.28, 841.89)
 Color = tuple[float, float, float]
 
@@ -202,7 +204,7 @@ def _info_text(text: str) -> bytes:
 class Document:
     """Les pages d'un PDF, et le fichier."""
 
-    def __init__(self, title: str = "", author: str = "Analyzer", subject: str = "",
+    def __init__(self, title: str = "", author: str = NAME, subject: str = "",
                  size: tuple[float, float] = A4):
         self.title, self.author, self.subject, self.size = title, author, subject, size
         self.pages: list[Page] = []
@@ -238,8 +240,9 @@ class Document:
             b" ".join(b"%d 0 R" % k for k in kids), len(kids))
         objects[catalog - 1] = b"<< /Type /Catalog /Pages %d 0 R >>" % pages_id
         stamp = created.strftime("D:%Y%m%d%H%M%S").encode()
-        info = add(b"<< /Title %s /Author %s /Subject %s /Producer (Analyzer) /Creator (Analyzer) /CreationDate (%s) >>" % (
-            _info_text(self.title), _info_text(self.author), _info_text(self.subject), stamp))
+        info = add(b"<< /Title %s /Author %s /Subject %s /Producer %s /Creator %s /CreationDate (%s) >>" % (
+            _info_text(self.title), _info_text(self.author), _info_text(self.subject), _info_text(NAME),
+            _info_text(NAME), stamp))
         out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
         offsets = []
         for i, body in enumerate(objects, start=1):

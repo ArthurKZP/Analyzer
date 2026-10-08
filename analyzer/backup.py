@@ -28,7 +28,7 @@ import zipfile
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import blobs, db
+from . import NAME, blobs, db
 from .theory import postflop
 
 DB_ENTRY = "analyzer.db"  # la base SQLite, dans l'archive
@@ -211,7 +211,7 @@ def backup(dest: Optional[str] = None, studies: Optional[bool] = None, log: Call
     else:
         target = Path(dest).expanduser()
         if target.resolve() == home().resolve() or home().resolve() in target.resolve().parents:
-            raise BackupError("Choisis un dossier en dehors de celui d'Analyzer (" + str(home()) + ").")
+            raise BackupError(f"Choisis un dossier en dehors de celui de {NAME} (" + str(home()) + ").")
         try:
             (target / "archives").mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -268,7 +268,7 @@ def restore(source: Optional[str] = None, studies: bool = True, log: Callable[[s
         raise BackupError("Indique d'où restaurer (le dossier ou le stockage de la sauvegarde).")
     archive = _latest_archive(source, log)
     if archive is None:
-        raise BackupError(f"Aucune sauvegarde Analyzer dans {source}.")
+        raise BackupError(f"Aucune sauvegarde {NAME} dans {source}.")
     root = home().resolve()
     restored = kept = 0
     legacy = False
@@ -323,7 +323,7 @@ def restore(source: Optional[str] = None, studies: bool = True, log: Callable[[s
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m analyzer sauvegarde",
-        description="Sauvegarde (ou restaure) la base d'Analyzer (mains, tailles, résolutions, mains analysées, "
+        description=f"Sauvegarde (ou restaure) la base de {NAME} (mains, tailles, résolutions, mains analysées, "
                     "entraînement…) et, en option, les arbres des études.")
     parser.add_argument("destination", nargs="?",
                         help="dossier (synchronisé en ligne de préférence) ou stockage rclone « nom:dossier » ; "

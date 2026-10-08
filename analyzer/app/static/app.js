@@ -171,7 +171,7 @@
       subtitle.textContent = 'Tes calculs (tailles, résolutions, mains analysées, études) à l\'abri, en ligne si tu veux';
     } else if (route.view === 'eleves') {
       title.textContent = 'Élèves';
-      subtitle.textContent = 'Le leakfinding de tes élèves : ils t\'envoient leurs mains, Analyzer trouve ce qu\'ils doivent travailler';
+      subtitle.textContent = 'Le leakfinding de tes élèves : ils t\'envoient leurs mains, Merlin trouve ce qu\'ils doivent travailler';
     } else if (route.view === 'eleve') {
       const s = students.find((x) => x.id === route.student);
       title.textContent = s ? s.name : 'Élève';
@@ -186,7 +186,7 @@
       title.textContent = 'Importer des mains';
       subtitle.textContent = 'Historiques Betclic, Winamax, Unibet (.txt, dossier ou archive .zip) — les mains déjà présentes sont ignorées';
     }
-    document.title = (route.view === 'adv' ? route.player : title.textContent) + ' — Analyzer HU';
+    document.title = (route.view === 'adv' ? route.player : title.textContent) + ' — Merlin';
   }
 
   // Type de l'adversaire : contre un récréatif, ses mains sortent des comparaisons à la théorie.
@@ -417,9 +417,9 @@
     const who = student && students.find((s) => s.id === student);
     // Les historiques importés vont dans la base ; le dossier reste une boîte d'arrivée (lue au lancement).
     const folder = who
-      ? el('p', { class: 'muted small' }, 'Les mains de ' + who.name + ' sont gardées dans la base d\'Analyzer. '
+      ? el('p', { class: 'muted small' }, 'Les mains de ' + who.name + ' sont gardées dans la base de Merlin. '
         + 'Boîte d\'arrivée : ' + who.folder)
-      : el('p', { class: 'muted small' }, 'Tes mains sont gardées dans la base d\'Analyzer. Boîte d\'arrivée : '
+      : el('p', { class: 'muted small' }, 'Tes mains sont gardées dans la base de Merlin. Boîte d\'arrivée : '
         + state.folder + ' · ',
         el('button', { type: 'button', class: 'link', onclick: () => reload(result) }, 'Relire le dossier'),
         ' (si tu y as déposé des historiques à la main)');
@@ -639,7 +639,7 @@
     if (route.view !== 'sauvegarde') return;
     const busy = !!v.running;
     const dest = el('input', { type: 'text', id: 'bk-dest', value: v.dest, spellcheck: 'false', disabled: busy,
-      placeholder: 'C:\\Users\\toi\\OneDrive\\Analyzer   ou   gdrive:Analyzer' });
+      placeholder: 'C:\\Users\\toi\\OneDrive\\Merlin   ou   gdrive:Merlin' });
     const studies = el('input', { type: 'checkbox', checked: v.studies, disabled: busy });
     const auto = el('input', { type: 'checkbox', checked: v.auto, disabled: busy });
     const status = el('div', { 'aria-live': 'polite' });
@@ -686,7 +686,7 @@
       el('div', { class: 'box help' },
         el('h2', {}, 'Où mettre tes sauvegardes ?'),
         el('p', {}, el('b', {}, 'Un dossier synchronisé'), ' (le plus simple) : un dossier de OneDrive, Google Drive ou Dropbox '
-          + 'sur ton ordinateur, par exemple ', el('code', {}, 'C:\\Users\\toi\\OneDrive\\Analyzer'),
+          + 'sur ton ordinateur, par exemple ', el('code', {}, 'C:\\Users\\toi\\OneDrive\\Merlin'),
         '. Leur application envoie la sauvegarde en ligne toute seule.'),
         el('p', {}, el('b', {}, 'Un stockage en ligne avec rclone'), ' (Google Drive, OneDrive, Dropbox, un serveur SFTP, S3…) : '
           + 'installe rclone (rclone.org), configure ton stockage avec ', el('code', {}, 'rclone config'),
@@ -694,7 +694,7 @@
         el('p', {}, 'Ce qui est gardé : les tailles de mise choisies (les plus longues à recalculer), les résolutions, '
           + 'les mains analysées, ton journal d\'entraînement et, en option, les études. Les 10 dernières archives sont '
           + 'gardées. Sur un autre ordinateur : même destination, puis « Restaurer ».'),
-        el('p', { class: 'muted small' }, 'Dossier de travail d\'Analyzer : ' + v.home
+        el('p', { class: 'muted small' }, 'Dossier de travail de Merlin : ' + v.home
           + ' (variable ANALYZER_HOME pour en changer).'))));
     if (v.running) backupTimer = setTimeout(() => { if (route.view === 'sauvegarde') showBackup(); }, 1500);
   }
@@ -749,6 +749,6 @@
   window.addEventListener('hashchange', render);
 
   loadState().then(render).catch((err) => {
-    showPanel(el('p', { class: 'error' }, 'Impossible de joindre le serveur Analyzer : ' + err.message));
+    showPanel(el('p', { class: 'error' }, 'Impossible de joindre le serveur de Merlin : ' + err.message));
   });
 })();

@@ -13,6 +13,7 @@ from html import unescape
 from pathlib import Path
 from xml.etree import ElementTree
 
+from analyzer import NAME
 from analyzer import pdfwriter as pw
 from analyzer import pptxwriter as px
 from analyzer.app.library import Library
@@ -89,6 +90,7 @@ class PdfWriterTest(unittest.TestCase):
         self.assertEqual(pdf_strings(data), ["Bonjour (à tous) \\ ok", "\xaa", "Deuxième page"])
         self.assertIn(b"/BaseFont /ZapfDingbats", data)
         self.assertIn(b"/CreationDate (D:20261001120000)", data)
+        self.assertIn(b"/Producer " + pw._info_text(NAME), data)  # le nom de l'application
 
 
 def check_pptx(test: unittest.TestCase, data: bytes) -> dict[str, str]:
@@ -181,6 +183,7 @@ class ReportPdfTest(IsolatedHome):
         flat = [t for slide in texts for t in slide]
         for expected in ("Où tu en es", "Les leaks à travailler", "Les mains à revoir", "D'ici la prochaine séance"):
             self.assertIn(expected, flat)
+        self.assertTrue(any(t.startswith(f"Préparé avec {NAME} le ") for t in flat))
         notes = slide_texts(parts, "ppt/notesSlides/notesSlide")
         self.assertEqual(len(notes), len(texts))
         self.assertTrue(all(n for n in notes))  # chaque diapositive a ses notes pour le coach

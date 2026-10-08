@@ -8,6 +8,7 @@ from statistics import median
 from typing import Optional
 from urllib.parse import quote
 
+from . import NAME
 from .cards import describe_holding, equity
 from .insights import (
     DUELS,
@@ -730,6 +731,7 @@ def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, vi
         for i in sorted(set(list(range(99, len(h.curve), 100)) + [len(h.curve) - 1]))
     )
     return TEMPLATE.format(
+        app_name=escape(NAME),
         title=escape(f"Profil HU — {villain}"),
         style=STYLE,
         heading="" if embed else f"<h1>{escape(villain)}</h1>",
@@ -1094,7 +1096,7 @@ TEMPLATE = """<!doctype html>
 <p class="muted">Groupées par sa ligne préflop. H = toi, V = lui ; le temps de réflexion de l'adversaire est indiqué après chacune de ses actions.</p>
 {showdowns}
 
-<p class="note">Repères indicatifs pour un régulier HU solide à 100bb+ : ils servent à repérer les écarts, pas à définir une stratégie optimale. Rapport généré par Analyzer.</p>
+<p class="note">Repères indicatifs pour un régulier HU solide à 100bb+ : ils servent à repérer les écarts, pas à définir une stratégie optimale. Rapport généré par {app_name}.</p>
 </main>
 <script>{script}</script>
 </body>

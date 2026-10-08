@@ -6,6 +6,7 @@ from html import escape
 from typing import Optional
 from urllib.parse import quote
 
+from .. import NAME
 from ..report import cards_html, html_page, num
 from ..theory import postflop, sizing, studyspots
 
@@ -296,7 +297,7 @@ def _sizes_row(spot, width: int, series: bool) -> str:
         reach = "flop" if e.get("method") == "arbre complet" else f'{num(100 * e.get("reach", 0), 1)} %'
         lines.append(f'<tr><td>{escape(e["label"])}</td><td>{reach}</td><td class="opt">{opts}</td></tr>')
     rare = sum(1 for e in report.values() if e.get("method") == "rare")
-    source = "livrées avec Analyzer" if chosen.get("source") == "livré" else f'choisies le {escape(chosen.get("created", ""))}'
+    source = f"livrées avec {NAME}" if chosen.get("source") == "livré" else f'choisies le {escape(chosen.get("created", ""))}'
     detail = (f'<table><thead><tr><th>Situation</th><th>Atteinte</th><th>Taille retenue, et écart des autres '
               f'(bb, quand la situation arrive)</th></tr></thead><tbody>{"".join(lines)}</tbody></table>'
               f'<div class="muted">{len(shown)} situations comparées ({source}) ; {rare} situation(s) presque jamais '
@@ -391,7 +392,7 @@ def _spot_section(family: str = "srp", shown_now: bool = True) -> str:
                             f'</td>' for t in columns)
             exploit = data.get("exploit_pct")
             local = spot.ident in metas
-            tag = "" if local else (' <span class="ref" title="Synthèse de référence livrée avec Analyzer : résous ce '
+            tag = "" if local else (' <span class="ref" title="Synthèse de référence livrée avec ' + NAME + ' : résous ce '
                                     'flop pour l\'explorer">réf.</span>')
             delete = (f'<button type="button" class="del" data-key="{escape(data["key"])}">Supprimer</button>'
                       if local else "")
@@ -426,7 +427,7 @@ def _spot_section(family: str = "srp", shown_now: bool = True) -> str:
 par flop, une par situation (deux à la river) : {escape(sizing.description(family))} ; la meilleure EV pour
 celui qui mise l'emporte. Chaque ligne donne la stratégie de toute la range : {escape(_reading(family))}.
 <b>Explorer ↗</b> ouvre le spot dans l'explorateur (turn et river comprises).{" Les flops marqués <b>réf.</b> montrent "
-"la synthèse livrée avec Analyzer (même arbre, calculée à l'avance) : résous-les ici pour les explorer." if refs else ""}</p>
+f"la synthèse livrée avec {NAME} (même arbre, calculée à l'avance) : résous-les ici pour les explorer." if refs else ""}</p>
 <div class="spot-head" data-family="{escape(family)}" data-done="{done}">
   <span><b>{done} / {total}</b> flops résolus{" · " + _size(size) if size else ""}</span>
   <button type="button" class="go spot-run"{" hidden" if not missing else ""}>Résoudre les {missing} flops manquants</button>
