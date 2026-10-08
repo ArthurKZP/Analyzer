@@ -364,6 +364,39 @@ class GTOpenIntegrationTest(unittest.TestCase):
         finally:
             session.close()
 
+    def test_custom_tree(self):
+        # Tes tailles (dont une relance « x3 ») puis un nœud verrouillé (custom_tree) : le solveur les respecte.
+        from analyzer.theory import custom_tree
+        hand = {h.hand_id: h for h in load_hands([FIXTURES])}["HAND02"]
+        spot = postflop.build_spot(hand, "Hero")
+        spot.edits = {"plan": {"bet:fo:": [25, 75], "raise:fi::0": ["x3"]}, "locks": []}
+        session = postflop.Session(spot.request(iterations=3, target=50.0), save=False)
+        session.start()
+        try:
+            root = session.node([])
+            self.assertEqual([a["kind"] for a in root["actions"]], ["check", "bet", "bet"])
+            self.assertAlmostEqual(root["actions"][1]["amount"], 0.25 * root["pot"], delta=0.05)
+            facing = session.node([{"type": "action", "index": 1}])
+            self.assertEqual([a["kind"] for a in facing["actions"]], ["fold", "call", "raise"])
+            self.assertAlmostEqual(facing["actions"][2]["amount"], 3 * root["actions"][1]["amount"], delta=0.05)
+            reply = session.ask({"path": [], "strategy": True})
+            combo = reply["strategy"][0][0]
+            lock = custom_tree.lock_from(dict(reply["node"], path=[]), reply["strategy"],
+                                         [{"label": combo, "combos": [combo], "freqs": [0, 0, 1]}])
+        finally:
+            session.close()
+        spot.edits["locks"] = [lock]
+        session = postflop.Session(spot.request(iterations=3, target=50.0), save=False)
+        session.start()
+        try:
+            root = session.node([])
+            self.assertTrue(root["locked"])
+            rows = {r[0]: r[4:7] for r in root["hands"][0]}
+            for c in lock["edited"]:
+                self.assertEqual([round(x, 3) for x in rows[c]], [0.0, 0.0, 1.0])
+        finally:
+            session.close()
+
     def test_plan_tree(self):
         # Sans plan, l'arbre d'Analyzer (native/arbre.rs) est celui de GTOpen, nœud pour nœud.
         hand = {h.hand_id: h for h in load_hands([FIXTURES])}["HAND02"]

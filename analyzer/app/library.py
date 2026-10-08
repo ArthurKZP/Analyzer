@@ -22,7 +22,8 @@ from ..parsers import read_zip
 from ..report import build_plan_page, build_report, format_switch, html_page
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
-from ..theory import coach, custom_ranges, handclass, postflop, review, ring_preflop, ring_ranges, studyspots
+from ..theory import (coach, custom_ranges, custom_tree, handclass, postflop, review, ring_preflop, ring_ranges, sizing,
+                      studyspots)
 from ..theory.page import build_preflop_page, build_ring_preflop_page
 from ..theory.preflop import load_solution
 from ..viewer import build_viewer
@@ -38,7 +39,7 @@ from .plan_page import build_coach_page
 from .review_page import build_review_page
 from .backups import Backups
 from .coach_chat import Coach
-from .solves import SolveQueue
+from .solves import NeedSession, SolveQueue
 
 PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur", "bluffs")
 HEADS_UP_ONLY = ('<p class="note">Aucune main heads-up : cette page analyse tes parties en heads-up. Tes tables à '
@@ -660,16 +661,20 @@ class Library:
 
     # --- résolution postflop ----------------------------------------------------
     def _spot(self, hand_id: str):
-        """Une main jouée (son numéro), ou un spot d'étude (« spot:srp:KsKd4c ») ; avec tes ranges ajustées."""
+        """Une main jouée (son numéro), ou un spot d'étude (« spot:srp:KsKd4c ») ; avec tes ranges ajustées et tes
+        modifications de l'arbre (tailles, verrous : custom_tree)."""
         if hand_id.startswith("spot:"):
             spot = studyspots.parse_ident(hand_id, custom=True)
             if spot is None:
                 raise UnknownPlayer(hand_id)
-            return spot
-        found = self.find_hand(hand_id)
-        if found is None:
-            raise UnknownPlayer(hand_id)
-        return postflop.build_spot(*found)
+        else:
+            found = self.find_hand(hand_id)
+            if found is None:
+                raise UnknownPlayer(hand_id)
+            spot = postflop.build_spot(*found)
+        edits = custom_tree.load(spot.ident)
+        spot.edits = edits if custom_tree.edited(edits) else None
+        return spot
 
     def solve(self, hand_id: str, start: bool = False, force: bool = False, fresh: bool = False) -> dict:
         """État de la résolution GTOpen d'une main (ou d'un spot d'étude) ; start=True la lance si besoin.
@@ -695,7 +700,7 @@ class Library:
                 return {"hand": hand_id, "state": "unavailable", "message": solver["message"],
                         "install": solver["install"]}
             board = "".join(getattr(spot, "board", []))
-            if (isinstance(spot, studyspots.StudySpot) and not spot.plan and not spot.adjusted
+            if (isinstance(spot, studyspots.StudySpot) and not spot.plan and not spot.adjusted and not spot.edits
                     and board in studyspots.flop_set(spot.family) and postflop.solved_request(spot.request()) is None):
                 # flop de la série sans tailles choisies : le choix d'abord, comme pour la série entière
                 family = spot.family
@@ -708,6 +713,7 @@ class Library:
             solver = postflop.status()
             view["solver"] = {k: solver[k] for k in ("ready", "message", "install")}
         view["adjusted"] = spot.adjusted
+        view["edits"] = ({"sizes": len(spot.edits["plan"]), "locks": len(spot.edits["locks"])} if spot.edits else None)
         view["precision"] = self.solves.precision()[1]  # le réglage, pour la prochaine résolution
         return view
 
@@ -846,7 +852,117 @@ class Library:
         handclass.annotate(reply["node"])  # catégories des mains, pour les filtres
         if isinstance(spot, postflop.PostflopSpot):
             postflop.mark_played_sizes(reply["node"], spot)  # la taille jouée ajoutée à l'arbre
+        lock = custom_tree.lock_at(spot.edits, path)
+        if lock is not None:  # ton verrou à ce nœud : tes changements et les mains concernées
+            reply["node"]["lock"] = {"edits": lock["edits"], "edited": lock.get("edited", [])}
         return reply
+
+    # --- arbre modifié : tailles de mise et nœuds verrouillés (onglet Arbre de l'explorateur) ----------
+    def _situation(self, spot, key: str, base_plan: dict, overrides: dict) -> dict:
+        """Une situation de l'arbre : son nom, ses tailles en jeu et celles d'origine."""
+        family = getattr(spot, "family", None)
+        family = family if family in sizing.PROFILES else "srp"
+        positions = (spot.oop, spot.ip) if isinstance(spot, studyspots.StudySpot) else spot.positions
+        title = sizing.label(key, family, positions)
+        street = {"f": "flop", "t": "turn", "r": "river"}[key.split(":")[1][0]]
+        if street not in title.lower():
+            title += f" ({street})"
+        base = list(base_plan[key]) if key in base_plan else spot.default_sizes_for(key)
+        return {"key": key, "title": title, "raise": key.startswith("raise"), "street": "ftr".index(key.split(":")[1][0]),
+                "base": base, "sizes": list(overrides.get(key, base)), "changed": key in overrides}
+
+    @staticmethod
+    def _situation_order(key: str) -> tuple:
+        """Dans l'ordre du coup : par street, puis par ce qui s'est passé avant, la mise avant les relances, le joueur
+        hors de position d'abord."""
+        parts = key.split(":")
+        level = int(parts[3]) if parts[0] == "raise" else -1
+        return "ftr".index(parts[1][0]), parts[2], level, parts[1][1] != "o"
+
+    def tree_state(self, hand_id: str, path: Optional[list] = None) -> dict:
+        """L'arbre du coup : ses situations (tailles en jeu, d'origine, modifiées), celle du nœud au bout du chemin, et
+        tes verrous."""
+        spot = self._spot(hand_id)
+        data = spot.edits or {"plan": {}, "locks": []}
+        base_plan = dict(getattr(spot, "plan", None) or {})
+        overrides = data["plan"]
+        keys = sorted(set(base_plan) | set(overrides), key=self._situation_order)
+        here = None
+        if path is not None:
+            try:
+                node = self.solves.node(spot, path)["node"]
+            except (NeedSession, postflop.SolverError):
+                node = None
+            key = postflop.node_situation(node) if node else None
+            if key is not None:
+                here = self._situation(spot, key, base_plan, overrides)
+        locks = [{"index": k, "path": x["path"], "title": x.get("title", ""), "edits": x["edits"],
+                  "actions": x.get("actions", [])} for k, x in enumerate(data["locks"])]
+        return {"hand": hand_id, "edited": bool(spot.edits), "here": here,
+                "situations": [self._situation(spot, k, base_plan, overrides) for k in keys], "locks": locks,
+                "live": self.solves.live_for(spot) is not None}
+
+    def set_tree_sizes(self, hand_id: str, plan: dict) -> dict:
+        """Tes tailles pour ces situations ({clé: tailles}) ; les mêmes que l'arbre d'origine effacent la modification.
+        Les verrous sont retirés (ils ne mènent plus aux mêmes nœuds). ValueError si une taille ne va pas."""
+        spot = self._spot(hand_id)
+        if not isinstance(plan, dict) or not plan or len(plan) > 40:
+            raise ValueError("Requête invalide.")
+        base_plan = dict(getattr(spot, "plan", None) or {})
+        checked = {custom_tree.check_key(k): custom_tree.check_sizes(k, v) for k, v in plan.items()}
+        removed = 0
+        for key, sizes in checked.items():
+            base = base_plan[key] if key in base_plan else spot.default_sizes_for(key)
+            removed += custom_tree.set_sizes(spot.ident, key, sizes, base)
+        return dict(self.tree_state(hand_id), removed_locks=removed)
+
+    def reset_tree(self, hand_id: str) -> dict:
+        """Revient à l'arbre d'origine : tes tailles et tes verrous sont effacés."""
+        spot = self._spot(hand_id)
+        custom_tree.save(spot.ident, {})
+        return self.tree_state(hand_id)
+
+    def add_lock(self, hand_id: str, path: list, edits: list, labels: Optional[list] = None) -> dict:
+        """Verrouille le nœud au bout du chemin : toutes les mains du joueur gardent la stratégie de la résolution
+        ouverte, sauf celles que tu changes (edits : [{"label", "combos", "freqs"}]). labels : les libellés des actions
+        tels que l'explorateur les affiche (gardés avec le verrou). Il faut la session de cette résolution. ValueError
+        si le verrou ne va pas."""
+        spot = self._spot(hand_id)
+        session = self.solves.live_for(spot)
+        if session is None:
+            raise ValueError("Ouvre d'abord la résolution complète de ce coup (session active) pour verrouiller un nœud.")
+        if not isinstance(edits, list) or not 0 < len(edits) <= 40:
+            raise ValueError("Choisis des mains et leur stratégie.")
+        reply = session.ask({"path": path, "strategy": True})
+        node = reply["node"]
+        positions = (spot.oop, spot.ip) if isinstance(spot, studyspots.StudySpot) else spot.positions
+        if not (isinstance(labels, list) and len(labels) == len(node["actions"])
+                and all(isinstance(x, str) and 0 < len(x) <= 40 for x in labels)):
+            labels = [x[:1].upper() + x[1:] for x in postflop.action_labels(node)]
+        node = dict(node, path=path, labels=labels, title=self._lock_title(node, positions))
+        previous = custom_tree.lock_at(spot.edits, path)
+        lock = custom_tree.lock_from(node, reply.get("strategy") or [], edits, previous)
+        custom_tree.put_lock(spot.ident, lock)
+        return self.tree_state(hand_id, path)
+
+    @staticmethod
+    def _lock_title(node: dict, positions) -> str:
+        """« Turn K♥ · BTN, après BB check, BTN mise 33 %, BB call, BB check »."""
+        streets = ("Flop", "Turn", "River")
+        steps = []
+        for h in node.get("history", []):
+            if h.get("kind") == "action" and h.get("chosen") is not None:
+                steps.append(f"{positions[h['player']]} {postflop.action_labels(h)[h['chosen']].lower()}")
+        board = "".join(node.get("board", [])[3:])
+        where = streets[node.get("street", 0)] + (f" {board}" if board else "")
+        who = positions[node["player"]] if node.get("player") is not None else ""
+        return f"{where} · {who}" + (f", après {', '.join(steps)}" if steps else "")
+
+    def remove_lock(self, hand_id: str, index: Optional[int]) -> dict:
+        """Retire un verrou (son rang), ou tous (index None)."""
+        spot = self._spot(hand_id)
+        custom_tree.remove_lock(spot.ident, index)
+        return self.tree_state(hand_id)
 
     def choose_hand_sizes(self, hand_id: str) -> dict:
         """Choisit les tailles théoriques du flop de ce coup (comme pour un spot d'étude, long), puis résout le coup

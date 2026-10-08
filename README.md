@@ -273,6 +273,32 @@ haut de l'explorateur, et la page *Études du solveur* marque ces études. Les s
 jeu et la référence livrée restent faits avec la théorie. Tes ranges sont gardées dans la base (sauvegardée) ;
 code : `theory/custom_ranges.py`.
 
+**Ton arbre : tailles de mise et nœuds verrouillés** (onglet *Arbre* de l'explorateur, sur un coup ou un spot
+d'étude résolu) :
+
+- **les tailles** : l'onglet montre la situation du nœud affiché (c-bet, 2e barrel, check-raise, probe…) avec ses
+  tailles. Ajoute une taille (en % du pot, *géo* ou *tapis* ; une relance en % du pot après le call ou en multiple
+  de la mise, « x3 »), retire-en une ; sans aucune taille, le joueur ne peut plus que checker (ou fold/call face à
+  une mise). *Toutes les situations de l'arbre* les liste dans l'ordre du coup, street par street. Une situation
+  garde les mêmes tailles sur toutes les turns et rivers. Les changements attendent **Résoudre avec cet arbre** ;
+- **le verrou (nodelock)** : à un nœud où le joueur a le choix, prends des mains (une case de la grille, un combo
+  avec son cadenas 🔒 dans l'onglet *Mains*, ou les mains gardées par les *Filtres* : main faite, tirage,
+  équité…), puis leur jeu : *Toujours check*, *Toujours mise 75 %*… ou un mélange en % (au départ, celui du
+  solveur). Plusieurs changements peuvent s'ajouter avant **Verrouiller et résoudre**. Comme dans PioSolver, le
+  solveur verrouille le nœud entier : les autres mains du joueur gardent la stratégie affichée (celle de la
+  résolution ouverte, d'où il faut la session active), et tout le reste de l'arbre s'adapte, l'adversaire comme
+  la suite du joueur verrouillé. Une main et ses équivalents de couleur sur ce board (A♦A♣ et A♠A♣ sur
+  K♠K♦4♣) sont verrouillés ensemble. Jusqu'à 12 nœuds verrouillés par coup ; changer des tailles retire les
+  verrous, dont les chemins ne mènent plus aux mêmes nœuds.
+
+Chaque version de l'arbre se résout dans une étude à part (marquée *ton arbre* dans *Études du solveur*) ; celle
+d'origine reste, et *Revenir à l'arbre d'origine* la rouvre. L'explorateur revient au nœud où tu étais, marque le
+nœud verrouillé (🔒 et le détail de tes changements, cases encadrées) et rappelle en tête *ton arbre 🔒 n*.
+L'entraîneur, la revue des mains, le leakfinding et les plans de jeu restent faits avec l'arbre d'origine. Tes
+arbres sont gardés dans la base (sauvegardée) ; code : `theory/custom_tree.py`, et dans le pont (`native/main.rs`)
+les verrous de la requête, posés avec `lock_node` de GTOpen (pas de carte graphique pour une résolution avec
+verrous).
+
 **L'EV** est en bb, à partir du moment du coup affiché : un fold vaut 0, le pot déjà au milieu est à gagner
 et les mises à venir sont dépensées. Pour une action (au survol), c'est ce que rapporte cette action puis la
 suite jouée par le solveur ; pour une main (dans la grille), c'est l'EV de sa stratégie, la moyenne de ses
@@ -529,7 +555,8 @@ l'arbre (`analyzer/theory/native/arbre.rs`, mêmes règles que GTOpen) quand la 
 une liste de tailles par situation, c-bet, 2e barrel, c-bet retardée, probe, bet/check/bet, check-raise…
 (clés décrites en tête du fichier). Sans plan, l'arbre est celui de GTOpen ; avec un plan vide, celui
 d'Analyzer lui est identique nœud pour nœud (`analyzer-solve --verifier-arbre requete.json`). C'est la
-base du choix des tailles par situation et de la modification des tailles d'un spot.
+base du choix des tailles par situation et de la modification des tailles d'un spot (onglet *Arbre* de
+l'explorateur, où une relance peut aussi se donner en multiple de la mise : « x3 »).
 Après une mise à jour d'Analyzer qui touche ce pont, relance `python -m analyzer gtopen --installer`.
 
 Variables d'environnement : `ANALYZER_HOME` (dossier de travail, `~/.analyzer` par défaut),
@@ -1040,8 +1067,9 @@ analyzer/
                        (coach.py), profil d'un adversaire réel et node-lock (exploit.py),
                        catégories de mains pour les filtres (handclass.py),
                        lecture de captures de ranges (extract.py) ; postflop avec GTOpen : spots,
-                       installation et lecture des résultats (postflop.py), pont Rust (native/main.rs ;
-                       arbre.rs pour les tailles, profil.rs pour le verrou d'un profil d'adversaire),
+                       installation et lecture des résultats (postflop.py), pont Rust (native/main.rs, avec
+                       tes nœuds verrouillés ; arbre.rs pour les tailles, profil.rs pour le verrou d'un profil
+                       d'adversaire), tes tailles et tes verrous dans l'explorateur (custom_tree.py),
                        commande `gtopen` (solve_cli.py), mains jouées face au solveur (review.py),
                        ranges des tables à plusieurs (ring_ranges.py), ton préflop face aux charts
                        (ring_preflop.py), arbre préflop 6-max pour l'explorateur (ring_tree.py), tes ranges ajustées

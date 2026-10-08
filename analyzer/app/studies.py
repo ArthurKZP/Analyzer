@@ -514,6 +514,8 @@ def _ring_all() -> str:
 
 
 ADJUSTED = ' <span class="muted small" title="Résolu avec tes ranges préflop ajustées">· tes ranges</span>'
+EDITED = (' <span class="muted small" title="Résolu avec ton arbre : tes tailles de mise ou tes nœuds verrouillés">'
+          '· ton arbre</span>')
 
 
 def _hand_section() -> str:
@@ -525,7 +527,7 @@ def _hand_section() -> str:
             "<tr>"
             f"<td>{escape(s['date'])}</td><td>{escape(s['villain'])}</td>"
             f"<td>{cards_html(s.get('hero_cards', []))}</td><td>{cards_html(s['board'])}</td>"
-            f"<td>{escape(s['pot_type'])}{ADJUSTED if s.get('adjusted') else ''}</td>"
+            f"<td>{escape(s['pot_type'])}{ADJUSTED if s.get('adjusted') else ''}{EDITED if s.get('edited') else ''}</td>"
             f"<td>{escape(POSITION_NAMES.get(s['hero_position'], s['hero_position'] or ''))}</td>"
             f'<td class="num">{num(s["net"], 1, sign=True)} bb</td>'
             f'<td class="num">{num(exploit, 2) + " %" if exploit is not None else "–"}</td>'

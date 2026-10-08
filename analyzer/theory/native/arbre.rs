@@ -15,7 +15,8 @@
 //!
 //! Une taille du plan : un nombre (% du pot ; pour une relance, du pot après le call), "geo" (la
 //! même fraction du pot à chaque street restante pour finir à tapis à la river : à la river, le
-//! tapis), "geo2" (pareil, à tapis au bout de deux streets : celle-ci et la suivante) ou "a" (tapis).
+//! tapis), "geo2" (pareil, à tapis au bout de deux streets : celle-ci et la suivante), "a" (tapis)
+//! ou, pour une relance, "x3" (relance à 3 fois la mise adverse ; ignorée pour une mise).
 //!
 //! Une situation absente du plan prend les tailles de sa street dans la configuration de GTOpen
 //! (bet, donk quand la BB mène dans l'agresseur de la street précédente, raise) : un plan vide
@@ -60,7 +61,11 @@ impl<'de> Deserialize<'de> for Size {
             Raw::Text(t) if t == "geo" => Ok(Size::Geo),
             Raw::Text(t) if t == "a" => Ok(Size::AllIn),
             Raw::Text(t) if matches!(t.as_str(), "geo1" | "geo2" | "geo3") => Ok(Size::GeoN(t[3..].parse().unwrap())),
-            _ => Err(D::Error::custom("taille invalide : un % du pot, \"geo\", \"geo2\" ou \"a\"")),
+            Raw::Text(t) if t.starts_with('x') => match t[1..].parse::<f64>() {
+                Ok(m) if m.is_finite() && m > 1.0 && m <= 100.0 => Ok(Size::Mult(m)),
+                _ => Err(D::Error::custom("multiple invalide : \"x2\" à \"x100\"")),
+            },
+            _ => Err(D::Error::custom("taille invalide : un % du pot, \"geo\", \"geo2\", \"a\" ou \"x3\"")),
         }
     }
 }

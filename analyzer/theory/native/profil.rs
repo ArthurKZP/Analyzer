@@ -228,6 +228,14 @@ impl Walker<'_> {
                 }
                 let nh = reach.len();
                 let mut sigma = vec![0f32; na * nh];
+                if locked_by_user(solver, idx) {
+                    solver.average_strategy_into(idx, node, &mut sigma);
+                    for (a, act) in acts.iter().enumerate() {
+                        let next: Vec<f32> = (0..nh).map(|i| reach[i] * sigma[a * nh + i]).collect();
+                        self.walk(children[a], &next, dealt, h.after(actor, act, v));
+                    }
+                    return;
+                }
                 solver.solved_strategy_into(node, &mut sigma);
                 let facing = acts.iter().any(|a| matches!(a, Action::Fold));
                 let (fold, aggressive) = situations(self.profile, &h, node.street, facing);
@@ -310,12 +318,24 @@ pub fn apply(solver: &mut Solver, profile: &Profile) -> Result<Value, String> {
     Ok(json!({"locked": locked, "situations": out, "seconds": round(start.elapsed().as_secs_f64())}))
 }
 
-/// Retire tous les verrous : l'arbre redevient celui du solveur.
+/// Retire les verrous du profil : l'arbre redevient celui du solveur (les verrous de la requête, posés par
+/// l'utilisateur, restent).
 pub fn clear(solver: &mut Solver) {
-    if !solver.locks.is_empty() {
-        solver.clear_locks();
-        solver.ensure_symmetric();
+    let ours: Vec<u32> = solver.lock_labels.iter().filter(|(_, l)| l.starts_with(LABEL)).map(|(k, _)| *k).collect();
+    if ours.is_empty() {
+        return;
     }
+    for k in ours {
+        solver.locks.remove(&k);
+        solver.lock_labels.remove(&k);
+    }
+    solver.mark_sym_dirty();
+    solver.ensure_symmetric();
+}
+
+/// Un nœud verrouillé par l'utilisateur (pas par un profil) : le profil le laisse tel quel.
+fn locked_by_user(solver: &Solver, idx: u32) -> bool {
+    solver.lock_labels.get(&idx).is_some_and(|l| !l.starts_with(LABEL))
 }
 
 fn round(x: f64) -> f64 {

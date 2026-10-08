@@ -396,11 +396,13 @@ class StudySpot(postflop.SpotTree):
     def after_solve(self, session: postflop.Session) -> None:
         """Juste après la résolution, l'étude encore ouverte : son plan de jeu (quelques secondes)."""
         from . import coach
-        if not self.adjusted:  # les plans de jeu (heads-up et 6-max) : la théorie, sans tes ranges ajustées
+        # les plans de jeu (heads-up et 6-max) : la théorie, sans tes ranges ajustées ni ton arbre modifié
+        if not self.adjusted and not getattr(self, "edits", None):
             coach.extract_and_save(session, self)
 
     def write_meta(self, request: dict, raw: dict, session: Optional[postflop.Session] = None) -> None:
-        if self.adjusted:  # étude à part, avec les coups joués : hors des séries et des plans
+        edited = bool(getattr(self, "edits", None))
+        if self.adjusted or edited:  # étude à part, avec les coups joués : hors des séries et des plans
             meta = {
                 "kind": "spot-ajuste", "key": postflop.study_key(request), "base": postflop.base_key(request),
                 "hand": self.ident, "id": self.ident,
@@ -408,7 +410,7 @@ class StudySpot(postflop.SpotTree):
                 "pot_type": self.name, "hero_position": None, "pot": self.pot_bb, "stack": self.stack_bb,
                 "net": None, "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"),
                 "seconds": raw.get("seconds"), "menu": self.menu_text(), "created": time.strftime("%d/%m/%Y %H:%M"),
-                "adjusted": self.adjusted,
+                "adjusted": self.adjusted, "edited": edited,
             }
             postflop.save_study_meta(request, meta)
             return

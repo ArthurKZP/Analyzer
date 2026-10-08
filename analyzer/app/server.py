@@ -262,6 +262,32 @@ class Handler(BaseHTTPRequestHandler):
         except KeyError:
             return self._error(404, "Historique inconnu.")
 
+    def _tree_action(self, library: Library, action: Optional[str], payload: dict):
+        """L'onglet Arbre de l'explorateur : l'état (avec le nœud au bout de « path »), tes tailles, le retour à l'arbre
+        d'origine, un verrou posé ou retiré."""
+        hand, path = payload["hand"], payload.get("path")
+        try:
+            if action is None:
+                return self._json(library.tree_state(hand, path if valid_path(path) else None))
+            if action == "tailles" and isinstance(payload.get("plan"), dict):
+                return self._json(library.set_tree_sizes(hand, payload["plan"]))
+            if action == "origine":
+                return self._json(library.reset_tree(hand))
+            if action == "verrou" and valid_path(path) and isinstance(payload.get("edits"), list):
+                return self._json(library.add_lock(hand, path, payload["edits"], payload.get("labels")))
+            if action == "deverrouiller":
+                index = payload.get("index")
+                if index is not None and (not isinstance(index, int) or isinstance(index, bool)):
+                    return self._error(400, "Requête invalide.")
+                return self._json(library.remove_lock(hand, index))
+            return self._error(400, "Requête invalide.")
+        except (UnknownPlayer, KeyError):
+            return self._error(404, "Main introuvable.")
+        except (ValueError, postflop.Unsupported) as exc:
+            return self._error(400, str(exc))
+        except postflop.SolverError as exc:
+            return self._error(409, str(exc))
+
     def _period(self, owner: Library):
         """Choisir la période d'analyse (la tienne, ou celle d'un élève) : {"kind": "all" | "last" (n) | "days" (days)
         | "range" (from, to)}."""
@@ -396,6 +422,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(404, "Main introuvable.")
             except (ValueError, postflop.Unsupported) as exc:
                 return self._error(400, str(exc))
+        if parts[:3] == ["api", "explorateur", "arbre"] and len(parts) <= 4:  # tes tailles et tes verrous
+            payload = self._small_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
+                return self._error(400, "Requête invalide.")
+            return self._tree_action(library, parts[3] if len(parts) == 4 else None, payload)
         if parts == ["api", "explorateur", "noeud"]:
             payload = self._small_json()
             path = payload.get("path") if isinstance(payload, dict) else None

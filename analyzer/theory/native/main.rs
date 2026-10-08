@@ -21,6 +21,15 @@
 //! Avec --serve, le programme garde ensuite l'arbre en mémoire et lit sur stdin une requête par
 //! ligne, {"path": [{"type": "action", "index": 0}, {"type": "card", "card": "Ah"}, ...]}, à laquelle
 //! il répond par une ligne {"node": ...} ou {"error": "..."}. Il s'arrête à la fin de stdin.
+//! "locks" (facultatif) : des nœuds verrouillés (nodelock), posés avant la résolution et respectés par elle :
+//!   [{"path": [étapes], "mode": {"kind": "hands", "edits": [{"combo": "AhKh", "freqs": [0, 1, 0]}, ...]}}]
+//! (les modes de GTOpen : "hands" fixe la stratégie de chaque main donnée ; Analyzer donne toutes les mains du nœud).
+//! Le reste de l'arbre s'adapte ; une étude garde les stratégies verrouillées, et les verrous sont reposés quand elle
+//! est rechargée.
+//!
+//! Une requête de session peut demander "strategy": true : la réponse ajoute alors "strategy", la stratégie du
+//! joueur qui agit pour toutes ses mains, portée nulle comprise ([[main, fréquence par action...], ...]) : la base
+//! d'un verrou (les mains que l'on ne change pas gardent celle-ci).
 //! Une requête peut porter un profil d'adversaire, "profile": {"villain": 0, "aggressor": 1,
 //! "tilts": {"cbet": 1.4, ...}} (voir profil.rs) : ses nœuds sont alors verrouillés sur ce profil
 //! tant que les requêtes le portent, et la réponse ajoute "profile" (fréquences du solveur et du
@@ -58,7 +67,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use solver::query::{ActionView, ExploitView, NodeView};
+use solver::query::{ActionView, ExploitView, LockMode, NodeView};
 use solver::tree::{KIND_ACTION, KIND_CHANCE, SENTINEL};
 use solver::{PathStep, RunOptions, Solver, Spot, SpotConfig, Storage};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
@@ -85,6 +94,31 @@ struct Request {
     /// Sous-jeu : une lettre par street déjà jouée (voir arbre.rs), avec un plan.
     #[serde(default)]
     past: String,
+    /// Nœuds verrouillés (voir l'en-tête).
+    #[serde(default)]
+    locks: Vec<LockSpec>,
+}
+
+#[derive(Deserialize, Clone)]
+struct LockSpec {
+    path: Vec<PathStep>,
+    mode: LockMode,
+}
+
+/// Label des verrous posés par la requête (les verrous d'un profil ont le leur, voir profil.rs).
+const LOCK_LABEL: &str = "verrou";
+
+/// Pose les verrous de la requête sur le solveur.
+fn apply_locks(solver: &mut Solver, locks: &[LockSpec]) -> Result<(), String> {
+    for (k, lock) in locks.iter().enumerate() {
+        solver
+            .lock_node(&lock.path, lock.mode.clone(), format!("{LOCK_LABEL} {}", k + 1))
+            .map_err(|e| format!("verrou {} : {e}", k + 1))?;
+    }
+    if !locks.is_empty() {
+        solver.ensure_symmetric();
+    }
+    Ok(())
 }
 
 /// Le spot de la requête. Avec un plan, GTOpen prépare les ranges et les symétries sur un arbre
@@ -227,6 +261,9 @@ struct Query {
     profile: Option<profil::Profile>,
     #[serde(default)]
     exploit: Option<usize>,
+    /// La stratégie de toutes les mains du joueur qui agit (base d'un verrou).
+    #[serde(default)]
+    strategy: bool,
 }
 
 #[derive(Serialize)]
@@ -268,6 +305,8 @@ struct NodeOut {
     cards: Option<Vec<String>>,
     hands: [Vec<Value>; 2],
     history: Vec<HistOut>,
+    /// Nœud verrouillé (sa stratégie est imposée).
+    locked: bool,
 }
 
 #[derive(Serialize)]
@@ -435,7 +474,24 @@ fn node_out(solver: &Solver, view: &NodeView) -> NodeOut {
                 card: h.card.clone(),
             })
             .collect(),
+        locked: view.locked,
     }
+}
+
+/// La stratégie du joueur qui agit, pour toutes ses mains (portée nulle comprise).
+fn strategy_out(view: &NodeView) -> Value {
+    let Some(p) = view.player else { return Value::Null };
+    let rows: Vec<Value> = view.players[p as usize]
+        .hands
+        .iter()
+        .filter_map(|h| {
+            let s = h.strategy.as_ref()?;
+            let mut row = vec![json!(h.combo)];
+            row.extend(s.iter().map(|&x| json!(round(x as f64, 4))));
+            Some(Value::Array(row))
+        })
+        .collect();
+    Value::Array(rows)
 }
 
 fn report(iteration: u32, exploit_pct: f64, elapsed: f64) {
@@ -597,6 +653,8 @@ fn load_study(path: &str) -> Result<(Request, Value, Solver), String> {
         // qu'à poursuivre le calcul).
         unsafe { solver.strat[p].write_f32(idx as u32, node.data_offset, na * nh, &sums) };
     }
+    let mut solver = solver;
+    apply_locks(&mut solver, &request.locks)?;
     Ok((request, header["summary"].clone(), solver))
 }
 
@@ -653,6 +711,9 @@ fn answer(solver: &mut Solver, locks: &mut Locks, q: Query) -> Value {
         Err(e) => return json!({ "error": e }),
     };
     let mut reply = json!({ "node": node_out(solver, &view) });
+    if q.strategy {
+        reply["strategy"] = strategy_out(&view);
+    }
     if locks.profile.is_some() {
         reply["profile"] = locks.summary.clone();
     }
@@ -752,8 +813,9 @@ fn main() {
     let tree_nodes = spot.tree.nodes.len();
     let hands = [spot.hands[0].len(), spot.hands[1].len()];
     // Le moteur GPU travaille en précision complète (f32).
-    let storage = if request.gpu { Storage::F32 } else { Storage::Compressed };
+    let storage = if request.gpu && request.locks.is_empty() { Storage::F32 } else { Storage::Compressed };
     let mut solver = Solver::with_storage(Arc::new(spot), storage);
+    apply_locks(&mut solver, &request.locks).unwrap_or_else(|e| fail(e));
     let _ = writeln!(
         std::io::stderr(),
         "{}",
@@ -767,7 +829,7 @@ fn main() {
     };
     let mut engine = "cpu";
     let mut done = None;
-    if request.gpu {
+    if request.gpu && request.locks.is_empty() {  // le moteur CUDA ne connaît pas les verrous
         match solve_gpu(&mut solver, &opts) {
             Ok(result) => {
                 engine = "gpu";

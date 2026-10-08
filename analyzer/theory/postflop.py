@@ -31,6 +31,7 @@ from .. import blobs, db
 from ..cards import combo_notation
 from ..db import documents, studies as db_studies
 from ..models import BET, CALL, CHECK, FOLD, RAISE, VOLUNTARY, Hand
+from . import custom_tree
 from .extract import hand_at
 from .preflop import MAIN_THRESHOLD, MIXED_THRESHOLD, Solution, load_solution
 
@@ -371,12 +372,27 @@ class SpotTree:
         }
         # Tailles par situation de la ligne (c-bet, 2e barrel, probe…) : % du pot, "geo" ou "a" (tapis),
         # voir native/arbre.rs. Sans plan,
-        # la requête (et donc la clé des études déjà enregistrées) ne change pas.
-        plan = getattr(self, "plan", None)
+        # la requête (et donc la clé des études déjà enregistrées) ne change pas. Tes modifications de l'arbre
+        # (custom_tree : tailles, nœuds verrouillés) changent la requête : une étude à part.
+        edits = getattr(self, "edits", None)
+        plan = custom_tree.merged_plan(getattr(self, "plan", None), edits)
         if plan:
             out["plan"] = {key: [s if isinstance(s, str) else float(s) for s in sizes]
                            for key, sizes in sorted(plan.items())}
+        locks = custom_tree.request_locks(edits)
+        if locks:
+            out["locks"] = locks
         return out
+
+    def default_sizes_for(self, key: str) -> list:
+        """Les tailles d'une situation absente du plan : celles de sa street dans la configuration de l'arbre (comme
+        native/arbre.rs : la mise, le donk quand le joueur hors de position mène dans l'agresseur de la street
+        précédente, ou la relance)."""
+        kind, where, past = key.split(":")[:3]
+        sizing = self.sizes[self.oop if where[1] == "o" else self.ip]["ftr".index(where[0])]
+        if kind == "raise":
+            return list(sizing["raise"])
+        return list(sizing["donk"] if where[1] == "o" and past[-1:] == "i" else sizing["bet"])
 
     def menu_text(self) -> str:
         def fmt(values: list) -> str:
@@ -1038,6 +1054,7 @@ def write_study_meta(spot: PostflopSpot, request: dict, raw: dict) -> None:
         "pot": spot.pot_bb, "stack": spot.stack_bb, "net": round(hand.net(spot.hero) / hand.bb, 2),
         "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"), "seconds": raw.get("seconds"),
         "menu": spot.menu_text(), "created": time.strftime("%d/%m/%Y %H:%M"), "adjusted": spot.adjusted,
+        "edited": bool(getattr(spot, "edits", None)),
     }
     save_study_meta(request, meta)
 
@@ -1377,6 +1394,16 @@ def interpret(spot: PostflopSpot, raw: dict) -> dict:
         "iterations": raw["iterations"], "exploit_pct": raw["exploit_pct"], "seconds": raw["seconds"],
         "tree_nodes": raw["tree_nodes"], "stopped": raw.get("stopped"), "decisions": decisions,
     }
+
+
+def node_situation(node: dict) -> Optional[str]:
+    """La situation (clé de native/arbre.rs) où le joueur du nœud mise ou relance : sa première mise de la street,
+    ou sa relance face à une mise ; None hors d'un nœud d'action."""
+    if node.get("type") != "action" or node.get("player") is None:
+        return None
+    facing = any(a["kind"] in ("call", "fold") for a in node["actions"])
+    probe = dict(node, actions=[{"kind": "raise" if facing else "bet"}])
+    return situation_keys(probe)[0]
 
 
 def situation_keys(node: dict) -> list[Optional[str]]:
