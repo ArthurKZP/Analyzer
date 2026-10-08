@@ -24,6 +24,7 @@ from ..theory import coach, custom_ranges, handclass, postflop, review, ring_pre
 from ..theory.page import build_preflop_page, build_ring_preflop_page
 from ..theory.preflop import load_solution
 from ..viewer import build_viewer
+from . import bilan_page
 from .bluffs_page import build_bluffs_page
 from .field_page import build_players_page
 from .hands_page import build_hands_page
@@ -282,6 +283,8 @@ class Library:
             return self.leaks_page(table_format=table_format)
         if page == "preflop" and self._leak_format(table_format) != "HU":
             return self._ring_preflop_page()
+        if page == "bilan" and self._leak_format(table_format) != "HU":
+            return self._ring_bilan()
         if not self.hands:
             if self.ring:  # seulement des tables à plusieurs : la page heads-up le dit
                 return html_page("Heads-up", HEADS_UP_ONLY, True)
@@ -293,7 +296,7 @@ class Library:
         def build():
             if page == "bilan":
                 return build_self_report(self.hands, self.all_stats(), self.hero, embed=True, spots_href="",
-                                         kinds=self.kinds())
+                                         kinds=self.kinds(), head=self._bilan_head("HU"))
             if page == "preflop":
                 return build_preflop_page(regular, self.hero, embed=True, spots_href="spots",
                                           note=_excluded_note(excluded), switch=format_switch(self.leak_formats(), "HU"))
@@ -304,15 +307,44 @@ class Library:
         kinds = self._kinds_key() if page in ("bilan", "preflop", "bluffs") else ()
         return self._cached(("self", page) + kinds, build)
 
+    def _ring_overview(self) -> tuple[list, list]:
+        """Tes stats aux tables à plusieurs (toutes ensemble) sur toutes tes mains, contre les réguliers et contre les
+        récréatifs (ring.analyze), et tes écarts les plus importants contre les réguliers : pour la page des tables et le
+        bilan."""
+        def build():
+            hero = self.hero or ""
+            kinds = self.ring_kinds()
+            parts = ring_leaks.split(ring_leaks.mine(self.ring, hero), hero, kinds)
+            scopes = [(scope, label, ring.analyze(parts[scope], hero, merge=True)) for scope, label in leaks.SCOPES]
+            return scopes, leaks.top_stat_gaps(ring_leaks.stats(self.ring, hero, kinds), "reg", 5)
+        key = (("ring_overview",) + documents.revision(db.current(), "plan", "ranges")[2:] + self._ring_kinds_key())
+        return self._cached(key, build)
+
     def _ring_page(self) -> str:
         """Tes stats par position aux tables à plusieurs (toutes ensemble), sur toutes tes mains, contre les réguliers
         et contre les récréatifs, après tes écarts les plus importants contre les réguliers."""
+        scopes, gaps = self._ring_overview()
+        return build_ring_page(scopes, self.hero or "", spots=self.ring_spots(), ranges=ring_ranges.available(),
+                               gaps=gaps)
+
+    def _bilan_head(self, fmt: str) -> str:
+        """En tête du bilan : le choix du format, et tes résultats tous formats confondus."""
         hero = self.hero or ""
-        kinds = self.ring_kinds()
-        parts = ring_leaks.split(ring_leaks.mine(self.ring, hero), hero, kinds)
-        scopes = [(scope, label, ring.analyze(parts[scope], hero, merge=True)) for scope, label in leaks.SCOPES]
-        gaps = leaks.top_stat_gaps(ring_leaks.stats(self.ring, hero, kinds), "reg", 5)
-        return build_ring_page(scopes, hero, spots=self.ring_spots(), ranges=ring_ranges.available(), gaps=gaps)
+        return format_switch(self.leak_formats(), fmt) + bilan_page.overall_html(
+            bilan_page.results(self.hands, hero), bilan_page.results(ring_leaks.mine(self.ring, hero), hero))
+
+    def _ring_bilan(self) -> str:
+        """Ton bilan aux tables à plusieurs, sur le plan de celui du heads-up."""
+        def build():
+            hero = self.hero or ""
+            scopes, gaps = self._ring_overview()
+            labels = {"all": "Toutes tes mains", "reg": "Contre les réguliers", "rec": "Contre les récréatifs"}
+            shown = [(scope, labels[scope], found[0] if found else None) for scope, _, found in scopes]
+            return bilan_page.build_ring_bilan(ring_leaks.mine(self.ring, hero), hero, shown,
+                                               self.ring_opponents_view(), gaps, head=self._bilan_head("ring"))
+        key = (("self", "bilan", "ring") + documents.revision(db.current(), "plan", "ranges")[2:]
+               + self._ring_kinds_key())
+        return self._cached(key, build)
 
     def _ring_preflop_page(self) -> str:
         """Mon préflop aux tables à plusieurs : tes décisions contre les réguliers face aux charts, avec les mêmes

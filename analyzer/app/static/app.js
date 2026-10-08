@@ -15,7 +15,7 @@
     etudes: [['explorateur', 'Explorateur'], ['plan', 'Plan de jeu suggéré'], ['srp', 'SRP HU'], ['3bet', '3bet HU'],
       ['4bet', '4bet HU'], ['6max', '6-max'], ['coups', 'Coups joués']],
   };
-  const FORMAT_TABS = ['leaks', 'preflop'];  // pages qui ont un choix heads-up / tables à plusieurs
+  const FORMAT_TABS = ['bilan', 'leaks', 'preflop'];  // pages qui ont un choix heads-up / tables à plusieurs
   let state = null;
   let route = null;
   let students = [];
@@ -66,11 +66,11 @@
     if (parts[0] === 'sauvegarde') return { view: 'sauvegarde' };
     if (parts[0] === 'adversaire' && parts[1]) return { view: 'adv', player: parts[1], tab: tabOf('adv', parts[2], 'plan') };
     if (parts[0] === 'moi' && parts[1] === 'bluffs') return { view: 'field', tab: 'bluffs' };  // ancienne adresse
-    if (parts[0] === 'moi') return { view: 'moi', tab: tabOf('moi', parts[1], state && !state.hands && state.ring_hands ? 'leaks' : 'bilan') };
+    if (parts[0] === 'moi') return { view: 'moi', tab: tabOf('moi', parts[1], 'bilan') };
     if (parts[0] === 'field') return { view: 'field', tab: tabOf('field', parts[1], 'bluffs') };
     if (parts[0] === 'eleves') return { view: 'eleves' };
     if (parts[0] === 'eleve' && parts[1]) return { view: 'eleve', student: parts[1], tab: tabOf('eleve', parts[2], 'leaks') };
-    return hasHands() ? { view: 'moi', tab: state.hands ? 'bilan' : 'leaks' } : { view: 'importer' };
+    return hasHands() ? { view: 'moi', tab: 'bilan' } : { view: 'importer' };
   }
 
   function hashFor(r) {
@@ -91,7 +91,7 @@
     if (r.view === 'entraineur') return '/entraineur';
     if (r.view === 'field') return '/field/' + r.tab;
     const space = r.view === 'eleve' ? '/eleve/' + encodeURIComponent(r.student) : '/moi';
-    // le dernier format choisi (heads-up ou tables à plusieurs), le même pour le Leakfinding et le préflop
+    // le dernier format choisi (heads-up ou tables à plusieurs), le même pour le bilan, le Leakfinding et le préflop
     const fmt = FORMAT_TABS.includes(r.tab) ? pref('format:' + space) : null;
     return space + '/' + r.tab + (fmt ? '?format=' + encodeURIComponent(fmt) : '');
   }
@@ -530,7 +530,7 @@
     if (e.origin !== location.origin || !e.data || e.data.type !== 'analyzer-page') return;
     const parts = String(e.data.path).split('/').filter(Boolean).map(decodeURIComponent);
     if (FORMAT_TABS.includes(parts[parts.length - 1]) && (parts[0] === 'moi' || parts[0] === 'eleve')) {
-      // le format choisi (Leakfinding, préflop) : gardé pour la prochaine fois
+      // le format choisi (bilan, Leakfinding, préflop) : gardé pour la prochaine fois
       const fmt = new URLSearchParams(e.data.search || '').get('format');
       const space = '/' + parts.slice(0, -1).map(encodeURIComponent).join('/');
       pref('format:' + space, fmt && fmt !== 'HU' ? fmt : null);

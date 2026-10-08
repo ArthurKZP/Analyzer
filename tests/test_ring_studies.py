@@ -39,7 +39,7 @@ class RingHome(unittest.TestCase):
 class FamiliesTest(unittest.TestCase):
     def test_families(self):
         fams = studyspots.RING_FAMILIES
-        self.assertEqual(len(fams), 10)
+        self.assertEqual(len(fams), 13)
         self.assertNotIn("6max_bb_btn_srp", studyspots.FAMILIES)  # le heads-up reste à part
         sb_bb = fams["6max_sb_bb_srp"]
         self.assertEqual((sb_bb["oop"], sb_bb["ip"], sb_bb["pot"], sb_bb["stack"], sb_bb["structure"]),
@@ -69,8 +69,11 @@ class FamiliesTest(unittest.TestCase):
     def test_hand_families(self):
         size = studyspots.size_families
         self.assertEqual(size(True, "BB", "BTN", "SRP", False), ["srp"])
-        self.assertEqual(size(False, "BB", "BTN", "SRP", False), ["6max_bb_btn_srp", "srp"])
-        self.assertEqual(size(False, "BB", "HJ", "SRP", False), ["6max_bb_btn_srp", "srp"])  # même structure
+        self.assertEqual(size(False, "BB", "BTN", "SRP", False),
+                         ["6max_bb_btn_srp", "6max_bb_co_srp", "6max_bb_hj_srp", "srp"])
+        self.assertEqual(size(False, "BB", "HJ", "SRP", False),  # sa série, puis celles de même structure
+                         ["6max_bb_hj_srp", "6max_bb_btn_srp", "6max_bb_co_srp", "srp"])
+        self.assertEqual(size(False, "BB", "UTG", "SRP", False)[0], "6max_bb_btn_srp")  # pas de série BB contre UTG
         self.assertEqual(size(False, "SB", "BB", "SRP", True), ["6max_sb_bb_srp"])  # pas d'équivalent heads-up
         self.assertEqual(size(False, "BB", "CO", "pot 3bet", True)[:2], ["6max_bb_co_3bet", "6max_sb_btn_3bet"])
         self.assertEqual(size(True, "BB", "BTN", "pot 3bet", False), [])  # 3bet du bouton en heads-up : pas couvert

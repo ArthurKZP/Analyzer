@@ -299,7 +299,8 @@ def _think_times(hand: Hand) -> list[Optional[float]]:
 
 
 def allin_ev(hand: Hand) -> Optional[dict[str, float]]:
-    """Gain net espéré (en monnaie) de chaque joueur pour un all-in payé avant la river (calculé une fois par main)."""
+    """Gain net espéré (en monnaie) de chaque joueur pour un all-in payé avant la river (calculé une fois par main) :
+    deux joueurs à l'abattage, cartes connues ; à une table à plusieurs, ceux qui ont foldé gardent leur résultat."""
     if "_allin_ev" not in hand.__dict__:
         hand.__dict__["_allin_ev"] = _allin_ev(hand)
     return hand.__dict__["_allin_ev"]
@@ -308,17 +309,21 @@ def allin_ev(hand: Hand) -> Optional[dict[str, float]]:
 def _allin_ev(hand: Hand) -> Optional[dict[str, float]]:
     if not hand.showdown or not any(a.all_in for a in hand.actions):
         return None
-    if any(len(hand.hole_cards.get(p, [])) != 2 for p in hand.seats):
-        return None
+    folded = {a.player for a in hand.actions if a.kind == FOLD}
+    live = [p for p in hand.seats if p not in folded]
+    if len(live) != 2 or any(len(hand.hole_cards.get(p, [])) != 2 for p in live):
+        return None  # pot à plusieurs, ou main inconnue
     last = [a for a in hand.actions if a.kind in VOLUNTARY][-1]
     board_size = {"preflop": 0, "flop": 3, "turn": 4}.get(last.street)
     if board_size is None:
         return None
-    p1, p2 = hand.players
+    p1, p2 = live
     eq = equity(hand.hole_cards[p1], hand.hole_cards[p2], hand.board[:board_size], seed=hand.hand_id)
-    pot = hand.total_pot - hand.rake
+    pot = hand.total_pot - hand.rake  # l'argent mort des joueurs couchés compris
     invested = {p: hand.put[p] - hand.uncalled[p] for p in hand.seats}
-    return {p1: eq * pot - invested[p1], p2: (1 - eq) * pot - invested[p2]}
+    out = {p: hand.net(p) for p in hand.seats if p not in live}
+    out.update({p1: eq * pot - invested[p1], p2: (1 - eq) * pot - invested[p2]})
+    return out
 
 
 def analyze(hands: list[Hand]) -> dict[str, PlayerStats]:

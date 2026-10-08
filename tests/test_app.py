@@ -108,7 +108,10 @@ class LibraryTest(IsolatedHome):
             self.assertEqual(added, 4)
             self.assertEqual([(s["name"], s["hands"], s["hero"]) for s in main.students_summary()], [("Paul", 4, "Hero")])
             self.assertEqual(main.find_hand("HAND02")[1], "Hero")  # ses mains s'ouvrent dans l'explorateur
-            self.assertIn("Leakfinding de Paul", student.self_page("leaks"))
+            page = student.self_page("leaks")
+            self.assertIn("Leakfinding de Paul", page)
+            self.assertIn("<h2>Ses adversaires</h2>", page)  # le résultat de l'élève, pas celui de l'adversaire
+            self.assertIn('data-sort="net">Résultat de Paul</th>', page)
             self.assertIn('data-api="/api/eleves/paul/revue"', student.self_page("solveur"))
             text, error = main.coach._run_tool("leakfinding", {"eleve": "Paul"})
             self.assertFalse(error, text)

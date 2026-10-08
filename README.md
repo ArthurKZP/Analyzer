@@ -32,9 +32,13 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   à exploiter). En haut de la fiche, son type : régulier ou récréatif (voir « Face au solveur »). Les liens « voir les mains » et « rejouer » ouvrent directement l'onglet Spots
   sur la bonne ligne ou la bonne main. Dans le replayer, **Résoudre ce coup** lance le solveur GTOpen
   (voir plus bas).
-- **Mon jeu** : ton bilan contre tous tes adversaires (résultats, courbe, puis **tes écarts les plus importants**
-  avant le détail de tes stats, résultats par adversaire avec recherche, filtre par type et tri par mains, résultat,
-  bb/100, date ou nom, pertes sans abattage), *Leakfinding*, *Mains de départ* (ce que rapporte chaque main, voir
+- **Mon jeu** : ton *Bilan* contre tous tes adversaires — en tête, tes résultats **tous formats confondus**, en
+  heads-up et aux tables à plusieurs ; puis, au choix *Heads-up* / *Tables à plusieurs* (retenu avec le Leakfinding
+  et Mon préflop), le même plan : résultat et courbe (réel, EV all-in, avec et sans abattage), **tes écarts les plus
+  importants** avant le détail de tes stats (aux tables à plusieurs, sur toutes tes mains, contre les réguliers et
+  contre les récréatifs), résultats par adversaire avec recherche, filtre par type et tri par mains, résultat,
+  bb/100, date ou nom (aux tables à plusieurs : mains ensemble, pots disputés et ton résultat dans ces pots), pertes
+  sans abattage (heads-up) ; *Leakfinding*, *Mains de départ* (ce que rapporte chaque main, voir
   plus bas), *Mon préflop*, *Mes spots*, *Face au solveur* (tes erreurs postflop, voir plus bas) et *Tables à
   plusieurs*. *Mon préflop* compare tes décisions préflop à la solution heads-up, ou, aux tables à plusieurs (choix
   *Heads-up* / *Tables à plusieurs* en haut de la page, retenu avec celui du Leakfinding), à tes charts avec les mêmes
@@ -473,7 +477,8 @@ flop, avec les ranges de tes charts 6-max (dans la base, voir *Tables à plusieu
 | SB contre BB | SRP, 3bet, 4bet | la SB ouvre et 4bette (hors de position) ; la BB 3bette en position |
 | SB contre BTN | 3bet, 4bet | la SB 3bette hors de position, le bouton 4bette en position |
 | BB contre BTN | SRP, 3bet, 4bet | le bouton ouvre et 4bette, la BB 3bette |
-| BB contre CO | 3bet, 4bet | le CO ouvre et 4bette, la BB 3bette |
+| BB contre CO | SRP, 3bet, 4bet | le CO ouvre et 4bette, la BB 3bette |
+| BB contre HJ | SRP, 3bet | le HJ ouvre, la BB 3bette |
 
 Tailles préflop (les charts donnent les ranges, pas les tailles) : open à 2,5 bb, 3bet à 3 fois l'open en
 position (7,5 bb) et 4 fois hors de position (10 bb), 4bet à 22 bb en position et 20 bb hors de position,
@@ -487,7 +492,7 @@ K♠K♦4♣ avec 4 cœurs, BB contre BTN en pot 3bet demande 12 minutes pour ch
 résoudre (26 minutes et 2 min 30 en heads-up), et les tailles changent (c-bet de la BB à 75 % au lieu de 33 %
 en heads-up). Le plan de jeu suggéré, le coach et le leakfinding 6-max (ses repères après le flop) lisent aussi
 les séries 6-max ; l'entraîneur travaille sur les séries heads-up. Leurs résultats viennent de tes charts et restent
-sur ta machine (rien n'est livré avec Analyzer). Les autres paires de positions (l'UTG ou le HJ contre la BB, le CO
+sur ta machine (rien n'est livré avec Analyzer). Les autres paires de positions (l'UTG contre la BB, le CO
 contre le BTN…) n'ont pas de série : elles se résolvent flop par flop depuis l'explorateur (*À plusieurs (6-max)*),
 et s'ajoutent à la liste *Autres positions* de l'onglet.
 
@@ -495,8 +500,8 @@ et s'ajoutent à la liste *Autres positions* de l'onglet.
 *Études du solveur*) met en file chaque flop manquant de toutes les séries que tes charts couvrent, un flop de
 chaque série à tour de rôle, les pots 4bet et 3bet d'abord (les plus rapides) : chaque plan de jeu se dessine vite
 au lieu d'attendre la fin des séries précédentes. Chaque flop passe par le choix de ses tailles puis par sa
-résolution, et son plan de jeu est lu aussitôt. Avant de lancer, la durée est annoncée (au plus 4 jours et demi
-environ sur 4 cœurs pour les 240 flops) ; on suit le flop en cours et la file, et **Tout arrêter** vide la file (les
+résolution, et son plan de jeu est lu aussitôt. Avant de lancer, la durée est annoncée (au plus 8 jours environ
+sur 4 cœurs pour les 312 flops des treize séries ; les séries en SRP sont les plus longues) ; on suit le flop en cours et la file, et **Tout arrêter** vide la file (les
 flops déjà résolus restent). La file vit dans l'application : après un redémarrage, le bouton reprend avec les
 flops qui manquent.
 
@@ -631,8 +636,9 @@ réguliers. Seules les mains contre les réguliers font des leaks et passent au 
   position contre celle de l'adversaire, dernière street), passent au solveur avec les ranges des charts pour la
   ligne jouée ; les situations portent les vraies positions (« Stab flop du CO », pot 3bet SB c. CO).
 - **Les mains de départ** qui perdent plus que le fold contre les réguliers, comme en heads-up, avec l'avis des charts.
-- **Ses adversaires** des tables à plusieurs : mains à la même table, pots disputés ensemble, son résultat dans ces
-  pots et leur type, réglable.
+- **Ses adversaires** des tables à plusieurs : mains à la même table, pots disputés ensemble, le résultat du joueur
+  dans ces pots (« Ton résultat » dans ton Leakfinding, « Résultat de Paul » dans celui d'un élève) et leur type,
+  réglable.
 
 L'onglet *Tables à plusieurs* commence par **tes écarts les plus importants** contre les réguliers (les mêmes
 repères), avec un lien vers ce rapport. Le coach lit aussi ce rapport (outil *leakfinding*, format `ring`).
@@ -713,8 +719,8 @@ Onglet *Plan de jeu suggéré* de *Études du solveur* : les études résolues r
 flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de flops résolus, plus il est précis.
 
 - **Heads-up et tables à plusieurs** : un plan pour chaque série de spots d'étude, les trois du heads-up et les
-  dix du 6-max (une par paire de positions et type de pot : SB contre BB, SB contre BTN, BB contre BTN, BB contre
-  CO ; voir *Spots d'étude 6-max*). Les arbres 6-max ont la forme du heads-up de même structure (celui qui a
+  treize du 6-max (une par paire de positions et type de pot : SB contre BB, SB contre BTN, BB contre BTN, BB contre
+  CO, BB contre HJ ; voir *Spots d'étude 6-max*). Les arbres 6-max ont la forme du heads-up de même structure (celui qui a
   l'initiative est hors de position ou en position) : mêmes lignes et mêmes règles, avec les vraies positions
   (« C-bet de la SB », « BB face à la c-bet », « CO face au check-raise »…). Les onglets 6-max apparaissent une
   fois tes charts 6-max chargés ; une famille que tes charts ne couvrent pas dit pourquoi.
@@ -1017,7 +1023,8 @@ analyzer/
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
                        solveur » (review_page.py), leakfinding (leaks_page.py), bluffs des adversaires
-                       (bluffs_page.py), étude du field (field_page.py), mains de départ (hands_page.py), entraîneur
+                       (bluffs_page.py), étude du field (field_page.py), bilan des tables à plusieurs
+                       (bilan_page.py), mains de départ (hands_page.py), entraîneur
                        (trainer.py, static/trainer.*), plan de jeu suggéré (plan_page.py), coach
                        (coach_chat.py, static/coach.*) et son serveur MCP pour l'abonnement Claude
                        (mcp_server.py), sauvegardes en arrière-plan (backups.py), interface

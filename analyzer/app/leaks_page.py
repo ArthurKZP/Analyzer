@@ -261,10 +261,12 @@ def _head(report: leaks.Report, api: str) -> str:
                'complète au fur et à mesure ; tu peux fermer la page.</p>' if todo else ""))
 
 
-def opponents_html(opponents: list[dict], ring: bool = False, title: str = "Ses adversaires") -> str:
-    """Ses adversaires et leur type, réglable : il décide quelles mains comptent pour les leaks. Recherche par nom,
-    filtre par type, tri par mains, résultat ou date. ring : ceux des tables à plusieurs (mains à la même table, son
-    résultat dans les pots disputés ensemble)."""
+def opponents_html(opponents: list[dict], ring: bool = False, title: str = "Tes adversaires",
+                   result: str = "Ton résultat") -> str:
+    """Les adversaires du joueur et leur type, réglable : il décide quelles mains comptent pour les leaks. Recherche par
+    nom, filtre par type, tri par mains, résultat ou date. ring : ceux des tables à plusieurs (mains à la même table,
+    résultat dans les pots disputés ensemble) ; result : la colonne du résultat du joueur contre chacun (« Ton
+    résultat », « Résultat de Paul »)."""
     if not opponents:
         return ""
     names = {"reg": "Régulier", "rec": "Récréatif"}
@@ -282,12 +284,12 @@ def opponents_html(opponents: list[dict], ring: bool = False, title: str = "Ses 
                     f'<td><select class="lk-kind" data-name="{escape(o["name"])}" title="{why}">{options}</select></td></tr>')
     tools = opponent_tools() if len(opponents) > 1 else ""
     head = ('<th class="num" data-sort="hands">Mains ensemble</th><th class="num">Pots disputés</th>'
-            '<th class="num" data-sort="net">Son résultat (pots)</th>') if ring else (
-        '<th class="num" data-sort="hands">Mains</th><th class="num" data-sort="net">Son résultat</th>')
+            f'<th class="num" data-sort="net">{escape(result)} (pots)</th>') if ring else (
+        f'<th class="num" data-sort="hands">Mains</th><th class="num" data-sort="net">{escape(result)}</th>')
     note = ("Le type décide quelles mains comptent pour les leaks : une main compte contre les récréatifs quand un "
             "récréatif a mis de l'argent dans le pot pendant que le joueur y était encore. Sans choix, une suggestion "
             "d'après les fréquences de l'adversaire aux tables à plusieurs (trop de mains jouées, de limps, de calls). "
-            "« Son résultat » : dans les pots disputés ensemble." if ring else
+            f"« {result} » : dans les pots disputés ensemble, en bb." if ring else
             "Le type décide quelles mains comptent pour les leaks (seulement contre les réguliers). Sans choix, une "
             "suggestion d'après les stats de l'adversaire.")
     return (f'<h2>{escape(title)}</h2><div class="card opp-box">{tools}<div class="scroll"><table class="stats opp-table">'
@@ -407,7 +409,8 @@ def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = T
 <h2>Mains à revoir</h2>
 {picks}
 {f'<h2>Contre les récréatifs</h2><div class="card"><ul>{rec}</ul></div>' if rec else ""}
-{"" if standalone else opponents_html(opponents or [], ring)}
+{"" if standalone else opponents_html(opponents or [], ring, *(("Tes adversaires", "Ton résultat") if name is None
+                                                                else ("Ses adversaires", f"Résultat de {who}")))}
 """
     style = f"<style>{REVIEW_STYLE}{STYLE}{OPP_STYLE}</style>"
     title = f"Leakfinding tables à plusieurs — {who}" if ring else f"Leakfinding — {who}"

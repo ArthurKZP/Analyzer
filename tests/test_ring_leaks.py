@@ -116,6 +116,30 @@ class PotTest(unittest.TestCase):
         self.assertIn("pas encore de repère du solveur", folds.note)
 
 
+class BilanTest(unittest.TestCase):
+    def test_allin_ev_at_a_ring_table(self):
+        """Un tapis payé à deux à une table à plusieurs : l'EV all-in des deux joueurs, avec l'argent mort de la SB ;
+        ceux qui se sont couchés gardent leur résultat."""
+        from analyzer.app.bilan_page import results
+        from analyzer.stats import allin_ev
+        hand = table_hand(1, "BTN", ["Ah", "Ad"], FOLDS_TO["BTN"] + [("BTN", RAISE, 200.0), ("SB", FOLD), ("BB", CALL)],
+                          winner="BB")
+        for a in hand.actions:
+            if a.kind in (RAISE, CALL):
+                a.all_in = True
+        hand.hole_cards["Joueur6"] = ["Kh", "Kd"]
+        hand.showdown = True
+        ev = allin_ev(hand)
+        self.assertEqual((hand.net("Hero"), hand.net("Joueur5")), (-200.0, -1.0))
+        self.assertGreater(ev["Hero"], 100)  # les as contre les rois : environ 82 % de 401
+        self.assertAlmostEqual(ev["Hero"] + ev["Joueur6"], 1.0)  # les deux se partagent la blinde morte de la SB
+        self.assertEqual(ev["Joueur5"], -1.0)
+        res = results([hand], "Hero")
+        self.assertEqual((res["allin"], res["net_bb"], res["sd_bb"]), (1, -100.0, -100.0))
+        self.assertGreater(res["ev_bb"], 50)
+        self.assertEqual(res["curve"][-1][0], -100.0)
+
+
 class VersusTest(unittest.TestCase):
     """Une main compte contre les récréatifs quand un récréatif a mis de l'argent dans le pot pendant que le joueur y
     était encore."""
@@ -353,7 +377,9 @@ class AppTest(IsolatedHome):
         status, _, page = self.request("GET", "/moi/leaks?format=ring")
         self.assertEqual(status, 200)
         self.assertIn("Leakfinding des tables à plusieurs de Hero (3-max, 6-max)", page)
-        self.assertIn("Mains ensemble", page)  # ses adversaires des tables à plusieurs, et leur type
+        self.assertIn("Mains ensemble", page)  # tes adversaires des tables à plusieurs, et leur type
+        self.assertIn("<h2>Tes adversaires</h2>", page)
+        self.assertIn("Ton résultat (pots)", page)
         for old in ("6-max", "3-max", "9-max"):  # les anciennes adresses mènent au rapport commun
             self.assertEqual(self.request("GET", f"/moi/leaks?format={old}")[0], 200)
         status, disposition, _ = self.request("GET", "/moi/rapport?format=ring")
@@ -368,6 +394,21 @@ class AppTest(IsolatedHome):
         self.assertIn('href="leaks?format=ring"', page)
         self.assertEqual(self.lib.summary()["ring_hands"], 3)
 
+    def test_bilan(self):
+        """Le bilan : en tête, tes résultats tous formats confondus et le choix du format ; aux tables à plusieurs, le même
+        plan qu'en heads-up."""
+        heads_up = self.lib.self_page("bilan")
+        for text in ('aria-current="page">Heads-up', 'href="?format=ring"', "Tous formats confondus", "En heads-up",
+                     "Aux tables à plusieurs", "Résultats par adversaire"):
+            self.assertIn(text, heads_up)
+        ring_bilan = self.lib.self_page("bilan", table_format="ring")
+        for text in ("3 mains aux tables à plusieurs (3-max, 6-max)", 'aria-current="page">Tables à plusieurs',
+                     "Tous formats confondus", "Ton résultat", "Résultat cumulé (bb)", "Tes écarts les plus importants",
+                     "Tes statistiques", "Résultats par adversaire", "Mains ensemble", "Ton résultat (bb)"):
+            self.assertIn(text, ring_bilan)
+        status, _, page = self.request("GET", "/moi/bilan?format=ring")
+        self.assertEqual((status, page), (200, ring_bilan))
+
     def test_ring_opponent_kind(self):
         """Le type d'un adversaire des tables à plusieurs se règle comme en heads-up, et change le découpage."""
         names = [o["name"] for o in self.lib.ring_opponents_view()]
@@ -379,6 +420,8 @@ class AppTest(IsolatedHome):
         after = self.lib.leaks_report("ring").scope_hands
         self.assertEqual(after["rec"], before["rec"] + 1)  # la main Unibet, où Villain a payé
         self.assertIn('href="leaks?format=ring"', self.lib.self_page("tables"))
+        bilan = self.lib.self_page("bilan", table_format="ring")
+        self.assertIn("Contre les récréatifs", bilan)  # la main Unibet, où Villain a payé
         field = self.lib.field_page("joueurs")  # Étude du field : les joueurs des deux jeux
         self.assertIn("<h2>Aux tables à plusieurs</h2>", field)
         self.assertIn("<h2>En heads-up</h2>", field)
@@ -397,7 +440,9 @@ class RingOnlyTest(IsolatedHome):
         self.assertEqual((len(lib.hands), lib.summary()["ring_hands"]), (0, 2))
         self.assertEqual(lib.leak_formats(), [("ring", 2)])
         self.assertIn("Leakfinding des tables à plusieurs de Hero", lib.self_page("leaks"))
-        self.assertIn("Aucune main heads-up", lib.self_page("bilan"))
+        bilan = lib.self_page("bilan")  # le bilan s'ouvre sur les tables à plusieurs
+        self.assertIn("2 mains aux tables à plusieurs (6-max)", bilan)
+        self.assertNotIn('class="lk-fmt"', bilan)  # un seul format : pas de choix
         self.assertIn("Aucune main heads-up", lib.self_page("solveur"))
         self.assertIn("Tes écarts les plus importants", lib.self_page("tables"))
 

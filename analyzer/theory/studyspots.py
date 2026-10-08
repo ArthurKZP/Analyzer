@@ -88,7 +88,8 @@ RING_FAMILIES = dict(_ring_family(*args) for args in (
     ("SB", "BB", "srp", "SB"), ("SB", "BB", "3bet", "SB"), ("SB", "BB", "4bet", "SB"),
     ("SB", "BTN", "3bet", "BTN"), ("SB", "BTN", "4bet", "BTN"),
     ("BB", "BTN", "srp", "BTN"), ("BB", "BTN", "3bet", "BTN"), ("BB", "BTN", "4bet", "BTN"),
-    ("BB", "CO", "3bet", "CO"), ("BB", "CO", "4bet", "CO"),
+    ("BB", "CO", "srp", "CO"), ("BB", "CO", "3bet", "CO"), ("BB", "CO", "4bet", "CO"),
+    ("BB", "HJ", "srp", "HJ"), ("BB", "HJ", "3bet", "HJ"),
 ))
 for _family, _info in RING_FAMILIES.items():
     sizing.register(_family, _info["structure"], _info["oop"], _info["ip"])

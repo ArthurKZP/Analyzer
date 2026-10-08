@@ -228,8 +228,10 @@ def self_stat_tables(ps: PlayerStats) -> str:
 
 
 def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str,
-                      embed: bool = False, spots_href: str = "spots", kinds: Optional[dict] = None) -> str:
-    """kinds : type de chaque adversaire (players.classify), pour séparer réguliers et récréatifs."""
+                      embed: bool = False, spots_href: str = "spots", kinds: Optional[dict] = None,
+                      head: str = "") -> str:
+    """kinds : type de chaque adversaire (players.classify), pour séparer réguliers et récréatifs ; head : en tête,
+    le choix du format et tes résultats tous formats confondus (l'application)."""
     h = stats[hero]
     results = opponent_results(hands, hero)
     kinds = kinds or {}
@@ -254,6 +256,7 @@ def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: st
     tools = opponent_tools(with_kind=bool(kinds)) if len(results) > 1 else ""
     body = f"""{heading}<style>{OPP_STYLE}</style>
 <div class="meta">{len(hands)} mains · {len(results)} adversaire(s) · {period}{spots}</div>
+{head}
 {tiles(h)}
 
 <h2>Résultat cumulé (bb)</h2>

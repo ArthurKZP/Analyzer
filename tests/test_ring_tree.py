@@ -52,7 +52,8 @@ class FamiliesTest(unittest.TestCase):
         self.assertEqual(studyspots.flop_set("6max_co_btn_srp"), [])  # hors des séries
         self.assertNotIn("6max_co_btn_srp", studyspots.RING_FAMILIES)
         self.assertEqual(studyspots.size_models("6max_co_btn_srp"), ["6max_sb_bb_srp"])  # l'ouvreur hors de position
-        self.assertEqual(studyspots.size_models("6max_bb_utg_srp"), ["6max_bb_btn_srp", "srp"])
+        self.assertEqual(studyspots.size_models("6max_bb_utg_srp"),
+                         ["6max_bb_btn_srp", "6max_bb_co_srp", "6max_bb_hj_srp", "srp"])
 
 
 class SpotTest(Home):
