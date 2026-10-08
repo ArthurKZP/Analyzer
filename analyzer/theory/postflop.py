@@ -659,7 +659,8 @@ def flop_pair(hand: Hand) -> Optional[tuple[str, str]]:
 
 
 def _ring_ranges(hand: Hand, hero: str, pre: list) -> tuple[str, str, str, dict]:
-    """Table à plusieurs : les deux joueurs qui voient le flop, leurs ranges d'après ta solution du format."""
+    """Table à plusieurs : les deux joueurs qui voient le flop, leurs ranges d'après ta solution du format (ou les
+    charts 6-max à même nombre de joueurs derrière, voir ring_ranges.resolve)."""
     from . import ring_ranges
     folded = {a.player for a in pre if a.kind == FOLD}
     players = [p for p in hand.seats if p not in folded]
@@ -674,15 +675,17 @@ def _ring_ranges(hand: Hand, hero: str, pre: list) -> tuple[str, str, str, dict]
     if any(pos not in POSTFLOP_ORDER for pos in positions.values()):
         raise Unsupported("Positions inconnues : le bouton manque dans l'historique.")
     steps = [(positions[a.player], a.kind) for a in pre if a.kind != FOLD]
-    found = ring_ranges.lookup(hand.table_format, steps)
+    chart = ring_ranges.resolve(hand.table_format, steps)
+    found = ring_ranges.lookup(*chart) if chart else None
     if found is None:
         raise Unsupported(f"Pas de range préflop pour « {ring_ranges.describe(steps)} » en {hand.table_format} : "
                           f"{ring_ranges.missing_hint(hand.table_format)}.")
     pot_type, by_position = found
-    if any(pos not in by_position for pos in positions.values()):
+    in_chart = dict(zip((pos for pos, _ in steps), (pos for pos, _ in chart[1])))  # position à la table -> charts
+    if any(in_chart.get(pos) not in by_position for pos in positions.values()):
         raise Unsupported(f"Ta solution ne donne pas les deux ranges de « {ring_ranges.describe(steps)} ».")
     oop, ip = sorted(players, key=lambda p: POSTFLOP_ORDER.index(positions[p]))
-    return oop, ip, pot_type, {p: dict(by_position[positions[p]]) for p in players}
+    return oop, ip, pot_type, {p: dict(by_position[in_chart[positions[p]]]) for p in players}
 
 PREFLOP_RAISES = ("Open", "3bet", "4bet", "5bet")
 

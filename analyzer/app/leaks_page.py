@@ -1,5 +1,5 @@
 """Page « Leakfinding » : le rapport d'un joueur (toi ou un élève) et ce qu'il doit travailler (voir analyzer/leaks.py,
-et analyzer/ring_leaks.py pour les tables à plusieurs). Un rapport par format de table : heads-up, 6-max, 3-max.
+et analyzer/ring_leaks.py pour les tables à plusieurs). Deux rapports : le heads-up, et les tables à plusieurs (3 à 9 joueurs ensemble).
 
 En version autonome (standalone), la page se télécharge pour être envoyée à l'élève : sans boutons ni liens vers
 l'application."""
@@ -18,7 +18,7 @@ from .review_page import STYLE as REVIEW_STYLE
 from .review_page import _costly_table, _drills, _duration, _situations_table
 from .ring_page import _why
 
-FORMAT_NAMES = {"HU": "Heads-up"}
+FORMAT_NAMES = {"HU": "Heads-up", "ring": "Tables à plusieurs"}
 
 STYLE = """
 .lk-list { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; }
@@ -100,7 +100,7 @@ def _ring(report: leaks.Report) -> bool:
 
 
 def format_query(table_format: str) -> str:
-    """« ?format=6-max » : le rapport d'un format de table (rien pour le heads-up)."""
+    """« ?format=ring » : le rapport des tables à plusieurs (rien pour le heads-up)."""
     return "" if table_format == "HU" else f"?format={quote(table_format)}"
 
 
@@ -131,9 +131,9 @@ def _example(leak: leaks.Leak, standalone: bool) -> str:
 
 def leaks_html(report: leaks.Report, pages: str, standalone: bool) -> str:
     if not report.leaks:
-        versus = "à ses tables" if _ring(report) else "contre les réguliers"
-        return (f'<p class="note">Pas de leak net pour l\'instant : pas assez de mains {versus}, ou un jeu proche de la '
-                'théorie dans les situations mesurées. Les mains analysées par le solveur affinent le rapport.</p>')
+        return ('<p class="note">Pas de leak net pour l\'instant : pas assez de mains contre les réguliers, ou un jeu '
+                'proche de la théorie dans les situations mesurées. Les mains analysées par le solveur affinent le '
+                'rapport.</p>')
     drills = {} if standalone else _drills()
     items = "".join(
         f'<li><div class="lk-t">{escape(x.title)} {_conf(x.confidence)}</div>'
@@ -153,8 +153,8 @@ def _reference(s: leaks.Stat) -> str:
 
 
 def _shows_verdict(report: leaks.Report, scope: str) -> bool:
-    """Les colonnes où un écart se colore : contre les réguliers et les récréatifs (heads-up), toutes ses mains (tables à
-    plusieurs, où c'est la seule)."""
+    """Les colonnes où un écart se colore : contre les réguliers et contre les récréatifs (toutes ses mains seulement si
+    c'est la portée comparée à la théorie)."""
     return scope != "all" or report.solver_scope == "all"
 
 
@@ -183,7 +183,7 @@ def gaps_html(report: leaks.Report) -> str:
     if not found:
         return ('<p class="muted">Aucun écart net à la théorie pour l\'instant : pas assez d\'occasions, ou des fréquences '
                 'proches de la théorie. Le détail de ses stats est plus bas.</p>')
-    who = "Ses mains" if _ring(report) else "Contre réguliers"
+    who = "Contre réguliers" if report.solver_scope == "reg" else "Ses mains"
     return f'<h3>Les écarts les plus importants</h3>{gaps_table(found, report.solver_scope, who)}'
 
 
@@ -207,7 +207,7 @@ def stats_html(report: leaks.Report) -> str:
     if not rows:
         return '<p class="muted">Pas encore assez de mains.</p>'
     head = "".join(f'<th class="num">{escape(label)}</th>' for _, label in scopes)
-    versus = "Écart" if _ring(report) else "Écart (réguliers)"
+    versus = "Écart" if report.solver_scope == "all" else "Écart (réguliers)"
     reference = "Théorie" if _ring(report) else "Solveur"
     return (f'<div class="scroll"><table class="stats lk"><thead><tr><th>Situation</th>{head}<th class="num">{reference}</th>'
             f'<th>{versus}</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>')
@@ -270,9 +270,10 @@ def _head(report: leaks.Report, api: str) -> str:
                'complète au fur et à mesure ; tu peux fermer la page.</p>' if todo else ""))
 
 
-def opponents_html(opponents: list[dict]) -> str:
+def opponents_html(opponents: list[dict], ring: bool = False) -> str:
     """Ses adversaires et leur type, réglable : il décide quelles mains comptent pour les leaks. Recherche par nom,
-    filtre par type, tri par mains, résultat ou date."""
+    filtre par type, tri par mains, résultat ou date. ring : ceux des tables à plusieurs (mains à la même table, son
+    résultat dans les pots disputés ensemble)."""
     if not opponents:
         return ""
     names = {"reg": "Régulier", "rec": "Récréatif"}
@@ -283,15 +284,24 @@ def opponents_html(opponents: list[dict]) -> str:
                           for v, t in (("", auto), ("reg", "Régulier"), ("rec", "Récréatif")))
         data = opponent_row_data(o["name"], o.get("kind") or "reg", o["hands"], o["net_bb"], o.get("bb100", 0.0),
                                  o.get("last", ""))
-        rows.append(f'<tr {data}><td>{escape(o["name"])}</td><td class="num">{o["hands"]}</td>'
+        pots = f'<td class="num">{o.get("pots", 0)}</td>' if ring else ""
+        why = escape(", ".join(o.get("reasons") or []))
+        rows.append(f'<tr {data}><td>{escape(o["name"])}</td><td class="num">{o["hands"]}</td>{pots}'
                     f'<td class="num">{num(o["net_bb"], 1, sign=True)} bb</td>'
-                    f'<td><select class="lk-kind" data-name="{escape(o["name"])}">{options}</select></td></tr>')
+                    f'<td><select class="lk-kind" data-name="{escape(o["name"])}" title="{why}">{options}</select></td></tr>')
     tools = opponent_tools() if len(opponents) > 1 else ""
+    head = ('<th class="num" data-sort="hands">Mains ensemble</th><th class="num">Pots disputés</th>'
+            '<th class="num" data-sort="net">Son résultat (pots)</th>') if ring else (
+        '<th class="num" data-sort="hands">Mains</th><th class="num" data-sort="net">Son résultat</th>')
+    note = ("Le type décide quelles mains comptent pour les leaks : une main compte contre les récréatifs quand un "
+            "récréatif a mis de l'argent dans le pot pendant que le joueur y était encore. Sans choix, une suggestion "
+            "d'après les fréquences de l'adversaire aux tables à plusieurs (trop de mains jouées, de limps, de calls). "
+            "« Son résultat » : dans les pots disputés ensemble." if ring else
+            "Le type décide quelles mains comptent pour les leaks (seulement contre les réguliers). Sans choix, une "
+            "suggestion d'après les stats de l'adversaire.")
     return (f'<h2>Ses adversaires</h2><div class="card opp-box">{tools}<div class="scroll"><table class="stats opp-table">'
-            '<thead><tr><th data-sort="name">Adversaire</th><th class="num" data-sort="hands">Mains</th>'
-            '<th class="num" data-sort="net">Son résultat</th><th>Type</th></tr></thead><tbody>'
-            + "".join(rows) + '</tbody></table></div><p class="note">Le type décide quelles mains comptent pour les leaks '
-            '(seulement contre les réguliers). Sans choix, une suggestion d\'après les stats de l\'adversaire.</p></div>')
+            f'<thead><tr><th data-sort="name">Adversaire</th>{head}<th>Type</th></tr></thead><tbody>'
+            + "".join(rows) + f'</tbody></table></div><p class="note">{escape(note)}</p></div>')
 
 
 def formats_html(formats: list[tuple[str, int]], current: str) -> str:
@@ -306,23 +316,14 @@ def formats_html(formats: list[tuple[str, int]], current: str) -> str:
 
 def _tiles(report: leaks.Report) -> str:
     r = report.review
-    solver = (f'<div class="tile"><div class="label">Face au solveur</div><div class="value">{r["analyzed"]} mains</div>'
-              f'<div class="sub">{num(r["lost"], 1)} bb perdus en {r["decisions"]} décisions</div></div>')
-    if _ring(report):
-        info = report.info["all"]
-        return ('<div class="tiles">'
-                f'<div class="tile"><div class="label">Mains en {escape(report.table_format)}</div>'
-                f'<div class="value">{report.hands}</div><div class="sub">{report.context.get("pots", 0)} pots à deux au '
-                'flop</div></div>'
-                f'<div class="tile"><div class="label">Résultat</div><div class="value">{_bb100(report.winrate["all"])}</div></div>'
-                f'<div class="tile"><div class="label">VPIP / PFR</div><div class="value">{_pct(info["vpip"])} / '
-                f'{_pct(info["pfr"])}</div></div>{solver}</div>')
+    label = "Mains aux tables à plusieurs" if _ring(report) else "Mains"
     return ('<div class="tiles">'
-            f'<div class="tile"><div class="label">Mains</div><div class="value">{report.hands}</div>'
+            f'<div class="tile"><div class="label">{label}</div><div class="value">{report.hands}</div>'
             f'<div class="sub">{report.scope_hands["reg"]} contre réguliers, {report.scope_hands["rec"]} contre récréatifs</div></div>'
             f'<div class="tile"><div class="label">Contre réguliers</div><div class="value">{_bb100(report.winrate["reg"])}</div></div>'
             f'<div class="tile"><div class="label">Contre récréatifs</div><div class="value">{_bb100(report.winrate["rec"])}</div></div>'
-            f'{solver}</div>')
+            f'<div class="tile"><div class="label">Face au solveur</div><div class="value">{r["analyzed"]} mains</div>'
+            f'<div class="sub">{num(r["lost"], 1)} bb perdus en {r["decisions"]} décisions</div></div></div>')
 
 
 def _hints(report: leaks.Report, standalone: bool) -> str:
@@ -330,16 +331,13 @@ def _hints(report: leaks.Report, standalone: bool) -> str:
     if not _ring(report):
         return ""
     out = []
-    fmt = escape(report.table_format)
     if not report.context.get("charts"):
         where = "" if standalone else " (Mon jeu › Tables à plusieurs : « Charger les charts »)"
-        out.append(f"Ses charts {fmt} ne sont pas encore là : le préflop n'est comparé qu'aux repères indicatifs de "
-                   f"l'open d'un régulier. Avec les charts{where}, chaque décision est comparée main par main.")
-    if report.table_format == studyspots.RING_FORMAT and not report.context.get("plans"):
+        out.append("Ses charts ne sont pas encore là : le préflop n'est comparé qu'aux repères indicatifs de l'open d'un "
+                   f"régulier 6-max. Avec les charts{where}, chaque décision est comparée main par main.")
+    if not report.context.get("plans"):
         where = "" if standalone else " (Études du solveur › 6-max : « Résoudre tous les flops 6-max manquants »)"
         out.append(f"Pas encore de flop 6-max résolu : l'après-flop n'a pas de repère du solveur{where}.")
-    elif report.table_format != studyspots.RING_FORMAT:
-        out.append(f"Les spots d'étude du solveur sont en 6-max : l'après-flop en {fmt} n'a pas de repère.")
     return "".join(f'<p class="lk-hint">{text}</p>' for text in out)
 
 
@@ -359,26 +357,32 @@ def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = T
     if standalone:  # pas de liens vers l'application dans le rapport envoyé
         solver = re.sub(r'<a class="open"[^>]*>.*?</a>', "", solver)
     if ring:
-        meta = (f"Leakfinding {escape(fmt)} de {escape(who)} : ce qu'il faut travailler en priorité à ses tables "
-                f"{escape(fmt)}, d'après ses mains face à ses charts préflop (avec les mêmes cartes), aux plans de jeu des "
-                "flops 6-max résolus et au solveur (pots à deux au flop).")
+        tables = ", ".join(report.context.get("formats") or [])
+        meta = (f"Leakfinding des tables à plusieurs de {escape(who)}{' (' + escape(tables) + ')' if tables else ''} : ce "
+                "qu'il faut travailler en priorité, d'après ses mains face aux charts préflop (avec les mêmes cartes), aux "
+                "plans de jeu des flops 6-max résolus et au solveur (pots à deux au flop).")
         theory_note = (
-            "Fréquence (et nombre d'occasions) sur toutes ses mains du format, face à la théorie : avant le flop, ses "
-            "charts avec les mêmes cartes que lui (ce qu'aurait joué un joueur qui les suit, sur les mains qu'il a reçues) "
-            "ou, sans charts, le repère indicatif d'un régulier ; après le flop, dans les pots à deux joueurs, la moyenne "
-            "des plans de jeu des flops 6-max résolus de même structure (qui a l'initiative, en position ou non). "
-            "« Solide » : le hasard explique mal l'écart (intervalle de confiance à 90 %, 20 occasions au moins) ; "
-            "« indicatif » : écart net sur moins de mains. * : précision sur le repère.")
+            "Fréquence (et nombre d'occasions) sur toutes ses mains de 3 joueurs et plus, contre les réguliers et contre "
+            "les récréatifs, face à la théorie : avant le flop, les charts avec les mêmes cartes que lui (ce qu'aurait "
+            "joué un joueur qui les suit, sur les mains qu'il a reçues ; ceux de chaque table, sinon ceux du 6-max à même "
+            "nombre de joueurs derrière) ou, sans charts, le repère indicatif d'un régulier ; après le flop, dans les pots "
+            "à deux joueurs, la moyenne des plans de jeu des flops 6-max résolus de même structure (qui a l'initiative, "
+            "en position ou non). Une main compte contre les récréatifs quand un récréatif a mis de l'argent dans le pot "
+            "pendant qu'il y était encore. « Solide » : le hasard explique mal l'écart (intervalle de confiance à 90 %, "
+            "20 occasions au moins) ; « indicatif » : écart net sur moins de mains. * : précision sur le repère.")
         leaks_note = ("Classés par confiance puis par poids (fréquence de la situation, écart, et ce que la décision met en "
-                      "jeu ; ou EV perdue face au solveur). À une table à plusieurs, toutes ses mains comptent.")
-        solver_title = "Face au solveur, ses pots à deux au flop"
-        solver_note = ("Ses plus gros pots à deux joueurs au flop passent au solveur, avec les ranges de ses charts pour la "
-                       "ligne jouée ; chaque décision y est comparée à la meilleure action pour sa main exacte (EV perdue "
-                       "en bb).")
-        picks = (f'<div class="card">{picks_html(report, "all", pages, standalone)}'
-                 '<p class="note">Les plus gros pots de chaque ligne (type de pot, positions, dernière street jouée), deux '
-                 'par ligne : de quoi couvrir des spots variés. « Hors solveur » : la ligne n\'a pas de range dans ses '
-                 'charts.</p></div>')
+                      "jeu ; ou EV perdue face au solveur). Seules les mains contre les réguliers comptent : contre un "
+                      "récréatif, l'exploitation prime sur la théorie.")
+        solver_title = "Face au solveur, contre les réguliers"
+        solver_note = ("Ses plus gros pots à deux joueurs au flop contre les réguliers passent au solveur, avec les ranges "
+                       "des charts pour la ligne jouée ; chaque décision y est comparée à la meilleure action pour sa main "
+                       "exacte (EV perdue en bb).")
+        picks = (f'<div class="card"><h3>Contre les réguliers</h3>{picks_html(report, "reg", pages, standalone)}'
+                 f'<h3>Contre les récréatifs</h3>{picks_html(report, "rec", pages, standalone)}'
+                 '<p class="note">Les plus gros pots à deux joueurs de chaque ligne (type de pot, positions, dernière street '
+                 'jouée), deux par ligne : de quoi couvrir des spots variés. Contre les réguliers, le solveur donne son '
+                 'avis (« hors solveur » : la ligne n\'a pas de range dans les charts) ; contre les récréatifs, elles sont '
+                 'à revoir à la main.</p></div>')
     else:
         families = ", ".join(studyspots.FAMILIES[f]["name"] for f in studyspots.FAMILIES)
         meta = (f"Leakfinding de {escape(who)} : ce qu'il faut travailler en priorité, d'après ses mains face à la théorie "
@@ -422,8 +426,8 @@ def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = T
 <h2>Mains à revoir</h2>
 {picks}
 {f'<h2>Contre les récréatifs</h2><div class="card"><ul>{rec}</ul></div>' if rec else ""}
-{"" if standalone or ring else opponents_html(opponents or [])}
+{"" if standalone else opponents_html(opponents or [], ring)}
 """
     style = f"<style>{REVIEW_STYLE}{STYLE}{OPP_STYLE}</style>"
-    title = f"Leakfinding {fmt} — {who}" if ring else f"Leakfinding — {who}"
+    title = f"Leakfinding tables à plusieurs — {who}" if ring else f"Leakfinding — {who}"
     return html_page(title, style + body, embed, script="" if standalone else SCRIPT + OPP_SCRIPT)

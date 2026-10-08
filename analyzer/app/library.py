@@ -35,8 +35,8 @@ from .solves import SolveQueue
 
 PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur", "bluffs")
 HEADS_UP_ONLY = ('<p class="note">Aucune main heads-up : cette page analyse tes parties en heads-up. Tes tables à '
-                 'plusieurs ont leur Leakfinding (6-max, 3-max), leurs mains de départ et leurs stats par position '
-                 '(onglet Tables à plusieurs).</p>')
+                 'plusieurs (3 à 9 joueurs, ensemble) ont leur Leakfinding, leur préflop, leurs mains de départ et leurs '
+                 'stats par position (onglet Tables à plusieurs).</p>')
 SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks", "tables", "mains")
 MAX_IMPORT_FILES = 5000  # fichiers (ou archives zip) par import
 
@@ -154,11 +154,44 @@ class Library:
         return hands, {"hands": len(self.hands) - len(hands), "players": sorted(recs)}
 
     def set_kind(self, player: str, kind: Optional[str]) -> dict:
-        if not any(h for h in self.hands if player in h.seats) and not any(
-                player in {o["name"] for o in self.student(s["id"]).opponents()} for s in students.all_students()):
+        if not self.knows(player) and not any(self.student(s["id"]).knows(player) for s in students.all_students()):
             raise UnknownPlayer(player)  # ni ton adversaire, ni celui d'un élève
         players.set_kind(player, kind)
         return self.summary()
+
+    def knows(self, player: str) -> bool:
+        """Un de tes adversaires, en heads-up ou à une table à plusieurs."""
+        return any(player in h.seats for h in self.hands) or any(player in h.seats for h in self.ring)
+
+    # --- tables à plusieurs : tes adversaires et leur type --------------------------------
+    def ring_opponents(self) -> list[dict]:
+        """Tes adversaires aux tables à plusieurs (ring.opponents), du plus joué au moins joué."""
+        return self._cached(("ring_opponents",), lambda: ring.opponents(self.ring, self.hero) if self.hero else [])
+
+    def _ring_profiles(self) -> dict:
+        return self._cached(("ring_profiles",), lambda: ring.profiles(
+            self.ring, {o["name"] for o in self.ring_opponents()}))
+
+    def ring_kinds(self) -> dict[str, dict]:
+        """Type retenu pour chaque adversaire des tables à plusieurs : ton choix (le même qu'en heads-up), sinon une
+        suggestion d'après ses fréquences à ces tables (players.ring_suggest)."""
+        return players.classify([o["name"] for o in self.ring_opponents()], {}, ring_profiles=self._ring_profiles())
+
+    def _ring_kinds_key(self) -> tuple:
+        return tuple(sorted(name for name, info in self.ring_kinds().items() if info["kind"] == "rec"))
+
+    def ring_opponents_view(self) -> list[dict]:
+        """Tes adversaires aux tables à plusieurs, pour les listes : mains à la même table, ton résultat dans les pots
+        disputés ensemble, leur type."""
+        kinds = self.ring_kinds()
+        return [{"name": o["name"], "hands": o["hands"], "pots": o["pots"], "net_bb": round(o["net_bb"], 1),
+                 "bb100": round(o["bb100"], 1), "last": o["last"].strftime("%d/%m/%Y"), **kinds[o["name"]]}
+                for o in self.ring_opponents()]
+
+    def _ring_versus(self) -> dict[str, str]:
+        """Main des tables à plusieurs -> « reg » ou « rec » (ring_leaks.versus)."""
+        kinds = self.ring_kinds()
+        return {h.hand_id: ring_leaks.versus(h, self.hero, kinds) for h in self.ring} if self.hero else {}
 
     def summary(self) -> dict:
         opponents = self.opponents()
@@ -227,9 +260,10 @@ class Library:
             raise KeyError(page)
         if page == "tables":  # tables à 3 joueurs et plus : pas besoin de mains heads-up
             changes = documents.revision(db.current(), "plan", "ranges")[2:]  # charts, plans des flops 6-max
-            return self._cached(("self", "tables") + changes, self._ring_page)
+            return self._cached(("self", "tables") + changes + self._ring_kinds_key(), self._ring_page)
         if page == "mains":  # heads-up et tables à plusieurs ; les analyses du solveur s'y ajoutent
-            key = ("self", "mains", tuple(sorted(ring_ranges.available().items())), _digest_count()) + self._kinds_key()
+            key = (("self", "mains", tuple(sorted(ring_ranges.available().items())), _digest_count()) + self._kinds_key()
+                   + self._ring_kinds_key())
             return self._cached(key, self._hands_page)
         if page == "leaks":  # change au fil des analyses : le rapport a son propre cache
             return self.leaks_page()
@@ -256,14 +290,17 @@ class Library:
         return self._cached(("self", page) + kinds, build)
 
     def _ring_page(self) -> str:
+        """Tes stats par position aux tables à plusieurs (toutes ensemble), sur toutes tes mains, contre les réguliers
+        et contre les récréatifs, après tes écarts les plus importants contre les réguliers."""
         hero = self.hero or ""
-        formats = ring.analyze(self.ring, hero)
-        gaps = {fs.table_format: leaks.top_stat_gaps(ring_leaks.stats(self.ring, hero, fs.table_format), "all", 5)
-                for fs in formats}
-        return build_ring_page(formats, hero, spots=self.ring_spots(), ranges=ring_ranges.available(), gaps=gaps)
+        kinds = self.ring_kinds()
+        parts = ring_leaks.split(ring_leaks.mine(self.ring, hero), hero, kinds)
+        scopes = [(scope, label, ring.analyze(parts[scope], hero, merge=True)) for scope, label in leaks.SCOPES]
+        gaps = leaks.top_stat_gaps(ring_leaks.stats(self.ring, hero, kinds), "reg", 5)
+        return build_ring_page(scopes, hero, spots=self.ring_spots(), ranges=ring_ranges.available(), gaps=gaps)
 
     def _plays(self) -> dict[str, list]:
-        """Tes mains de départ lues (handplay), en heads-up et aux tables à plusieurs (3-max et 6-max ensemble), avec
+        """Tes mains de départ lues (handplay), en heads-up et aux tables à plusieurs (3 à 9 joueurs ensemble), avec
         l'EV perdue après le flop des coups déjà passés au solveur."""
         def build():
             if not self.hero:
@@ -280,8 +317,8 @@ class Library:
 
     def _hands_page(self) -> str:
         """Ce que rapporte chaque main de départ ; le détail d'une main se demande à hands_detail."""
-        kinds = self._kind_map()
-        formats = {fmt: handplay.aggregate(plays, kinds if fmt == "HU" else None) for fmt, plays in self._plays().items()}
+        formats = {fmt: handplay.aggregate(plays, self._kind_map() if fmt == "HU" else self._ring_versus())
+                   for fmt, plays in self._plays().items()}
         return build_hands_page(formats, api=f"{self.api}/mains")
 
     def hands_detail(self, query: dict[str, str]) -> dict:
@@ -295,7 +332,8 @@ class Library:
         situation = query.get("sit") or "all"
         if situation != "all" and situation not in dict(handplay.SITUATIONS):
             raise KeyError(situation)
-        return handplay.detail(plays, self._kind_map() if query.get("fmt", "HU") == "HU" else None, name=name,
+        return handplay.detail(plays, self._kind_map() if query.get("fmt", "HU") == "HU" else self._ring_versus(),
+                               name=name,
                                kind=query.get("kind") or "", position=query.get("pos") or "", situation=situation,
                                actions=actions)
 
@@ -424,36 +462,39 @@ class Library:
 
     # --- leakfinding ----------------------------------------------------------------------
     def leak_formats(self) -> list[tuple[str, int]]:
-        """Les formats de table de tes mains et leur nombre : heads-up, puis 6-max, 3-max… (un rapport chacun)."""
+        """Les formats de tes mains et leur nombre : le heads-up, puis les tables à plusieurs (3 à 9 joueurs
+        ensemble) ; un rapport chacun."""
         out = [("HU", len(self.hands))] if self.hands else []
-        counts: dict[str, int] = {}
-        for h in self.ring:
-            counts[h.table_format] = counts.get(h.table_format, 0) + 1
-        order = lambda fmt: (ring.FORMATS.index(fmt) if fmt in ring.FORMATS else len(ring.FORMATS), fmt)  # noqa: E731
-        return out + sorted(counts.items(), key=lambda kv: order(kv[0]))
+        return out + ([(ring_leaks.FORMAT, len(self.ring))] if self.ring else [])
 
     def _leak_format(self, table_format: Optional[str]) -> str:
-        """Le format demandé (par défaut le heads-up, ou ta première table à plusieurs) ; UnknownPlayer sans mains."""
+        """Le format demandé (par défaut le heads-up, ou les tables à plusieurs) ; « 6-max », « 3-max »… : les tables
+        à plusieurs. UnknownPlayer sans mains de ce format."""
         formats = [fmt for fmt, _ in self.leak_formats()]
-        if not formats or (table_format and table_format not in formats):
-            raise UnknownPlayer(table_format or "aucune main")
-        return table_format or formats[0]
+        if not formats:
+            raise UnknownPlayer("aucune main")
+        if not table_format:
+            return formats[0]
+        fmt = "HU" if table_format == "HU" else ring_leaks.FORMAT
+        if fmt not in formats:
+            raise UnknownPlayer(table_format)
+        return fmt
 
     def leaks_report(self, table_format: str = "HU") -> "leaks.Report":
-        """Le rapport d'un format de table, recalculé quand des mains, des analyses du solveur, tes charts ou les plans
-        de jeu changent."""
+        """Le rapport d'un format, recalculé quand des mains, des analyses du solveur, tes charts, les plans de jeu ou
+        le type de tes adversaires changent."""
         changes = (_digest_count(),) + documents.revision(db.current(), "plan", "ranges")[2:]
         if table_format == "HU":
             return self._cached(("leaks",) + changes + self._kinds_key(),
                                 lambda: leaks.build(self.hands, self.hero, self.kinds()))
-        return self._cached(("leaks", table_format) + changes,
-                            lambda: ring_leaks.build(self.ring, self.hero or "", table_format))
+        return self._cached(("leaks", ring_leaks.FORMAT) + changes + self._ring_kinds_key(),
+                            lambda: ring_leaks.build(self.ring, self.hero or "", self.ring_kinds()))
 
     def leaks_page(self, standalone: bool = False, table_format: Optional[str] = None) -> str:
         fmt = self._leak_format(table_format)
         return build_leaks_page(self.leaks_report(fmt), api=f"{self.api}/leaks", pages=self.pages,
                                 embed=not standalone, standalone=standalone, name=self.display_name,
-                                opponents=self.summary()["opponents"] if fmt == "HU" else None,
+                                opponents=self.summary()["opponents"] if fmt == "HU" else self.ring_opponents_view(),
                                 formats=self.leak_formats())
 
     def leaks_state(self, start: bool = False, table_format: Optional[str] = None) -> dict:

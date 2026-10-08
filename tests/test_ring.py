@@ -55,18 +55,27 @@ class AnalyzeTest(unittest.TestCase):
         self.assertAlmostEqual(six.total.net_bb, 88.5 / 5)
         self.assertEqual(ring.ref("6-max", "open", "BTN"), (40, 50))
         self.assertIsNone(ring.ref("3-max", "vpip"))
-        page = build_ring_page(stats, "Hero")
-        for text in ("Préflop par position", "Après le flop", "6-max (2)", "3-max (1)", "repère 18–23&nbsp;%"):
+        # toutes les tables ensemble : une position compte ses mains de chaque taille de table
+        merged = ring.analyze(hands, "Hero", merge=True)
+        self.assertEqual([(fs.table_format, fs.total.hands, fs.formats) for fs in merged],
+                         [(ring.MERGED, 3, ["3-max", "6-max"])])
+        self.assertEqual([p.position for p in merged[0].positions], ["HJ", "BB"])
+        self.assertEqual(ring.ref(ring.MERGED, "open", "HJ"), (18, 23))
+        scopes = [("all", "Toutes", merged), ("reg", "Réguliers", merged), ("rec", "Récréatifs", [])]
+        page = build_ring_page(scopes, "Hero")
+        for text in ("Préflop par position", "Après le flop", "Toutes tes mains (3)", "Contre les réguliers (3)",
+                     "repère 18–23&nbsp;%", "3-max, 6-max"):
             self.assertIn(text, page)
+        self.assertNotIn("Contre les récréatifs (", page)  # aucune main contre eux : pas de bouton
         self.assertIn("Aucune main", build_ring_page([], "Hero"))
-        # un pot à deux au flop en 6-max sans ranges : de quoi charger les charts de Hand2Note Guide
+        # un pot à deux au flop sans ranges : de quoi charger les charts de Hand2Note Guide
         row = {"id": "X1", "date": stats[0].first, "format": "6-max", "hero": "CO", "villain": "BB",
                "line": "CO open, BB call", "pot_type": None, "cards": ["Ah", "Kd"], "board": ["2c", "7d", "9s"],
                "total_bb": 12.0, "net_bb": 5.5, "status": "Pas de range préflop pour « CO open, BB call » en 6-max"}
-        page = build_ring_page(stats, "Hero", spots=[row], ranges={})
+        page = build_ring_page(scopes, "Hero", spots=[row], ranges={})
         self.assertIn("Charger les charts 100 bb de Hand2Note Guide (6-max et 3-max)", page)
         self.assertIn("pas de range préflop", page)
-        ready = build_ring_page(stats, "Hero", spots=[dict(row, status=None, pot_type="SRP")], ranges={"6-max": 23})
+        ready = build_ring_page(scopes, "Hero", spots=[dict(row, status=None, pot_type="SRP")], ranges={"6-max": 23})
         self.assertNotIn("Charger les charts", ready)
         self.assertIn('href="/explorateur/X1"', ready)
 

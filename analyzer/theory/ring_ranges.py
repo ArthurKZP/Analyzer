@@ -1,8 +1,9 @@
-"""Ranges préflop des tables à plusieurs (3-max, 6-max), tirées de tes solutions : de quoi résoudre au postflop les
-coups où il ne reste que deux joueurs au flop.
+"""Ranges préflop des tables à plusieurs (3 à 9 joueurs), tirées de tes solutions : de quoi résoudre au postflop les
+coups où il ne reste que deux joueurs au flop, et juger tes décisions préflop.
 
 Une solution par format de table (« 6-max », « 3-max »), gardée dans la base (documents « ranges ») ; importée
-d'un fichier JSON (python -m analyzer ranges --importer FICHIER) ou des charts de Hand2Note Guide (--hand2note) :
+d'un fichier JSON (python -m analyzer ranges --importer FICHIER) ou des charts de Hand2Note Guide (--hand2note).
+Une table sans solution à elle prend les charts 6-max à même nombre de joueurs derrière (chart_mapping) :
 
     {"format": "6-max", "stack_bb": 100, "source": "…",
      "lines": {"CO:raise BB:call": {"pot_type": "SRP", "ranges": {"CO": "AA,AKs,KQo:0.5,…", "BB": "…"}},
@@ -27,10 +28,13 @@ POT_TYPES = {1: "SRP", 2: "pot 3bet", 3: "pot 4bet"}
 
 
 def missing_hint(table_format: str) -> str:
-    """Comment donner sa solution d'un format de table."""
-    return (f"importe ta solution {table_format} (python -m analyzer ranges --importer FICHIER.json"
-            + (", ou --hand2note pour les charts de Hand2Note Guide" if table_format in ("6-max", "3-max") else "")
-            + ")")
+    """Comment donner sa solution d'un format de table ; aux tables à plusieurs, les charts 6-max couvrent toutes les
+    tailles de table."""
+    if table_format in ("HU", "2-max"):
+        return f"importe ta solution {table_format} (python -m analyzer ranges --importer FICHIER.json)"
+    return ("importe tes charts 6-max, qui servent à toutes les tables à plusieurs (python -m analyzer ranges "
+            "--hand2note pour les charts de Hand2Note Guide, ou --importer FICHIER.json), ou ta solution "
+            f"{table_format}")
 
 
 def line_key(steps: list[tuple[str, str]]) -> str:
@@ -98,6 +102,39 @@ def lookup(table_format: str, steps: list[tuple[str, str]]) -> Optional[tuple[st
     raises = sum(1 for _, kind in steps if kind == "raise")
     pot_type = entry.get("pot_type") or POT_TYPES.get(raises, "pot limpé" if raises == 0 else f"pot {raises + 1}bet")
     return pot_type, {pos: parse_range(text) for pos, text in entry["ranges"].items() if isinstance(text, str)}
+
+
+# Une table sans solution à elle prend les charts 6-max, position pour position à même nombre de joueurs derrière : le
+# 3-max (BTN, SB, BB, comme ses charts tirés du 6-max), une table de 7 à 9 joueurs (le LJ ouvre comme l'UTG de 6-max ;
+# les places plus éloignées du bouton, UTG à UTG+2, n'ont pas de chart).
+CHART_POSITIONS = {"UTG": "UTG", "HJ": "HJ", "CO": "CO", "BTN": "BTN", "SB": "SB", "BB": "BB"}
+FULL_RING_POSITIONS = {"LJ": "UTG", "HJ": "HJ", "CO": "CO", "BTN": "BTN", "SB": "SB", "BB": "BB"}
+
+
+def chart_mapping(table_format: str, formats) -> Optional[tuple[str, dict[str, str]]]:
+    """Les charts d'un format de table, parmi les formats qui ont une solution : (format des charts, position à la
+    table -> position dans les charts), ou None. Le format a sa solution, sinon les charts 6-max (voir plus haut)."""
+    if table_format in formats:
+        return table_format, {}
+    if "6-max" not in formats or table_format == "HU":
+        return None
+    if table_format in ("3-max", "6-max"):
+        return "6-max", dict(CHART_POSITIONS)
+    return "6-max", dict(FULL_RING_POSITIONS)
+
+
+def resolve(table_format: str, steps: list[tuple[str, str]]) -> Optional[tuple[str, list[tuple[str, str]]]]:
+    """La ligne dans les charts qui la couvrent : (format des charts, étapes aux positions des charts), ou None si
+    une position n'a pas de chart."""
+    found = chart_mapping(table_format, available())
+    if found is None:
+        return None
+    chart_format, mapping = found
+    if not mapping:
+        return chart_format, list(steps)
+    if any(pos not in mapping for pos, _ in steps):
+        return None
+    return chart_format, [(mapping[pos], kind) for pos, kind in steps]
 
 
 def available() -> dict[str, int]:

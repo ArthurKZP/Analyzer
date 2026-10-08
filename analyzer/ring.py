@@ -6,8 +6,12 @@ ou de la SB, sans caller), réaction au 3bet après ton open, c-bet au flop en p
 à la c-bet de l'agresseur, abattage. Une main sans décision (la BB à qui tout le monde folde) compte dans les mains
 et le résultat, pas dans les fréquences.
 
-Repères : fourchettes indicatives d'un régulier en 6-max à 100 bb (stats de tracker courantes), en attendant ceux
-du solveur ; pas de repère en 3-max.
+Repères : fourchettes indicatives d'un régulier en 6-max à 100 bb (stats de tracker courantes) ; pas de repère en
+3-max. Les tables de 3 à 9 joueurs se lisent aussi ensemble (analyze(…, merge=True), MERGED), avec les repères du
+6-max.
+
+Les adversaires des tables à plusieurs : leurs fréquences à chaque taille de table (profiles, pour les classer
+régulier ou récréatif, players.ring_suggest) et les pots disputés avec toi (opponents).
 """
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ from .stats import Ratio
 ORDER = ("UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN", "SB", "BB")
 STEAL_FROM = ("CO", "BTN", "SB")
 FORMATS = ("6-max", "3-max")
+MERGED = "Tables à plusieurs"  # toutes les tables de 3 joueurs et plus, ensemble
 
 STATS = (
     ("vpip", "VPIP"), ("pfr", "PFR"), ("open", "Open"), ("limp", "Limp d'entrée"), ("threebet", "3bet"),
@@ -56,6 +61,7 @@ class FormatStats:
     sites: list[str]
     first: Optional[object] = None
     last: Optional[object] = None
+    formats: list[str] = field(default_factory=list)  # les tailles de table réunies (MERGED)
 
 
 def read(hand: Hand, hero: str) -> dict[str, bool]:
@@ -119,13 +125,16 @@ def read(hand: Hand, hero: str) -> dict[str, bool]:
     return out
 
 
-def analyze(hands: list[Hand], hero: str) -> list[FormatStats]:
-    """Tes stats par format de table (6-max, 3-max…), puis par position."""
+def analyze(hands: list[Hand], hero: str, merge: bool = False) -> list[FormatStats]:
+    """Tes stats par format de table (6-max, 3-max…), puis par position ; merge=True : toutes les tables de 3 joueurs
+    et plus ensemble (MERGED), une position comptant ses mains de chaque taille de table."""
     out = []
     formats = sorted({h.table_format for h in hands if hero in h.seats and h.size > 2},
                      key=lambda f: (FORMATS.index(f) if f in FORMATS else len(FORMATS), f))
+    if merge:
+        formats = [MERGED] if formats else []
     for fmt in formats:
-        mine = [h for h in hands if hero in h.seats and h.table_format == fmt and h.bb]
+        mine = [h for h in hands if hero in h.seats and h.bb and h.size > 2 and (fmt == MERGED or h.table_format == fmt)]
         total = PositionStats("Toutes")
         by_pos: dict[str, PositionStats] = {}
         for h in mine:
@@ -138,12 +147,19 @@ def analyze(hands: list[Hand], hero: str) -> list[FormatStats]:
                 by_pos[pos].ratios[key].add(made)
         positions = sorted(by_pos.values(), key=lambda p: ORDER.index(p.position) if p.position in ORDER else len(ORDER))
         out.append(FormatStats(fmt, total, positions, sorted({h.site for h in mine}),
-                               mine[0].date if mine else None, mine[-1].date if mine else None))
+                               mine[0].date if mine else None, mine[-1].date if mine else None,
+                               sorted({h.table_format for h in mine}, key=lambda f: (h_size(f), f))))
     return out
 
 
+def h_size(table_format: str) -> int:
+    """La taille d'une table d'après son format (« 6-max », « 9 joueurs »), pour les ranger."""
+    digits = "".join(c for c in table_format if c.isdigit())
+    return int(digits) if digits else 0
+
+
 def ref(table_format: str, key: str, position: Optional[str] = None) -> Optional[tuple[float, float]]:
-    if table_format != "6-max":
+    if table_format not in ("6-max", MERGED):
         return None
     if key == "open" and position:
         return OPEN_6MAX.get(position)
@@ -152,3 +168,53 @@ def ref(table_format: str, key: str, position: Optional[str] = None) -> Optional
 
 def stat_def(table_format: str, key: str, position: Optional[str] = None) -> StatDef:
     return StatDef(key, LABEL[key], ref(table_format, key, position))
+
+
+# --- Les adversaires ------------------------------------------------------------------------------------------------
+
+def size_class(players: int) -> str:
+    """« 3 », « 6 » (4 à 6 joueurs) ou « 9 » (7 et plus)."""
+    return "3" if players <= 3 else "6" if players <= 6 else "9"
+
+
+def profiles(hands: list[Hand], names: set[str]) -> dict[str, dict]:
+    """Les fréquences de ces joueurs (read) à chaque taille de table : {joueur: {taille: {"hands": n, stat: Ratio}}}."""
+    out: dict[str, dict] = {}
+    for h in hands:
+        if h.size <= 2 or not h.bb:
+            continue
+        size = size_class(h.size)
+        for name in names & set(h.seats):
+            st = out.setdefault(name, {}).setdefault(size, {"hands": 0})
+            st["hands"] += 1
+            for key, made in read(h, name).items():
+                st.setdefault(key, Ratio()).add(made)
+    return out
+
+
+def in_pot(hand: Hand, player: str) -> bool:
+    """Le joueur a mis de l'argent dans le pot de lui-même (call, relance, mise ; pas une blinde)."""
+    return any(a.player == player and a.kind in (CALL, RAISE, BET) for a in hand.actions)
+
+
+def opponents(hands: list[Hand], hero: str) -> list[dict]:
+    """Tes adversaires aux tables à plusieurs, du plus joué au moins joué : mains à la même table, pots disputés
+    ensemble (chacun y a mis de l'argent de lui-même), ton résultat dans ces pots."""
+    rows: dict[str, dict] = {}
+    for h in hands:
+        if h.size <= 2 or hero not in h.seats or not h.bb:
+            continue
+        mine = in_pot(h, hero)
+        for name in h.seats:
+            if name == hero:
+                continue
+            row = rows.setdefault(name, {"name": name, "hands": 0, "pots": 0, "net_bb": 0.0, "last": None})
+            row["hands"] += 1
+            row["last"] = max(row["last"] or h.date, h.date)
+            if mine and in_pot(h, name):
+                row["pots"] += 1
+                row["net_bb"] += h.net(hero) / h.bb
+    out = list(rows.values())
+    for row in out:
+        row["bb100"] = 100 * row["net_bb"] / row["pots"] if row["pots"] else 0.0
+    return sorted(out, key=lambda r: (-r["hands"], r["name"]))

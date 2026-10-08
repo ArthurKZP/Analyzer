@@ -119,12 +119,13 @@ class Handler(BaseHTTPRequestHandler):
         return [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
 
     def _format(self) -> Optional[str]:
-        """Le format de table demandé (« ?format=6-max ») : le Leakfinding a un rapport par format."""
+        """Le format demandé (« ?format=ring ») : le Leakfinding a un rapport pour le heads-up, un pour les tables à
+        plusieurs (« 6-max », « 3-max »… y mènent aussi)."""
         return parse_qs(urlsplit(self.path).query).get("format", [None])[0]
 
     @staticmethod
     def _report_name(table_format: Optional[str], who: str = "") -> str:
-        suffix = f"-{table_format}" if table_format and table_format != "HU" else ""
+        suffix = "-tables-a-plusieurs" if table_format and table_format != "HU" else ""
         return f"leakfinding{'-' + who if who else ''}{suffix}.html"
 
     # --- GET --------------------------------------------------------------------

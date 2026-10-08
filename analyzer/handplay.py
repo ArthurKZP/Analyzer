@@ -220,17 +220,28 @@ class Theory:
             if node is None or (situation != "open" and raisers and raisers[0] != hand.button):
                 return None  # l'arbre de référence part de l'open du bouton
             return node.strategy(combo)
-        lines = self.lines.get(hand.table_format)
-        if not lines:
+        found = self.chart(hand.table_format)
+        if found is None:
             return None
-        me = hand.position(hero)
+        lines, mapping = found
+        at = (lambda pos: mapping.get(pos)) if mapping else (lambda pos: pos)  # noqa: E731
+        me = at(hand.position(hero))
         if situation == "open":
-            return _chart_open(lines, me, combo)
+            return _chart_open(lines, me, combo) if me else None
         if situation == "vs_open":
-            return _chart_vs_open(lines, hand.position(raisers[0]), me, combo)
+            opener = at(hand.position(raisers[0]))
+            return _chart_vs_open(lines, opener, me, combo) if me and opener else None
         if situation == "vs_3bet":
-            return _chart_vs_3bet(lines, me, hand.position(raisers[1]), combo)
+            threebettor = at(hand.position(raisers[1]))
+            return _chart_vs_3bet(lines, me, threebettor, combo) if me and threebettor else None
         return None  # face au 4bet : les charts ne donnent que les calls (pas les tapis)
+
+    def chart(self, table_format: str) -> Optional[tuple[dict, dict]]:
+        """(lignes des charts, position à la table -> position des charts) pour ce format : les siens, sinon ceux du
+        6-max (ring_ranges.chart_mapping)."""
+        from .theory import ring_ranges
+        found = ring_ranges.chart_mapping(table_format, self.lines)
+        return (self.lines[found[0]], found[1]) if found else None
 
 
 def _range(lines: dict, key: str, position: str) -> Optional[dict[str, float]]:
@@ -275,11 +286,11 @@ def _chart_vs_3bet(lines: dict, me: str, threebettor: str, combo: str) -> Option
     return {"raise": r, "call": c, "fold": max(0.0, 1 - r - c)}
 
 
-def ring_lines(formats: tuple[str, ...] = ("6-max", "3-max")) -> dict[str, dict]:
-    """Les ranges de tes charts (ring_ranges), ligne par ligne, pour chaque format présent."""
+def ring_lines(formats: Optional[tuple[str, ...]] = None) -> dict[str, dict]:
+    """Les ranges de tes charts (ring_ranges), ligne par ligne, pour chaque format présent (tous par défaut)."""
     from .theory import ring_ranges
     out = {}
-    for table_format in formats:
+    for table_format in formats or tuple(ring_ranges.available()):
         data = ring_ranges.solution(table_format)
         if data:
             out[table_format] = {key: {pos: ring_ranges.parse_range(text) for pos, text in entry["ranges"].items()}
@@ -331,7 +342,9 @@ def _freq(d: Decision) -> Optional[float]:
 
 
 def _kind(p: Played, kinds: dict[str, str]) -> str:
-    return kinds.get(p.opponent or "", "") if p.opponent else ""
+    """Le type de l'adversaire : en heads-up, d'après son nom ; à une table à plusieurs, d'après la main (kinds : main ->
+    « reg » | « rec »)."""
+    return kinds.get(p.opponent or p.hand_id, "")
 
 
 def aggregate(plays: list[Played], kinds: Optional[dict[str, str]] = None) -> dict:

@@ -201,7 +201,7 @@ SCRIPT = r"""
   function render() {
     const f = DATA.formats[st.fmt];
     buttons('hp-fmt', 'Format', fmts.length > 1 ? fmts.map((x) => [x, FMT[x] || x]) : [], 'fmt');
-    buttons('hp-kind', 'Adversaires', st.fmt === 'HU' ? [['', 'Tous'], ['reg', 'Réguliers'], ['rec', 'Récréatifs']] : [], 'kind');
+    buttons('hp-kind', 'Adversaires', [['', 'Tous'], ['reg', 'Réguliers'], ['rec', 'Récréatifs']], 'kind');
     if (st.pos && !f.positions.includes(st.pos)) st.pos = '';
     buttons('hp-pos', 'Position', [['', 'Toutes']].concat(f.positions.map((p) => [p, p])), 'pos');
     buttons('hp-sit', 'Décision', [['all', 'Toutes les mains']].concat(DATA.situations.filter(([k]) => k !== 'vs_limp' || st.fmt !== 'HU')), 'sit');

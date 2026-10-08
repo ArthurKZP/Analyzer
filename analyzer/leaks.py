@@ -15,8 +15,8 @@
 Contre un récréatif, s'écarter de la théorie n'est pas une erreur en soi : ses stats sont montrées à côté, mais
 seules celles contre les réguliers comptent pour les leaks.
 
-Ce module fait le rapport du heads-up ; celui des tables à plusieurs (6-max, 3-max) est dans analyzer/ring_leaks.py,
-avec les mêmes briques (Stat, Leak, Pick, Report, rank).
+Ce module fait le rapport du heads-up ; celui des tables à plusieurs (3 à 9 joueurs, ensemble) est dans
+analyzer/ring_leaks.py, avec les mêmes briques (Stat, Leak, Pick, Report, rank) et la même présentation.
 """
 from __future__ import annotations
 
@@ -72,6 +72,11 @@ class Stat:
     stake: float = 1.0    # ce que la décision met en jeu (STREET_STAKE × POT_STAKE), pour classer les écarts
     exact: bool = False   # repère calculé sur les mêmes cartes que les siennes (charts) : le hasard des cartes n'y
     # est pour rien, la tolérance est plus faible
+    refs: Optional[dict] = None  # portée -> repère, quand il change d'une portée à l'autre (mêmes cartes) ; reference
+    # est celui de la portée comparée à la théorie
+
+    def ref_for(self, scope: str) -> Optional[float]:
+        return self.refs.get(scope, self.reference) if self.refs else self.reference
 
     def weight(self, scope: str = "reg") -> float:
         """Le poids d'un écart (≈ bb pour 100 mains, ordre de grandeur seulement) : occasions pour 100 mains × écart ×
@@ -81,11 +86,12 @@ class Stat:
     def verdict(self, scope: str = "reg") -> Optional[tuple[str, str]]:
         """(« plus » | « moins », « solide » | « indicatif ») face à la théorie (ou à la fourchette), ou None."""
         r = self.ratios.get(scope)
-        if (self.reference is None and self.band is None) or r is None or r.opps < LOOSE_N:
+        reference = self.ref_for(scope)
+        if (reference is None and self.band is None) or r is None or r.opps < LOOSE_N:
             return None
         lo, hi = (x / 100 for x in wilson(r))
         p = r.hits / r.opps
-        if self.reference is None:  # fourchette : écart dès qu'on en sort, « solide » si le hasard ne l'explique pas
+        if reference is None:  # fourchette : écart dès qu'on en sort, « solide » si le hasard ne l'explique pas
             low, high = self.band
             if low <= p <= high:
                 return None
@@ -93,20 +99,20 @@ class Stat:
             if r.opps >= SOLID_N and (lo > high if direction == "plus" else hi < low):
                 return direction, "solide"
             return (direction, "indicatif") if self.gap(scope) >= LOOSE_GAP / 2 else None
-        margin, loose = self.tolerances()
-        if r.opps >= SOLID_N and not self.fragile and \
-                (lo > self.reference + margin or hi < self.reference - margin):
-            return ("plus" if p > self.reference else "moins"), "solide"
-        if abs(p - self.reference) >= loose:
-            return ("plus" if p > self.reference else "moins"), "indicatif"
+        margin, loose = self.tolerances(reference)
+        if r.opps >= SOLID_N and not self.fragile and (lo > reference + margin or hi < reference - margin):
+            return ("plus" if p > reference else "moins"), "solide"
+        if abs(p - reference) >= loose:
+            return ("plus" if p > reference else "moins"), "indicatif"
         return None
 
-    def tolerances(self) -> tuple[float, float]:
+    def tolerances(self, reference: Optional[float] = None) -> tuple[float, float]:
         """(marge d'un écart « solide », écart d'un « indicatif ») autour du repère : 4 et 8 points, la moitié quand
         le repère est calculé sur les mêmes cartes ; moins près de 0 % ou de 100 %, où quelques points font un gros
         écart (un open à 22 % au lieu de 16 %)."""
+        reference = self.reference if reference is None else reference
         scale = 0.5 if self.exact else 1.0
-        edge = min(self.reference, 1 - self.reference)
+        edge = min(reference, 1 - reference)
         return max(0.01, min(SOLID_MARGIN * scale, 0.2 * edge)), max(0.02, min(LOOSE_GAP * scale, 0.4 * edge))
 
     def gap(self, scope: str = "reg") -> float:
@@ -115,8 +121,9 @@ class Stat:
         if r is None or not r.opps:
             return 0.0
         p = r.hits / r.opps
-        if self.reference is not None:
-            return abs(p - self.reference)
+        reference = self.ref_for(scope)
+        if reference is not None:
+            return abs(p - reference)
         if self.band is not None:
             return max(self.band[0] - p, p - self.band[1], 0.0)
         return 0.0
@@ -147,7 +154,7 @@ class Leak:
 class Pick:
     """Une main à revoir."""
     hand: Hand
-    kind: str             # reg, rec (all : une table à plusieurs)
+    kind: str             # reg, rec
     line: str             # « SRP · BTN · river »
     pot_bb: float
     net_bb: float
@@ -169,8 +176,8 @@ class Report:
     leaks: list
     rec_notes: list = field(default_factory=list)
     opponents: dict = field(default_factory=dict)   # type -> joueurs
-    table_format: str = "HU"    # HU, 6-max, 3-max
-    scopes: tuple = SCOPES      # portées des stats (aux tables à plusieurs : toutes ses mains)
+    table_format: str = "HU"    # HU, ring (les tables à plusieurs)
+    scopes: tuple = SCOPES      # portées des stats
     solver_scope: str = "reg"   # la portée comparée à la théorie (leaks, mains passées au solveur)
     context: dict = field(default_factory=dict)  # tables à plusieurs : charts présents, flops 6-max résolus…
 
@@ -373,9 +380,9 @@ def _solver_leak(group: dict, analyzed: int, digests: Optional[list[dict]] = Non
 
 
 def _hand_leak(x: "handplay.Loser", hands: int, scope: str = "reg", fmt: str = "HU") -> Leak:
-    """Une main (ou une famille) jouée ainsi perd nettement plus que le fold, contre les réguliers (à une table à
-    plusieurs, fmt « ring » : sur toutes ses mains) : d'où vient la perte (le type de pot qui coûte le plus), ce qu'en
-    dit la théorie, et le coup le plus cher à revoir."""
+    """Une main (ou une famille) jouée ainsi perd nettement plus que le fold, contre les réguliers (fmt « ring » : à
+    une table à plusieurs, face aux charts) : d'où vient la perte (le type de pot qui coûte le plus), ce qu'en dit la
+    théorie, et le coup le plus cher à revoir."""
     fr = lambda text: text.replace(".", ",")  # noqa: E731
     evidence = fr(f"{x.n} fois{SCOPE_WORDS.get(scope, '')} : {x.mean:+.2f} bb par main (± {x.half_width:.1f}), contre "
                   f"{x.fold:+.2f} bb pour le fold, soit {100 * x.gap:+.0f} bb/100 par rapport au fold.")
@@ -405,7 +412,7 @@ def _hand_leak(x: "handplay.Loser", hands: int, scope: str = "reg", fmt: str = "
     else:
         advice = "Joue-la moins souvent ainsi, ou revois la suite de ces coups."
     group = "fold" if x.action == "fold" else "pas" if x.action in ("call", "check") else "agg"
-    query = {"fmt": fmt, "kind": "reg"} if fmt == "HU" else {"fmt": fmt}
+    query = {"fmt": fmt, "kind": scope} if scope in ("reg", "rec") else {"fmt": fmt}
     link = "mains#" + urlencode(dict(query, pos=x.position, sit=x.situation, main=x.name, act=group))
     example = None
     if x.worst and x.worst[0][1] < 0:
