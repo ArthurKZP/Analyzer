@@ -262,14 +262,17 @@ def _head(report: leaks.Report, api: str) -> str:
 
 
 def opponents_html(opponents: list[dict], ring: bool = False, title: str = "Tes adversaires",
-                   result: str = "Ton résultat") -> str:
+                   result: str = "Ton résultat", pick: bool = False,
+                   groups: Optional[dict[str, list[str]]] = None) -> str:
     """Les adversaires du joueur et leur type, réglable : il décide quelles mains comptent pour les leaks. Recherche par
     nom, filtre par type, tri par mains, résultat ou date. ring : ceux des tables à plusieurs (mains à la même table,
     résultat dans les pots disputés ensemble) ; result : la colonne du résultat du joueur contre chacun (« Ton
-    résultat », « Résultat de Paul »)."""
+    résultat », « Résultat de Paul ») ; pick : une case à cocher par joueur (pour les regrouper sous un alias) ;
+    groups : les alias et leurs pseudos ({alias: [pseudos]}), signalés à côté du nom."""
     if not opponents:
         return ""
     names = {"reg": "Régulier", "rec": "Récréatif"}
+    groups = groups or {}
     rows = []
     for o in opponents:
         auto = f"Auto : {names[o['suggestion']]}" if o.get("suggestion") else "Auto : Régulier"
@@ -279,7 +282,12 @@ def opponents_html(opponents: list[dict], ring: bool = False, title: str = "Tes 
                                  o.get("last", ""))
         pots = f'<td class="num">{o.get("pots", 0)}</td>' if ring else ""
         why = escape(", ".join(o.get("reasons") or []))
-        rows.append(f'<tr {data}><td>{escape(o["name"])}</td><td class="num">{o["hands"]}</td>{pots}'
+        box = (f'<td class="al-cell"><input type="checkbox" class="al-pick" value="{escape(o["name"])}" '
+               f'aria-label="Choisir {escape(o["name"])}"></td>') if pick else ""
+        pseudos = groups.get(o["name"])
+        tag = (f' <span class="al-tag" title="Pseudos : {escape(", ".join(pseudos))}">{len(pseudos)} pseudo(s)</span>'
+               if pseudos else "")
+        rows.append(f'<tr {data}>{box}<td>{escape(o["name"])}{tag}</td><td class="num">{o["hands"]}</td>{pots}'
                     f'<td class="num">{num(o["net_bb"], 1, sign=True)} bb</td>'
                     f'<td><select class="lk-kind" data-name="{escape(o["name"])}" title="{why}">{options}</select></td></tr>')
     tools = opponent_tools() if len(opponents) > 1 else ""
@@ -292,8 +300,9 @@ def opponents_html(opponents: list[dict], ring: bool = False, title: str = "Tes 
             f"« {result} » : dans les pots disputés ensemble, en bb." if ring else
             "Le type décide quelles mains comptent pour les leaks (seulement contre les réguliers). Sans choix, une "
             "suggestion d'après les stats de l'adversaire.")
+    first = '<th class="al-cell"></th>' if pick else ""
     return (f'<h2>{escape(title)}</h2><div class="card opp-box">{tools}<div class="scroll"><table class="stats opp-table">'
-            f'<thead><tr><th data-sort="name">Adversaire</th>{head}<th>Type</th></tr></thead><tbody>'
+            f'<thead><tr>{first}<th data-sort="name">Adversaire</th>{head}<th>Type</th></tr></thead><tbody>'
             + "".join(rows) + f'</tbody></table></div><p class="note">{escape(note)}</p></div>')
 
 

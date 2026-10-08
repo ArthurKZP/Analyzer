@@ -48,7 +48,10 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   exclues.
 - **Étude du field** : comment jouent tes adversaires. *Bluffs des réguliers* (où ils bluffent, ensemble puis un par
   un, voir plus bas) et *Les joueurs* : tes adversaires en heads-up et aux tables à plusieurs, réguliers et
-  récréatifs, avec recherche, tri et leur type réglable (le même partout).
+  récréatifs, avec recherche, tri et leur type réglable (le même partout). **Alias** : un même joueur peut avoir
+  plusieurs pseudos (un par site, ou un pseudo changé) ; coche-les dans ces listes et donne-leur un nom : ses mains,
+  ses stats et son type sont réunis sous ce nom partout dans l'application (tes mains et celles de tes élèves), sa
+  fiche rappelle ses pseudos, et « Défaire » les sépare à nouveau.
 - **Entraîneur** : joue des mains sur les spots résolus, le solveur juge chaque décision (voir plus bas).
 - **Sauvegarde** : tes calculs vers un dossier synchronisé ou un stockage en ligne (voir plus bas).
 - **Importer des mains** : glisse tes historiques ou choisis-les — des fichiers `.txt`, un dossier (avec ses
@@ -57,7 +60,10 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   doublons, les formats non reconnus et les autres fichiers de l'archive (PDF, images…) sont signalés. Une
   archive : 20 000 historiques et 1 Go décompressé au plus, 200 Mo par envoi (une archive de 150 Mo environ). Le
   dossier des mains (`hands/` par défaut) reste une boîte d'arrivée : un historique ou un `.zip` qu'on y dépose
-  est importé au lancement de l'application.
+  est importé au lancement de l'application. Sous l'import, **tes historiques importés** (site, format, mains,
+  dates) : *Retirer* efface leurs mains de la base et des analyses (une main présente aussi dans un autre historique
+  reste) ; l'historique est gardé pour être *rétabli*, et le réimporter le rétablit aussi (resté dans la boîte
+  d'arrivée, il n'est pas réimporté au lancement).
 
 Options : `--dossier` (dossier des historiques), `--port`, `--hero`, `--sans-navigateur`.
 Les analyses sont calculées à la première ouverture d'une page puis gardées en mémoire ; un import les recalcule.
@@ -904,7 +910,7 @@ Analyzer.
 ### Base de données
 
 Tout ce qu'Analyzer garde est dans une base de données : tes mains et celles de tes élèves (avec le texte d'origine
-de chaque historique), le type de tes adversaires, les résumés des mains passées au solveur, et les données du
+de chaque historique), le type de tes adversaires et leurs alias, les résumés des mains passées au solveur, et les données du
 solveur — tailles de mise choisies, plans de jeu, résultats des résolutions et précision de chaque spot, solutions
 préflop des tables à plusieurs et ranges ajustées, réglages et durées des résolutions, journal de l'entraîneur,
 fiches des études :
@@ -918,8 +924,8 @@ fiches des études :
   `ANALYZER_DB=postgresql://utilisateur:motdepasse@hôte:5432/base` avant de lancer l'application.
 - **Organisation** : un compte (« local » ici, un client en ligne), ses espaces (toi, chaque élève), et dans chaque
   espace ses historiques (texte d'origine compressé, importé une seule fois) et ses mains (une seule fois chacune,
-  même si deux historiques la contiennent). Le type des adversaires, les résumés et les données du solveur
-  appartiennent au compte. Si le code de lecture des historiques change, les mains sont relues depuis le texte
+  même si deux historiques la contiennent ; un historique retiré garde son texte, sans ses mains). Le type des
+  adversaires, les alias, les résumés et les données du solveur appartiennent au compte. Si le code de lecture des historiques change, les mains sont relues depuis le texte
   gardé.
 - **À jour partout** : chaque écriture d'un type de données (tailles, ranges, études…) change sa révision dans la
   base ; les calculs qui en dépendent (spots d'étude à jour, clés des spots des mains) se refont alors, même quand
@@ -1033,6 +1039,7 @@ analyzer/
   blobs.py             stockage des gros fichiers (arbres des études) : un dossier ici, un stockage objet en ligne
   store.py             cache sur disque des calculs longs (SQLite : mains lues, équités, clés des spots)
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
+  aliases.py           alias : les pseudos d'un même joueur regroupés sous un nom (appliqué à la lecture des mains)
   leaks.py             leakfinding : stats face à la théorie, revue du solveur, mains à revoir, leaks prioritaires
   ring_leaks.py        leakfinding aux tables à plusieurs : réguliers et récréatifs, préflop face aux charts, après le
                        flop face aux plans 6-max

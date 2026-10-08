@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from .. import aliases
 from ..theory import postflop, preflop_tree, ring_tree, studyspots
 from . import trainer
 from .library import Library, UnknownPlayer
@@ -143,6 +144,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.summary())
             if parts == ["api", "fichiers"]:  # tes historiques importés
                 return self._json(library.files_view())
+            if parts == ["api", "alias"]:  # les pseudos regroupés sous un alias
+                return self._json(aliases.groups())
             if parts == ["api", "solveur"]:
                 return self._json(postflop.status())
             if len(parts) == 3 and parts[:2] == ["api", "resoudre"]:
@@ -460,6 +463,16 @@ class Handler(BaseHTTPRequestHandler):
             return files if files is None else self._json(library.import_files(files))
         if len(parts) == 3 and parts[:2] == ["api", "fichiers"] and parts[2] in ("retirer", "retablir"):
             return self._file_action(library, parts[2])
+        if parts in (["api", "alias"], ["api", "alias", "defaire"]):
+            payload = self._small_json()
+            alias = payload.get("alias") if isinstance(payload, dict) else None
+            pseudos = payload.get("pseudos") if isinstance(payload, dict) else None
+            if not isinstance(alias, str) or (len(parts) == 2 and not (isinstance(pseudos, list) and len(pseudos) <= 50)):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.set_alias(alias, pseudos) if len(parts) == 2 else library.remove_alias(alias))
+            except ValueError as exc:
+                return self._error(400, str(exc))
         if len(parts) == 3 and parts[:2] == ["api", "leaks"] and parts[2] in ("lancer", "arreter"):
             try:
                 return self._json(library.leaks_cancel(self._format()) if parts[2] == "arreter"

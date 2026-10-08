@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
-from .. import bluffs, db, handplay, leaks, players, ring, ring_leaks, spots, store, students
+from .. import aliases, bluffs, db, handplay, leaks, players, ring, ring_leaks, spots, store, students
 from ..db import analyses as db_analyses
 from ..db import documents
 from ..db import hands as db_hands
@@ -126,7 +126,9 @@ class Library:
         """Importe les historiques nouveaux du dossier, puis lit les mains de l'espace dans la base."""
         db_hands.sync_folder(self.db, self.space_id, self.folder)
         hands = db_hands.load(self.db, self.space_id)
-        hero = self.hero_override or detect_hero(hands)
+        mapping = aliases.load()  # les pseudos regroupés sous un alias prennent son nom
+        aliases.apply(hands, mapping)
+        hero = mapping.get(self.hero_override, self.hero_override) if self.hero_override else detect_hero(hands)
         unify_hero(hands, hero)
         heads_up = [h for h in hands if hero and hero in h.seats and len(h.seats) == 2 and h.button and h.bb]
         ring = [h for h in hands if hero and hero in h.seats and len(h.seats) > 2 and h.button and h.bb]
@@ -213,6 +215,7 @@ class Library:
             "folder": str(self.folder),
             "hands": len(self.hands),
             "ring_hands": len(self.ring),  # tables à plusieurs
+            "aliases": aliases.groups(),  # {alias: [ses pseudos]}
             "first": self.hands[0].date.strftime("%d/%m/%Y") if self.hands else None,
             "last": self.hands[-1].date.strftime("%d/%m/%Y") if self.hands else None,
             "net_bb": round(sum(o["net_bb"] for o in opponents), 1),
@@ -435,7 +438,8 @@ class Library:
             return self.self_page("bluffs")
         if not self.hands and not self.ring:
             raise UnknownPlayer("moi")
-        return build_players_page(self.summary()["opponents"] if self.hands else [], self.ring_opponents_view())
+        return build_players_page(self.summary()["opponents"] if self.hands else [], self.ring_opponents_view(),
+                                  aliases.groups())
 
     def _population_bluffs(self) -> str:
         """Les bluffs des réguliers, ensemble puis un par un."""
@@ -969,6 +973,27 @@ class Library:
         for view in self.solves.active_for(todo.hand_ids):
             self.solves.cancel(view["job"])
         return self.review_state(villain)
+
+    # --- alias : plusieurs pseudos d'un même joueur ---------------------------------------
+    def set_alias(self, alias: str, pseudos: list[str]) -> dict:
+        """Regroupe ces pseudos sous un alias (pour tout le compte : tes mains et celles des élèves) ; ValueError si
+        rien à regrouper."""
+        found = aliases.group(alias, pseudos)
+        self._reload_all()
+        return {"aliases": found, "state": self.summary()}
+
+    def remove_alias(self, alias: str) -> dict:
+        found = aliases.ungroup(alias)
+        self._reload_all()
+        return {"aliases": found, "state": self.summary()}
+
+    def _reload_all(self) -> None:
+        """Relit tes mains et celles des élèves déjà ouverts (les noms des joueurs ont changé)."""
+        self.reload()
+        with self._lock:
+            loaded = list(self._students.values())
+        for lib in loaded:
+            lib.reload()
 
     # --- historiques importés : liste, retrait, rétablissement --------------------------
     def files_view(self) -> list[dict]:

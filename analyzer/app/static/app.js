@@ -139,8 +139,10 @@
     if (route.view === 'adv') {
       const o = state.opponents.find((x) => x.name === route.player);
       title.textContent = route.player;
+      const pseudos = (state.aliases || {})[route.player];  // un alias : ses pseudos
       subtitle.textContent = o
         ? o.hands + ' mains · ton résultat ' + signed(o.net_bb) + ' bb (' + signed(o.bb100) + ' bb/100) · dernière main le ' + o.last
+          + (pseudos ? ' · pseudos : ' + pseudos.join(', ') : '')
         : '';
       renderKind(o);
     } else if (route.view === 'moi') {
@@ -584,7 +586,12 @@
 
   // Une page du cadre a suivi un lien interne (ex. « voir les mains ») : on met l'onglet à jour.
   window.addEventListener('message', (e) => {
-    if (e.origin !== location.origin || !e.data || e.data.type !== 'analyzer-page') return;
+    if (e.origin !== location.origin || !e.data) return;
+    if (e.data.type === 'analyzer-refresh') {  // une page a changé les noms des joueurs (alias) : le menu suit
+      loadState().catch(() => {});
+      return;
+    }
+    if (e.data.type !== 'analyzer-page') return;
     const parts = String(e.data.path).split('/').filter(Boolean).map(decodeURIComponent);
     if (FORMAT_TABS.includes(parts[parts.length - 1]) && (parts[0] === 'moi' || parts[0] === 'eleve')) {
       // le format choisi (bilan, Leakfinding, préflop) : gardé pour la prochaine fois
