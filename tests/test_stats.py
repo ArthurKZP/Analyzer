@@ -5,6 +5,19 @@ from analyzer.insights import findings
 from analyzer.parsers import load_hands
 from analyzer.stats import HandReader, allin_ev, analyze
 
+try:
+    from .base import isolate_module, release_module
+except ImportError:  # lancé par « unittest discover -s tests »
+    from base import isolate_module, release_module
+
+
+def setUpModule():
+    isolate_module()
+
+
+def tearDownModule():
+    release_module()
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 

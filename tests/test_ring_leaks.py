@@ -14,7 +14,15 @@ from analyzer.app.leaks_page import build_leaks_page
 from analyzer.models import BET, CALL, CHECK, FOLD, POST_BB, POST_SB, RAISE, Action, Hand, Seat
 from analyzer.stats import Ratio
 from analyzer.theory import ring_ranges
-from tests.base import IsolatedHome
+from tests.base import IsolatedHome, isolate_module, release_module
+
+
+def setUpModule():
+    isolate_module()
+
+
+def tearDownModule():
+    release_module()
 
 SITES = Path(__file__).parent / "sites"
 FIXTURES = Path(__file__).parent / "fixtures"

@@ -6,18 +6,31 @@ from pathlib import Path
 
 from analyzer.cli import find_player, main, slugify
 
+try:
+    from .base import isolate_module, release_module
+except ImportError:  # lancé par « unittest discover -s tests »
+    from base import isolate_module, release_module
+
+
+def setUpModule():
+    isolate_module()
+
+
+def tearDownModule():
+    release_module()
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class CliTest(unittest.TestCase):
     def test_slugify(self):
         self.assertEqual(slugify("_Vïllâïn_"), "villain")
-        self.assertEqual(slugify("Peste Noire"), "peste-noire")
+        self.assertEqual(slugify("Joueur Exemple"), "joueur-exemple")
 
     def test_find_player_is_accent_and_case_insensitive(self):
-        names = ["_Vïllâïn_", "Peste Noire"]
+        names = ["_Vïllâïn_", "Joueur Exemple"]
         self.assertEqual(find_player("villain", names), "_Vïllâïn_")
-        self.assertEqual(find_player("peste", names), "Peste Noire")
+        self.assertEqual(find_player("exemple", names), "Joueur Exemple")
         self.assertIsNone(find_player("inconnu", names))
 
     def test_generates_report(self):

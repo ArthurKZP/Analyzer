@@ -9,6 +9,19 @@ from analyzer.report import chart_sample
 from analyzer.spots import line_options, line_tag, spot_records
 from analyzer.viewer import _json_for_script, build_viewer
 
+try:
+    from .base import isolate_module, release_module
+except ImportError:  # lancé par « unittest discover -s tests »
+    from base import isolate_module, release_module
+
+
+def setUpModule():
+    isolate_module()
+
+
+def tearDownModule():
+    release_module()
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
