@@ -616,6 +616,13 @@ ensemble ; les boutons en haut de la page, le dernier choisi est gardé), voir p
   en quatre couleurs) et, s'il y a lieu, quoi changer contre les récréatifs ; sur la période choisie, qu'elle
   rappelle. Fait sans dépendance (`analyzer/pdfwriter.py` : les polices standard des lecteurs PDF, rien à
   embarquer, une quinzaine de Ko).
+- **Présentation PowerPoint** (Leakfinding d'un élève) : de quoi mener la séance, une idée par diapositive — où en
+  est l'élève (chiffres clés), la courbe de ses résultats (réel et EV all-in), ses leaks puis chacun des trois
+  premiers (sa fréquence face à la théorie, ce que disent ses mains, quoi travailler, la main la plus chère), ses
+  écarts à la théorie, ce que dit le solveur, les mains à revoir ensemble (cartes en quatre couleurs), quoi changer
+  contre les récréatifs et le plan de travail d'ici la prochaine séance. Chaque diapositive a ses **notes pour le coach** (questions à poser, chiffres
+  détaillés). Format 16:9, police Arial, modifiable dans PowerPoint, Keynote ou LibreOffice ; fait sans dépendance
+  (`analyzer/pptxwriter.py`). Aussi pour toi : `/moi/presentation.pptx`.
 
 L'élève a aussi ses onglets *Préflop* (face à la solution, main par main), *Mains de départ*, *Face au solveur*
 (toutes ses mains contre les réguliers) et *Mains* (le visualiseur, d'où chaque main s'ouvre dans l'explorateur).
@@ -1044,8 +1051,8 @@ analyzer/
                        solveur » (review_page.py), leakfinding (leaks_page.py), bluffs des adversaires
                        (bluffs_page.py), étude du field (field_page.py), bilan des tables à plusieurs
                        (bilan_page.py), mains de départ (hands_page.py), synthèse du Leakfinding
-                       (synthesis.py) et son rapport PDF (report_pdf.py), entraîneur
-                       (trainer.py, static/trainer.*), plan de jeu suggéré (plan_page.py), coach
+                       (synthesis.py), son rapport PDF (report_pdf.py) et sa présentation (report_pptx.py),
+                       entraîneur (trainer.py, static/trainer.*), plan de jeu suggéré (plan_page.py), coach
                        (coach_chat.py, static/coach.*) et son serveur MCP pour l'abonnement Claude
                        (mcp_server.py), sauvegardes en arrière-plan (backups.py), interface
                        (static/, dont l'explorateur explorer.*)
@@ -1056,6 +1063,7 @@ analyzer/
   aliases.py           alias : les pseudos d'un même joueur regroupés sous un nom (appliqué à la lecture des mains)
   period.py            période d'analyse : toutes les mains, les N dernières, les N derniers jours, d'une date à une autre
   pdfwriter.py         PDF sans dépendance : pages A4, texte Helvetica (accents), symboles des cartes, formes, courbes
+  pptxwriter.py        PowerPoint sans dépendance : diapositives 16:9, textes, formes, tableaux, courbes, notes
   leaks.py             leakfinding : stats face à la théorie, revue du solveur, mains à revoir, leaks prioritaires
   ring_leaks.py        leakfinding aux tables à plusieurs : réguliers et récréatifs, préflop face aux charts, après le
                        flop face aux plans 6-max

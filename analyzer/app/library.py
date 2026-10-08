@@ -28,6 +28,7 @@ from ..theory.preflop import load_solution
 from ..viewer import build_viewer
 from . import bilan_page, synthesis
 from .report_pdf import build_pdf
+from .report_pptx import build_pptx
 from .bluffs_page import build_bluffs_page
 from .field_page import build_players_page
 from .hands_page import build_hands_page
@@ -625,6 +626,10 @@ class Library:
     def report_pdf(self, table_format: Optional[str] = None) -> bytes:
         """Le rapport de Leakfinding en PDF, synthétique."""
         return build_pdf(self.report_synthesis(table_format))
+
+    def report_pptx(self, table_format: Optional[str] = None) -> bytes:
+        """La présentation PowerPoint du Leakfinding, pour la séance du coach avec l'élève."""
+        return build_pptx(self.report_synthesis(table_format))
 
     def leaks_state(self, start: bool = False, table_format: Optional[str] = None) -> dict:
         """Les mains choisies (contre les réguliers en heads-up) : analysées, à analyser, en cours ; start=True les

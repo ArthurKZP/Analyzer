@@ -383,9 +383,9 @@ def _hand_leak(x: "handplay.Loser", hands: int, scope: str = "reg", fmt: str = "
     """Une main (ou une famille) jouée ainsi perd nettement plus que le fold, contre les réguliers (fmt « ring » : à
     une table à plusieurs, face aux charts) : d'où vient la perte (le type de pot qui coûte le plus), ce qu'en dit la
     théorie, et le coup le plus cher à revoir."""
-    fr = lambda text: text.replace(".", ",")  # noqa: E731
+    fr = lambda text: text.replace(".", ",")  # noqa: E731  (les nombres à la française ; le point final après)
     evidence = fr(f"{x.n} fois{SCOPE_WORDS.get(scope, '')} : {x.mean:+.2f} bb par main (± {x.half_width:.1f}), contre "
-                  f"{x.fold:+.2f} bb pour le fold, soit {100 * x.gap:+.0f} bb/100 par rapport au fold.")
+                  f"{x.fold:+.2f} bb pour le fold, soit {100 * x.gap:+.0f} bb/100 par rapport au fold") + "."
     costly = [src for src in x.sources if src.contribution < 0][:2]
     if costly:
         parts = [fr(f"{handplay.POT_SOURCES[src.pot]} ({src.n} fois, {src.mean:+.1f} bb par main : "
@@ -394,7 +394,7 @@ def _hand_leak(x: "handplay.Loser", hands: int, scope: str = "reg", fmt: str = "
         worst = costly[0]
         if worst.solver_n:
             evidence += fr(f" Le solveur y voit {worst.solver_loss:.2f} bb perdus par coup après le flop "
-                           f"({worst.solver_n} coups analysés).")
+                           f"({worst.solver_n} coups analysés)") + "."
     t = None if x.theory is None else round(100 * x.theory)
     who, s = ("La théorie", "") if fmt == "HU" else ("Tes charts", "nt")  # « la joue », « la jouent »
     where = handplay.POT_WORDS.get(costly[0].pot, "") if costly else ""

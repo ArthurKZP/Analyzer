@@ -347,7 +347,10 @@ def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = T
         f'<p><a class="lk-dl" href="{escape(pages)}/rapport{query}" download>Télécharger le rapport</a> '
         '<span class="muted small">(page autonome à envoyer, sans les boutons de l\'application)</span> · '
         f'<a class="lk-dl" href="{escape(pages)}/rapport.pdf{query}" download>Synthèse PDF</a> '
-        '<span class="muted small">(deux pages : chiffres, leaks, écarts, mains à revoir)</span></p>')
+        '<span class="muted small">(deux pages : chiffres, leaks, écarts, mains à revoir)</span>'
+        + (f' · <a class="lk-dl" href="{escape(pages)}/presentation.pptx{query}" download>Présentation PowerPoint</a> '
+           '<span class="muted small">(pour la séance avec l\'élève, avec les notes du coach)</span>'
+           if name is not None else "") + '</p>')
     solver = (_situations_table(report.review["digests"], "H", False) + "<h3>Ses décisions les plus chères</h3>"
               + _costly_table(report.review["digests"], "H", True))
     if standalone:  # pas de liens vers l'application dans le rapport envoyé

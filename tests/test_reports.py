@@ -1,14 +1,20 @@
 import http.client
+import io
+import posixpath
 import re
 import shutil
 import tempfile
 import threading
 import unittest
+import zipfile
 import zlib
 from datetime import datetime
+from html import unescape
 from pathlib import Path
+from xml.etree import ElementTree
 
 from analyzer import pdfwriter as pw
+from analyzer import pptxwriter as px
 from analyzer.app.library import Library
 from analyzer.app.server import start
 
@@ -85,6 +91,64 @@ class PdfWriterTest(unittest.TestCase):
         self.assertIn(b"/CreationDate (D:20261001120000)", data)
 
 
+def check_pptx(test: unittest.TestCase, data: bytes) -> dict[str, str]:
+    """Un paquet PowerPoint bien formé : chaque XML se lit, chaque relation mène à une partie qui existe, chaque partie
+    a son type. Renvoie ses parties (nom -> texte)."""
+    archive = zipfile.ZipFile(io.BytesIO(data))
+    names = archive.namelist()
+    test.assertEqual(names[0], "[Content_Types].xml")
+    parts = {name: archive.read(name).decode("utf-8") for name in names}
+    for name, text in parts.items():
+        ElementTree.fromstring(text.encode())  # XML bien formé
+    types = parts["[Content_Types].xml"]
+    for name in names:
+        if not name.endswith(".rels") and name != "[Content_Types].xml":
+            test.assertIn(f'PartName="/{name}"', types, name)
+        if name.endswith(".rels"):
+            base = posixpath.dirname(posixpath.dirname(name))
+            for target in re.findall(r'Target="([^"]+)"', parts[name]):
+                test.assertIn(posixpath.normpath(posixpath.join(base, target)), names, (name, target))
+    return parts
+
+
+def slide_texts(parts: dict[str, str], prefix: str = "ppt/slides/slide") -> list[list[str]]:
+    """Les textes de chaque diapositive (ou de chaque page de notes), dans l'ordre."""
+    count = len([n for n in parts if n.startswith(prefix) and n.endswith(".xml")])
+    return [[unescape(t) for t in re.findall(r"<a:t>(.*?)</a:t>", parts[f"{prefix}{i}.xml"])]
+            for i in range(1, count + 1)]
+
+
+class PptxWriterTest(unittest.TestCase):
+    def test_package(self):
+        deck = px.Presentation(title="Essai & co")
+        slide = deck.add_slide("0F3D2E")
+        slide.text(1, 1, 5, 1, [px.para("Bonjour <à tous>", 24, "FFFFFF", bold=True)])
+        slide.shape(1, 2.5, 2, 1, fill="E0A526", geom="roundRect", paras=[px.para("Forme", 14)])
+        slide.line(1, 4, 3, 3.5, "D03B3B", 2)
+        slide.path(4, 3, 4, 2, [(0, 1), (0.5, 0.2), (1, 0.6)], "2A78D6")
+        slide.notes = "Première ligne\nDeuxième ligne"
+        other = deck.add_slide()
+        other.table(1, 1, [2, 1], [[px.Cell([px.para("Situation", 14)], fill="0F3D2E"), px.Cell([px.para("Toi", 14)])],
+                                   [px.Cell([px.para("Open", 14)]), px.Cell([px.para("23 %", 14)], fill="FBE1D6")]],
+                    [0.5, 0.6])
+        parts = check_pptx(self, deck.output(datetime(2026, 10, 1, 12, 0)))
+        self.assertEqual(len(re.findall(r"<p:sldId ", parts["ppt/presentation.xml"])), 2)
+        self.assertEqual(slide_texts(parts), [["Bonjour <à tous>", "Forme"], ["Situation", "Toi", "Open", "23 %"]])
+        self.assertEqual(slide_texts(parts, "ppt/notesSlides/notesSlide")[0], ["Première ligne", "Deuxième ligne"])
+        self.assertIn("<dc:title>Essai &amp; co</dc:title>", parts["docProps/core.xml"])
+        self.assertIn('flipV="1"', parts["ppt/slides/slide1.xml"])  # le trait monte vers la droite
+
+    def test_fit(self):
+        from analyzer.app.report_pptx import first_sentence, fit
+        text, size, lines = fit("Un titre beaucoup trop long pour tenir sur une seule ligne de la boîte", 3.0, 24,
+                                True, 1, 14)
+        self.assertEqual((lines, size), (1, 14))
+        self.assertTrue(text.endswith("…"))
+        self.assertLessEqual(px.width(text, size, True), 3.0)
+        self.assertEqual(fit("Court", 3.0, 24)[0:2], ("Court", 24))
+        self.assertEqual(first_sentence("A 1,5 bb. La suite."), "A 1,5 bb.")
+
+
 class ReportPdfTest(IsolatedHome):
     def setUp(self):
         super().setUp()
@@ -111,6 +175,17 @@ class ReportPdfTest(IsolatedHome):
         shutil.copy(FIXTURE, Path(lib.student(student["id"]).folder) / "sample.txt")
         lib.student(student["id"]).reload()
         self.assertIn("Paul", pdf_strings(lib.student(student["id"]).report_pdf()))
+        parts = check_pptx(self, lib.student(student["id"]).report_pptx())
+        texts = slide_texts(parts)
+        self.assertEqual(texts[0][:6], ["\u2660", "\u2665", "\u2666", "\u2663", "SÉANCE DE COACHING · LEAKFINDING", "Paul"])
+        flat = [t for slide in texts for t in slide]
+        for expected in ("Où tu en es", "Les leaks à travailler", "Les mains à revoir", "D'ici la prochaine séance"):
+            self.assertIn(expected, flat)
+        notes = slide_texts(parts, "ppt/notesSlides/notesSlide")
+        self.assertEqual(len(notes), len(texts))
+        self.assertTrue(all(n for n in notes))  # chaque diapositive a ses notes pour le coach
+        self.assertIn("presentation.pptx", lib.student(student["id"]).leaks_page())
+        self.assertNotIn("presentation.pptx", lib.leaks_page())  # pour un élève seulement
 
 
 class ReportRoutesTest(IsolatedHome):
@@ -139,6 +214,14 @@ class ReportRoutesTest(IsolatedHome):
         self.assertTrue(data.startswith(b"%PDF"))
         self.assertEqual(self.get("/moi/rapport.pdf?format=ring")[0].status, 404)  # pas de table à plusieurs
         self.assertIn(b'/moi/rapport.pdf" download>Synth', self.get("/moi/leaks")[1])
+
+    def test_pptx_route(self):
+        resp, data = self.get("/moi/presentation.pptx")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.getheader("Content-Type"),
+                         "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+        self.assertIn('filename="leakfinding.pptx"', resp.getheader("Content-Disposition"))
+        self.assertTrue(zipfile.is_zipfile(io.BytesIO(data)))
 
 
 if __name__ == "__main__":

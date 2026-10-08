@@ -27,6 +27,7 @@ class Synthesis:
     period: str = ""              # « 1 000 dernières mains », rien pour toutes les mains
     student: bool = False         # le rapport d'un élève (la présentation s'adresse à lui)
     generated: datetime = field(default_factory=datetime.now)
+    hands: dict = field(default_factory=dict)  # numéro -> main (les exemples des leaks)
 
     @property
     def table_format(self) -> str:
@@ -63,9 +64,20 @@ class Synthesis:
              f"{num(r.scope_hands['rec'], 0)} contre récréatifs", None),
             ("Contre réguliers", bb100(r.winrate.get("reg")), "bb/100", r.winrate.get("reg")),
             ("Contre récréatifs", bb100(r.winrate.get("rec")), "bb/100", r.winrate.get("rec")),
-            ("Face au solveur", f"{rv['analyzed']} mains", f"{num(rv['lost'], 1)} bb perdus en {rv['decisions']} "
-             "décisions", None),
+            ("Face au solveur", plural(rv["analyzed"], "main"), f"{num(rv['lost'], 1)} bb perdus en "
+             f"{plural(rv['decisions'], 'décision')}", None),
         ]
+
+    def stat_of(self, leak: leaks.Leak) -> Optional[leaks.Stat]:
+        """La stat d'un leak qui vient d'un écart à la théorie (même titre), pour montrer sa fréquence et la théorie."""
+        return next((s for s in self.report.stats if f"{s.section} · {s.label}" == leak.title), None)
+
+    def example(self, leak: leaks.Leak) -> Optional[tuple[Hand, float]]:
+        """La main la plus chère d'un leak et ce qu'elle a coûté (bb), si on l'a."""
+        if not leak.example:
+            return None
+        hand = self.hands.get(leak.example[0])
+        return (hand, leak.example[2]) if hand is not None else None
 
     def gaps(self, n: int = 8) -> list[tuple[leaks.Stat, str, str]]:
         """Les écarts les plus importants à la théorie (leaks.top_gaps)."""
@@ -99,6 +111,11 @@ class Synthesis:
         return [(0, 0.0, 0.0)] + [(i + 1, rows[i][0], rows[i][1]) for i in picked]
 
 
+def plural(n: int, word: str) -> str:
+    """« 0 main », « 1 main », « 12 mains »."""
+    return f"{num(n, 0)} {word}{'s' if n > 1 else ''}"
+
+
 def bb100(x: Optional[float]) -> str:
     return "–" if x is None else num(x, 1, sign=True)
 
@@ -117,4 +134,5 @@ def collect(report: leaks.Report, hands: list[Hand], who: str, period: str = "",
             now: Optional[datetime] = None) -> Synthesis:
     """La synthèse d'un rapport : hands, les mains du rapport (pour la courbe des résultats) ; period, la période
     (rien pour toutes les mains)."""
-    return Synthesis(who, report, results(hands, report.hero), period, student, now or datetime.now())
+    return Synthesis(who, report, results(hands, report.hero), period, student, now or datetime.now(),
+                     {h.hand_id: h for h in hands})

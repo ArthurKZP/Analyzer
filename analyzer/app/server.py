@@ -32,6 +32,7 @@ STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css
 MAX_PATH = 40  # étapes d'un chemin dans l'arbre (bien plus qu'un coup réel)
 MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
 MAX_SMALL_BODY = 64 * 1024
+PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "bluffs", "tables", "mains")
 
 
@@ -159,6 +160,9 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["moi", "rapport.pdf"]:
                 return self._download(library.report_pdf(self._format()), self._report_name(self._format(), ext="pdf"),
                                       "application/pdf")
+            if parts == ["moi", "presentation.pptx"]:
+                return self._download(library.report_pptx(self._format()), self._report_name(self._format(), ext="pptx"),
+                                      PPTX)
             if parts == ["moi", "leaks"]:
                 return self._html(library.leaks_page(table_format=self._format()))
             if len(parts) == 2 and parts[0] == "moi":
@@ -177,6 +181,9 @@ class Handler(BaseHTTPRequestHandler):
                 if parts[2] == "rapport.pdf":
                     return self._download(student.report_pdf(self._format()),
                                           self._report_name(self._format(), parts[1], "pdf"), "application/pdf")
+                if parts[2] == "presentation.pptx":
+                    return self._download(student.report_pptx(self._format()),
+                                          self._report_name(self._format(), parts[1], "pptx"), PPTX)
                 if parts[2] not in STUDENT_PAGES:
                     raise KeyError(parts[2])
                 if parts[2] == "leaks":

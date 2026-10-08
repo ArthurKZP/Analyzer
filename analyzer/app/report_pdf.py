@@ -10,7 +10,7 @@ from typing import Callable, Optional, Sequence
 from .. import leaks
 from .. import pdfwriter as pw
 from ..report import num
-from .synthesis import Synthesis, pick_status
+from .synthesis import Synthesis, pick_status, plural
 
 W, H = pw.A4
 M = 42.0                   # marges gauche et droite
@@ -289,14 +289,15 @@ def _gaps(flow: Flow) -> None:
 def _solver(flow: Flow) -> None:
     s = flow.s
     rv = s.report.review
-    flow.heading("Face au solveur", f"{rv['analyzed']} mains analysées", keep=40)
+    flow.heading("Face au solveur", f"{plural(rv['analyzed'], 'main')} analysée{'s' if rv['analyzed'] > 1 else ''}",
+                 keep=40)
     if not rv["analyzed"]:
         flow.paragraph("Aucune main passée au solveur pour l'instant : dans l'application, le Leakfinding analyse les "
                        "mains choisies (Face au solveur) ; chaque décision y est comparée à la meilleure action pour la "
                        "main exacte.")
         return
     groups = s.situations()
-    flow.paragraph(f"{num(rv['lost'], 1)} bb perdus en {rv['decisions']} décisions face au solveur. "
+    flow.paragraph(f"{num(rv['lost'], 1)} bb perdus en {plural(rv['decisions'], 'décision')} face au solveur. "
                    + ("Les situations qui coûtent le plus :" if groups else "Aucune situation n'y coûte d'EV notable."),
                    color=INK2)
     flow.y += 2
