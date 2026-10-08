@@ -412,8 +412,9 @@ tailles sont choisies (même texture et même structure de couleurs d'abord) ; u
 résolu passe d'abord par son propre choix des tailles. La liste des flops de la série (surlignés quand ils sont
 résolus) reste en dessous. Le spot s'ouvre alors avec ses actions préflop en tête
 du déroulé : un clic y revient au préflop, *changer* sous le flop ramène au choix du flop, et *◀ Retour*
-au début du spot aussi. Les autres onglets de *Études du solveur* séparent les séries (SRP, pots 3bet,
-pots 4bet) et les coups joués résolus : plus besoin de dérouler toute la page.
+au début du spot aussi. Les autres onglets de *Études du solveur* séparent le heads-up (ses trois séries, une à
+la fois : *SRP*, *pot 3bet*, *pot 4bet*, comme les séries de l'onglet *6-max*), le 6-max et les coups joués
+résolus : plus besoin de dérouler toute la page. La série choisie reste affichée quand la page se recharge.
 
 **Un coup à plusieurs** : en haut de l'explorateur, *Heads-up* / *À plusieurs (6-max)* (le dernier choisi est gardé ;
 `/explorateur/preflop#table=6-max` ; sans tes charts 6-max, un bouton les charge, même sans main à plusieurs). À plusieurs, le déroulé suit l'ordre de parole d'une table 6-max (UTG, HJ, CO,
@@ -537,7 +538,8 @@ contre le BTN…) n'ont pas de série : elles se résolvent flop par flop depuis
 et s'ajoutent à la liste *Autres positions* de l'onglet.
 
 **Toutes les séries d'un coup** : le bouton **Résoudre tous les flops 6-max manquants** (en haut de l'onglet 6-max de
-*Études du solveur*) met en file chaque flop manquant de toutes les séries que tes charts couvrent, un flop de
+*Études du solveur* ; en haut de l'onglet *Heads-up*, le même pour les trois séries heads-up : jusqu'à 2 jours sur
+4 cœurs pour les 72 flops, bien moins quand leurs tailles sont déjà choisies) met en file chaque flop manquant de toutes les séries que tes charts couvrent, un flop de
 chaque série à tour de rôle, les pots 4bet et 3bet d'abord (les plus rapides) : chaque plan de jeu se dessine vite
 au lieu d'attendre la fin des séries précédentes. Chaque flop passe par le choix de ses tailles puis par sa
 résolution, et son plan de jeu est lu aussitôt. Avant de lancer, la durée est annoncée (au plus 8 jours environ

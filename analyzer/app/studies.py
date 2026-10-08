@@ -30,13 +30,13 @@ STYLE = """
 .stxt { font-size: 11px; color: var(--ink-2); margin-top: 2px; white-space: nowrap; }
 .k-fold { background: #2a78d6; } .k-pass { background: #1baf7a; } .k-bet { background: #eb6834; }
 .k-raise { background: #c4441c; } .k-allin { background: #4a3aa7; }
-.spot-head, .ring-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 4px 0 6px; }
-.spot-head button, .ring-head button, .spot-other button { font: inherit; font-size: 13px; padding: 5px 12px;
+.spot-head, .group-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 4px 0 6px; }
+.spot-head button, .group-head button, .spot-other button { font: inherit; font-size: 13px; padding: 5px 12px;
   border-radius: 6px; cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
-.spot-head button.go, .ring-head button.go { background: var(--series-1); border-color: var(--series-1); color: #fff;
+.spot-head button.go, .group-head button.go { background: var(--series-1); border-color: var(--series-1); color: #fff;
   font-weight: 600; }
-.spot-head button:disabled, .ring-head button:disabled { opacity: .5; cursor: default; }
-.ring-count { font-weight: 600; font-size: 14px; }
+.spot-head button:disabled, .group-head button:disabled { opacity: .5; cursor: default; }
+.group-count { font-weight: 600; font-size: 14px; }
 .spot-status { font-size: 12px; color: var(--ink-2); }
 .spot-prec { font-size: 13px; color: var(--ink-2); display: inline-flex; gap: 6px; align-items: center; }
 .spot-prec select { font: inherit; font-size: 13px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border);
@@ -72,15 +72,27 @@ function duration(sec) {
   if (sec < 86400) return Math.floor(sec / 3600) + ' h ' + String(Math.round((sec % 3600) / 60)).padStart(2, '0');
   return Math.floor(sec / 86400) + ' j ' + Math.round((sec % 86400) / 3600) + ' h';
 }
-document.querySelectorAll('.fam-switch button').forEach(function (b) {
-  b.addEventListener('click', function () {
-    document.querySelectorAll('.fam-switch button').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
-    document.querySelectorAll('.spot-family').forEach(function (s) {
+// Une série à la fois dans chaque onglet (heads-up, 6-max) ; la série choisie reste dans l'adresse (#4bet), pour la
+// retrouver quand la page se recharge (un flop de plus résolu).
+document.querySelectorAll('.fam-group').forEach(function (group) {
+  var buttons = group.querySelectorAll('.fam-switch button');
+  function pick(b, remember) {
+    buttons.forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+    group.querySelectorAll('.spot-family').forEach(function (s) {
       var show = s.dataset.family === b.dataset.family, was = s.hidden;
       s.hidden = !show;
-      if (show && was) s.querySelector('.spot-head').dispatchEvent(new Event('show'));
+      var head = s.querySelector('.spot-head');
+      if (show && was && head) head.dispatchEvent(new Event('show'));
     });
-  });
+    if (remember) history.replaceState(null, '', '#' + b.dataset.family);
+  }
+  buttons.forEach(function (b) { b.addEventListener('click', function () { pick(b, true); }); });
+  function fromAddress() {
+    var wanted = decodeURIComponent(location.hash.slice(1));
+    buttons.forEach(function (b) { if (b.dataset.family === wanted && b.getAttribute('aria-pressed') !== 'true') pick(b, false); });
+  }
+  fromAddress();
+  window.addEventListener('hashchange', fromAddress);  // l'application ouvre une autre série (#3bet)
 });
 function post(url, body) {
   return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })
@@ -170,17 +182,16 @@ document.querySelectorAll('.spot-head').forEach(function (box) {
     window.open('/explorateur/spot:' + family + ':' + board.join(''), '_blank', 'noopener');
   });
 });
-// Toutes les séries 6-max : un bouton pour mettre en file tous les flops manquants.
-(function () {
-  var box = document.querySelector('.ring-head');
-  if (!box) return;
-  var run = box.querySelector('.ring-run'), stop = box.querySelector('.ring-stop'), status = box.querySelector('.ring-status');
-  var count = box.querySelector('.ring-count'), done = null, timer = null, last = null;
+// Toutes les séries d'un onglet (heads-up, 6-max) : un bouton pour mettre en file tous les flops manquants.
+document.querySelectorAll('.group-head').forEach(function (box) {
+  var group = box.dataset.group, label = box.dataset.label, upto = box.dataset.upto === '1';
+  var run = box.querySelector('.group-run'), stop = box.querySelector('.group-stop'), status = box.querySelector('.group-status');
+  var count = box.querySelector('.group-count'), done = null, timer = null, last = null;
   function show(s) {
     if (done !== null && s.done !== done) { location.reload(); return; }  // un flop de plus : les séries à jour
     done = s.done;
     last = s;
-    count.textContent = s.done + ' / ' + s.total + ' flops 6-max résolus';
+    count.textContent = s.done + ' / ' + s.total + ' flops ' + label + ' résolus';
     stop.hidden = !s.busy;
     run.disabled = !s.ready;
     run.hidden = !!s.busy || s.done >= s.total;
@@ -196,24 +207,24 @@ document.querySelectorAll('.spot-head').forEach(function (box) {
     } else if (s.waiting) {
       status.textContent = s.waiting + ' flop(s) en attente (une autre résolution passe d\\'abord)';
     } else if (s.done < s.total) {
-      status.textContent = 'Au plus ≈ ' + duration(s.seconds) + ' sur 4 cœurs pour les ' + (s.total - s.done)
+      status.textContent = (upto ? 'Au plus ≈ ' : '≈ ') + duration(s.seconds) + ' sur 4 cœurs pour les ' + (s.total - s.done)
         + ' flops manquants (moins avec plus de cœurs).';
     }
     clearTimeout(timer);
     if (s.busy) timer = setTimeout(refresh, 4000);
   }
-  function refresh() { fetch('/api/spots/6max').then(function (r) { return r.json(); }).then(show); }
+  function refresh() { fetch('/api/spots/' + group).then(function (r) { return r.json(); }).then(show); }
   run.addEventListener('click', function () {
     var n = last ? last.total - last.done : 0;
-    if (!confirm('Mettre en file les ' + n + ' flops 6-max manquants ? Chacun passe par le choix de ses tailles puis par '
-        + 'sa résolution : au plus ≈ ' + duration(last ? last.seconds : 0) + ' sur 4 cœurs. Tu peux tout arrêter à '
-        + 'tout moment ; les flops déjà résolus restent.')) return;
+    if (!confirm('Mettre en file les ' + n + ' flops ' + label + ' manquants ? Chacun passe par le choix de ses tailles puis '
+        + 'par sa résolution : ' + (upto ? 'au plus ' : '') + '≈ ' + duration(last ? last.seconds : 0) + ' sur 4 cœurs. '
+        + 'Tu peux tout arrêter à tout moment ; les flops déjà résolus restent.')) return;
     run.disabled = true;
-    post('/api/spots/6max/resoudre').then(show);
+    post('/api/spots/' + group + '/resoudre').then(show);
   });
-  stop.addEventListener('click', function () { post('/api/spots/6max/arreter').then(show); });
+  stop.addEventListener('click', function () { post('/api/spots/' + group + '/arreter').then(show); });
   refresh();
-})();
+});
 """
 
 KIND_CLASS = {"fold": "k-fold", "check": "k-pass", "call": "k-pass", "bet": "k-bet", "raise": "k-raise"}
@@ -403,7 +414,7 @@ def _spot_section(family: str = "srp", shown_now: bool = True) -> str:
                   "dans celui qui a misé à la street précédente). Les mêmes flops que les séries heads-up, pour comparer")
         cost = "au plus " + COST[info["kind"]] + " (ranges plus serrées : souvent bien moins)"
     else:
-        title = f"Spots d'étude · {info['name']}"
+        title = f"Heads-up · {info['name']}"
         origin = ("Ranges de la solution préflop ; pas de donk (la BB ne mène pas dans celui qui a misé à la street "
                   "précédente). Trois flops par texture : pairé, monotone, puis selon la plus haute carte")
         cost = COST[family]
@@ -474,8 +485,24 @@ def _ring_section() -> str:
             f'{escape(studyspots.RING_FAMILIES[f]["name"])}</button>' for f in group) + "</div>"
         for pair, group in pairs.items())
     sections = "".join(_ring_family_section(f, f == families[0]) for f in families)
-    return (f'<h2>Spots d\'étude 6-max</h2>{intro}{_ring_all()}<div class="fam-switch" role="group" '
-            f'aria-label="Paire de positions et type de pot">{switch}</div>{sections}{_ring_others()}')
+    return (f'<div class="fam-group" data-group="6max"><h2>Spots d\'étude 6-max</h2>{intro}{_group_all("6max")}'
+            f'<div class="fam-switch" role="group" aria-label="Paire de positions et type de pot">{switch}</div>'
+            f'{sections}{_ring_others()}</div>')
+
+
+def _hu_section(first: str = "srp") -> str:
+    """Les spots d'étude heads-up (bouton contre BB) : une série à la fois (SRP, pot 3bet, pot 4bet), first d'abord."""
+    families = list(studyspots.FAMILIES)
+    first = first if first in families else families[0]
+    intro = ('<p class="note">Le heads-up, bouton contre BB, 100 bb : les ranges de la solution préflop heads-up, une '
+             'série de flops par type de pot (les mêmes flops que les séries 6-max, pour comparer les deux jeux). '
+             'Tailles préflop : open à 2,5 bb, 3bet à 11,5 bb, 4bet à 26 bb.</p>')
+    switch = ('<div class="fam-pair"><span>BTN contre BB</span>' + "".join(
+        f'<button type="button" data-family="{escape(f)}" aria-pressed="{str(f == first).lower()}">'
+        f'{escape(studyspots.FAMILIES[f]["name"])}</button>' for f in families) + "</div>")
+    sections = "".join(_spot_section(f, f == first) for f in families)
+    return (f'<div class="fam-group" data-group="hu"><h2>Spots d\'étude heads-up</h2>{intro}{_group_all("hu")}'
+            f'<div class="fam-switch" role="group" aria-label="Type de pot">{switch}</div>{sections}</div>')
 
 
 def _ring_others() -> str:
@@ -499,18 +526,28 @@ def _ring_others() -> str:
             f'</tr></thead><tbody>{rows}</tbody></table></div><p class="note">{escape(note)}</p></div>')
 
 
-def _ring_all() -> str:
-    """Le bouton qui met en file tous les flops 6-max manquants (état lu par la page : /api/spots/6max)."""
-    return ('<div class="card"><div class="ring-head">'
-            '<span class="ring-count"></span>'
-            '<button type="button" class="go ring-run" hidden>Résoudre tous les flops 6-max manquants</button>'
-            '<button type="button" class="ring-stop" hidden>Tout arrêter</button>'
-            '<span class="spot-status ring-status"></span></div>'
-            '<p class="note">Toutes les séries que tes charts couvrent, un flop de chaque série à tour de rôle (pots 4bet '
-            'et 3bet d\'abord, les plus rapides) : chaque plan de jeu se dessine vite au lieu d\'attendre la fin des '
-            'séries précédentes. Chaque flop passe d\'abord par le choix de ses tailles, puis par sa résolution, à la '
-            'précision réglée ; son plan de jeu est lu aussitôt. La file vit dans l\'application : si elle s\'arrête, '
-            'relance le bouton, il reprend avec les flops qui manquent.</p></div>')
+GROUP_NOTES = {
+    "hu": ("Les trois séries heads-up, un flop de chaque série à tour de rôle (pots 4bet et 3bet d'abord, les plus "
+           "rapides) : chaque plan de jeu se dessine vite au lieu d'attendre la fin des séries précédentes."),
+    "6max": ("Toutes les séries que tes charts couvrent, un flop de chaque série à tour de rôle (pots 4bet et 3bet "
+             "d'abord, les plus rapides) : chaque plan de jeu se dessine vite au lieu d'attendre la fin des séries "
+             "précédentes."),
+}
+
+
+def _group_all(group: str) -> str:
+    """Le bouton qui met en file tous les flops manquants des séries d'un onglet (état lu par la page :
+    /api/spots/hu ou /api/spots/6max)."""
+    label = "heads-up" if group == "hu" else "6-max"
+    upto = "1" if group == "6max" else "0"  # ranges des charts plus serrées : au plus la durée heads-up
+    return (f'<div class="card"><div class="group-head" data-group="{group}" data-label="{label}" data-upto="{upto}">'
+            '<span class="group-count"></span>'
+            f'<button type="button" class="go group-run" hidden>Résoudre tous les flops {label} manquants</button>'
+            '<button type="button" class="group-stop" hidden>Tout arrêter</button>'
+            '<span class="spot-status group-status"></span></div>'
+            f'<p class="note">{escape(GROUP_NOTES[group])} Chaque flop passe d\'abord par le choix de ses tailles, puis '
+            'par sa résolution, à la précision réglée ; son plan de jeu est lu aussitôt. La file vit dans l\'application '
+            ': si elle s\'arrête, relance le bouton, il reprend avec les flops qui manquent.</p></div>')
 
 
 ADJUSTED = ' <span class="muted small" title="Résolu avec tes ranges préflop ajustées">· tes ranges</span>'
@@ -551,22 +588,26 @@ quelques secondes, sans recalculer.</p>{table}</div>
 """
 
 
-SECTIONS = tuple(studyspots.FAMILIES) + ("6max", "coups")
+# Les onglets de l'application : heads-up (ses trois séries), 6-max, coups joués ; « srp », « 3bet » et « 4bet »
+# (anciens onglets) ouvrent l'onglet heads-up sur cette série.
+SECTIONS = ("hu", "6max", "coups") + tuple(studyspots.FAMILIES)
 
 
 def build_studies_page(embed: bool = True, section: Optional[str] = None) -> str:
-    """Toutes les études, ou une seule section (onglets de l'application) : srp, 3bet, 4bet (heads-up), 6max ou
-    coups."""
+    """Toutes les études, ou une seule section (onglets de l'application) : hu (SRP, pots 3bet et 4bet heads-up), 6max
+    ou coups."""
     if section is not None and section not in SECTIONS:
         raise KeyError(section)
     studies = postflop.list_studies()
     total = sum(s["size"] for s in studies)
     if section is None:
-        content = "".join(_spot_section(family) for family in studyspots.FAMILIES) + _ring_section() + _hand_section()
+        content = _hu_section() + _ring_section() + _hand_section()
     elif section == "coups":
         content = _hand_section()
+    elif section == "6max":
+        content = _ring_section()
     else:
-        content = _ring_section() if section == "6max" else _spot_section(section)
+        content = _hu_section(section)
     body = f"""
 <div class="meta">{len(studies)} étude(s) · {_size(total)} sur le disque · {escape(str(postflop.studies_dir()))}</div>
 <p class="note">Précision : exploitabilité de la solution, en % du pot (plus c'est bas, plus elle est proche de

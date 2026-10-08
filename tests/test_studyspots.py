@@ -200,7 +200,7 @@ class SolveSpotsTest(unittest.TestCase):
             self.assertEqual((reply["live"], reply["node"]["player"]), (True, 1))
 
             page = build_studies_page()
-            for text in ("Spots d'étude · SRP", "Monotone", "Moyenne", "C-bet du BTN", "spot:srp:As8s3s",
+            for text in ("Heads-up · SRP", "Monotone", "Moyenne", "C-bet du BTN", "spot:srp:As8s3s",
                          "21 flops manquants"):
                 self.assertIn(text, page)
 
@@ -300,14 +300,14 @@ class SolveSpotsTest(unittest.TestCase):
         spot = StudySpot("3bet", cards_of("KsKd4c"))
         self.assertEqual(spot.request()["plan"]["bet:fo:"], [33.0])
         self.assertTrue(spot.menu_text().startswith("c-bet 33 %"))
-        self.assertIn("Spots d'étude · pot 3bet", build_studies_page())
+        self.assertIn("Heads-up · pot 3bet", build_studies_page())
 
     def test_choose_sizes_4bet(self):
         plan = studyspots.choose_sizes("4bet", "KsKd4c", lambda m: None)["plan"]
         self.assertEqual((plan["bet:fi:"], plan["raise:fo::0"], plan["raise:fi::1"]), ([25], [33], [33]))
         self.assertEqual((plan["bet:to:x"], plan["bet:ti:x"]), ([50], [50]))
         self.assertEqual((plan["bet:ro:xx"], plan["bet:ri:xx"]), ([25, 50], [25, 50]))
-        self.assertIn("Spots d'étude · pot 4bet", build_studies_page())
+        self.assertIn("Heads-up · pot 4bet", build_studies_page())
 
     def test_app_chooses_then_solves(self):
         lib = Library(self.folder / "mains")

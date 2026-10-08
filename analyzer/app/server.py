@@ -232,8 +232,8 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["api", "revue"]:
                 villain = parse_qs(urlsplit(self.path).query).get("adversaire", [None])[0]
                 return self._json(library.review_state(villain))
-            if parts == ["api", "spots", "6max"]:  # toutes les séries 6-max
-                return self._json(library.ring_spot_sets())
+            if parts[:2] == ["api", "spots"] and len(parts) == 3 and parts[2] in library.SPOT_GROUPS:
+                return self._json(library.group_spot_sets(parts[2]))  # toutes les séries heads-up, ou 6-max
             if len(parts) == 3 and parts[:2] == ["api", "spots"]:
                 return self._json(library.spot_set(parts[2]))
             if len(parts) == 2 and parts[0] == "explorateur" and (parts[1] == "preflop" or library.find_hand(parts[1])
@@ -503,8 +503,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.review_state(villain, start=True))
             except UnknownPlayer:
                 return self._error(404, "Adversaire inconnu.")
-        if parts[:3] == ["api", "spots", "6max"] and len(parts) == 4 and parts[3] in ("resoudre", "arreter"):
-            return self._json(library.ring_spot_cancel() if parts[3] == "arreter" else library.ring_spot_sets(start=True))
+        if (parts[:2] == ["api", "spots"] and len(parts) == 4 and parts[2] in library.SPOT_GROUPS
+                and parts[3] in ("resoudre", "arreter")):
+            group = parts[2]
+            return self._json(library.group_spot_cancel(group) if parts[3] == "arreter"
+                              else library.group_spot_sets(group, start=True))
         if len(parts) == 4 and parts[:2] == ["api", "spots"] and parts[3] in ("resoudre", "arreter"):
             if not studyspots.is_series(parts[2]):
                 return self._error(404, "Série inconnue.")

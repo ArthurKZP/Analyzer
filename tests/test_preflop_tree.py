@@ -114,12 +114,17 @@ class PreflopServerTest(unittest.TestCase):
             self.assertEqual(self.request("POST", "/api/explorateur/flop", json.dumps(bad))[0], 400, bad)
 
     def test_studies_sections(self):
-        status, body = self.request("GET", "/etudes/srp")
+        status, body = self.request("GET", "/etudes/hu")  # le heads-up : ses trois séries, la première affichée
         self.assertEqual(status, 200)
-        self.assertIn("Spots d'étude · SRP".encode(), body)
+        for title in ("Spots d'étude heads-up", "Heads-up · SRP", "Heads-up · pot 3bet", "Heads-up · pot 4bet"):
+            self.assertIn(title.encode(), body)
+        self.assertIn(b'data-family="srp" aria-pressed="true"', body)
         self.assertNotIn("Coups joués".encode(), body)
+        self.assertNotIn("Spots d'étude 6-max".encode(), body)
         self.assertIn("Coups joués".encode(), self.request("GET", "/etudes/coups")[1])
-        self.assertIn("Spots d'étude · pot 4bet".encode(), self.request("GET", "/etudes/4bet")[1])
+        status, body = self.request("GET", "/etudes/4bet")  # ancienne adresse : l'onglet heads-up, sur cette série
+        self.assertEqual(status, 200)
+        self.assertIn(b'data-family="4bet" aria-pressed="true"', body)
         self.assertEqual(self.request("GET", "/etudes/autre")[0], 404)
 
 

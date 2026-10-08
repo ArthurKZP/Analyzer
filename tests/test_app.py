@@ -384,8 +384,12 @@ class ServerTest(unittest.TestCase):
         status, _, body = self.request("GET", "/etudes")
         self.assertEqual(status, 200)
         self.assertIn("Aucun coup résolu".encode(), body)
-        self.assertIn("Spots d'étude · SRP".encode(), body)
+        self.assertIn("Heads-up · SRP".encode(), body)
         self.assertIn("0 / 24</b> flops résolus".encode(), body)
+        self.assertIn("Résoudre tous les flops heads-up manquants".encode(), body)  # un onglet pour les trois séries
+        state = json.loads(self.request("GET", "/api/spots/hu")[2])
+        self.assertEqual((state["group"], len(state["families"])), ("hu", 3))
+        self.assertEqual(self.request("GET", "/api/spots/inconnu")[0], 404)
         if shutil.which("node"):  # le script de la page doit au moins être du JavaScript valide
             script = body.decode().rsplit("<script>", 1)[1].split("</script>")[0]
             path = Path(self.tmp.name) / "etudes.js"

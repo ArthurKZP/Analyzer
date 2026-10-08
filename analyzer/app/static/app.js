@@ -11,11 +11,13 @@
       ['tables', 'Tables à plusieurs'], ['importer', 'Importer']],
     adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
       ['solveur', 'Face au solveur'], ['bluffs', 'Ses bluffs']],
-    // L'explorateur part du préflop ; les séries de spots et les coups joués ont chacun leur onglet.
-    etudes: [['explorateur', 'Explorateur'], ['plan', 'Plan de jeu suggéré'], ['srp', 'SRP HU'], ['3bet', '3bet HU'],
-      ['4bet', '4bet HU'], ['6max', '6-max'], ['coups', 'Coups joués']],
+    // L'explorateur part du préflop ; les séries heads-up (SRP, pots 3bet et 4bet), les séries 6-max et les coups joués
+    // ont chacun leur onglet.
+    etudes: [['explorateur', 'Explorateur'], ['plan', 'Plan de jeu suggéré'], ['hu', 'Heads-up'], ['6max', '6-max'],
+      ['coups', 'Coups joués']],
   };
   const FORMAT_TABS = ['bilan', 'leaks', 'preflop'];  // pages qui ont un choix heads-up / tables à plusieurs
+  const HU_SERIES = ['srp', '3bet', '4bet'];  // anciens onglets des études : l'onglet Heads-up
   let state = null;
   let route = null;
   let students = [];
@@ -62,6 +64,7 @@
     const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
     const tabOf = (view, name, fallback) => (TABS[view].some(([id]) => id === name) ? name : fallback);
     if (parts[0] === 'importer') return { view: 'importer' };
+    if (parts[0] === 'etudes' && HU_SERIES.includes(parts[1])) return { view: 'etudes', tab: 'hu', family: parts[1] };
     if (parts[0] === 'etudes') return { view: 'etudes', tab: tabOf('etudes', parts[1], 'explorateur') };
     if (parts[0] === 'entraineur') return { view: 'entraineur' };
     if (parts[0] === 'sauvegarde') return { view: 'sauvegarde' };
@@ -88,7 +91,7 @@
 
   function srcFor(r) {
     if (r.view === 'adv') return '/p/' + encodeURIComponent(r.player) + '/' + r.tab;
-    if (r.view === 'etudes') return r.tab === 'explorateur' ? '/explorateur/preflop' : '/etudes/' + r.tab;
+    if (r.view === 'etudes') return r.tab === 'explorateur' ? '/explorateur/preflop' : '/etudes/' + r.tab + (r.family ? '#' + r.family : '');
     if (r.view === 'entraineur') return '/entraineur';
     if (r.view === 'field') return '/field/' + r.tab;
     const space = r.view === 'eleve' ? '/eleve/' + encodeURIComponent(r.student) : '/moi';
@@ -718,7 +721,7 @@
     if (parts[0] === 'p' && parts.length === 3) r = { view: 'adv', player: parts[1], tab: parts[2] };
     else if (parts[0] === 'moi' && parts.length === 2) r = parts[1] === 'bluffs' ? { view: 'field', tab: 'bluffs' } : { view: 'moi', tab: parts[1] };
     else if (parts[0] === 'field' && parts.length === 2) r = { view: 'field', tab: parts[1] };
-    else if (parts[0] === 'etudes' && parts.length <= 2) r = { view: 'etudes', tab: parts[1] || 'srp' };
+    else if (parts[0] === 'etudes' && parts.length <= 2) r = { view: 'etudes', tab: !parts[1] || HU_SERIES.includes(parts[1]) ? 'hu' : parts[1] };
     else if (parts[0] === 'entraineur' && parts.length === 1) r = { view: 'entraineur' };
     else if (parts[0] === 'eleve' && parts.length === 3) r = { view: 'eleve', student: parts[1], tab: parts[2] };
     if (!r) return;
