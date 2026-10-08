@@ -21,6 +21,15 @@
     </nav>
     <div class="opp-head">Adversaires <span id="opp-count"></span></div>
     <input class="search" id="opp-search" type="search" placeholder="Rechercher un joueur" aria-label="Rechercher un adversaire">
+    <div class="opp-sorts">
+      <select id="opp-sort" aria-label="Trier les adversaires">
+        <option value="hands">Plus de mains</option><option value="net">Meilleur résultat</option>
+        <option value="loss">Pire résultat</option><option value="last">Plus récents</option><option value="name">Nom (A → Z)</option>
+      </select>
+      <select id="opp-kind" aria-label="Type d'adversaire">
+        <option value="">Tous</option><option value="reg">Réguliers</option><option value="rec">Récréatifs</option>
+      </select>
+    </div>
     <ul class="opps" id="opps"></ul>
   </aside>
   <div class="backdrop" id="backdrop"></div>

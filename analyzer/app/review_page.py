@@ -8,9 +8,14 @@ from urllib.parse import quote
 from .. import players
 from ..models import Hand
 from ..report import cards_html, html_page, num
-from ..theory import review
+from ..theory import review, studyspots
 
 FAMILY_NAME = {"srp": "SRP", "3bet": "3bet", "4bet": "4bet"}
+
+
+def family_tag(family: str) -> str:
+    """L'étiquette du type de pot : « 3bet » ; à une table à plusieurs, avec les positions (« SRP BB c. CO »)."""
+    return escape(FAMILY_NAME.get(family) or studyspots.pot_name(family))
 MINUTES = {"SRP": 3, "pot 3bet": 2, "pot 4bet": 0.3}  # durée d'une résolution sur 4 cœurs (mesurée)
 
 STYLE = """
@@ -109,7 +114,7 @@ def _costly_table(digests: list[dict], who: str, show_villain: bool) -> str:
         rows.append(
             f'<tr><td class="small">{escape(g["date"])}</td>'
             + (f'<td>{escape(g["villain"])}</td>' if show_villain else "")
-            + f'<td>{escape(d["label"])}<span class="fam">{FAMILY_NAME[g["family"]]}</span></td>'
+            + f'<td>{escape(d["label"])}<span class="fam">{family_tag(g["family"])}</span></td>'
             f'<td>{cards_html(cards)}</td><td>{cards_html(d["board"])}</td>'
             f'<td>{escape(d["played"])}{" ≈" if d["approx"] else ""}</td><td class="small">{_theory(d)}</td>'
             + _loss(review.loss(d)) +
@@ -149,7 +154,7 @@ def _situations_table(digests: list[dict], who: str, villain: bool) -> str:
         lost = _loss(group["lost"]) if group["known"] else '<td class="num">–</td>'
         mean = _loss(group["lost"] / group["known"], "") if group["known"] else '<td class="num">–</td>'
         rows.append(
-            f'<tr><td>{escape(group["label"])}<span class="fam">{FAMILY_NAME[group["family"]]}</span></td>'
+            f'<tr><td>{escape(group["label"])}<span class="fam">{family_tag(group["family"])}</span></td>'
             f'<td class="num">{group["n"]}</td>'
             + ("" if villain else f'<td class="num">{group["errors"]}</td>{lost}{mean}')
             + f'<td>{_freqs(group)}</td><td class="small">{advice}</td>'
@@ -170,7 +175,7 @@ def _exploits_table(digests: list[dict]) -> str:
             rows.append((abs(dev["z"]), group, dev))
     rows.sort(key=lambda r: -r[0])
     html_rows = [
-        f'<tr><td>{escape(g["label"])}<span class="fam">{FAMILY_NAME[g["family"]]}</span></td>'
+        f'<tr><td>{escape(g["label"])}<span class="fam">{family_tag(g["family"])}</span></td>'
         f'<td class="num">{g["n"]}</td><td>{escape(dev["label"])}</td>'
         f'<td class="num">{round(100 * dev["observed"])} %</td><td class="num">{round(100 * dev["expected"])} %</td>'
         f'<td><span class="conf {dev["confidence"]}">{dev["confidence"]}</span></td>'

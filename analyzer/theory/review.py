@@ -54,14 +54,15 @@ def situation(node: dict) -> str:
     return f"bet:{where}:{past}" if level == 0 else f"face:{where}:{past}:{level}"
 
 
-def situation_label(key: str, family: str) -> str:
+def situation_label(key: str, family: str, positions: Optional[tuple[str, str]] = None) -> str:
+    """Le nom d'une situation ; positions : (hors de position, en position), celles de la famille par défaut."""
     kind, where, past, *level = key.split(":")
     if kind == "bet":
-        return sizing.label(key, family)
+        return sizing.label(key, family, positions)
     other = "i" if where[1] == "o" else "o"
     n = int(level[0])
     source = f"bet:{where[0]}{other}:{past}" if n == 1 else f"raise:{where[0]}{other}:{past}:{n - 2}"
-    return "Face à : " + sizing.label(source, family)
+    return "Face à : " + sizing.label(source, family, positions)
 
 
 def loss(d: dict) -> Optional[float]:

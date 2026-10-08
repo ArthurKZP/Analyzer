@@ -1,4 +1,5 @@
-"""Page « Tables à plusieurs » de Mon jeu : tes stats par position en 6-max et en 3-max (analyzer/ring.py)."""
+"""Page « Tables à plusieurs » de Mon jeu : tes stats par position en 6-max et en 3-max (analyzer/ring.py), après tes
+écarts à la théorie les plus importants (analyzer/ring_leaks.py, le détail dans le Leakfinding du format)."""
 from __future__ import annotations
 
 from html import escape
@@ -116,7 +117,25 @@ def _spots(rows: list[dict], table_format: str, ready: bool) -> str:
             f"pour la ligne jouée ; le pot compte l'argent mort des joueurs qui ont foldé.{more}</p>")
 
 
-def _section(fs: ring.FormatStats, shown: bool, spots: str = "") -> str:
+def _gaps(found: Optional[list], table_format: str) -> str:
+    """Tes écarts à la théorie les plus importants dans ce format (charts, plans de jeu des flops résolus), en tête de
+    page ; le détail est dans le Leakfinding du format."""
+    if found is None:
+        return ""
+    from .leaks_page import format_query, gaps_table
+    link = (f'<a href="leaks{escape(format_query(table_format))}">Le Leakfinding {escape(table_format)}</a> donne le '
+            "détail de toutes tes stats, les mains à passer au solveur et les leaks à travailler.")
+    if not found:
+        body = ('<p class="muted">Aucun écart net à la théorie pour l\'instant (charts avant le flop, plans de jeu des '
+                f"flops résolus après) : pas assez d'occasions, ou un jeu proche de la théorie. {link}</p>")
+    else:
+        body = (gaps_table(found, "all", "Toi") + '<p class="note">Comparé à tes charts avec les mêmes cartes (avant le '
+                "flop) et aux plans de jeu des flops 6-max résolus (après le flop, pots à deux joueurs) ; les nets "
+                f"d'abord, puis selon la taille de l'écart, sa fréquence et ce qu'il met en jeu. {link}</p>")
+    return f'<h2>Tes écarts les plus importants</h2><div class="card">{body}</div>'
+
+
+def _section(fs: ring.FormatStats, shown: bool, spots: str = "", gaps: str = "") -> str:
     t = fs.total
     tiles = [("Mains", str(t.hands), " · ".join(fs.sites)),
              ("Résultat", f"{num(t.net_bb, 1, sign=True)} bb", f"{num(t.bb100, 1, sign=True)} bb/100"),
@@ -129,7 +148,7 @@ def _section(fs: ring.FormatStats, shown: bool, spots: str = "") -> str:
     note = ("Repères indicatifs d'un régulier en 6-max à 100 bb (stats de tracker courantes), en attendant ceux du "
             "solveur." if fs.table_format == "6-max" else "Pas encore de repère pour ce format.")
     return (f'<section class="rg-fmt" data-fmt="{escape(fs.table_format)}"{"" if shown else " hidden"}>'
-            f'<div class="meta">{escape(fs.table_format)} · {period}</div>{tiles_html}'
+            f'<div class="meta">{escape(fs.table_format)} · {period}</div>{tiles_html}{gaps}'
             f"<h2>Préflop par position</h2>{_table(fs, PREFLOP, True)}"
             f"<h2>Après le flop</h2>{_table(fs, POSTFLOP, False)}"
             f"{_refs(fs)}{spots}"
@@ -139,8 +158,9 @@ def _section(fs: ring.FormatStats, shown: bool, spots: str = "") -> str:
 
 
 def build_ring_page(stats: list[ring.FormatStats], hero: str, embed: bool = True, spots: Optional[list[dict]] = None,
-                    ranges: Optional[dict[str, int]] = None) -> str:
-    """spots : Library.ring_spots() ; ranges : formats dont la solution préflop est là (ring_ranges.available)."""
+                    ranges: Optional[dict[str, int]] = None, gaps: Optional[dict[str, list]] = None) -> str:
+    """spots : Library.ring_spots() ; ranges : formats dont la solution préflop est là (ring_ranges.available) ;
+    gaps : tes écarts les plus importants par format (leaks.top_stat_gaps)."""
     if not stats:
         body = ('<p class="note">Aucune main à une table de 3 joueurs ou plus. Importe des historiques 3-max ou 6-max '
                 "(Betclic, Winamax, Unibet) : tes stats par position s'afficheront ici.</p>")
@@ -151,7 +171,13 @@ def build_ring_page(stats: list[ring.FormatStats], hero: str, embed: bool = True
             f'<button type="button" data-fmt="{escape(fs.table_format)}" aria-pressed="{str(k == 0).lower()}">'
             f"{escape(fs.table_format)} ({fs.total.hands})</button>" for k, fs in enumerate(stats)) + "</div>"
     heading = "" if embed else f"<h1>Tables à plusieurs — {escape(hero)}</h1>"
-    body = STYLE + heading + switch + "".join(
-        _section(fs, k == 0, _spots(spots or [], fs.table_format, fs.table_format in (ranges or {})))
+    style = ""
+    if gaps:
+        from .leaks_page import STYLE as LEAK_STYLE
+        from .review_page import STYLE as REVIEW_STYLE
+        style = f"<style>{REVIEW_STYLE}{LEAK_STYLE}</style>"
+    body = STYLE + style + heading + switch + "".join(
+        _section(fs, k == 0, _spots(spots or [], fs.table_format, fs.table_format in (ranges or {})),
+                 _gaps((gaps or {}).get(fs.table_format), fs.table_format))
         for k, fs in enumerate(stats))
     return html_page(f"Tables à plusieurs — {hero}", body, embed, script=SCRIPT)

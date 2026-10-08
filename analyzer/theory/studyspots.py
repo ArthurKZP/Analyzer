@@ -130,6 +130,17 @@ def family_title(family: str) -> str:
     return f"6-max, {info['pair']}, {info['name']}" if family in RING_FAMILIES else f"heads-up, {info['name']}"
 
 
+def pot_name(family: str) -> str:
+    """Le nom court d'un type de pot : « SRP », « pot 3bet » ; à une table à plusieurs, avec les positions des deux
+    joueurs (« SRP BB c. CO ») : une famille 6-max (« 6max_<hors de position>_<en position>_<pot> »), d'étude ou non."""
+    if family in FAMILIES:
+        return FAMILIES[family]["name"]
+    parts = family.split("_")
+    if len(parts) == 4 and parts[3] in POT_NAMES:
+        return f"{POT_NAMES[parts[3]]} {parts[1].upper()} c. {parts[2].upper()}"
+    return family
+
+
 def family_info(family: str) -> dict:
     """Une famille de spots : heads-up (FAMILIES) ou d'une table à plusieurs (RING_FAMILIES) ; KeyError sinon."""
     return FAMILIES[family] if family in FAMILIES else RING_FAMILIES[family]

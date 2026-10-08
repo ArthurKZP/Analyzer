@@ -1,6 +1,6 @@
 """Parseur des historiques de mains Unibet (cash game NLHE, toutes tailles de table).
 
-Le compte qui a exporté les mains porte son identifiant entre crochets (« END-BOSS[Unibet_fdf3…] ») : c'est le
+Le compte qui a exporté les mains porte son identifiant entre crochets (« Pseudo[Unibet_1a2b…] ») : c'est le
 héros ; il garde son pseudo seul. Les joueurs assis mais absents (« sitting out ») ne sont pas servis et ne
 comptent pas dans la main. Pas d'heure par action.
 """

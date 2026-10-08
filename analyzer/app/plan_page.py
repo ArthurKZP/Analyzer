@@ -99,7 +99,9 @@ SCRIPT = """
   var saved = null;
   try { saved = localStorage.getItem('analyzer-plan-famille'); } catch (e) { saved = null; }
   var first = document.querySelector('.pl-fams button[data-default]') || buttons[0];
-  show(saved && document.querySelector('.pl-fams button[data-fam="' + saved + '"]') ? saved : first.dataset.fam);
+  var wanted = (location.hash.match(/famille=([\w+-]+)/) || [])[1];  // lien d'une autre page : « #famille=6max_bb_btn_srp »
+  var known = function (f) { return f && document.querySelector('.pl-fams button[data-fam="' + f + '"]'); };
+  show(known(wanted) ? wanted : known(saved) ? saved : first.dataset.fam);
 
   // Attaque ou défense, dans chaque famille
   document.querySelectorAll('.pl-sides button').forEach(function (b) {

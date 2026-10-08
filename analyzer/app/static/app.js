@@ -17,6 +17,17 @@
   let state = null;
   let route = null;
   let students = [];
+  const hasHands = () => !!(state && (state.hands || state.ring_hands));  // heads-up ou tables à plusieurs
+
+  // Petites préférences gardées dans le navigateur (tri des adversaires, format du Leakfinding).
+  function pref(key, value) {
+    try {
+      if (value === undefined) return localStorage.getItem('analyzer-' + key);
+      if (value === null) localStorage.removeItem('analyzer-' + key);
+      else localStorage.setItem('analyzer-' + key, value);
+    } catch (e) { /* stockage indisponible : on fait sans */ }
+    return null;
+  }
 
   // ---------- utilitaires ----------
   function el(tag, attrs, ...children) {
@@ -52,10 +63,10 @@
     if (parts[0] === 'entraineur') return { view: 'entraineur' };
     if (parts[0] === 'sauvegarde') return { view: 'sauvegarde' };
     if (parts[0] === 'adversaire' && parts[1]) return { view: 'adv', player: parts[1], tab: tabOf('adv', parts[2], 'plan') };
-    if (parts[0] === 'moi') return { view: 'moi', tab: tabOf('moi', parts[1], 'bilan') };
+    if (parts[0] === 'moi') return { view: 'moi', tab: tabOf('moi', parts[1], state && !state.hands && state.ring_hands ? 'leaks' : 'bilan') };
     if (parts[0] === 'eleves') return { view: 'eleves' };
     if (parts[0] === 'eleve' && parts[1]) return { view: 'eleve', student: parts[1], tab: tabOf('eleve', parts[2], 'leaks') };
-    return state && state.hands ? { view: 'moi', tab: 'bilan' } : { view: 'importer' };
+    return hasHands() ? { view: 'moi', tab: state.hands ? 'bilan' : 'leaks' } : { view: 'importer' };
   }
 
   function hashFor(r) {
@@ -73,8 +84,9 @@
     if (r.view === 'adv') return '/p/' + encodeURIComponent(r.player) + '/' + r.tab;
     if (r.view === 'etudes') return r.tab === 'explorateur' ? '/explorateur/preflop' : '/etudes/' + r.tab;
     if (r.view === 'entraineur') return '/entraineur';
-    if (r.view === 'eleve') return '/eleve/' + encodeURIComponent(r.student) + '/' + r.tab;
-    return '/moi/' + r.tab;
+    const path = r.view === 'eleve' ? '/eleve/' + encodeURIComponent(r.student) + '/' + r.tab : '/moi/' + r.tab;
+    const fmt = r.tab === 'leaks' ? pref('format:' + path) : null;  // le dernier format choisi (6-max…)
+    return path + (fmt ? '?format=' + encodeURIComponent(fmt) : '');
   }
 
   async function loadStudents() {
@@ -102,10 +114,10 @@
       }
       if (route.tab === 'importer') return showImport(route.student);
       const s = students.find((x) => x.id === route.student);
-      if (!s.hands) return showImport(route.student);
+      if (!s.hands && !s.ring_hands) return showImport(route.student);
       return showFrame(srcFor(route));
     }
-    if (!state.hands) return showWelcome();
+    if (!hasHands()) return showWelcome();
     if (route.view === 'adv' && !state.opponents.some((o) => o.name === route.player)) {
       return showPanel(el('div', { class: 'welcome' }, el('h2', {}, 'Joueur introuvable'),
         el('p', {}, 'Aucune main contre ce joueur dans ton dossier.')));
@@ -127,7 +139,8 @@
       title.textContent = 'Mon jeu';
       subtitle.textContent = state.hands
         ? state.hands + ' mains contre ' + state.opponents.length + ' adversaire(s) · ' + state.first + ' → ' + state.last
-        : '';
+          + (state.ring_hands ? ' · ' + state.ring_hands + ' mains aux tables à plusieurs' : '')
+        : state.ring_hands ? state.ring_hands + ' mains aux tables à plusieurs' : '';
     } else if (route.view === 'etudes') {
       title.textContent = 'Études du solveur';
       subtitle.textContent = 'Coups résolus avec GTOpen, gardés sur ton ordinateur pour être réexplorés';
@@ -141,7 +154,9 @@
       const s = students.find((x) => x.id === route.student);
       title.textContent = s ? s.name : 'Élève';
       subtitle.textContent = s ? (s.hands ? s.hands + ' mains · ' + (s.hero || '') + ' · ' + s.first + ' → ' + s.last
-        : 'Pas encore de mains : importe ses historiques') : '';
+          + (s.ring_hands ? ' · ' + s.ring_hands + ' mains aux tables à plusieurs' : '')
+        : s.ring_hands ? s.ring_hands + ' mains aux tables à plusieurs · ' + (s.hero || '')
+          : 'Pas encore de mains : importe ses historiques') : '';
     } else if (route.view === 'entraineur') {
       title.textContent = 'Entraîneur';
       subtitle.textContent = 'Joue des mains sur les spots résolus : le solveur juge chaque décision';
@@ -179,7 +194,7 @@
     const tabs = $('tabs');
     tabs.textContent = '';
     const list = TABS[route.view] || [];
-    tabs.hidden = !list.length || (!state.hands && route.view !== 'etudes' && route.view !== 'eleve');
+    tabs.hidden = !list.length || (!hasHands() && route.view !== 'etudes' && route.view !== 'eleve');
     for (const [id, label] of list) {
       const r = Object.assign({}, route, { tab: id });
       tabs.append(el('a', { href: hashFor(r), 'aria-current': id === route.tab ? 'page' : null }, label));
@@ -199,11 +214,20 @@
   // ---------- menu latéral ----------
   function renderSidebar() {
     $('hero-name').textContent = state.hero ? 'Toi : ' + state.hero : 'Aucune main chargée';
-    $('opp-count').textContent = state.opponents.length ? '(' + state.opponents.length + ')' : '';
-    const q = $('opp-search').value.trim().toLowerCase();
+    const plain = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();  // sans accents
+    const q = plain($('opp-search').value.trim()), kind = $('opp-kind').value, sort = $('opp-sort').value;
     const list = $('opps');
     list.textContent = '';
-    const shown = state.opponents.filter((o) => !q || o.name.toLowerCase().includes(q));
+    const shown = state.opponents.filter((o) => (!q || plain(o.name).includes(q)) && (!kind || o.kind === kind));
+    const day = (d) => d.split('/').reverse().join('-');  // jj/mm/aaaa -> aaaa-mm-jj, pour comparer
+    const order = {
+      hands: (a, b) => b.hands - a.hands, net: (a, b) => b.net_bb - a.net_bb, loss: (a, b) => a.net_bb - b.net_bb,
+      last: (a, b) => (day(a.last) < day(b.last) ? 1 : day(a.last) > day(b.last) ? -1 : 0),
+      name: (a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }),
+    }[sort] || ((a, b) => b.hands - a.hands);
+    shown.sort((a, b) => order(a, b) || b.hands - a.hands);
+    const total = state.opponents.length;
+    $('opp-count').textContent = !total ? '' : shown.length === total ? '(' + total + ')' : '(' + shown.length + ' / ' + total + ')';
     for (const o of shown) {
       list.append(el('li', {}, el('a', { href: '#/adversaire/' + encodeURIComponent(o.name), 'data-name': o.name },
         el('span', { class: 'n' }, o.name, o.kind === 'rec' ? el('span', { class: 'k', title: 'Récréatif' }, 'réc.') : null),
@@ -366,7 +390,8 @@
     } else result.append(table);
     if (data.files.some((f) => f.formats && Object.keys(f.formats).some((k) => k !== 'HU'))) {
       result.append(el('p', { class: 'small' }, 'Les mains heads-up vont dans toute l\'analyse (adversaires, solveur, '
-        + 'leakfinding) ; celles des tables à 3 joueurs et plus sont gardées pour l\'analyse par position.'));
+        + 'leakfinding) ; celles des tables à 3 joueurs et plus ont leur leakfinding (6-max, 3-max), leurs mains de '
+        + 'départ et leurs stats par position.'));
     }
   }
 
@@ -398,7 +423,8 @@
     const cards = students.map((s) => el('a', { class: 'student', href: '#/eleve/' + encodeURIComponent(s.id) + '/leaks' },
       el('b', {}, s.name),
       el('span', { class: 'muted small' }, s.hands ? s.hands + ' mains · ' + (s.hero || '') + ' · dernière le ' + s.last
-        : 'pas encore de mains')));
+        + (s.ring_hands ? ' · ' + s.ring_hands + ' aux tables à plusieurs' : '')
+        : s.ring_hands ? s.ring_hands + ' mains aux tables à plusieurs' : 'pas encore de mains')));
     showPanel(el('div', { class: 'students' },
       el('p', {}, 'Chaque élève a son dossier de mains et son rapport de leakfinding : ses stats face à la théorie, '
         + 'contre les réguliers et contre les récréatifs, les mains à revoir avec l\'avis du solveur, et les leaks à travailler.'),
@@ -492,6 +518,10 @@
   window.addEventListener('message', (e) => {
     if (e.origin !== location.origin || !e.data || e.data.type !== 'analyzer-page') return;
     const parts = String(e.data.path).split('/').filter(Boolean).map(decodeURIComponent);
+    if (parts[parts.length - 1] === 'leaks') {  // le format choisi dans le Leakfinding : gardé pour la prochaine fois
+      const fmt = new URLSearchParams(e.data.search || '').get('format');
+      pref('format:' + e.data.path, fmt && fmt !== 'HU' ? fmt : null);
+    }
     let r = null;
     if (parts[0] === 'p' && parts.length === 3) r = { view: 'adv', player: parts[1], tab: parts[2] };
     else if (parts[0] === 'moi' && parts.length === 2) r = { view: 'moi', tab: parts[1] };
@@ -509,6 +539,11 @@
   });
 
   $('opp-search').addEventListener('input', renderSidebar);
+  [['opp-sort', 'hands'], ['opp-kind', '']].forEach(([id, fallback]) => {  // tri et type gardés d'une visite à l'autre
+    const select = $(id), saved = pref(id);
+    select.value = saved !== null && select.querySelector('option[value="' + saved + '"]') ? saved : fallback;
+    select.addEventListener('change', () => { pref(id, select.value); renderSidebar(); });
+  });
   $('menu').addEventListener('click', () => $('app').classList.toggle('drawer-open'));
   $('backdrop').addEventListener('click', closeDrawer);
   window.addEventListener('hashchange', render);

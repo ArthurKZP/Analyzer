@@ -232,12 +232,14 @@ def legend(curve) -> str:
     ) + "</div>"
 
 
-def findings_html(ps: PlayerStats, hero_mode: bool = False, folds: Optional[dict] = None) -> str:
-    items = findings(ps)
+def findings_html(ps: PlayerStats, hero_mode: bool = False, folds: Optional[dict] = None,
+                  items: Optional[list] = None) -> str:
+    """Les écarts aux repères (items : ceux à montrer, dans l'ordre ; par défaut les 12 plus marqués)."""
+    items = findings(ps)[:12] if items is None else items
     if not items:
         return '<p class="muted">Aucun écart marqué par rapport aux repères (ou échantillon trop faible).</p>'
     rows = []
-    for f in items[:12]:
+    for f in items:
         lo, hi = f.stat.ref
         badge = '<span class="pill strong">net</span>' if f.strong else '<span class="pill">tendance</span>'
         arrow = "▲" if f.direction == "haut" else "▼"
@@ -765,7 +767,8 @@ EMBED_SCRIPT = """
 (function () {
   if (window.parent === window) return;
   var post = function () {
-    window.parent.postMessage({ type: 'analyzer-page', path: location.pathname, hash: location.hash }, location.origin);
+    window.parent.postMessage({ type: 'analyzer-page', path: location.pathname, search: location.search,
+      hash: location.hash }, location.origin);
   };
   post();
   window.addEventListener('hashchange', post);
@@ -960,6 +963,7 @@ table.lines tr.pooled td { background: var(--page); }
 .chip.h-rien { color: var(--muted); } .chip.h-paire { background: var(--lo-bg); } .chip.h-fort { background: var(--lo-bg); font-weight: 600; }
 details.inner { margin: 12px 0 0; border-radius: 8px; }
 details.inner summary { padding: 8px 12px; font-size: 13px; }
+details .inner-body { padding: 10px 12px; }
 .chart-wrap { overflow-x: auto; }
 .chart { min-width: 600px; }
 table.sizing td:first-child { white-space: nowrap; }

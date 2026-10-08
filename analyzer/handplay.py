@@ -361,7 +361,7 @@ def aggregate(plays: list[Played], kinds: Optional[dict[str, str]] = None) -> di
         for d in p.decisions:
             add(f"{p.position}|{d.situation}|{d.action}|{kind}", p.combo, p.net_bb, p.ev_bb, d.fold_bb, _freq(d))
     return {"cells": {k: {c: [round(x, 3) for x in v] for c, v in cell.items()} for k, cell in cells.items()},
-            "positions": sorted({p.position for p in plays}, key=_position_order),
+            "positions": sorted({p.position for p in plays}, key=position_order),
             "hands": len(plays)}
 
 
@@ -444,7 +444,7 @@ def detail(plays: list[Played], kinds: Optional[dict[str, str]] = None, *, name:
 POSITION_ORDER = ("UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN", "SB", "BB")
 
 
-def _position_order(pos: str) -> int:
+def position_order(pos: str) -> int:
     return POSITION_ORDER.index(pos) if pos in POSITION_ORDER else len(POSITION_ORDER)
 
 

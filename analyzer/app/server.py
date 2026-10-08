@@ -118,6 +118,15 @@ class Handler(BaseHTTPRequestHandler):
     def _parts(self) -> list[str]:
         return [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
 
+    def _format(self) -> Optional[str]:
+        """Le format de table demandé (« ?format=6-max ») : le Leakfinding a un rapport par format."""
+        return parse_qs(urlsplit(self.path).query).get("format", [None])[0]
+
+    @staticmethod
+    def _report_name(table_format: Optional[str], who: str = "") -> str:
+        suffix = f"-{table_format}" if table_format and table_format != "HU" else ""
+        return f"leakfinding{'-' + who if who else ''}{suffix}.html"
+
     # --- GET --------------------------------------------------------------------
     def do_GET(self):
         if not self._trusted():
@@ -137,23 +146,30 @@ class Handler(BaseHTTPRequestHandler):
                 job = library.solves.get(parts[2])
                 return self._json(job) if job else self._error(404, "Résolution inconnue.")
             if parts == ["moi", "rapport"]:
-                return self._download(library.leaks_page(standalone=True), "leakfinding.html")
+                return self._download(library.leaks_page(standalone=True, table_format=self._format()),
+                                      self._report_name(self._format()))
+            if parts == ["moi", "leaks"]:
+                return self._html(library.leaks_page(table_format=self._format()))
             if len(parts) == 2 and parts[0] == "moi":
                 return self._html(library.self_page(parts[1]))
             if parts == ["api", "leaks"]:
-                return self._json(library.leaks_state())
+                return self._json(library.leaks_state(table_format=self._format()))
             if parts == ["api", "eleves"]:
                 return self._json(library.students_summary())
             if len(parts) == 3 and parts[0] == "eleve":
                 student = library.student(parts[1])
                 if parts[2] == "rapport":
-                    return self._download(student.leaks_page(standalone=True), f"leakfinding-{parts[1]}.html")
+                    return self._download(student.leaks_page(standalone=True, table_format=self._format()),
+                                          self._report_name(self._format(), parts[1]))
                 if parts[2] not in STUDENT_PAGES:
                     raise KeyError(parts[2])
+                if parts[2] == "leaks":
+                    return self._html(student.leaks_page(table_format=self._format()))
                 return self._html(student.self_page(parts[2]))
             if len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] in ("leaks", "revue"):
                 student = library.student(parts[2])
-                return self._json(student.leaks_state() if parts[3] == "leaks" else student.review_state())
+                return self._json(student.leaks_state(table_format=self._format()) if parts[3] == "leaks"
+                                  else student.review_state())
             if parts[:2] == ["api", "coups"] and len(parts) in (2, 3) or \
                     parts[:2] == ["api", "eleves"] and len(parts) in (4, 5) and parts[3] == "coups":
                 owner = library if parts[1] == "coups" else library.student(parts[2])
@@ -402,7 +418,11 @@ class Handler(BaseHTTPRequestHandler):
             files = self._import_files()
             return files if files is None else self._json(library.import_files(files))
         if len(parts) == 3 and parts[:2] == ["api", "leaks"] and parts[2] in ("lancer", "arreter"):
-            return self._json(library.leaks_cancel() if parts[2] == "arreter" else library.leaks_state(start=True))
+            try:
+                return self._json(library.leaks_cancel(self._format()) if parts[2] == "arreter"
+                                  else library.leaks_state(start=True, table_format=self._format()))
+            except UnknownPlayer:
+                return self._error(404, "Format de table inconnu.")
         if parts == ["api", "eleves"]:
             payload = self._small_json()
             name = payload.get("name") if isinstance(payload, dict) else None
@@ -423,7 +443,11 @@ class Handler(BaseHTTPRequestHandler):
                 files = self._import_files()
                 return files if files is None else self._json(student.import_files(files))
             if len(parts) == 5 and parts[3] == "leaks" and parts[4] in ("lancer", "arreter"):
-                return self._json(student.leaks_cancel() if parts[4] == "arreter" else student.leaks_state(start=True))
+                try:
+                    return self._json(student.leaks_cancel(self._format()) if parts[4] == "arreter"
+                                      else student.leaks_state(start=True, table_format=self._format()))
+                except UnknownPlayer:
+                    return self._error(404, "Format de table inconnu.")
             if len(parts) == 5 and parts[3] == "revue" and parts[4] in ("lancer", "arreter"):
                 return self._json(student.review_cancel() if parts[4] == "arreter" else student.review_state(start=True))
         return self._error(404, "Page introuvable.")

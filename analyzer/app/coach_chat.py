@@ -53,7 +53,7 @@ Tu consultes ses données avec des outils :
 - strategie_main : une main précise à ce moment (sa stratégie, l'EV de chaque action, son équité).
 - ecarts_adversaire : un adversaire réel, son type (régulier ou récréatif) et ses écarts de fréquence face au solveur.
 - bluffs_adversaire : où un adversaire réel (ou la population des réguliers) bluffe : ses fréquences de mise selon la carte et la texture face au solveur, ses mains montrées par ligne, taille et carte, et les patterns qui en ressortent.
-- leakfinding : le rapport de leakfinding de l'élève (ou d'un de ses élèves de poker) : ses leaks prioritaires, ses stats face à la théorie contre réguliers et récréatifs, ses pertes face au solveur, les mains à revoir.
+- leakfinding : le rapport de leakfinding de l'élève (ou d'un de ses élèves de poker), en heads-up ou à une table à plusieurs (6-max, 3-max) : ses leaks prioritaires, ses stats face à la théorie (en heads-up contre réguliers et récréatifs ; en 6-max, face à ses charts avec les mêmes cartes et aux plans de jeu des flops 6-max), ses pertes face au solveur, les mains à revoir.
 - exploiter : node-lock d'un adversaire réel. Son profil postflop mesuré sur ses mains (c-bet, barrels, fold face aux mises, relances, probes) est verrouillé dans une étude, puis le solveur calcule la meilleure réponse : ce qui change par famille de mains, les mains qui changent d'action, le gain en bb.
 
 Comment répondre :
@@ -130,10 +130,15 @@ TOOLS = [
      "description": ("Le rapport de leakfinding d'un joueur : l'élève lui-même (par défaut) ou l'un de ses élèves de poker "
                      "(onglet Élèves). Ses leaks prioritaires (preuve chiffrée, confiance, conseil), ses stats préflop et "
                      "postflop face à la théorie contre les réguliers et contre les récréatifs, son EV perdue face au "
-                     "solveur par situation, les mains choisies à revoir. Consulte-le pour écrire un rapport de coaching "
-                     "ou répondre à une question sur les leaks d'un joueur."),
+                     "solveur par situation, les mains choisies à revoir. Un rapport par format de table : le heads-up, "
+                     "ou une table à plusieurs (6-max, 3-max : préflop face à ses charts avec les mêmes cartes, après le "
+                     "flop face aux plans de jeu des flops 6-max). Consulte-le pour écrire un rapport de coaching ou "
+                     "répondre à une question sur les leaks d'un joueur."),
      "input_schema": {"type": "object", "properties": {
-         "eleve": {"type": "string", "description": "nom de l'élève (onglet Élèves) ; absent : les mains de l'élève lui-même"}}}},
+         "eleve": {"type": "string", "description": "nom de l'élève (onglet Élèves) ; absent : les mains de l'élève lui-même"},
+         "format": {"type": "string", "enum": ["HU", "6-max", "3-max"],
+                    "description": "format de table du rapport ; absent : le heads-up (ou sa table à plusieurs s'il n'a "
+                                   "que celle-là)"}}}},
     {"name": "exploiter",
      "description": ("Node-lock contre un adversaire réel dans un spot résolu. Son profil postflop dans ce type de pot et ce "
                      "rôle (c-bet, barrels, c-bet retardée, fold face aux mises et aux relances, relances, probes ou stabs), "
@@ -444,7 +449,7 @@ class Coach:
             elif name == "bluffs_adversaire":
                 data = self._bluffs(args.get("adversaire"))
             elif name == "leakfinding":
-                data = self._leaks(args.get("eleve"))
+                data = self._leaks(args.get("eleve"), args.get("format"))
             else:
                 return f"Outil inconnu : {name}.", True
         except CoachError as exc:
@@ -585,7 +590,7 @@ class Coach:
         info = kinds.get(match[0], {})
         return match[0], match, ("récréatif" if info.get("kind") == "rec" else "régulier")
 
-    def _leaks(self, who) -> dict:
+    def _leaks(self, who, table_format=None) -> dict:
         lib = self.library
         name = None
         if isinstance(who, str) and who.strip():
@@ -595,9 +600,13 @@ class Coach:
                 known = ", ".join(s["name"] for s in students.all_students()) or "aucun"
                 raise CoachError(f"Élève inconnu : {who}. Élèves : {known}.")
             lib, name = lib.student(match[0]["id"]), match[0]["name"]
-        if not lib.hands:
+        formats = [fmt for fmt, _ in lib.leak_formats()]
+        if not formats:
             raise CoachError("Pas encore de mains pour ce joueur : importe ses historiques.")
-        return dict(leaks.summary(lib.leaks_report()), eleve=name or "toi")
+        if table_format and table_format not in formats:
+            raise CoachError(f"Pas de mains en {table_format} pour ce joueur. Formats : {', '.join(formats)}.")
+        report = lib.leaks_report(table_format or formats[0])
+        return dict(leaks.summary(report), eleve=name or "toi", formats=formats)
 
     def _bluffs(self, who) -> dict:
         label, names, kind = self._targets(who)
