@@ -158,10 +158,13 @@ Pour chaque décision (tes cartes sont toujours connues ; les siennes seulement 
 - **hors range** : le solveur n'amène jamais cette main à ce nœud (ex. un 4bet face à un 3bet avec une main
   qu'il n'ouvre pas) ; ces décisions sont exclues des fréquences.
 
-La page montre, par nœud, la grille du solveur (couleurs = actions, hauteur = part de la main qui arrive
-ici) avec tes décisions par main (✕ = écart), tes fréquences face à celles du solveur **avec exactement les
-mêmes mains**, et la liste des écarts avec un lien « rejouer ». Pour l'adversaire : ses fréquences globales
-face au solveur et les mains montrées qu'il joue autrement.
+La page commence par **En bref** : les trois situations qui s'écartent le plus de la théorie, une ligne chacune
+(« Big blind face à l'open : 3bet trop souvent (27 % au lieu de 19 %) ; 3bet au lieu de call avec A7s, A6s,
+K9s… (19 fois) »), classées par le nombre de mains jouées autrement ; les autres sont comptées, et le détail de
+la comparaison est replié. Elle montre ensuite, par nœud, la grille du solveur (couleurs = actions, hauteur = part
+de la main qui arrive ici) avec tes décisions par main (✕ = écart), tes fréquences face à celles du solveur
+**avec exactement les mêmes mains**, et la liste des écarts avec un lien « rejouer ». Pour l'adversaire : ses
+fréquences globales face au solveur et les mains montrées qu'il joue autrement.
 
 Limites : la lecture des captures est précise à environ 2 % ; la solution est à 100bb et avec ces tailles,
 alors que ta profondeur et vos tailles réelles peuvent différer (la page les affiche). Les pots limpés et

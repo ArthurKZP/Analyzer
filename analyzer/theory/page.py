@@ -66,6 +66,9 @@ PAGE_STYLE = """
 .dev-group table { margin-top: 6px; }
 .bullets { margin: 0; padding-left: 18px; }
 .bullets li { margin-bottom: 6px; }
+details.brief-more { margin: 6px 0 0; border: none; background: none; font-size: 13px; }
+details.brief-more summary { padding: 0; color: var(--muted); border: none; }
+details.brief-more .note { margin: 6px 0 0; }
 details.rp-node { margin: 8px 0; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 details.rp-node > summary { cursor: pointer; padding: 10px 14px; }
 details.rp-node > .rp-body { padding: 0 14px 14px; }
@@ -175,26 +178,59 @@ def _replay(spots_href: str, hand: Hand) -> str:
     return f'<a class="spots-link" href="{escape(spots_href)}#hand={quote(hand.hand_id, safe="")}">rejouer</a>'
 
 
-def key_points(summaries: list[NodeSummary], who: str = "tu", ref: str = "solveur") -> list[str]:
-    """Phrases de synthèse : fréquences qui s'écartent de la théorie et écarts les plus fréquents."""
-    points = []
+MAX_BRIEF = 3  # situations dans « En bref » (le détail de chacune suit, nœud par nœud)
+
+
+def brief_points(summaries: list[NodeSummary], limit: int = MAX_BRIEF) -> tuple[list[str], int]:
+    """« En bref » : une ligne (HTML) par situation qui s'écarte de la théorie, les plus importantes d'abord (mains
+    jouées autrement : l'écart de fréquence rapporté aux décisions, ou les écarts main par main), au plus limit ; et
+    le nombre d'autres situations qui s'en écartent."""
+    found = []
     for s in summaries:
         n = len(s.in_range)
         if n < MIN_DECISIONS:
             continue
         node = s.node
         actions = node.actions[:1] if len(node.actions) == 2 else node.actions  # le fold est le complément
-        for a in actions:
-            act, exp = s.actual.get(a, 0.0), s.expected.get(a, 0.0)
-            if abs(act - exp) >= GAP_ALERT:
-                points.append(f"{node.label} : {node.word(a)} {num(act, 0)} % contre {num(exp, 0)} % pour "
-                              f"{REFS[ref]['the']} avec les mêmes mains ({n} décisions).")
+        gaps = [(a, s.actual.get(a, 0.0), s.expected.get(a, 0.0)) for a in actions]
+        gaps = [g for g in gaps if abs(g[1] - g[2]) >= GAP_ALERT]
         groups = [(k, g) for k, g in s.deviations() if len(g) >= 3]
+        if not gaps and not groups:
+            continue
+        parts = []
+        weight = 0.0
+        if gaps:
+            a, act, exp = max(gaps, key=lambda g: abs(g[1] - g[2]))
+            parts.append(f"{escape(node.word(a))} {'trop souvent' if act > exp else 'pas assez'} "
+                         f"({num(act, 0)}&nbsp;% au lieu de {num(exp, 0)}&nbsp;%)")
+            weight = abs(act - exp) * n / 100
         if groups:
             (action, best), items = groups[0]
-            combos = ", ".join(_sort_combos([d.combo for d in items])[:8])
-            points.append(f"{node.label} : {len(items)} fois {node.word(action)} au lieu de {node.word(best)} ({combos}).")
-    return points
+            combos = _sort_combos([d.combo for d in items])
+            shown = ", ".join(combos[:3]) + ("…" if len(combos) > 3 else "")
+            parts.append(f"{escape(node.word(action))} au lieu de {escape(node.word(best))} avec {escape(shown)} "
+                         f"({len(items)} fois)")
+            weight = max(weight, len(items))
+        found.append((weight, f"<b>{escape(node.label)}</b> : " + " ; ".join(parts)))
+    found.sort(key=lambda x: -x[0])
+    return [line for _, line in found[:limit]], max(0, len(found) - limit)
+
+
+def _brief(summaries: list[NodeSummary], ref: str, facts: str, more: str) -> str:
+    """La section « En bref » : les écarts principaux, une ligne de repères (facts) et le détail de la comparaison
+    (more), replié."""
+    points, rest = brief_points(summaries)
+    if points:
+        items = "".join(f"<li>{p}</li>" for p in points)
+        if rest:
+            items += (f'<li class="muted">Et {rest} autre{"s" if rest > 1 else ""} situation{"s" if rest > 1 else ""} '
+                      "à revoir, nœud par nœud plus bas.</li>")
+    else:
+        items = f"<li>Pas d'écart marqué par rapport {'au solveur' if ref == 'solveur' else 'aux charts'}.</li>"
+    return (f'<h2>En bref</h2>\n<div class="card"><ul class="bullets">{items}</ul>'
+            f'<p class="note" style="margin-bottom:0">{facts}</p>'
+            f'<details class="brief-more"><summary>Comment c\'est comparé</summary><p class="note">{more}</p></details>'
+            "</div>")
 
 
 def villain_table(solution: Solution, ps: PlayerStats) -> str:
@@ -267,9 +303,12 @@ def build_preflop_page(hands: list[Hand], hero: str, villain: Optional[str] = No
     links = "" if embed else "".join(f' · <a href="{escape(href)}">{text}</a>' for href, text in
                                      ((report_href, "Rapport"), (spots_href, "Spots")) if href)
     tiles = _tiles(hero_decisions, len(hands))
-    points = key_points(summaries)
-    bullets = "".join(f"<li>{escape(p)}</li>" for p in points) or "<li>Pas d'écart marqué par rapport au solveur.</li>"
     sizes = _sizes_note(solution, summaries, villain_stats)
+    facts = (f"Solution à {num(solution.stack_bb, 0)}&nbsp;bb, ta profondeur médiane ici : {num(depth, 0)}&nbsp;bb"
+             + (f" · {sizes}" if sizes else "") + ".")
+    more = ("Chaque décision est comparée à ce que fait le solveur avec exactement ta main (« mêmes mains » : les mains "
+            "qu'il n'amène jamais à ce nœud sont exclues). Plus tes tailles et ta profondeur s'éloignent de la solution, "
+            f"plus la comparaison est indicative. {escape(solution.source)}")
 
     villain_block = ""
     if villain and villain_stats:
@@ -319,11 +358,7 @@ def build_preflop_page(hands: list[Hand], hero: str, villain: Optional[str] = No
 {note_html}
 <div class="tiles">{tiles}</div>
 
-<h2>En bref</h2>
-<div class="card"><ul class="bullets">{bullets}</ul>
-<p class="note">Solution à {num(solution.stack_bb, 0)}&nbsp;bb ; ta profondeur effective médiane ici est de {num(depth, 0)}&nbsp;bb.
-{('Tailles observées : ' + sizes + '. ') if sizes else ''}Plus les tailles et la profondeur s'éloignent de la solution, plus la comparaison est indicative.
-{escape(solution.source)}</p></div>
+{_brief(summaries, "solveur", facts, more)}
 {villain_block}
 {''.join(nodes_html) or '<p class="muted">Aucune décision préflop comparable.</p>'}
 """
@@ -373,8 +408,12 @@ def build_ring_preflop_page(found: "RingPreflop", hero: str, embed: bool = False
     hero_decisions = found.decisions
     summaries = [s for s in summarize(hero_decisions, solution) if s.decisions]
     depth = median(d.effective_bb for d in hero_decisions) if hero_decisions else 0
-    points = key_points(summaries, ref="charts")
-    bullets = "".join(f"<li>{escape(p)}</li>" for p in points) or "<li>Pas d'écart marqué par rapport aux charts.</li>"
+    facts = f"Charts à 100&nbsp;bb, ta profondeur médiane ici : {num(depth, 0)}&nbsp;bb."
+    more = ("Chaque décision est comparée à ce que jouent les charts avec exactement ta main (« mêmes mains »), avec les "
+            "charts de sa table, sinon ceux du 6-max à même nombre de joueurs derrière (le LJ d'une table de 7 à 9 "
+            "joueurs comme l'UTG). Ne sont pas comparées : les places sans chart (UTG à UTG+2 à 7-9 joueurs) et les "
+            "situations que les charts ne couvrent pas (après un limp, squeeze, face au 4bet). Un tapis compte comme une "
+            "relance.")
     sections = []
     for situation, heading in SITUATIONS:
         group = [s for s in summaries if getattr(s.node, "situation", "") == situation]
@@ -388,12 +427,7 @@ def build_ring_preflop_page(found: "RingPreflop", hero: str, embed: bool = False
 {note_html}
 <div class="tiles">{_tiles(hero_decisions, found.hands, "charts")}</div>
 
-<h2>En bref</h2>
-<div class="card"><ul class="bullets">{bullets}</ul>
-<p class="note">Charts à 100&nbsp;bb ; ta profondeur effective médiane ici est de {num(depth, 0)}&nbsp;bb. Chaque décision
-est jugée par les charts de sa table, sinon par ceux du 6-max à même nombre de joueurs derrière (le LJ d'une table de 7
-à 9 joueurs comme l'UTG). Ne sont pas comparées : les places sans chart (UTG à UTG+2 à 7-9 joueurs) et les situations
-que les charts ne couvrent pas (après un limp, squeeze, face au 4bet). Un tapis compte comme une relance.</p></div>
+{_brief(summaries, "charts", facts, more)}
 {''.join(sections) or '<p class="muted">Aucune décision préflop comparable aux charts.</p>'}
 """
     return html_page(title, f"<style>{PAGE_STYLE}</style>{body}", embed)

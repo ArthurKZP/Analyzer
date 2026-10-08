@@ -79,7 +79,8 @@ class CollectTest(IsolatedHome):
         page = build_ring_preflop_page(found, "Hero", switch='<nav class="lk-fmt"></nav>')
         for text in ("UTG, premier à parler", "Premier à parler", "Charts,<br>mêmes mains", "Limp au lieu de fold",
                      "Action principale des charts", 'class="lk-fmt"',
-                     "UTG, premier à parler : limp 100 % contre 0 % pour les charts avec les mêmes mains"):
+                     "<b>UTG, premier à parler</b> : limp trop souvent (100&nbsp;% au lieu de 0&nbsp;%) ; "
+                     "limp au lieu de fold avec 72o (16 fois)", "Comment c'est comparé"):
             self.assertIn(text, page)
 
     def test_without_charts(self):
