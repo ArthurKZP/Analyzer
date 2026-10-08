@@ -152,7 +152,7 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["moi", "leaks"]:
                 return self._html(library.leaks_page(table_format=self._format()))
             if len(parts) == 2 and parts[0] == "moi":
-                return self._html(library.self_page(parts[1]))
+                return self._html(library.self_page(parts[1], table_format=self._format()))
             if parts == ["api", "leaks"]:
                 return self._json(library.leaks_state(table_format=self._format()))
             if parts == ["api", "eleves"]:
@@ -166,7 +166,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise KeyError(parts[2])
                 if parts[2] == "leaks":
                     return self._html(student.leaks_page(table_format=self._format()))
-                return self._html(student.self_page(parts[2]))
+                return self._html(student.self_page(parts[2], table_format=self._format()))
             if len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] in ("leaks", "revue"):
                 student = library.student(parts[2])
                 return self._json(student.leaks_state(table_format=self._format()) if parts[3] == "leaks"

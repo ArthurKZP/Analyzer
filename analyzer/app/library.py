@@ -7,6 +7,7 @@ import threading
 from html import escape
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from .. import bluffs, db, handplay, leaks, players, ring, ring_leaks, spots, store, students
 from ..db import analyses as db_analyses
@@ -16,11 +17,11 @@ from ..cli import detect_hero, unify_hero
 from ..lines import villain_lines
 from ..models import CALL, RAISE, Hand
 from ..parsers import read_zip
-from ..report import build_plan_page, build_report, html_page
+from ..report import build_plan_page, build_report, format_switch, html_page
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
-from ..theory import coach, custom_ranges, handclass, postflop, review, ring_ranges, studyspots
-from ..theory.page import build_preflop_page
+from ..theory import coach, custom_ranges, handclass, postflop, review, ring_preflop, ring_ranges, studyspots
+from ..theory.page import build_preflop_page, build_ring_preflop_page
 from ..theory.preflop import load_solution
 from ..viewer import build_viewer
 from .bluffs_page import build_bluffs_page
@@ -62,6 +63,14 @@ def _kind_note(kind: dict) -> str:
     return ("Joueur classé récréatif : tes décisions contre lui ne sont pas comparées à la théorie ; "
             "ses fréquences ci-dessous servent à l'exploiter.")
 
+
+
+def _ring_replay(hand: Hand) -> str:
+    """Revoir une main d'une table à plusieurs : au solveur, quand elle est allée au flop à deux."""
+    if postflop.flop_pair(hand) is None:
+        return ""
+    return (f'<a class="spots-link" href="/explorateur/{quote(hand.hand_id, safe="")}" target="_blank" '
+            'rel="noopener">revoir ↗</a>')
 
 
 def _digest_count() -> int:
@@ -255,7 +264,9 @@ class Library:
                                 records=self._spot_index(player))
         return self._cached(("player", player, page) + ((kind["kind"],) if page == "preflop" else ()), build)
 
-    def self_page(self, page: str) -> str:
+    def self_page(self, page: str, table_format: Optional[str] = None) -> str:
+        """Une page de Mon jeu ; table_format : le heads-up (« HU ») ou les tables à plusieurs (« ring »), pour le
+        Leakfinding et le préflop."""
         if page not in SELF_PAGES:
             raise KeyError(page)
         if page == "tables":  # tables à 3 joueurs et plus : pas besoin de mains heads-up
@@ -266,7 +277,9 @@ class Library:
                    + self._ring_kinds_key())
             return self._cached(key, self._hands_page)
         if page == "leaks":  # change au fil des analyses : le rapport a son propre cache
-            return self.leaks_page()
+            return self.leaks_page(table_format=table_format)
+        if page == "preflop" and self._leak_format(table_format) != "HU":
+            return self._ring_preflop_page()
         if not self.hands:
             if self.ring:  # seulement des tables à plusieurs : la page heads-up le dit
                 return html_page("Heads-up", HEADS_UP_ONLY, True)
@@ -281,7 +294,7 @@ class Library:
                                          kinds=self.kinds())
             if page == "preflop":
                 return build_preflop_page(regular, self.hero, embed=True, spots_href="spots",
-                                          note=_excluded_note(excluded))
+                                          note=_excluded_note(excluded), switch=format_switch(self.leak_formats(), "HU"))
             if page == "bluffs":
                 return self._population_bluffs()
             return build_viewer(self.hands, self.hero, None, embed=True, solver=True, api=f"{self.api}/coups",
@@ -298,6 +311,22 @@ class Library:
         scopes = [(scope, label, ring.analyze(parts[scope], hero, merge=True)) for scope, label in leaks.SCOPES]
         gaps = leaks.top_stat_gaps(ring_leaks.stats(self.ring, hero, kinds), "reg", 5)
         return build_ring_page(scopes, hero, spots=self.ring_spots(), ranges=ring_ranges.available(), gaps=gaps)
+
+    def _ring_preflop_page(self) -> str:
+        """Mon préflop aux tables à plusieurs : tes décisions contre les réguliers face aux charts, avec les mêmes
+        cartes (theory/ring_preflop.py)."""
+        def build():
+            hero = self.hero or ""
+            parts = ring_leaks.split(ring_leaks.mine(self.ring, hero), hero, self.ring_kinds())
+            note = (f"{len(parts['rec'])} mains contre des récréatifs sont exclues (un récréatif a mis de l'argent dans le "
+                    "pot pendant que tu y étais) : contre eux, l'exploitation prime sur la théorie."
+                    if parts["rec"] else "")
+            return build_ring_preflop_page(
+                ring_preflop.collect(parts["reg"], hero), hero, embed=True, note=note,
+                switch=format_switch(self.leak_formats(), ring_leaks.FORMAT), replay=_ring_replay,
+                load_hint=" Charge-les dans Mon jeu › Tables à plusieurs (« Charger les charts »).")
+        key = ("self", "preflop", "ring") + documents.revision(db.current(), "ranges")[2:] + self._ring_kinds_key()
+        return self._cached(key, build)
 
     def _plays(self) -> dict[str, list]:
         """Tes mains de départ lues (handplay), en heads-up et aux tables à plusieurs (3 à 9 joueurs ensemble), avec

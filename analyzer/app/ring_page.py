@@ -8,7 +8,7 @@ from typing import Optional
 from urllib.parse import quote
 
 from .. import ring
-from ..report import cards_html, html_page, num, pct_cell
+from ..report import cards_html, format_query, html_page, num, pct_cell
 
 STYLE = """<style>
 .rg-switch { display: flex; gap: 6px; margin-top: 14px; }
@@ -126,7 +126,7 @@ def _gaps(found: Optional[list]) -> str:
     if found is None:
         return ""
     from ..ring_leaks import FORMAT
-    from .leaks_page import format_query, gaps_table
+    from .leaks_page import gaps_table
     link = (f'<a href="leaks{escape(format_query(FORMAT))}">Le Leakfinding des tables à plusieurs</a> donne le détail de '
             "toutes tes stats, les mains à passer au solveur et les leaks à travailler.")
     if not found:

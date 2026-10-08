@@ -11,14 +11,12 @@ from typing import Optional
 from urllib.parse import quote
 
 from .. import leaks
-from ..report import cards_html, html_page, num
+from ..report import cards_html, format_query, format_switch, html_page, num
 from ..selfreport import OPP_SCRIPT, OPP_STYLE, opponent_row_data, opponent_tools
 from ..theory import review, studyspots
 from .review_page import STYLE as REVIEW_STYLE
 from .review_page import _costly_table, _drills, _duration, _situations_table
 from .ring_page import _why
-
-FORMAT_NAMES = {"HU": "Heads-up", "ring": "Tables à plusieurs"}
 
 STYLE = """
 .lk-list { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; }
@@ -34,12 +32,6 @@ table.lk td.dim, table.lk span.n { color: var(--muted); font-size: 12px; }
 table.lk td.small { font-size: 12px; color: var(--ink-2); }
 table.lk .where { display: block; font-size: 11px; color: var(--muted); }
 .lk-dl { font-weight: 600; }
-.lk-fmt { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
-.lk-fmt a { font-size: 13px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border); text-decoration: none;
-  color: var(--ink-2); background: var(--surface); }
-.lk-fmt a span { color: var(--muted); font-size: 12px; margin-left: 2px; }
-.lk-fmt a[aria-current="page"] { background: var(--ink); color: var(--page); border-color: var(--ink); font-weight: 600; }
-.lk-fmt a[aria-current="page"] span { color: var(--page); opacity: .75; }
 details.lk-all { margin: 14px 0 0; }
 details.lk-all > summary { font-weight: 600; }
 details.lk-all > .inner-body { padding: 12px 16px; }
@@ -97,11 +89,6 @@ def _conf(confidence: str) -> str:
 
 def _ring(report: leaks.Report) -> bool:
     return report.table_format != "HU"
-
-
-def format_query(table_format: str) -> str:
-    """« ?format=ring » : le rapport des tables à plusieurs (rien pour le heads-up)."""
-    return "" if table_format == "HU" else f"?format={quote(table_format)}"
 
 
 def _leak_link(leak: leaks.Leak, pages: str, drills: dict, standalone: bool) -> str:
@@ -304,16 +291,6 @@ def opponents_html(opponents: list[dict], ring: bool = False) -> str:
             + "".join(rows) + f'</tbody></table></div><p class="note">{escape(note)}</p></div>')
 
 
-def formats_html(formats: list[tuple[str, int]], current: str) -> str:
-    """Le choix du format de table : un rapport par format (ses mains de chaque format)."""
-    if len(formats) < 2:
-        return ""
-    links = "".join(
-        f'<a href="{escape(format_query(fmt) or "?format=HU")}" aria-current="{"page" if fmt == current else "false"}">'
-        f'{escape(FORMAT_NAMES.get(fmt, fmt))} <span>{n}</span></a>' for fmt, n in formats)
-    return f'<nav class="lk-fmt" aria-label="Format de table">{links}</nav>'
-
-
 def _tiles(report: leaks.Report) -> str:
     r = report.review
     label = "Mains aux tables à plusieurs" if _ring(report) else "Mains"
@@ -408,7 +385,7 @@ def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = T
     count = len(report.stats)
     body = f"""
 <div class="meta">{meta}</div>
-{"" if standalone else formats_html(formats or [], fmt)}
+{"" if standalone else format_switch(formats or [], fmt)}
 {download}
 {_tiles(report)}
 {_hints(report, standalone)}

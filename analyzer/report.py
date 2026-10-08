@@ -800,6 +800,24 @@ def html_page(title: str, body: str, embed: bool = False, script: str = "") -> s
                        script=script + (EMBED_SCRIPT if embed else ""))
 
 
+FORMAT_NAMES = {"HU": "Heads-up", "ring": "Tables à plusieurs"}
+
+
+def format_query(table_format: str) -> str:
+    """« ?format=ring » : la page des tables à plusieurs (rien pour le heads-up)."""
+    return "" if table_format == "HU" else f"?format={quote(table_format)}"
+
+
+def format_switch(formats: list[tuple[str, int]], current: str) -> str:
+    """Le choix entre le heads-up et les tables à plusieurs, avec leur nombre de mains (rien s'il n'y en a qu'un)."""
+    if len(formats) < 2:
+        return ""
+    links = "".join(
+        f'<a href="{escape(format_query(fmt) or "?format=HU")}" aria-current="{"page" if fmt == current else "false"}">'
+        f'{escape(FORMAT_NAMES.get(fmt, fmt))} <span>{n}</span></a>' for fmt, n in formats)
+    return f'<nav class="lk-fmt" aria-label="Format de table">{links}</nav>'
+
+
 def build_plan_page(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, villain: str,
                     embed: bool = False, lines: Optional[list[Line]] = None,
                     report_href: str = "rapport", spots_href: str = "spots") -> str:
@@ -877,6 +895,12 @@ td .n.small { font-style: italic; }
 td.dev-haut { background: var(--hi-bg); }
 td.dev-bas { background: var(--lo-bg); }
 td.strong .v { font-weight: 700; }
+.lk-fmt { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.lk-fmt a { font-size: 13px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border); text-decoration: none;
+  color: var(--ink-2); background: var(--surface); }
+.lk-fmt a span { color: var(--muted); font-size: 12px; margin-left: 2px; }
+.lk-fmt a[aria-current="page"] { background: var(--ink); color: var(--page); border-color: var(--ink); font-weight: 600; }
+.lk-fmt a[aria-current="page"] span { color: var(--page); opacity: .75; }
 .legend-dev { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); margin: 0 0 12px; }
 .legend-dev i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
 .findings { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }

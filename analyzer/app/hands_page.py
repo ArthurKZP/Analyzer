@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 
 from .. import handplay
-from ..report import html_page
+from ..report import FORMAT_NAMES, html_page
 
-FORMAT_NAMES = {"HU": "Heads-up", "ring": "Tables à plusieurs"}
 
 STYLE = """<style>
 :root { --gain: 27, 175, 122; --perte: 208, 59, 59; --vide: #ecebe6; }

@@ -14,6 +14,7 @@
     etudes: [['explorateur', 'Explorateur'], ['plan', 'Plan de jeu suggéré'], ['srp', 'SRP HU'], ['3bet', '3bet HU'],
       ['4bet', '4bet HU'], ['6max', '6-max'], ['coups', 'Coups joués']],
   };
+  const FORMAT_TABS = ['leaks', 'preflop'];  // pages qui ont un choix heads-up / tables à plusieurs
   let state = null;
   let route = null;
   let students = [];
@@ -84,9 +85,10 @@
     if (r.view === 'adv') return '/p/' + encodeURIComponent(r.player) + '/' + r.tab;
     if (r.view === 'etudes') return r.tab === 'explorateur' ? '/explorateur/preflop' : '/etudes/' + r.tab;
     if (r.view === 'entraineur') return '/entraineur';
-    const path = r.view === 'eleve' ? '/eleve/' + encodeURIComponent(r.student) + '/' + r.tab : '/moi/' + r.tab;
-    const fmt = r.tab === 'leaks' ? pref('format:' + path) : null;  // le dernier format choisi (6-max…)
-    return path + (fmt ? '?format=' + encodeURIComponent(fmt) : '');
+    const space = r.view === 'eleve' ? '/eleve/' + encodeURIComponent(r.student) : '/moi';
+    // le dernier format choisi (heads-up ou tables à plusieurs), le même pour le Leakfinding et le préflop
+    const fmt = FORMAT_TABS.includes(r.tab) ? pref('format:' + space) : null;
+    return space + '/' + r.tab + (fmt ? '?format=' + encodeURIComponent(fmt) : '');
   }
 
   async function loadStudents() {
@@ -518,9 +520,11 @@
   window.addEventListener('message', (e) => {
     if (e.origin !== location.origin || !e.data || e.data.type !== 'analyzer-page') return;
     const parts = String(e.data.path).split('/').filter(Boolean).map(decodeURIComponent);
-    if (parts[parts.length - 1] === 'leaks') {  // le format choisi dans le Leakfinding : gardé pour la prochaine fois
+    if (FORMAT_TABS.includes(parts[parts.length - 1]) && (parts[0] === 'moi' || parts[0] === 'eleve')) {
+      // le format choisi (Leakfinding, préflop) : gardé pour la prochaine fois
       const fmt = new URLSearchParams(e.data.search || '').get('format');
-      pref('format:' + e.data.path, fmt && fmt !== 'HU' ? fmt : null);
+      const space = '/' + parts.slice(0, -1).map(encodeURIComponent).join('/');
+      pref('format:' + space, fmt && fmt !== 'HU' ? fmt : null);
     }
     let r = null;
     if (parts[0] === 'p' && parts.length === 3) r = { view: 'adv', player: parts[1], tab: parts[2] };
