@@ -26,7 +26,8 @@ from ..theory import coach, custom_ranges, handclass, postflop, review, ring_pre
 from ..theory.page import build_preflop_page, build_ring_preflop_page
 from ..theory.preflop import load_solution
 from ..viewer import build_viewer
-from . import bilan_page
+from . import bilan_page, synthesis
+from .report_pdf import build_pdf
 from .bluffs_page import build_bluffs_page
 from .field_page import build_players_page
 from .hands_page import build_hands_page
@@ -611,6 +612,19 @@ class Library:
                                 embed=not standalone, standalone=standalone, name=self.display_name,
                                 opponents=self.summary()["opponents"] if fmt == "HU" else self.ring_opponents_view(),
                                 formats=self.leak_formats(), period=periods.describe(self.period))
+
+    def report_synthesis(self, table_format: Optional[str] = None) -> synthesis.Synthesis:
+        """L'essentiel du Leakfinding d'un format, sur la période (pour le rapport PDF et la présentation)."""
+        fmt = self._leak_format(table_format)
+        hero = self.hero or ""
+        hands = self.hands if fmt == "HU" else ring_leaks.mine(self.ring, hero)
+        period = "" if self.period["kind"] == "all" else periods.label(self.period)
+        return synthesis.collect(self.leaks_report(fmt), hands, self.display_name or hero, period,
+                                 student=self.display_name is not None)
+
+    def report_pdf(self, table_format: Optional[str] = None) -> bytes:
+        """Le rapport de Leakfinding en PDF, synthétique."""
+        return build_pdf(self.report_synthesis(table_format))
 
     def leaks_state(self, start: bool = False, table_format: Optional[str] = None) -> dict:
         """Les mains choisies (contre les réguliers en heads-up) : analysées, à analyser, en cours ; start=True les

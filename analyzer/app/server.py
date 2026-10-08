@@ -80,11 +80,11 @@ class Handler(BaseHTTPRequestHandler):
     def _html(self, html: str, status: int = 200) -> None:
         self._send(status, "text/html; charset=utf-8", html.encode())
 
-    def _download(self, html_text: str, filename: str) -> None:
-        """Une page à enregistrer (rapport à envoyer)."""
-        body = html_text.encode()
+    def _download(self, content: str | bytes, filename: str, ctype: str = "text/html; charset=utf-8") -> None:
+        """Un fichier à enregistrer (rapport à envoyer : page, PDF, présentation)."""
+        body = content.encode() if isinstance(content, str) else content
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -125,9 +125,9 @@ class Handler(BaseHTTPRequestHandler):
         return parse_qs(urlsplit(self.path).query).get("format", [None])[0]
 
     @staticmethod
-    def _report_name(table_format: Optional[str], who: str = "") -> str:
+    def _report_name(table_format: Optional[str], who: str = "", ext: str = "html") -> str:
         suffix = "-tables-a-plusieurs" if table_format and table_format != "HU" else ""
-        return f"leakfinding{'-' + who if who else ''}{suffix}.html"
+        return f"leakfinding{'-' + who if who else ''}{suffix}.{ext}"
 
     # --- GET --------------------------------------------------------------------
     def do_GET(self):
@@ -156,6 +156,9 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["moi", "rapport"]:
                 return self._download(library.leaks_page(standalone=True, table_format=self._format()),
                                       self._report_name(self._format()))
+            if parts == ["moi", "rapport.pdf"]:
+                return self._download(library.report_pdf(self._format()), self._report_name(self._format(), ext="pdf"),
+                                      "application/pdf")
             if parts == ["moi", "leaks"]:
                 return self._html(library.leaks_page(table_format=self._format()))
             if len(parts) == 2 and parts[0] == "moi":
@@ -171,6 +174,9 @@ class Handler(BaseHTTPRequestHandler):
                 if parts[2] == "rapport":
                     return self._download(student.leaks_page(standalone=True, table_format=self._format()),
                                           self._report_name(self._format(), parts[1]))
+                if parts[2] == "rapport.pdf":
+                    return self._download(student.report_pdf(self._format()),
+                                          self._report_name(self._format(), parts[1], "pdf"), "application/pdf")
                 if parts[2] not in STUDENT_PAGES:
                     raise KeyError(parts[2])
                 if parts[2] == "leaks":

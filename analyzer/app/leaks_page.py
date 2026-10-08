@@ -342,9 +342,12 @@ def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = T
     who = name or report.hero
     ring = _ring(report)
     fmt = report.table_format
+    query = escape(format_query(fmt))
     download = "" if standalone else (
-        f'<p><a class="lk-dl" href="{escape(pages)}/rapport{escape(format_query(fmt))}" download>Télécharger le rapport</a> '
-        '<span class="muted small">(page autonome à envoyer, sans les boutons de l\'application)</span></p>')
+        f'<p><a class="lk-dl" href="{escape(pages)}/rapport{query}" download>Télécharger le rapport</a> '
+        '<span class="muted small">(page autonome à envoyer, sans les boutons de l\'application)</span> · '
+        f'<a class="lk-dl" href="{escape(pages)}/rapport.pdf{query}" download>Synthèse PDF</a> '
+        '<span class="muted small">(deux pages : chiffres, leaks, écarts, mains à revoir)</span></p>')
     solver = (_situations_table(report.review["digests"], "H", False) + "<h3>Ses décisions les plus chères</h3>"
               + _costly_table(report.review["digests"], "H", True))
     if standalone:  # pas de liens vers l'application dans le rapport envoyé

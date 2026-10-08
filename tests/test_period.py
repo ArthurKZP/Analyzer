@@ -58,7 +58,7 @@ class PeriodTest(unittest.TestCase):
 
     def test_labels(self):
         self.assertEqual(period.label({"kind": "all"}), "Toutes les mains")
-        self.assertEqual(period.label({"kind": "last", "n": 1000}), "1 000 dernières mains")
+        self.assertEqual(period.label({"kind": "last", "n": 1000}), "1\u202f000 dernières mains")
         self.assertEqual(period.label({"kind": "days", "days": 30}), "30 derniers jours")
         self.assertEqual(period.label({"kind": "range", "from": "2026-01-01", "to": "2026-01-31"}),
                          "Du 01/01/2026 au 31/01/2026")

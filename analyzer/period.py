@@ -97,7 +97,7 @@ def select(hands: list[Hand], period: dict, today: Optional[date] = None) -> lis
 
 
 def _num(n: int) -> str:
-    return f"{n:,}".replace(",", " ")
+    return f"{n:,}".replace(",", "\u202f")
 
 
 def _fr(day: str) -> str:

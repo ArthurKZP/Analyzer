@@ -611,6 +611,11 @@ ensemble ; les boutons en haut de la page, le dernier choisi est gardé), voir p
 - **Télécharger le rapport** : la même page en fichier autonome, sans les boutons de l'application, à envoyer à
   l'élève. Le coach a l'outil *leakfinding* : « Écris le rapport de coaching de Paul » dans l'application Claude
   rédige un rapport à partir de ces données.
+- **Synthèse PDF** : l'essentiel en deux pages environ (A4) — les chiffres clés, la courbe des résultats (réel et EV
+  all-in), les leaks à travailler, les écarts les plus importants, ce que dit le solveur, les mains à revoir (cartes
+  en quatre couleurs) et, s'il y a lieu, quoi changer contre les récréatifs ; sur la période choisie, qu'elle
+  rappelle. Fait sans dépendance (`analyzer/pdfwriter.py` : les polices standard des lecteurs PDF, rien à
+  embarquer, une quinzaine de Ko).
 
 L'élève a aussi ses onglets *Préflop* (face à la solution, main par main), *Mains de départ*, *Face au solveur*
 (toutes ses mains contre les réguliers) et *Mains* (le visualiseur, d'où chaque main s'ouvre dans l'explorateur).
@@ -1038,7 +1043,8 @@ analyzer/
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
                        solveur » (review_page.py), leakfinding (leaks_page.py), bluffs des adversaires
                        (bluffs_page.py), étude du field (field_page.py), bilan des tables à plusieurs
-                       (bilan_page.py), mains de départ (hands_page.py), entraîneur
+                       (bilan_page.py), mains de départ (hands_page.py), synthèse du Leakfinding
+                       (synthesis.py) et son rapport PDF (report_pdf.py), entraîneur
                        (trainer.py, static/trainer.*), plan de jeu suggéré (plan_page.py), coach
                        (coach_chat.py, static/coach.*) et son serveur MCP pour l'abonnement Claude
                        (mcp_server.py), sauvegardes en arrière-plan (backups.py), interface
@@ -1049,6 +1055,7 @@ analyzer/
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
   aliases.py           alias : les pseudos d'un même joueur regroupés sous un nom (appliqué à la lecture des mains)
   period.py            période d'analyse : toutes les mains, les N dernières, les N derniers jours, d'une date à une autre
+  pdfwriter.py         PDF sans dépendance : pages A4, texte Helvetica (accents), symboles des cartes, formes, courbes
   leaks.py             leakfinding : stats face à la théorie, revue du solveur, mains à revoir, leaks prioritaires
   ring_leaks.py        leakfinding aux tables à plusieurs : réguliers et récréatifs, préflop face aux charts, après le
                        flop face aux plans 6-max
