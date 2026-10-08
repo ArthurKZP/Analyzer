@@ -5,7 +5,8 @@
   const frame = $('frame');
   const TABS = {
     moi: [['bilan', 'Bilan'], ['leaks', 'Leakfinding'], ['mains', 'Mains de départ'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots'],
-      ['solveur', 'Face au solveur'], ['bluffs', 'Bluffs des réguliers'], ['tables', 'Tables à plusieurs']],
+      ['solveur', 'Face au solveur'], ['tables', 'Tables à plusieurs']],
+    field: [['bluffs', 'Bluffs des réguliers'], ['joueurs', 'Les joueurs']],  // étude du field : tes adversaires
     eleve: [['leaks', 'Leakfinding'], ['mains', 'Mains de départ'], ['preflop', 'Préflop'], ['solveur', 'Face au solveur'], ['spots', 'Mains'],
       ['tables', 'Tables à plusieurs'], ['importer', 'Importer']],
     adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
@@ -64,7 +65,9 @@
     if (parts[0] === 'entraineur') return { view: 'entraineur' };
     if (parts[0] === 'sauvegarde') return { view: 'sauvegarde' };
     if (parts[0] === 'adversaire' && parts[1]) return { view: 'adv', player: parts[1], tab: tabOf('adv', parts[2], 'plan') };
+    if (parts[0] === 'moi' && parts[1] === 'bluffs') return { view: 'field', tab: 'bluffs' };  // ancienne adresse
     if (parts[0] === 'moi') return { view: 'moi', tab: tabOf('moi', parts[1], state && !state.hands && state.ring_hands ? 'leaks' : 'bilan') };
+    if (parts[0] === 'field') return { view: 'field', tab: tabOf('field', parts[1], 'bluffs') };
     if (parts[0] === 'eleves') return { view: 'eleves' };
     if (parts[0] === 'eleve' && parts[1]) return { view: 'eleve', student: parts[1], tab: tabOf('eleve', parts[2], 'leaks') };
     return hasHands() ? { view: 'moi', tab: state.hands ? 'bilan' : 'leaks' } : { view: 'importer' };
@@ -73,6 +76,7 @@
   function hashFor(r) {
     if (r.view === 'adv') return '#/adversaire/' + encodeURIComponent(r.player) + '/' + r.tab;
     if (r.view === 'moi') return '#/moi/' + r.tab;
+    if (r.view === 'field') return '#/field/' + r.tab;
     if (r.view === 'etudes') return '#/etudes/' + r.tab;
     if (r.view === 'entraineur') return '#/entraineur';
     if (r.view === 'sauvegarde') return '#/sauvegarde';
@@ -85,6 +89,7 @@
     if (r.view === 'adv') return '/p/' + encodeURIComponent(r.player) + '/' + r.tab;
     if (r.view === 'etudes') return r.tab === 'explorateur' ? '/explorateur/preflop' : '/etudes/' + r.tab;
     if (r.view === 'entraineur') return '/entraineur';
+    if (r.view === 'field') return '/field/' + r.tab;
     const space = r.view === 'eleve' ? '/eleve/' + encodeURIComponent(r.student) : '/moi';
     // le dernier format choisi (heads-up ou tables à plusieurs), le même pour le Leakfinding et le préflop
     const fmt = FORMAT_TABS.includes(r.tab) ? pref('format:' + space) : null;
@@ -143,6 +148,9 @@
         ? state.hands + ' mains contre ' + state.opponents.length + ' adversaire(s) · ' + state.first + ' → ' + state.last
           + (state.ring_hands ? ' · ' + state.ring_hands + ' mains aux tables à plusieurs' : '')
         : state.ring_hands ? state.ring_hands + ' mains aux tables à plusieurs' : '';
+    } else if (route.view === 'field') {
+      title.textContent = 'Étude du field';
+      subtitle.textContent = 'Comment jouent tes adversaires : les bluffs des réguliers, qui est régulier ou récréatif';
     } else if (route.view === 'etudes') {
       title.textContent = 'Études du solveur';
       subtitle.textContent = 'Coups résolus avec GTOpen, gardés sur ton ordinateur pour être réexplorés';
@@ -528,7 +536,8 @@
     }
     let r = null;
     if (parts[0] === 'p' && parts.length === 3) r = { view: 'adv', player: parts[1], tab: parts[2] };
-    else if (parts[0] === 'moi' && parts.length === 2) r = { view: 'moi', tab: parts[1] };
+    else if (parts[0] === 'moi' && parts.length === 2) r = parts[1] === 'bluffs' ? { view: 'field', tab: 'bluffs' } : { view: 'moi', tab: parts[1] };
+    else if (parts[0] === 'field' && parts.length === 2) r = { view: 'field', tab: parts[1] };
     else if (parts[0] === 'etudes' && parts.length <= 2) r = { view: 'etudes', tab: parts[1] || 'srp' };
     else if (parts[0] === 'entraineur' && parts.length === 1) r = { view: 'entraineur' };
     else if (parts[0] === 'eleve' && parts.length === 3) r = { view: 'eleve', student: parts[1], tab: parts[2] };

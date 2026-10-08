@@ -379,6 +379,9 @@ class AppTest(IsolatedHome):
         after = self.lib.leaks_report("ring").scope_hands
         self.assertEqual(after["rec"], before["rec"] + 1)  # la main Unibet, où Villain a payé
         self.assertIn('href="leaks?format=ring"', self.lib.self_page("tables"))
+        field = self.lib.field_page("joueurs")  # Étude du field : les joueurs des deux jeux
+        self.assertIn("<h2>Aux tables à plusieurs</h2>", field)
+        self.assertIn("<h2>En heads-up</h2>", field)
 
 
 class RingOnlyTest(IsolatedHome):

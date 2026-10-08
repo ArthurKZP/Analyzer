@@ -60,6 +60,13 @@ class LibraryTest(IsolatedHome):
         population = lib.self_page("bluffs")
         self.assertIn("Les bluffs des réguliers", population)
         self.assertIn("Les réguliers ensemble : Villain.", population)
+        self.assertIs(lib.field_page("bluffs"), population)  # Étude du field : le même onglet
+        field = lib.field_page("joueurs")
+        self.assertIn("<h2>En heads-up</h2>", field)
+        self.assertIn('data-name="Villain"', field)
+        self.assertNotIn("Aux tables à plusieurs</h2>", field)  # pas de mains à plusieurs
+        with self.assertRaises(KeyError):
+            lib.field_page("inconnue")
         with self.assertRaises(UnknownPlayer):
             lib.player_page("Personne", "plan")
         with self.assertRaises(KeyError):
@@ -273,6 +280,9 @@ class ServerTest(unittest.TestCase):
                 s.close()
             time.sleep(1.5)
             self.assertEqual(self.request("GET", "/moi/bluffs")[0], 200)
+            self.assertEqual(self.request("GET", "/field/bluffs")[0], 200)
+            self.assertEqual(self.request("GET", "/field/joueurs")[0], 200)
+            self.assertEqual(self.request("GET", "/field/inconnue")[0], 404)
         self.assertNotIn("Traceback", err.getvalue())
 
     def request(self, method, path, body=None, headers=None):

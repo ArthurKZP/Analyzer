@@ -66,6 +66,10 @@ SCRIPT = """
   stop.addEventListener('click', function () { post(api + '/arreter' + query).then(show); });
   refresh();
 })();
+"""
+
+# Le type d'un adversaire, réglé dans la liste : la page se recalcule.
+KIND_SCRIPT = """
 document.querySelectorAll('select.lk-kind').forEach(function (sel) {
   sel.addEventListener('change', function () {
     fetch('/api/joueurs', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -257,7 +261,7 @@ def _head(report: leaks.Report, api: str) -> str:
                'complète au fur et à mesure ; tu peux fermer la page.</p>' if todo else ""))
 
 
-def opponents_html(opponents: list[dict], ring: bool = False) -> str:
+def opponents_html(opponents: list[dict], ring: bool = False, title: str = "Ses adversaires") -> str:
     """Ses adversaires et leur type, réglable : il décide quelles mains comptent pour les leaks. Recherche par nom,
     filtre par type, tri par mains, résultat ou date. ring : ceux des tables à plusieurs (mains à la même table, son
     résultat dans les pots disputés ensemble)."""
@@ -286,7 +290,7 @@ def opponents_html(opponents: list[dict], ring: bool = False) -> str:
             "« Son résultat » : dans les pots disputés ensemble." if ring else
             "Le type décide quelles mains comptent pour les leaks (seulement contre les réguliers). Sans choix, une "
             "suggestion d'après les stats de l'adversaire.")
-    return (f'<h2>Ses adversaires</h2><div class="card opp-box">{tools}<div class="scroll"><table class="stats opp-table">'
+    return (f'<h2>{escape(title)}</h2><div class="card opp-box">{tools}<div class="scroll"><table class="stats opp-table">'
             f'<thead><tr><th data-sort="name">Adversaire</th>{head}<th>Type</th></tr></thead><tbody>'
             + "".join(rows) + f'</tbody></table></div><p class="note">{escape(note)}</p></div>')
 
@@ -407,4 +411,4 @@ def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = T
 """
     style = f"<style>{REVIEW_STYLE}{STYLE}{OPP_STYLE}</style>"
     title = f"Leakfinding tables à plusieurs — {who}" if ring else f"Leakfinding — {who}"
-    return html_page(title, style + body, embed, script="" if standalone else SCRIPT + OPP_SCRIPT)
+    return html_page(title, style + body, embed, script="" if standalone else SCRIPT + KIND_SCRIPT + OPP_SCRIPT)

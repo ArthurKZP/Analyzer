@@ -153,6 +153,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.leaks_page(table_format=self._format()))
             if len(parts) == 2 and parts[0] == "moi":
                 return self._html(library.self_page(parts[1], table_format=self._format()))
+            if len(parts) == 2 and parts[0] == "field":  # Étude du field
+                return self._html(library.field_page(parts[1]))
             if parts == ["api", "leaks"]:
                 return self._json(library.leaks_state(table_format=self._format()))
             if parts == ["api", "eleves"]:

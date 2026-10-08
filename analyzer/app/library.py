@@ -25,6 +25,7 @@ from ..theory.page import build_preflop_page, build_ring_preflop_page
 from ..theory.preflop import load_solution
 from ..viewer import build_viewer
 from .bluffs_page import build_bluffs_page
+from .field_page import build_players_page
 from .hands_page import build_hands_page
 from .leaks_page import build_leaks_page
 from .ring_page import build_ring_page
@@ -39,6 +40,7 @@ HEADS_UP_ONLY = ('<p class="note">Aucune main heads-up : cette page analyse tes 
                  'plusieurs (3 à 9 joueurs, ensemble) ont leur Leakfinding, leur préflop, leurs mains de départ et leurs '
                  'stats par position (onglet Tables à plusieurs).</p>')
 SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks", "tables", "mains")
+FIELD_PAGES = ("bluffs", "joueurs")  # Étude du field
 MAX_IMPORT_FILES = 5000  # fichiers (ou archives zip) par import
 
 
@@ -391,6 +393,17 @@ class Library:
         if hand is None or not self.hero or self.hero not in hand.seats or len(hand.seats) != 2 or not hand.button:
             raise KeyError(hand_id)
         return spots.hand_record(hand, self.hero, hand.opponent_of(self.hero))
+
+    # --- étude du field -------------------------------------------------------------------
+    def field_page(self, page: str) -> str:
+        """Étude du field : les bluffs des réguliers (heads-up), tes adversaires et leur type."""
+        if page not in FIELD_PAGES:
+            raise KeyError(page)
+        if page == "bluffs":
+            return self.self_page("bluffs")
+        if not self.hands and not self.ring:
+            raise UnknownPlayer("moi")
+        return build_players_page(self.summary()["opponents"] if self.hands else [], self.ring_opponents_view())
 
     def _population_bluffs(self) -> str:
         """Les bluffs des réguliers, ensemble puis un par un."""
