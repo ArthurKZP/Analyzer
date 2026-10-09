@@ -55,12 +55,13 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   leakfinding de ceux que tu croises le plus, chacun avec ses leaks à exploiter et ce que montrent ses lignes, puis
   sa fiche détaillée (voir *Étude du field : le leakfinding de tes adversaires*) ; *Bluffs des réguliers* (où ils
   bluffent en heads-up, ensemble puis un par un, voir plus bas).
-- **Paramètres** : *Général* (ton pseudo, les formats que tu joues, coach ou non, le seuil de l'Étude du field, la
-  précision du solveur) et *Joueurs et alias* : tes adversaires en heads-up et aux tables à plusieurs, réguliers et
-  récréatifs, avec recherche, tri et leur type réglable (le même partout). **Alias** : un même joueur peut avoir
-  plusieurs pseudos (un par site, ou un pseudo changé) ; coche-les dans ces listes et donne-leur un nom : ses mains,
-  ses stats et son type sont réunis sous ce nom partout dans l'application (tes mains et celles de tes élèves), sa
-  fiche rappelle ses pseudos, et « Défaire » les sépare à nouveau. Voir *Paramètres* plus bas.
+- **Paramètres** : *Général* (tes pseudos réunis sous un nom, les formats que tu joues, coach ou non, le seuil de
+  l'Étude du field, la précision du solveur) et *Joueurs et alias* : tes adversaires en heads-up et aux tables à
+  plusieurs, réguliers et récréatifs, avec recherche, tri et leur type réglable (le même partout). **Alias** : un
+  même joueur peut avoir plusieurs pseudos (un par site, ou un pseudo changé) ; coche-les dans ces listes et
+  donne-leur un nom : ses mains, ses stats et son type sont réunis sous ce nom partout dans l'application (tes mains
+  et celles de tes élèves), sa fiche rappelle ses pseudos, et « Défaire » les sépare à nouveau. Voir *Paramètres*
+  plus bas.
 - **Entraîneur** : joue des mains sur les spots résolus, le solveur juge chaque décision (voir plus bas).
 - **Sauvegarde** : tes calculs vers un dossier synchronisé ou un stockage en ligne (voir plus bas).
 - **Période d'analyse** (en haut de *Mon jeu*, de l'*Étude du field*, d'une fiche d'adversaire ou d'un élève) :
@@ -791,8 +792,14 @@ joueurs et leurs chiffres, leurs leaks et leurs lignes réunis (« Quand un réc
 Menu **Paramètres**, onglet *Général* (gardé dans la base, pour ton espace : chaque élève garde son pseudo et tous
 ses formats) :
 
-- **Ton pseudo** : les pseudos que tes historiques marquent comme toi (« Dealt to … »), avec leur site et leurs
-  mains ; ils sont tous réunis sous ton pseudo principal, le plus fréquent par défaut, ou celui que tu choisis.
+- **Toi : tes pseudos réunis** : tous tes pseudos sont réunis en un seul joueur, analysé sur toutes leurs mains
+  (bilan, Leakfinding, préflop, rapports), sous un nom que tu choisis (*Nom du regroupement* ; par défaut ton pseudo
+  le plus fréquent ; libre, sauf le pseudo d'un adversaire). Les pseudos que tes historiques marquent comme toi
+  (« Dealt to … ») sont proposés, cochés d'office, avec leurs sites et leurs mains, et un nouveau pseudo rejoint le
+  regroupement tout seul. Décoche ceux qui ne sont pas toi (les mains d'un autre joueur importées chez toi) : leurs
+  mains sortent de tes analyses ; recoche-les pour les remettre. *Ajouter un pseudo* : un pseudo à toi que tes
+  historiques ne marquent pas (proposé parmi les joueurs des mains sans héros repéré) ; ses mains sans héros repéré
+  rejoignent le regroupement. Il reste toujours au moins un pseudo coché.
 - **Ce que tu joues** : heads-up et/ou tables à plusieurs. Un format que tu ne joues pas sort des menus : ses onglets
   (*Mes spots* et *Face au solveur* pour le heads-up, *Tables à plusieurs* sinon), le choix de format des pages (le
   bilan, le Leakfinding, Mon préflop, les mains de départ et l'Étude du field s'ouvrent sur l'autre), l'onglet
@@ -1166,7 +1173,7 @@ analyzer/
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
   field.py             étude du field : leaks à exploiter d'un adversaire, sa value et ses bluffs par ligne, style
                        des récréatifs (passif, agressif, prudent)
-  settings.py          tes paramètres : ton pseudo, les formats que tu joues, coach, seuil de l'étude du field
+  settings.py          tes paramètres : tes pseudos réunis, les formats que tu joues, coach, seuil du field
   aliases.py           alias : les pseudos d'un même joueur regroupés sous un nom (appliqué à la lecture des mains)
   period.py            période d'analyse : toutes les mains, les N dernières, les N derniers jours, d'une date à une autre
   pdfwriter.py         PDF sans dépendance : pages A4, texte Helvetica (accents), symboles des cartes, formes, courbes
@@ -1196,11 +1203,11 @@ reports/               rapports générés (ignorés par git)
 | Winamax | ligne « Dealt to » | pot du résumé net du rake ; aux tables anonymes, « Incognito 2 » devient « Incognito-<identifiant> » (ligne *Player Info*) pour ne pas mélanger deux joueurs assis à la même place |
 | Unibet | compte entre crochets (`Pseudo[Unibet_…]`) | joueurs « sitting out » écartés (pas servis) |
 
-Ton pseudo peut changer d'un site à l'autre : le héros de chaque main prend le pseudo principal (celui qui revient
-le plus souvent), pour que *Mon jeu* réunisse tous les sites. Chaque joueur reçoit sa position (BTN, SB, BB, CO,
-HJ, UTG…) d'après le bouton et les blindes postées. L'import indique, par fichier, le site et le nombre de mains
-en HU, 3-max, 6-max ou à 7-9 joueurs. Les mains heads-up (deux joueurs servis) ont toute l'analyse ; celles des
-tables de 3 joueurs et plus sont réunies sous *Tables à plusieurs*.
+Ton pseudo peut changer d'un site à l'autre : le héros de chaque main prend le nom de tes pseudos réunis (celui que
+tu choisis dans *Paramètres*, sinon ton pseudo le plus fréquent), pour que *Mon jeu* réunisse tous les sites. Chaque
+joueur reçoit sa position (BTN, SB, BB, CO, HJ, UTG…) d'après le bouton et les blindes postées. L'import indique,
+par fichier, le site et le nombre de mains en HU, 3-max, 6-max ou à 7-9 joueurs. Les mains heads-up (deux joueurs
+servis) ont toute l'analyse ; celles des tables de 3 joueurs et plus sont réunies sous *Tables à plusieurs*.
 
 **Tables à plusieurs** (onglet de *Mon jeu*, et de chaque élève) : tes stats par position, toutes tes tables de 3 à
 9 joueurs ensemble (une position compte ses mains de chaque taille de table), sur toutes tes mains, contre les

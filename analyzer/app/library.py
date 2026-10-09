@@ -126,6 +126,8 @@ class Library:
         self.by_id: dict[str, Hand] = {}
         self.hero: Optional[str] = None
         self.hero_pseudos: Counter = Counter()  # (pseudo, site) -> mains où tes historiques te marquent ainsi
+        self.players_seen: Counter = Counter()  # joueur -> mains (toutes, avant de réunir tes pseudos)
+        self.unmarked_seen: Counter = Counter()  # joueur -> mains sans héros marqué (où un pseudo peut s'ajouter)
         self.api, self.pages = api, pages
         self.display_name: Optional[str] = None  # nom de l'élève (rapport)
         self._students: dict[str, Library] = {}
@@ -144,21 +146,53 @@ class Library:
         mapping = aliases.load()  # les pseudos regroupés sous un alias prennent son nom
         aliases.apply(hands, mapping)
         pseudos = Counter((h.hero, h.site) for h in hands if h.hero)  # tes pseudos, tels que tes historiques les marquent
-        if self.hero_override:  # --hero (ligne de commande) ou le pseudo de l'élève
-            hero = mapping.get(self.hero_override, self.hero_override)
-        else:  # ton choix dans les Paramètres, s'il est encore dans tes mains ; sinon le plus fréquent
-            chosen = settings.load()["hero"] if self.is_me else None
-            chosen = mapping.get(chosen, chosen) if chosen else None
-            hero = chosen if chosen and any(p == chosen for p, _ in pseudos) else detect_hero(hands)
-        unify_hero(hands, hero)
-        heads_up = [h for h in hands if hero and hero in h.seats and len(h.seats) == 2 and h.button and h.bb]
-        ring = [h for h in hands if hero and hero in h.seats and len(h.seats) > 2 and h.button and h.bb]
+        seen = Counter(name for h in hands for name in h.seats)  # tous les joueurs (ton nom n'est pas le leur)
+        unmarked = Counter(name for h in hands if not h.hero for name in h.seats)
+        if self.is_me and not self.hero_override:  # tes pseudos réunis sous ton nom (Paramètres)
+            hero, mine = self._group_me(hands, pseudos, settings.load())
+        else:  # --hero (ligne de commande) ou le pseudo de l'élève, sinon le plus fréquent : ses pseudos sous celui-là
+            hero = mapping.get(self.hero_override, self.hero_override) if self.hero_override else detect_hero(hands)
+            unify_hero(hands, hero)
+            mine = [h for h in hands if hero and hero in h.seats and (not h.hero or h.hero == hero)]
+        heads_up = [h for h in mine if len(h.seats) == 2 and h.button and h.bb]
+        ring = [h for h in mine if len(h.seats) > 2 and h.button and h.bb]
         with self._lock:
             self._all_hands, self._all_ring = heads_up, ring
             self.by_id = {h.hand_id: h for h in heads_up + ring}  # le solveur résout aussi leurs pots à deux
             self.hero = hero
             self.hero_pseudos = pseudos
+            self.players_seen, self.unmarked_seen = seen, unmarked
             self._select()
+
+    @staticmethod
+    def my_pseudos(pseudos: Counter, conf: dict) -> set[str]:
+        """Tes pseudos : ceux que tes historiques marquent comme toi, sans ceux que tu as retirés, avec ceux que tu as
+        ajoutés (Paramètres)."""
+        return ({p for p, _ in pseudos} - set(conf["hero_excluded"])) | set(conf["hero_added"])
+
+    def _group_me(self, hands: list[Hand], pseudos: Counter, conf: dict) -> tuple[Optional[str], list[Hand]]:
+        """Réunit tes pseudos sous ton nom : renvoie ce nom (celui que tu as choisi, sinon ton pseudo le plus fréquent)
+        et tes mains. Une main est à toi quand son héros (marqué par l'historique) est un de tes pseudos, ou, sans héros
+        marqué, quand un de tes pseudos y joue : la main d'un pseudo décoché n'est plus la tienne."""
+        mine = self.my_pseudos(pseudos, conf)
+        if not mine:  # ni héros marqué ni pseudo ajouté : le joueur le plus fréquent
+            guess = detect_hero(hands)
+            mine = {guess} if guess else set()
+        owners = []
+        for h in hands:
+            me = h.hero or next((p for p in h.seats if p in mine), None)
+            if me in mine:
+                owners.append((h, me))
+        if not owners:
+            return conf["hero"] or (min(mine, key=str.lower) if mine else None), []
+        name = conf["hero"] or Counter(me for _, me in owners).most_common(1)[0][0]
+        kept = []
+        for h, me in owners:
+            h.seats[me].is_hero = True  # sans héros marqué : ta place
+            h.rename(me, name)  # sans effet si un autre joueur de la main porte ce nom : elle n'est alors pas comptée
+            if h.hero == name:
+                kept.append(h)
+        return name, kept
 
     @property
     def is_me(self) -> bool:
@@ -264,17 +298,27 @@ class Library:
 
     # --- paramètres ------------------------------------------------------------------------
     def settings_view(self) -> dict:
-        """Tes paramètres et de quoi les choisir : les pseudos que tes historiques marquent comme toi, tes mains par
-        format (toutes périodes), tes élèves, la précision du solveur."""
+        """Tes paramètres et de quoi les choisir : tes pseudos (ceux que tes historiques marquent comme toi, avec leurs
+        sites et leurs mains, cochés s'ils sont réunis sous ton nom ; ceux que tu as ajoutés), les joueurs à proposer
+        pour en ajouter, tes mains par format (toutes périodes), tes élèves, la précision du solveur."""
         conf = settings.load()
+        excluded, added = set(conf["hero_excluded"]), set(conf["hero_added"])
         by_name: dict[str, dict] = {}
         for (pseudo, site), n in self.hero_pseudos.items():
-            row = by_name.setdefault(pseudo, {"name": pseudo, "sites": [], "hands": 0})
+            row = by_name.setdefault(pseudo, {"name": pseudo, "sites": [], "hands": 0, "added": False})
             row["hands"] += n
             if site not in row["sites"]:
                 row["sites"].append(site)
-        pseudos = sorted(by_name.values(), key=lambda r: (-r["hands"], r["name"].lower()))
-        return {"hero": self.hero, "chosen_hero": conf["hero"], "pseudos": pseudos,
+        for pseudo in added - set(by_name):  # ses mains : celles sans héros marqué où il joue
+            by_name[pseudo] = {"name": pseudo, "sites": [], "hands": self.unmarked_seen.get(pseudo, 0), "added": True}
+        for row in by_name.values():
+            row["included"] = row["name"] not in excluded
+        pseudos = sorted(by_name.values(), key=lambda r: (r["added"], -r["hands"], r["name"].lower()))
+        # à ajouter : les joueurs des mains sans héros marqué (ailleurs, ce sont tes adversaires)
+        mine = self.my_pseudos(self.hero_pseudos, conf) | {self.hero or ""}
+        others = [name for name, _ in self.unmarked_seen.most_common() if name not in mine][:500]
+        return {"hero": self.hero, "chosen_hero": conf["hero"], "pseudos": pseudos, "players": others,
+                "my_hands": len(self._all_hands) + len(self._all_ring),
                 "formats": {"HU": len(self._all_hands), "ring": len(self._all_ring)}, "plays": conf["formats"],
                 "coach": conf["coach"], "students": len(students.all_students()), "min_hands": conf["min_hands"],
                 "precision": self.solves.precision()[1], "period": periods.label(self.period)}
@@ -283,14 +327,34 @@ class Library:
         return build_settings_page(self.settings_view())
 
     def set_settings(self, changes: object) -> dict:
-        """Enregistre des paramètres (settings.check ; ValueError sinon) ; ton pseudo se choisit parmi ceux que tes
-        historiques marquent comme toi. Les pages se recalculent."""
+        """Enregistre des paramètres (settings.check ; ValueError sinon). Tes pseudos : un pseudo marqué qu'on rajoute
+        se recoche ; un pseudo ajouté joue dans tes mains sans héros marqué (ailleurs, c'est un adversaire) ; il t'en
+        reste au moins un ; ton nom n'est pas celui d'un autre joueur de tes mains. Les pages se recalculent."""
         checked = settings.check(changes)
-        hero = checked.get("hero")
-        if hero is not None and not any(p == hero for p, _ in self.hero_pseudos):
-            raise ValueError("Ce pseudo n'est pas marqué comme toi dans tes historiques.")
+        before = settings.load()
+        marked = {p for p, _ in self.hero_pseudos}
+        if "hero_added" in checked:
+            back = marked & set(checked["hero_added"])
+            if back:  # un pseudo que tes historiques marquent : il revient en se recochant
+                checked["hero_added"] = [p for p in checked["hero_added"] if p not in back]
+                checked["hero_excluded"] = [p for p in checked.get("hero_excluded", before["hero_excluded"])
+                                            if p not in back]
+            for p in sorted(set(checked["hero_added"]) - set(before["hero_added"]), key=str.lower):
+                if p not in self.players_seen:
+                    raise ValueError(f"Pseudo introuvable dans tes mains : {p}.")
+                if p not in self.unmarked_seen:
+                    raise ValueError(f"« {p} » joue contre toi dans tes mains : ce n'est pas un de tes pseudos.")
+        conf = dict(before, **checked)
+        mine = self.my_pseudos(self.hero_pseudos, conf)
+        if {"hero_excluded", "hero_added"} & set(checked) and (marked or conf["hero_added"]) and not mine:
+            raise ValueError("Garde au moins un pseudo : tes analyses ont besoin de toi.")
+        name = checked.get("hero")
+        if name is not None and name not in mine and name != self.hero and name in self.players_seen:
+            raise ValueError(f"« {name} » est le pseudo d'un autre joueur de tes mains : choisis un autre nom.")
+        if conf["hero"] and conf["hero"] not in mine and conf["hero"] in self.players_seen:
+            checked["hero"] = None  # ton nom était un pseudo que tu retires : ton pseudo le plus fréquent le remplace
         settings.save(checked)
-        if "hero" in checked:
+        if {"hero", "hero_excluded", "hero_added"} & set(checked):
             self.reload()
         else:
             with self._lock:

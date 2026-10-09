@@ -201,7 +201,7 @@
       subtitle.textContent = 'Comment jouent tes adversaires : leurs leaks à exploiter, leur value et leurs bluffs';
     } else if (route.view === 'parametres') {
       title.textContent = 'Paramètres';
-      subtitle.textContent = 'Ton pseudo, ce que tu joues, tes élèves, le type de tes adversaires et leurs alias';
+      subtitle.textContent = 'Tes pseudos réunis, ce que tu joues, tes élèves, le type de tes adversaires et leurs alias';
     } else if (route.view === 'etudes') {
       title.textContent = 'Études du solveur';
       subtitle.textContent = 'Coups résolus avec GTOpen, gardés sur ton ordinateur pour être réexplorés';

@@ -23,6 +23,11 @@ STYLE = """
 .st-status { font-size: 12px; min-height: 1.2em; margin-top: 6px; color: var(--muted); }
 .st-status.err { color: var(--alert); }
 .st-links { margin: 0; padding-left: 18px; }
+.st-row input[type=text] { font: inherit; font-size: 14px; padding: 4px 8px; border-radius: 6px; min-width: 0;
+  flex: 1 1 180px; max-width: 320px; border: 1px solid var(--border); background: var(--page); color: var(--ink); }
+.st-row button { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
+.st-row button.link { border: none; background: none; color: var(--series-1); padding: 4px 0; text-decoration: underline; }
 .st-links li { margin: 4px 0; }
 """
 
@@ -61,14 +66,57 @@ SCRIPT = """
         if (!(value >= 10)) { status(box, 'Au moins 10 mains.', true); return; }
       } else if (key === 'coach') {
         value = e.target.value === '' ? null : e.target.value === 'true';
-      } else if (key === 'hero') {
-        value = e.target.value || null;
       }
       var body = {};
       body[key] = value;
-      send('/api/parametres', body, box, key === 'hero' ? function () { location.reload(); } : null);
+      send('/api/parametres', body, box);
     });
   });
+  // Toi : tes pseudos réunis sous ton nom (les cases), ton nom, un pseudo de plus.
+  var me = document.querySelector('[data-me]');
+  if (me) {
+    var reload = function () { location.reload(); };
+    var picked = function () {
+      var boxes = Array.prototype.slice.call(me.querySelectorAll('input.st-pseudo'));
+      return {
+        hero_excluded: boxes.filter(function (b) { return !b.checked && !b.hasAttribute('data-added'); })
+          .map(function (b) { return b.value; }),
+        hero_added: boxes.filter(function (b) { return b.checked && b.hasAttribute('data-added'); })
+          .map(function (b) { return b.value; })
+      };
+    };
+    me.addEventListener('change', function (e) {
+      if (!e.target.classList.contains('st-pseudo')) return;
+      var body = picked();
+      if (!me.querySelector('input.st-pseudo:checked')) {
+        e.target.checked = true;
+        status(me, 'Garde au moins un pseudo.', true);
+        return;
+      }
+      send('/api/parametres', body, me, reload);
+    });
+    var rename = function () {
+      var name = me.querySelector('.st-name').value.trim();
+      if (!name) { status(me, 'Écris un nom.', true); return; }
+      send('/api/parametres', { hero: name }, me, reload);
+    };
+    me.querySelector('.st-rename').addEventListener('click', rename);
+    me.querySelector('.st-name').addEventListener('keydown', function (e) { if (e.key === 'Enter') rename(); });
+    var auto = me.querySelector('.st-auto');
+    if (auto) auto.addEventListener('click', function () { send('/api/parametres', { hero: null }, me, reload); });
+    var add = function () {
+      var input = me.querySelector('.st-add'), name = input.value.trim();
+      if (!name) { input.focus(); return; }
+      var known = Array.prototype.filter.call(me.querySelectorAll('input.st-pseudo'),
+        function (b) { return b.value === name; })[0];
+      if (known) known.checked = true;  // déjà dans la liste : il se recoche
+      var body = picked();
+      if (!known) body.hero_added.push(name);
+      send('/api/parametres', body, me, reload);
+    };
+    me.querySelector('.st-add-go').addEventListener('click', add);
+    me.querySelector('.st-add').addEventListener('keydown', function (e) { if (e.key === 'Enter') add(); });
+  }
   var prec = document.querySelector('[data-precision]');
   if (prec) prec.addEventListener('change', function (e) {
     send('/api/precision', { precision: Number(e.target.value) }, prec);
@@ -84,26 +132,44 @@ def _radio(name: str, value: str, label: str, checked: bool, detail: str = "") -
 
 
 def _hero_html(view: dict) -> str:
+    """Toi : tes pseudos (cochés : réunis en un seul joueur et analysés ensemble), le nom de ce regroupement, et de quoi
+    ajouter un pseudo."""
     pseudos = view["pseudos"]
-    chosen = view["chosen_hero"]
-    first = pseudos[0]["name"] if pseudos else view["hero"]
-    auto = f"Automatique : le plus fréquent ({escape(first)})" if first else "Automatique"
-    options = [_radio("hero", "", auto, chosen is None)]
+    rows = []
     for p in pseudos:
-        detail = f"{', '.join(p['sites'])} · {num(p['hands'], 0)} mains"
-        options.append(_radio("hero", p["name"], f"<b>{escape(p['name'])}</b>", chosen == p["name"], detail))
+        where = ", ".join(p["sites"]) if p["sites"] else "ajouté par toi"
+        detail = f"{escape(where)} · {num(p['hands'], 0)} mains"
+        rows.append(f'<label class="st-opt"><input type="checkbox" class="st-pseudo" value="{escape(p["name"])}"'
+                    f'{" data-added" if p["added"] else ""}{" checked" if p["included"] else ""}>'
+                    f'<span><b>{escape(p["name"])}</b> <span class="muted">{detail}</span></span></label>')
     if not pseudos:
-        options.append('<p class="note">Aucun pseudo marqué comme toi pour l\'instant : importe tes historiques.</p>')
-    shown = escape(view["hero"]) if view["hero"] else "personne pour l'instant"
+        rows.append('<p class="note">Aucun pseudo marqué comme toi pour l\'instant : importe tes historiques.</p>')
+    name = view["hero"] or ""
+    total = (f" : {num(view['my_hands'], 0)} mains analysées ensemble" if view["my_hands"]
+             else ", analysé sur toutes leurs mains")
+    players = "".join(f'<option value="{escape(n)}"></option>' for n in view["players"])
+    auto = ('<button type="button" class="link st-auto">Revenir au pseudo le plus fréquent</button>'
+            if view["chosen_hero"] else "")
     return f"""
-<h2>Toi</h2>
-<div class="card st-box" data-setting="hero">
-<p style="margin-top:0">Le joueur analysé : <b>{shown}</b>.</p>
-<fieldset><legend>Ton pseudo principal</legend>{"".join(options)}</fieldset>
+<h2>Toi : tes pseudos réunis</h2>
+<div class="card st-box" data-me>
+<p style="margin-top:0">Tes pseudos cochés sont réunis en un seul joueur,
+<b class="st-current">{escape(name) or "—"}</b>{total} (bilan, Leakfinding, préflop, rapports).</p>
+<div class="st-row"><label for="st-name">Nom du regroupement</label>
+<input type="text" id="st-name" class="st-name" maxlength="60" value="{escape(name)}" spellcheck="false">
+<button type="button" class="st-rename">Renommer</button>{auto}</div>
+<fieldset style="margin-top:12px"><legend>Pseudos réunis</legend>{"".join(rows)}</fieldset>
+<div class="st-row" style="margin-top:8px"><label for="st-add">Ajouter un pseudo</label>
+<input type="text" id="st-add" class="st-add" list="st-players" autocomplete="off" spellcheck="false"
+placeholder="pseudo à ajouter">
+<datalist id="st-players">{players}</datalist>
+<button type="button" class="st-add-go">Ajouter</button></div>
 <div class="st-status" aria-live="polite"></div>
-<p class="note">Tes historiques marquent tes mains (« Dealt to … ») : tous ces pseudos sont toi, réunis sous ton pseudo
-principal partout dans l'application (un par site, ou un pseudo changé). Un pseudo d'adversaire qui en a plusieurs se
-regroupe dans l'onglet <b>Joueurs et alias</b>.</p>
+<p class="note">Les pseudos que tes historiques marquent comme toi sont proposés et cochés d'office (un nouveau
+pseudo rejoint le regroupement tout seul). Décoche ceux qui ne sont pas toi (les mains d'un autre joueur importées chez
+toi) : leurs mains sortent de tes analyses ; recoche-les pour les remettre. Ajoute un pseudo à toi que tes historiques
+ne marquent pas : ses mains sans héros repéré rejoignent le regroupement. Le nom est libre, sauf celui d'un adversaire.
+Un adversaire qui a plusieurs pseudos se regroupe dans l'onglet <b>Joueurs et alias</b>.</p>
 </div>"""
 
 

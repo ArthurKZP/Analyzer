@@ -176,13 +176,20 @@ def other_hero_copy() -> str:
     return re.sub(r"Hero(?!\])", "Moi2", text)
 
 
+def unmarked_copy() -> str:
+    """Les mains du fichier de test jouées par « Ancien » contre « Autre », sans héros marqué par l'historique."""
+    text = FIXTURE.read_text(encoding="utf-8")
+    text = re.sub(r"Hand ID: HAND(\d+)", r"Hand ID: SANS\1", text)
+    return re.sub(r"Hero(?!\])", "Ancien", text).replace(" Hero]", "]").replace("Villain", "Autre")
+
+
 class SettingsTest(IsolatedHome):
     def test_check_and_save(self):
         self.assertEqual(settings.load(), settings.DEFAULTS)
         saved = settings.save({"formats": ["ring", "HU"], "min_hands": 80})
         self.assertEqual((saved["formats"], saved["min_hands"]), (["HU", "ring"], 80))
         for bad in ({"formats": []}, {"formats": ["5max"]}, {"min_hands": 5}, {"coach": "oui"}, {"inconnu": 1}, [],
-                    {"hero": ""}):
+                    {"hero": ""}, {"hero": "x" * 61}, {"hero_added": "Moi2"}, {"hero_excluded": [""]}):
             with self.assertRaises(ValueError):
                 settings.save(bad)
         self.assertEqual(settings.enabled_formats(["HU", "ring"], ["ring"]), ["ring"])
@@ -191,26 +198,59 @@ class SettingsTest(IsolatedHome):
         self.assertFalse(settings.coach_shown(2, False))
         self.assertFalse(settings.coach_shown(0, None))
 
+    def test_pseudos_grouped(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        folder = Path(tmp.name)
+        (folder / "sans-heros.txt").write_text(unmarked_copy(), encoding="utf-8")
+        lib = _library(folder, other_hero_copy())
+        self.addCleanup(lib.solves.shutdown)
+        view = lib.settings_view()
+        self.assertEqual([(p["name"], p["included"]) for p in view["pseudos"]], [("Hero", True), ("Moi2", True)])
+        self.assertEqual(len(lib.hands), 8)  # tes deux pseudos réunis en un seul joueur
+        self.assertEqual(set(view["players"]), {"Ancien", "Autre"})  # à ajouter : les joueurs des mains sans héros
+        state = lib.set_settings({"hero": "MonNom"})  # le regroupement renommé
+        self.assertEqual((state["hero"], lib.hero, len(lib.hands)), ("MonNom", "MonNom", 8))
+        self.assertTrue(all(h.hero == "MonNom" for h in lib.hands))
+        with self.assertRaises(ValueError):
+            lib.set_settings({"hero": "Villain"})  # le pseudo d'un adversaire
+        lib.set_settings({"hero_excluded": ["Moi2"]})  # pas toi : ses mains sortent de tes analyses
+        self.assertEqual((lib.hero, len(lib.hands)), ("MonNom", 4))
+        self.assertEqual([p["included"] for p in lib.settings_view()["pseudos"]], [True, False])
+        with self.assertRaises(ValueError):
+            lib.set_settings({"hero_excluded": ["Hero", "Moi2"]})  # il reste au moins un pseudo
+        with self.assertRaises(ValueError):
+            lib.set_settings({"hero_added": ["Villain"]})  # il joue contre toi : pas un de tes pseudos
+        with self.assertRaises(ValueError):
+            lib.set_settings({"hero_added": ["Personne"]})  # dans aucune main
+        lib.set_settings({"hero_added": ["Ancien", "Moi2"]})  # « Moi2 » se recoche, « Ancien » s'ajoute
+        conf = settings.load()
+        self.assertEqual((conf["hero_added"], conf["hero_excluded"]), (["Ancien"], []))
+        self.assertEqual(len(lib.hands), 12)
+        self.assertEqual([(p["name"], p["added"], p["hands"]) for p in lib.settings_view()["pseudos"]][-1],
+                         ("Ancien", True, 4))
+        lib.set_settings({"hero": "Moi2"})
+        lib.set_settings({"hero_excluded": ["Moi2"]})  # le nom était ce pseudo : le plus fréquent le remplace
+        self.assertIsNone(settings.load()["hero"])
+        self.assertIn(lib.hero, ("Hero", "Ancien"))
+        self.assertEqual(len(lib.hands), 8)
+        page = lib.settings_page()
+        self.assertIn("Pseudos réunis", page)
+        self.assertIn('class="st-pseudo" value="Moi2">', page)  # décoché
+        self.assertIn('class="st-pseudo" value="Ancien" data-added checked>', page)
+
     def test_library(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         lib = _library(Path(tmp.name), other_hero_copy())
         self.addCleanup(lib.solves.shutdown)
-        view = lib.settings_view()
-        self.assertEqual(sorted(p["name"] for p in view["pseudos"]), ["Hero", "Moi2"])  # tes deux pseudos
-        self.assertEqual(len(lib.hands), 8)  # réunis sous un seul « toi »
-        state = lib.set_settings({"hero": "Moi2"})
-        self.assertEqual((state["hero"], lib.hero, len(lib.hands)), ("Moi2", "Moi2", 8))
-        with self.assertRaises(ValueError):
-            lib.set_settings({"hero": "Villain"})  # pas marqué comme toi dans tes historiques
         state = lib.set_settings({"formats": ["ring"]})
         self.assertEqual(state["settings"]["plays"], ["ring"])
         self.assertEqual([f for f, _ in lib.leak_formats()], ["HU"])  # pas de mains à plusieurs : le heads-up reste
         state = lib.set_settings({"coach": False, "min_hands": 10})
         self.assertEqual((state["settings"]["coach"], state["settings"]["min_hands"]), (False, 10))
         page = lib.settings_page()
-        self.assertIn("Ton pseudo principal", page)
-        self.assertIn('value="Moi2" checked', page)
+        self.assertIn("Nom du regroupement", page)
         if shutil.which("node"):  # le script de la page doit au moins être du JavaScript valide
             script = Path(tempfile.mkdtemp(dir=self.home.parent)) / "parametres.js"
             script.write_text(page.rsplit("<script>", 1)[1].split("</script>")[0], encoding="utf-8")
