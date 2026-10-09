@@ -1205,9 +1205,9 @@ reports/               rapports générés (ignorés par git)
 
 | Site | Héros | Particularités |
 |---|---|---|
-| Betclic | étiquette `[Hero]` | heure de chaque action (temps de réflexion) |
+| Betclic | étiquette `[Hero]` | heure de chaque action (temps de réflexion) ; un joueur qui arrive et poste petite et grosse blinde : la petite est morte (hors de sa mise) |
 | Winamax | ligne « Dealt to » | pot du résumé net du rake ; aux tables anonymes, « Incognito 2 » devient « Incognito-<identifiant> » (ligne *Player Info*) pour ne pas mélanger deux joueurs assis à la même place |
-| Unibet | compte entre crochets (`Pseudo[Unibet_…]`) | joueurs « sitting out » écartés (pas servis) |
+| Unibet | compte entre crochets (`Pseudo[Unibet_…]`) | joueurs « sitting out » écartés (pas servis) ; gains lus sur « X wins » : le « won » du résumé compte la mise non payée rendue (« Uncalled bet returned »), qui ne doit pas l'être deux fois ; blindes d'entrée (« new player's blind » vivante, « missed small blind » morte) |
 
 Ton pseudo peut changer d'un site à l'autre : le héros de chaque main prend le nom de tes pseudos réunis (celui que
 tu choisis dans *Paramètres*, sinon ton pseudo le plus fréquent), pour que *Mon jeu* réunisse tous les sites. Chaque

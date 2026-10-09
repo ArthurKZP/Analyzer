@@ -25,13 +25,17 @@ _BUTTON_RE = re.compile(r"^(.+) has the button$")
 _DEALT_RE = re.compile(r"^Dealt (?:in (.+)|to (.+?) \[([^\]]*)\])$")
 _STREET_RE = re.compile(r"^\*\*\* (Flop|Turn|River) \*\*\* ((?:\[[^\]]*\] ?)+)")
 _SHOWS_RE = re.compile(r"^(.+?) shows \[([^\]]*)\](?:, (.*))?$")
-_WINS_RE = re.compile(r"^(.+?) wins " + _MONEY)
+_WINS_RE = re.compile(r"^(.+?) wins " + _MONEY)  # « X wins €5.15 », « … from main pot », « … from side pot 1 »
+_RETURNED_RE = re.compile(r"^Uncalled bet returned to (.+): " + _MONEY + r"$")
+_SUMMARY_WON_RE = re.compile(r"^Seat \d+: (.+?): .*\bwon " + _MONEY)
 _TOTAL_RE = re.compile(r"^Total pot " + _MONEY + r"(?: Rake " + _MONEY + r")?")
 
+_LIVE_POST = "live_post"  # blinde d'entrée (« new player's blind », « missed big blind ») : compte dans sa mise
 _ACTIONS = [
     (POST_SB, re.compile(r"^posts small blind " + _MONEY)),
     (POST_BB, re.compile(r"^posts big blind " + _MONEY)),
-    (POST_ANTE, re.compile(r"^posts ante " + _MONEY)),
+    (POST_ANTE, re.compile(r"^posts (?:ante|missed small blind) " + _MONEY)),  # mises mortes
+    (_LIVE_POST, re.compile(r"^posts (?:new player's blind|missed big blind) " + _MONEY)),
     (FOLD, re.compile(r"^folds")),
     (CHECK, re.compile(r"^checks")),
     (CALL, re.compile(r"^calls " + _MONEY)),
@@ -75,6 +79,9 @@ def parse_hand(chunk: str) -> Hand | None:
     street, section = "preflop", "head"
     committed: dict[str, float] = {}
     pot = 0.0
+    saw_wins = False  # une ligne « X wins … » lue
+    returned: dict[str, float] = {}  # mises non payées rendues
+    summary_won: dict[str, float] = {}  # « won » du résumé (mise non payée comprise)
     for line in lines[1:]:
         if not line:
             continue
@@ -108,6 +115,19 @@ def parse_hand(chunk: str) -> Hand | None:
                                     is_hero=bool(account))
             continue
         player = next((d for d in sorted(full, key=len, reverse=True) if line.startswith(d + " ")), None)
+        if section in ("actions", "showdown"):
+            # Les gains : « X wins €5.15 », après la dernière action ou à l'abattage, sans la mise non payée (« Uncalled
+            # bet returned to X: €1.29 ») que le résumé, lui, compte dans « won ».
+            m = _WINS_RE.match(line)
+            if m and m.group(1) in full:
+                name = full[m.group(1)]
+                hand.winnings[name] = round(hand.winnings.get(name, 0.0) + _money(m.group(2)), 2)
+                saw_wins = True
+                continue
+            m = _RETURNED_RE.match(line)
+            if m and m.group(1) in full:
+                returned[full[m.group(1)]] = returned.get(full[m.group(1)], 0.0) + _money(m.group(2))
+                continue
         if section == "hole":
             m = _DEALT_RE.match(line)
             if m:
@@ -138,6 +158,8 @@ def parse_hand(chunk: str) -> Hand | None:
                 amount, to = value, before + value
             elif kind == POST_ANTE:
                 amount, to = value, before
+            elif kind == _LIVE_POST:  # gardée comme une mise forcée (pas la grosse blinde : les positions n'en dépendent pas)
+                kind, amount, to = POST_ANTE, value, before + value
             else:
                 amount, to = 0.0, before
             hand.actions.append(Action(player=name, kind=kind, street=street, amount=round(amount, 2),
@@ -152,21 +174,19 @@ def parse_hand(chunk: str) -> Hand | None:
                 if m.group(3):
                     hand.shown_hand[full[m.group(1)]] = m.group(3)
                 continue
-            m = _WINS_RE.match(line)
-            if m and m.group(1) in full:
-                name = full[m.group(1)]
-                hand.winnings[name] = round(hand.winnings.get(name, 0.0) + _money(m.group(2)), 2)
         elif section == "summary":
             m = _TOTAL_RE.match(line)
             if m:
-                hand.total_pot = _money(m.group(1))  # rake compris
+                hand.total_pot = _money(m.group(1))  # rake compris, sans les mises non payées
                 hand.rake = _money(m.group(2)) if m.group(2) else 0.0
                 continue
-            if not hand.showdown:  # sans abattage, le gain se lit dans le résumé : « Seat 1: X: … won €12 »
-                m = re.match(r"^Seat \d+: (.+?): .*\bwon " + _MONEY, line)
-                if m and m.group(1) in full and _money(m.group(2)) > 0:
-                    name = full[m.group(1)]
-                    hand.winnings[name] = round(hand.winnings.get(name, 0.0) + _money(m.group(2)), 2)
+            m = _SUMMARY_WON_RE.match(line)  # « Seat 3: X: bet €3.79 and won €6.44, net result: €2.65 »
+            if m and m.group(1) in full:
+                summary_won[full[m.group(1)]] = _money(m.group(2))
+    if not saw_wins:  # sans ligne « wins » : le gain du résumé, moins la mise non payée qu'il y compte
+        for name, won in summary_won.items():
+            if won - returned.get(name, 0.0) > 0.005:
+                hand.winnings[name] = round(won - returned.get(name, 0.0), 2)
     players = dealt or list(seated)
     hand.seats = {name: seated[name] for name in sorted(players, key=lambda n: seated[n].seat) if name in seated}
     if button in hand.seats:
