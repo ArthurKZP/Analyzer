@@ -20,7 +20,7 @@ def results(hands: list[Hand], hero: str) -> dict:
     """Ton résultat sur ces mains : net (en monnaie et en bb), EV all-in (tapis à deux payés avant la river), avec et
     sans abattage, et la courbe (cumul réel, EV, abattage, sans abattage), main par main."""
     out = {"hands": 0, "net": 0.0, "net_bb": 0.0, "ev_bb": 0.0, "allin": 0, "sd_bb": 0.0, "nosd_bb": 0.0,
-           "curve": [], "first": None, "last": None}
+           "sd_hands": 0, "curve": [], "first": None, "last": None}
     prev = (0.0, 0.0, 0.0, 0.0)
     for h in hands:
         if hero not in h.seats or not h.bb:
@@ -37,6 +37,7 @@ def results(hands: list[Hand], hero: str) -> dict:
         out["allin"] += ev is not None and hero in ev and not any(a.player == hero and a.kind == FOLD
                                                                   for a in h.actions)
         out["sd_bb" if showdown else "nosd_bb"] += net_bb
+        out["sd_hands"] += showdown
         out["first"] = out["first"] or h.date
         out["last"] = h.date
         prev = (prev[0] + net_bb, prev[1] + ev_bb, prev[2] + (net_bb if showdown else 0.0),
@@ -74,7 +75,8 @@ def result_tiles(res: dict) -> str:
         _tile("Winrate", num(res["bb100"], 1, sign=True) if res["bb100"] is not None else "–", "bb/100 mains"),
         _tile("Résultat EV all-in", f"{num(res['ev_bb'], 1, sign=True)} bb",
               f"écart chance : {num(res['net_bb'] - res['ev_bb'], 1, sign=True)} bb sur {res['allin']} all-in"),
-        _tile("Avec / sans abattage", f"{num(res['sd_bb'], 0, sign=True)} / {num(res['nosd_bb'], 0, sign=True)}", "bb"),
+        _tile("Avec / sans abattage", f"{num(res['sd_bb'], 0, sign=True)} / {num(res['nosd_bb'], 0, sign=True)}",
+              f"bb · {num(res['sd_hands'], 0)} / {num(res['hands'] - res['sd_hands'], 0)} mains"),
     )) + "</div>"
 
 

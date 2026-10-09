@@ -1214,6 +1214,10 @@ tu choisis dans *Paramètres*, sinon ton pseudo le plus fréquent), pour que *Mo
 joueur reçoit sa position (BTN, SB, BB, CO, HJ, UTG…) d'après le bouton et les blindes postées. L'import indique,
 par fichier, le site et le nombre de mains en HU, 3-max, 6-max ou à 7-9 joueurs. Les mains heads-up (deux joueurs
 servis) ont toute l'analyse ; celles des tables de 3 joueurs et plus sont réunies sous *Tables à plusieurs*.
+L'**abattage** se déduit des actions, comme dans PokerTracker : une main y va quand au moins deux joueurs restent
+jusqu'au bout sans se coucher (la ligne « Showdown » de l'historique ne compte pas : selon le site ou la version du
+format, elle manque, ou figure quand un joueur montre ses cartes après le fold des autres). Quand le code de lecture
+change, l'application relit une fois tes historiques gardés au lancement (elle l'annonce).
 
 **Tables à plusieurs** (onglet de *Mon jeu*, et de chaque élève) : tes stats par position, toutes tes tables de 3 à
 9 joueurs ensemble (une position compte ses mains de chaque taille de table), sur toutes tes mains, contre les

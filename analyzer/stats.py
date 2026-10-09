@@ -59,6 +59,7 @@ class PlayerStats:
     net_bb_by_pos: Counter = field(default_factory=Counter)
     net_bb_showdown: float = 0.0
     net_bb_no_showdown: float = 0.0
+    hands_showdown: int = 0  # mains allées à l'abattage
     ev_adjust_bb: float = 0.0
     allin_hands: int = 0
     curve: list = field(default_factory=list)  # (cumul réel bb, cumul EV bb, cumul SD, cumul non-SD)
@@ -376,6 +377,7 @@ def analyze(hands: list[Hand]) -> dict[str, PlayerStats]:
             st.net_bb_by_pos[pos] += net_bb
             if hand.showdown:
                 st.net_bb_showdown += net_bb
+                st.hands_showdown += 1
             else:
                 st.net_bb_no_showdown += net_bb
             if ev is not None:

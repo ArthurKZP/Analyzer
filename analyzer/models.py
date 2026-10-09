@@ -147,12 +147,24 @@ class Hand:
     def effective_stack(self) -> float:
         return min(s.stack for s in self.seats.values())
 
+    def remaining(self) -> set[str]:
+        """Les joueurs encore dans le coup à la fin : ceux qui ont agi (blindes comprises) sans se coucher."""
+        folded = {a.player for a in self.actions if a.kind == FOLD}
+        return {a.player for a in self.actions} - folded
+
+    def went_to_showdown(self) -> bool:
+        """Abattage : au moins deux joueurs vont au bout sans se coucher (la définition de PokerTracker et Hold'em
+        Manager). La ligne « Showdown » de l'historique ne suffit pas : selon le site ou la version du format, elle
+        manque, ou figure quand un joueur montre ses cartes après le fold des autres."""
+        return len(self.remaining()) >= 2
+
     def finalize(self) -> None:
-        """Calcule les mises totales et la part non payée rendue au joueur.
+        """Calcule les mises totales, la part non payée rendue au joueur et l'abattage (went_to_showdown).
 
         Selon les sites, un surplus non payé (ex. tapis supérieur au tapis adverse)
         n'apparaît pas dans le pot total : on le rend au plus gros contributeur.
         """
+        self.showdown = self.went_to_showdown()
         put = {p: 0.0 for p in self.seats}
         for a in self.actions:
             put[a.player] = put.get(a.player, 0.0) + a.amount
@@ -211,6 +223,8 @@ def hand_from_dict(d: dict) -> Hand:
     actions = [Action(player, kind, street, amount, to, all_in, datetime.fromisoformat(time) if time else None,
                       pot_before, facing)
                for player, kind, street, amount, to, all_in, time, pot_before, facing in d["actions"]]
-    return Hand(d["site"], d["id"], d["table"], d["game"], datetime.fromisoformat(d["date"]), d["sb"], d["bb"],
+    hand = Hand(d["site"], d["id"], d["table"], d["game"], datetime.fromisoformat(d["date"]), d["sb"], d["bb"],
                 d["pot"], d["rake"], d["max"], seats, d["cards"], d["board"], actions, d["won"], d["sd"], d["shown"],
                 d["put"], d["unc"])
+    hand.showdown = hand.went_to_showdown()  # (une main gardée par une version d'avant : son abattage recalculé)
+    return hand

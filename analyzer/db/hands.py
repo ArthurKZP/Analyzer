@@ -235,6 +235,14 @@ def count(db: Database, space_id: int) -> int:
     return db.value("SELECT COUNT(*) FROM mains WHERE espace_id = ?", (space_id,), 0)
 
 
+def outdated(db: Database, key: str = "moi") -> int:
+    """Les mains de l'espace lues par un autre code de lecture : relues à son prochain chargement."""
+    found = db.value("SELECT id FROM espaces WHERE compte_id = ? AND cle = ?", (db.account(), key))
+    if found is None:
+        return 0
+    return db.value("SELECT COUNT(*) FROM mains WHERE espace_id = ? AND lecture != ?", (found, reader_version()), 0)
+
+
 def _reread_outdated(db: Database, space_id: int, version: str) -> None:
     """Relit les historiques dont les mains ont été lues par un autre code (parseur corrigé…)."""
     from ..parsers import parse_text

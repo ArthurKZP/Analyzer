@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .. import NAME, aliases
+from .. import NAME, aliases, db
+from ..db import hands as db_hands
 from ..theory import postflop, preflop_tree, ring_tree, studyspots
 from . import trainer
 from .library import Library, UnknownPlayer
@@ -654,10 +655,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     print("Chargement des mains…", flush=True)
+    outdated = db_hands.outdated(db.current())
+    if outdated:  # le code de lecture a changé : une fois, les historiques gardés sont relus
+        print(f"Lecture améliorée : {outdated} mains relues une fois depuis tes historiques (quelques minutes pour une "
+              "grosse base)…", flush=True)
     library = Library(args.dossier, args.hero)
     server = start(library, args.port)
     url = f"http://127.0.0.1:{server.server_address[1]}/"
-    print(f"{len(library.hands)} mains, toi : {library.hero or 'inconnu'}")
+    print(f"{len(library.hands) + len(library.ring)} mains, toi : {library.hero or 'inconnu'}")
     print(f"{NAME} est ouvert sur {url}  (Ctrl+C pour arrêter)", flush=True)
     if not args.sans_navigateur:
         webbrowser.open(url)

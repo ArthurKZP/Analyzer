@@ -139,9 +139,12 @@ class SchemaAndHandsTest(DatabaseCase):
         partial = SAMPLE.split("*** HEADER ***")
         self.assertEqual(hands.import_text(self.db, me, "extrait.txt", "*** HEADER ***" + partial[1])[1:], (0, True))
         self.assertEqual(self.db.value("SELECT COUNT(*) FROM fichiers WHERE nom = 'extrait.txt'"), 0)  # rien de neuf
+        self.assertEqual(hands.outdated(self.db), 0)
         with mock.patch.object(hands, "reader_version", return_value="nouveau-code"):
+            self.assertEqual(hands.outdated(self.db), 7)  # annoncées au lancement de l'application
             self.assertEqual(len(hands.load(self.db, me)), 7)  # relues depuis le texte gardé
             self.assertEqual(self.db.value("SELECT COUNT(*) FROM mains WHERE lecture != 'nouveau-code'"), 0)
+            self.assertEqual(hands.outdated(self.db), 0)
 
 
 class AccountDataTest(DatabaseCase):

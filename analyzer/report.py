@@ -244,7 +244,7 @@ def tiles(hero: PlayerStats) -> str:
         ("Résultat EV all-in", f"{num(ev_total, 1, sign=True)} bb",
          f"écart chance : {num(-hero.ev_adjust_bb, 1, sign=True)} bb sur {hero.allin_hands} all-in"),
         ("Avec / sans abattage", f"{num(hero.net_bb_showdown, 0, sign=True)} / {num(hero.net_bb_no_showdown, 0, sign=True)}",
-         "bb"),
+         f"bb · {num(hero.hands_showdown, 0)} / {num(hero.hands - hero.hands_showdown, 0)} mains"),
     ]
     return '<div class="tiles">' + "".join(
         f'<div class="tile"><div class="label">{label}</div><div class="value">{value}</div><div class="sub">{sub}</div></div>'

@@ -143,7 +143,7 @@ class BilanTest(unittest.TestCase):
         self.assertAlmostEqual(ev["Hero"] + ev["Joueur6"], 1.0)  # les deux se partagent la blinde morte de la SB
         self.assertEqual(ev["Joueur5"], -1.0)
         res = results([hand], "Hero")
-        self.assertEqual((res["allin"], res["net_bb"], res["sd_bb"]), (1, -100.0, -100.0))
+        self.assertEqual((res["allin"], res["net_bb"], res["sd_bb"], res["sd_hands"]), (1, -100.0, -100.0, 1))
         self.assertGreater(res["ev_bb"], 50)
         self.assertEqual(res["curve"][-1][0], -100.0)
 
