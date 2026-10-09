@@ -301,7 +301,11 @@ class RingReportTest(IsolatedHome):
         self.assertEqual((report.table_format, report.solver_scope, report.scopes, report.hands),
                          ("ring", "reg", leaks.SCOPES, 55))
         self.assertEqual((report.context["charts"], report.context["pots"]), (True, 25))
-        self.assertEqual(report.leaks[0].title, "Préflop · premier à parler · UTG : open")
+        # ses opens hors des charts volent toujours les blindes (72o d'UTG) ou gagnent le pot (AKo du CO) : vérifiés
+        # en jeu, ils rapportent, ce ne sont pas des leaks
+        self.assertEqual(report.leaks, [])
+        self.assertEqual([x.title for x in report.exploits], ["Préflop · premier à parler · CO : open",
+                                                              "Préflop · premier à parler · UTG : open"])
         picks = report.picks["reg"]
         self.assertEqual(len(picks), 2)  # deux par ligne : SRP · CO c. BB · flop
         self.assertEqual(picks[0].line, "SRP · CO c. BB · flop")
@@ -309,7 +313,7 @@ class RingReportTest(IsolatedHome):
         self.assertEqual(report.picks["rec"], [])
         self.assertEqual(leaks.selection_spots(report), [p.spot for p in picks])
         summary = leaks.summary(report)  # pour le coach
-        self.assertEqual((summary["format"], summary["mains_par_type"], summary["leaks"][0]["titre"]),
+        self.assertEqual((summary["format"], summary["mains_par_type"], summary["ecarts_qui_rapportent"][1]["titre"]),
                          ("ring", {"all": 55, "reg": 55, "rec": 0}, "Préflop · premier à parler · UTG : open"))
         self.assertEqual(summary["stats"][0]["ecart_reguliers"], "plus/solide")
         page = build_leaks_page(report, "/api/leaks", "/moi", formats=[("HU", 4), ("ring", 55)])
@@ -317,7 +321,7 @@ class RingReportTest(IsolatedHome):
                      'href="?format=HU"', "Les écarts les plus importants", "Le détail : toutes ses stats",
                      "Préflop · premier à parler", "Face au solveur, contre les réguliers", 'data-query="?format=ring"',
                      "rapport?format=ring", "/explorateur/R0030", "Pas encore de flop 6-max résolu",
-                     "Contre les récréatifs", "Toutes ses mains"):
+                     "Contre les récréatifs", "Toutes ses mains", "<h2>Les écarts justifiés</h2>"):
             self.assertIn(text, page)
         self.assertLess(page.index("Les écarts les plus importants"), page.index("Le détail : toutes ses stats"))
         alone = build_leaks_page(report, "/api/leaks", "/moi", embed=False, standalone=True,

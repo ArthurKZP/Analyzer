@@ -281,7 +281,7 @@ def leak_slide(deck: px.Presentation, s: Synthesis, leak: leaks.Leak, k: int, to
         text_block(slide, inner_x, 3.3, inner_w, "perdus" + leak.evidence.split(" bb", 1)[1], 16, INK2, max_lines=4)
     else:
         slide.text(inner_x, 1.95, inner_w, 0.3, [para("CE QUE DISENT TES MAINS", 12, MUTED, bold=True)])
-        text_block(slide, inner_x, 2.35, inner_w, leak.evidence, 16, INK2, max_lines=9, min_size=14)
+        text_block(slide, inner_x, 2.35, inner_w, leak.verified, 16, INK2, max_lines=9, min_size=14)
     if example is not None and (stat is not None or leak.source == "solveur"):
         hand, lost = example
         _example(slide, s, hand, lost, inner_x, 5.35, inner_w, leak.source == "solveur")
@@ -290,7 +290,7 @@ def leak_slide(deck: px.Presentation, s: Synthesis, leak: leaks.Leak, k: int, to
     if stat is not None or leak.source == "solveur":
         slide.text(right_x, y, right_w, 0.3, [para("CE QUE DISENT TES MAINS", 12, MUTED, bold=True)])
         y += 0.38
-        y += text_block(slide, right_x, y, right_w, leak.evidence, 18, INK2, max_lines=5, min_size=14) + 0.35
+        y += text_block(slide, right_x, y, right_w, leak.verified, 18, INK2, max_lines=6, min_size=14) + 0.35
     elif example is not None:
         hand, lost = example
         slide.text(right_x, y, right_w, 0.3, [para("LA MAIN LA PLUS CHÈRE", 12, MUTED, bold=True)])
@@ -302,7 +302,8 @@ def leak_slide(deck: px.Presentation, s: Synthesis, leak: leaks.Leak, k: int, to
     box_h = lines * px.line_height(size) + 0.5
     slide.shape(right_x, y, right_w, box_h, fill="FFF6E0", geom="roundRect", radius=0.12,
                 paras=[para(advice, size, FELT, bold=False)], anchor="ctr", inset=0.25, name="Conseil")
-    slide.notes = (f"{leak.title} ({leak.confidence}).\n{leak.evidence}\nÀ travailler : {leak.advice}\n"
+    proofs = "".join(f"\n· {p}" for p in (leak.check.proofs if leak.check else []))
+    slide.notes = (f"{leak.title} ({leak.confidence}).\n{leak.verified}{proofs}\nÀ travailler : {leak.advice}\n"
                    "Questions à poser : qu'est-ce qui te fait jouer ainsi dans cette situation ? Que ferait un "
                    "régulier solide ? Puis rejouez ensemble la main la plus chère dans l'explorateur ou l'entraîneur.")
 

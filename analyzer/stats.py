@@ -12,7 +12,7 @@ from statistics import median
 from typing import Optional
 
 from .cards import combo_notation, equity
-from .models import AGGRESSIVE, BET, CALL, CHECK, FOLD, POSTFLOP, RAISE, VOLUNTARY, Hand
+from .models import AGGRESSIVE, BET, CALL, CHECK, FOLD, POSTFLOP, RAISE, VOLUNTARY, Action, Hand
 
 OUTCOMES = {FOLD: "fold", CALL: "call", RAISE: "raise", CHECK: "check", BET: "bet"}
 PF_LEVEL_NAMES = {1: "3bet", 2: "4bet"}
@@ -109,6 +109,9 @@ class HandReader:
         self.sb = hand.button
         self.bb = hand.big_blind
         self.events: dict[str, list[tuple[str, bool]]] = defaultdict(list)
+        # les décisions après le flop, avec leur situation (« cbet_flop », « vs_cbet_turn »…) : de quoi mesurer ce
+        # qu'elles ont rapporté (analyzer/leakcheck.py)
+        self.spots: dict[str, list[tuple[str, Action]]] = defaultdict(list)
         self.sizes: dict[str, list[tuple[str, float]]] = defaultdict(list)
         self.tokens: dict[str, list[str]] = defaultdict(list)
         self.pfa: Optional[str] = None
@@ -226,6 +229,7 @@ class HandReader:
                         contexts += self._pfa_contexts(p, street, i, prev, made_cbet, checked_through, called_cbet)
                     for ctx in contexts:
                         self._flag(p, ctx, kind == BET)
+                        self.spots[p].append((ctx, a))
                     if kind == BET:
                         pct = 100.0 * a.amount / a.pot_before if a.pot_before else 0.0
                         bet_ctx = contexts[-1]
@@ -240,11 +244,14 @@ class HandReader:
                 else:
                     facing = "vs_bet" if level == 1 else "vs_raise"
                     self._record(p, f"{facing}_{street}", choice, ("fold", "call", "raise"))
+                    self.spots[p].append((f"{facing}_{street}", a))
                     if level == 1:
                         if p in checked:
                             self._flag(p, f"xr_{street}", kind == RAISE)
+                            self.spots[p].append((f"xr_{street}", a))
                         if bet_ctx and not bet_ctx.startswith(("lead_", "stab_")):
                             self._record(p, f"vs_{bet_ctx}", choice, ("fold", "call", "raise"))
+                            self.spots[p].append((f"vs_{bet_ctx}", a))
                             if bet_ctx == f"cbet_{street}" and kind == CALL:
                                 called_cbet[street] = True
                     if kind == RAISE and last_to and not a.all_in:

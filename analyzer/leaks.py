@@ -8,9 +8,17 @@
    situation et ses erreurs les plus chères.
 3. Des mains à revoir, choisies pour couvrir les lignes (type de pot, position, street atteinte) contre chaque
    type d'adversaire : les plus gros pots de chaque ligne. Contre les réguliers, elles passent au solveur.
-4. Les leaks prioritaires : les écarts et les pertes ci-dessus, classés par confiance puis par poids (fréquence
-   de la situation multipliée par l'écart et par ce que la décision met en jeu, le pot grossissant à chaque street
-   et dans les pots 3bet ou 4bet ; ou EV perdue), avec la façon de les travailler.
+4. Les leaks prioritaires : les écarts et les pertes ci-dessus, les pertes confirmées d'abord (mesurées en jeu, face
+   au fold ou au solveur, ou confirmées par les réponses de ses adversaires), puis par confiance et par poids (ce
+   qu'elles coûtent en bb/100 ; à défaut, la fréquence de la situation multipliée par l'écart et par ce que la
+   décision met en jeu, le pot grossissant à chaque street et dans les pots 3bet ou 4bet), avec la façon de les
+   travailler.
+5. Chaque écart à la théorie est vérifié en jeu (analyzer/leakcheck.py) : ce qu'il rapporte ou coûte sur ses mains,
+   la réponse de ses adversaires, le plan de jeu suggéré. Un écart qui exploite ses adversaires (c-bet range quand
+   ils se couchent trop, open plus large quand ils 3bet peu…) ou qui suit le plan de jeu sort des leaks : il est
+   montré à part, avec ce qu'il rapporte. Une perte face au solveur qui vient d'un tel écart est relativisée. Là où
+   il joue comme la théorie, leur fold face à ses mises et relances montre les exploitations possibles (ils se
+   couchent trop face à ses opens : ouvrir plus large rapporterait).
 
 Contre un récréatif, s'écarter de la théorie n'est pas une erreur en soi : ses stats sont montrées à côté, mais
 seules celles contre les réguliers comptent pour les leaks.
@@ -24,7 +32,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urlencode
 
-from . import handplay, players
+from . import handplay, leakcheck, players
 from .insights import wilson
 from .models import Hand
 from .stats import HandReader, Ratio, analyze
@@ -74,6 +82,7 @@ class Stat:
     # est pour rien, la tolérance est plus faible
     refs: Optional[dict] = None  # portée -> repère, quand il change d'une portée à l'autre (mêmes cartes) ; reference
     # est celui de la portée comparée à la théorie
+    check: Optional[leakcheck.Check] = None  # l'écart vérifié en jeu, contre les réguliers (leakcheck)
 
     def ref_for(self, scope: str) -> Optional[float]:
         return self.refs.get(scope, self.reference) if self.refs else self.reference
@@ -148,6 +157,16 @@ class Leak:
     link: Optional[str] = None       # où le travailler (entraîneur, page Préflop, plan de jeu)
     link_text: str = ""
     example: Optional[tuple] = None  # (main, décision, EV perdue) : la plus chère de la situation
+    check: Optional[leakcheck.Check] = None  # écart à la théorie vérifié en jeu (leakcheck)
+    confirmed: bool = False          # la perte est mesurée (en jeu, face au fold, au solveur) ou confirmée par leurs
+    # réponses : ces leaks passent devant les écarts encore à vérifier
+    note: str = ""                   # une réserve (une perte face au solveur qui vient d'un écart qui rapporte…)
+
+    @property
+    def verified(self) -> str:
+        """La preuve, puis ce qu'en dit la vérification en jeu et l'éventuelle réserve (rapports PDF et PowerPoint)."""
+        parts = [self.evidence] + ([self.check.summary] if self.check else []) + ([self.note] if self.note else [])
+        return " ".join(t if t.endswith((".", "!", "?")) else t + "." for t in (x.strip() for x in parts) if t)
 
 
 @dataclass
@@ -180,6 +199,8 @@ class Report:
     scopes: tuple = SCOPES      # portées des stats
     solver_scope: str = "reg"   # la portée comparée à la théorie (leaks, mains passées au solveur)
     context: dict = field(default_factory=dict)  # tables à plusieurs : charts présents, flops 6-max résolus…
+    exploits: list = field(default_factory=list)  # les écarts qui rapportent ou suivent le plan de jeu (Leak)
+    opportunities: list = field(default_factory=list)  # là où il joue comme la théorie, un écart qui rapporterait (Leak)
 
 
 # --- Découpage par type d'adversaire ---------------------------------------------------------------------
@@ -320,11 +341,24 @@ def _cap(text: str) -> str:
 SCOPE_WORDS = {"reg": " contre les réguliers", "rec": " contre les récréatifs", "all": ""}
 
 
+KEPT = ("exploit", "plan")  # les verdicts d'un écart qui sort des leaks (leakcheck)
+
+
+def _checked(stat: Stat, scope: str) -> Optional[leakcheck.Check]:
+    """La vérification en jeu de l'écart, quand elle porte sur cette portée (celle comparée à la théorie)."""
+    return stat.check if scope == "reg" else None
+
+
 def _stat_leak(stat: Stat, scope: str = "reg") -> Optional[Leak]:
+    """L'écart d'une stat à la théorie, comme leak ; None sans écart net, ou quand il exploite ses adversaires ou suit
+    le plan de jeu (vérifié en jeu : voir kept). Une fuite mesurée pèse ce qu'elle coûte (bb/100)."""
     v = stat.verdict(scope)
     if not v:
         return None
     direction, conf = v
+    check = _checked(stat, scope)
+    if check is not None and check.verdict in KEPT:
+        return None
     r = stat.ratios[scope]
     p = r.hits / r.opps
     preflop_stat = stat.section.startswith("Préflop")
@@ -333,8 +367,84 @@ def _stat_leak(stat: Stat, scope: str = "reg") -> Optional[Leak]:
     return Leak(f"{stat.section} · {stat.label}",
                 f"{round(100 * p)} % sur {r.opps} occasions{SCOPE_WORDS.get(scope, '')}, contre {stat.ref_text()}"
                 + (f" ({stat.note})" if stat.note else ""),
-                _cap(advice) + ".", "préflop" if preflop_stat else "postflop", conf, stat.weight(scope),
-                link[0], link[1])
+                _cap(advice) + ".", "préflop" if preflop_stat else "postflop", conf, importance(stat, scope),
+                link[0], link[1], check=check, confirmed=check is not None and check.verdict == "fuite")
+
+
+KEPT_ADVICE = {
+    "exploit": "Garde-le contre ces adversaires : il rapporte plus que la théorie. Surveille leurs réponses (les preuves "
+               "ci-dessus) : s'ils s'adaptent, reviens vers la théorie.",
+    "justifié": "Garde-le contre ces adversaires, sans forcer : leurs réponses le justifient, mais son gain n'est pas "
+                "chiffré. S'ils s'adaptent, reviens vers la théorie.",
+    "plan": "Garde-le : c'est le plan de jeu suggéré, plus simple à jouer que la stratégie mixte du solveur et proche "
+            "de ce qu'elle rapporte.",
+}
+
+
+def _kept_leak(stat: Stat, scope: str = "reg") -> Optional[Leak]:
+    """Un écart à la théorie qui exploite ses adversaires ou suit le plan de jeu (vérifié en jeu)."""
+    v = stat.verdict(scope)
+    check = _checked(stat, scope)
+    if not v or check is None or check.verdict not in KEPT:
+        return None
+    r = stat.ratios[scope]
+    preflop_stat = stat.section.startswith("Préflop")
+    link = stat.link or (("preflop", "Voir l'onglet Préflop") if preflop_stat else ("plan", "Voir le plan de jeu"))
+    gain = check.bb100 if check.bb100 is not None else 0.0
+    return Leak(f"{stat.section} · {stat.label}",
+                f"{round(100 * r.hits / r.opps)} % sur {r.opps} occasions{SCOPE_WORDS.get(scope, '')}, contre "
+                f"{stat.ref_text()}" + (f" ({stat.note})" if stat.note else ""),
+                KEPT_ADVICE["justifié" if check.verdict == "exploit" and not check.measured else check.verdict],
+                check.verdict, v[1], gain, link[0], link[1], check=check, confirmed=True)
+
+
+OPPORTUNITY_ADVICE = {
+    ("bet", "plus"): "Mise plus souvent ici contre eux : ajoute des mains faibles (bluffs, semi-bluffs) ; reviens vers "
+                     "la théorie s'ils s'adaptent.",
+    ("bet", "moins"): "Mise moins souvent en bluff ici contre eux : ils ne se couchent pas assez ; garde tes mises pour "
+                      "la value.",
+    ("raise", "plus"): "Relance plus souvent ici contre eux, en bluff : ils se couchent trop face à tes relances.",
+    ("raise", "moins"): "Relance moins souvent en bluff ici contre eux : ils ne se couchent pas assez.",
+    ("aggr", "plus"): "Relance plus large ici contre eux : ils se couchent trop face à tes relances (ajoute des mains "
+                      "faibles) ; reviens vers la théorie s'ils s'adaptent.",
+    ("aggr", "moins"): "Relance moins large ici contre eux : ils ne se couchent pas assez face à tes relances.",
+}
+
+
+def _chance_leak(stat: Stat, scope: str = "reg") -> Optional[Leak]:
+    """Là où il joue comme la théorie, un écart qui rapporterait (leakcheck.chance)."""
+    check = _checked(stat, scope)
+    if check is None or check.verdict != "opportunité":
+        return None
+    r = stat.ratios[scope]
+    preflop_stat = stat.section.startswith("Préflop")
+    link = stat.link or (("preflop", "Voir l'onglet Préflop") if preflop_stat else ("plan", "Voir le plan de jeu"))
+    advice = OPPORTUNITY_ADVICE.get((stat.kind, check.direction), "Écarte-toi de la théorie dans ce sens contre eux.")
+    return Leak(f"{stat.section} · {stat.label}",
+                f"{round(100 * r.hits / r.opps)} % sur {r.opps} occasions{SCOPE_WORDS.get(scope, '')}, proche de "
+                f"{stat.ref_text()}", advice, "opportunité", "solide", check.bb100, link[0], link[1], check=check,
+                confirmed=True)
+
+
+def chances(stats: list[Stat], scope: str = "reg") -> list[Leak]:
+    """Les exploitations possibles : là où il joue comme la théorie, les écarts qui rapporteraient le plus d'abord."""
+    return sorted((x for x in (_chance_leak(s, scope) for s in stats) if x), key=lambda x: -x.weight)
+
+
+def gap_advice(stat: Stat, direction: str, scope: str) -> str:
+    """Ce qu'il faut faire d'un écart : le corriger, ou le garder quand il est justifié en jeu (kept)."""
+    check = _checked(stat, scope)
+    if check is not None and check.verdict in KEPT:
+        return "À garder : " + ("il exploite tes adversaires" if check.verdict == "exploit" else
+                                "c'est le plan de jeu suggéré")
+    return _cap((stat.advice or {}).get(direction) or ADVICE.get((stat.kind, direction), "écart à corriger"))
+
+
+def kept(stats: list[Stat], scope: str = "reg") -> list[Leak]:
+    """Ses écarts à la théorie qui rapportent (ou suivent le plan de jeu) : ceux qui rapportent le plus d'abord."""
+    found = [x for x in (_kept_leak(s, scope) for s in stats) if x]
+    found.sort(key=lambda x: (x.check.verdict != "exploit", x.check.bb100 is None, -x.weight))
+    return found
 
 
 def top_gaps(report: "Report", n: int = 8) -> list[tuple[Stat, str, str]]:
@@ -342,11 +452,32 @@ def top_gaps(report: "Report", n: int = 8) -> list[tuple[Stat, str, str]]:
     return top_stat_gaps(report.stats, report.solver_scope, n)
 
 
+CHECK_ORDER = {"fuite": 0, "": 1, "plan": 2, "exploit": 3}  # vérifiés en jeu : les fuites d'abord, ce qui rapporte
+# en dernier
+
+
+def importance(stat: Stat, scope: str) -> float:
+    """Le poids d'un écart (≈ bb/100) : ce qu'il coûte, mesuré en jeu ; sans mesure nette, Stat.weight, mais jamais plus
+    que ce que la mesure incertaine lui permet de coûter (la borne de son intervalle à 95 %)."""
+    weight = stat.weight(scope)
+    check = _checked(stat, scope)
+    if check is None or check.bb100 is None:
+        return weight
+    return check.cost if check.measured else min(weight, check.max_cost)
+
+
 def top_stat_gaps(stats: list[Stat], scope: str, n: int = 8) -> list[tuple[Stat, str, str]]:
-    """Les écarts de ces stats dans cette portée : les solides d'abord, puis du plus lourd au plus léger (Stat.weight :
-    fréquence de la situation, écart, ce que la décision met en jeu) ; (stat, « plus » | « moins », confiance)."""
+    """Les écarts de ces stats dans cette portée : les fuites vérifiées en jeu d'abord, puis ceux encore à confirmer,
+    ceux qui suivent le plan de jeu et ceux qui exploitent ses adversaires ; les solides avant les indicatifs ; enfin
+    du plus lourd au plus léger (importance : ce qu'ils coûtent vraiment, ou fréquence de la situation × écart × ce que
+    la décision met en jeu) ; (stat, « plus » | « moins », confiance)."""
     found = [(s, *s.verdict(scope)) for s in stats if s.verdict(scope)]
-    found.sort(key=lambda x: (x[2] != "solide", -x[0].weight(scope)))
+
+    def order(item: tuple) -> tuple:
+        check = _checked(item[0], scope)
+        return CHECK_ORDER.get(check.verdict if check else "", 1), item[2] != "solide", -importance(item[0], scope)
+
+    found.sort(key=order)
     return found[:n]
 
 
@@ -365,7 +496,23 @@ def family_name(family: str) -> str:
     return studyspots.pot_name(family)
 
 
-def _solver_leak(group: dict, analyzed: int, digests: Optional[list[dict]] = None) -> Optional[Leak]:
+def _exploited(group: dict, devs: list[dict], stats: dict[str, Stat]) -> Optional[Stat]:
+    """La stat dont l'écart, vérifié en jeu, exploite ses adversaires (ou suit le plan de jeu) et explique un écart de
+    la situation du solveur dans le même sens (il mise plus que le solveur à la c-bet, et la c-bet plus large
+    rapporte) ; None sinon."""
+    for dev in devs:
+        stat = stats.get(leakcheck.solver_stat(group["family"], group["key"], dev["category"]) or "")
+        check = stat.check if stat is not None else None
+        if check is None or check.verdict not in KEPT:
+            continue
+        more = dev["observed"] > dev["expected"]
+        if ("plus" if more != (dev["category"] == "passive") else "moins") == check.direction:
+            return stat
+    return None
+
+
+def _solver_leak(group: dict, analyzed: int, digests: Optional[list[dict]] = None,
+                 stats: Optional[dict[str, Stat]] = None) -> Optional[Leak]:
     if group["known"] < 2 or group["lost"] < 0.5 or group["errors"] < 1:
         return None
     devs = review.deviations(group, min_n=5)
@@ -374,9 +521,15 @@ def _solver_leak(group: dict, analyzed: int, digests: Optional[list[dict]] = Non
                 f"{review.ERROR:.2f} bb), sur {analyzed} mains analysées").replace(".", ",")
     advice = " ".join(review.exploit(group, d, villain=False) for d in devs) or \
         "Revois ces décisions dans l'explorateur : l'EV de chaque action y est donnée."
+    exploited = _exploited(group, devs, stats or {})
+    note = ""
+    if exploited is not None:
+        note = (f"À relativiser : le solveur suppose des adversaires qui jouent bien ; contre les tiens, l'écart « "
+                f"{exploited.label} » est justifié (vérifié en jeu, voir « Les écarts justifiés ») : une partie de ces "
+                "bb n'est pas perdue.")
     return Leak(f"{family_name(group['family'])} · {group['label']}", evidence, advice, "solveur", conf,
                 100 * group["lost"] / max(analyzed, 1), f"drill:{group['family']}:{group['key']}", "S'entraîner",
-                _worst(digests or [], group))
+                _worst(digests or [], group), confirmed=exploited is None, note=note)
 
 
 def _hand_leak(x: "handplay.Loser", hands: int, scope: str = "reg", fmt: str = "HU") -> Leak:
@@ -419,14 +572,18 @@ def _hand_leak(x: "handplay.Loser", hands: int, scope: str = "reg", fmt: str = "
         hand_id, ev, _ = x.worst[0]
         example = (hand_id, 0, -ev)
     return Leak(f"Préflop · {x.label}", evidence, advice, "préflop", "solide", -100 * x.gap * x.n / max(hands, 1),
-                link, "Voir d'où vient la perte", example)
+                link, "Voir d'où vient la perte", example, confirmed=True)
 
 
 def rank(stats: list[Stat], groups: list[dict], analyzed: int, top: int = TOP,
          digests: Optional[list[dict]] = None, extra: Optional[list[Leak]] = None, scope: str = "reg") -> list[Leak]:
+    """Les leaks à travailler, les grosses erreurs d'abord : les pertes confirmées (mesurées en jeu, face au fold ou au
+    solveur, ou confirmées par leurs réponses) avant les écarts encore à vérifier ; les solides avant les indicatifs ;
+    puis du plus lourd au plus léger. Les écarts qui exploitent ses adversaires n'y sont pas (kept)."""
+    by_key = {s.key: s for s in stats}
     leaks = [x for x in (_stat_leak(s, scope) for s in stats) if x] + list(extra or [])
-    leaks += [x for x in (_solver_leak(g, analyzed, digests) for g in groups) if x]
-    leaks.sort(key=lambda x: (x.confidence != "solide", -x.weight))
+    leaks += [x for x in (_solver_leak(g, analyzed, digests, by_key) for g in groups) if x]
+    leaks.sort(key=lambda x: (not x.confirmed, x.confidence != "solide", -x.weight))
     return leaks[:top]
 
 
@@ -463,6 +620,7 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None) -> Report:
     picks = interesting(parts, hero, solver["digests"])
     plays = handplay.collect(parts["reg"], hero, handplay.Theory(preflop.load_solution()),
                              review.hero_losses(solver["digests"]))
+    leakcheck.attach(rows, leakcheck.hu_checks(rows, parts["reg"], hero, stats["reg"], plays))
     hand_leaks = [_hand_leak(x, len(parts["reg"])) for x in handplay.losers(plays)[:HAND_LEAKS]]
     opponents: dict = {"reg": [], "rec": []}
     for name, info_k in kinds.items():
@@ -470,12 +628,18 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None) -> Report:
     return Report(hero, len(hands), {s: len(parts[s]) for s, _ in SCOPES}, winrate, info, rows, solver, picks,
                   rank(rows, solver["groups"], solver["analyzed"], digests=solver["digests"], extra=hand_leaks),
                   rec_notes(rows),
-                  opponents)
+                  opponents, exploits=kept(rows), opportunities=chances(rows))
 
 
 def selection_spots(report: Report) -> list:
     """Les mains choisies contre les réguliers (à une table à plusieurs : toutes), encore à passer au solveur."""
     return [p.spot for p in report.picks.get(report.solver_scope, []) if p.digest is None and p.spot is not None]
+
+
+def _check_summary(check: leakcheck.Check) -> dict:
+    """Une vérification en jeu, en données simples."""
+    return {"verdict": check.verdict or "à confirmer", "bb_100": None if check.bb100 is None else round(check.bb100, 2),
+            "resume": check.summary, "preuves": check.proofs}
 
 
 def summary(report: Report) -> dict:
@@ -486,14 +650,21 @@ def summary(report: Report) -> dict:
         "joueur": report.hero, "format": report.table_format, "mains": report.hands, "mains_par_type": report.scope_hands,
         "bb_100": {k: None if v is None else round(v, 1) for k, v in report.winrate.items()},
         "leaks": [{"titre": x.title, "preuve": x.evidence, "conseil": x.advice, "source": x.source,
-                   "confiance": x.confidence, "main_la_plus_chere": x.example[0] if x.example else None}
+                   "confiance": x.confidence, "main_la_plus_chere": x.example[0] if x.example else None,
+                   **({"verifie_en_jeu": _check_summary(x.check)} if x.check else {}),
+                   **({"reserve": x.note} if x.note else {})}
                   for x in report.leaks],
+        "ecarts_qui_rapportent": [{"titre": x.title, "preuve": x.evidence, "conseil": x.advice,
+                                   "verifie_en_jeu": _check_summary(x.check)} for x in report.exploits],
+        "exploitations_possibles": [{"titre": x.title, "preuve": x.evidence, "conseil": x.advice,
+                                     "verifie_en_jeu": _check_summary(x.check)} for x in report.opportunities],
         "stats": [{"section": s.section, "stat": s.label, "solveur_pct": None if s.reference is None else round(100 * s.reference),
                    **({"repere_pct": [round(100 * x) for x in s.band]} if s.band else {}),
                    **{f"{scope}_pct": pct(s.ratios[scope]) for scope, _ in scopes},
                    **{f"{scope}_n": s.ratios[scope].opps for scope, _ in scopes},
                    "ecart" if report.solver_scope == "all" else "ecart_reguliers":
-                       "/".join(s.verdict(report.solver_scope)) if s.verdict(report.solver_scope) else None}
+                       "/".join(s.verdict(report.solver_scope)) if s.verdict(report.solver_scope) else None,
+                   **({"en_jeu": _check_summary(s.check)} if _checked(s, report.solver_scope) else {})}
                   for s in report.stats],
         "solveur": {"mains_analysees": report.review["analyzed"], "a_analyser": len(report.review["todo"]),
                     "ev_perdue_bb": round(report.review["lost"], 1),

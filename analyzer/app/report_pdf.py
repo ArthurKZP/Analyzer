@@ -239,7 +239,7 @@ def _leaks(flow: Flow) -> None:
     for k, leak in enumerate(items, start=1):
         conf_w = pw.text_width(leak.confidence, "regular", 7.5) + 14
         title = pw.wrap(leak.title, width - conf_w, "bold", 10)
-        evidence = pw.wrap(leak.evidence, width, "regular", 8.6)
+        evidence = pw.wrap(leak.verified, width, "regular", 8.6)
         advice = pw.wrap("› " + leak.advice, width, "regular", 9)
         height = len(title) * 13 + len(evidence) * 11.2 + len(advice) * 11.8 + 10
         flow.need(height)
@@ -257,6 +257,19 @@ def _leaks(flow: Flow) -> None:
             page.text(text_x, y + 9.5, line, "regular", 9, INK)
             y += 11.8
         flow.y = y + 8
+    _kept(flow)
+
+
+def _kept(flow: Flow) -> None:
+    """Les écarts à la théorie justifiés en jeu (ils exploitent ses adversaires, ou suivent le plan de jeu)."""
+    for items, title, sub in ((flow.s.report.exploits, "Les écarts justifiés", "vérifiés en jeu : ce ne sont pas des fuites"),
+                              (flow.s.report.opportunities, "Les exploitations possibles",
+                               "joué comme la théorie, mais un écart rapporterait")):
+        if not items:
+            continue
+        flow.heading(title, sub, keep=40)
+        for x in items:
+            flow.paragraph(f"• {x.title} ({x.check.badge}) : {x.check.summary}", color=INK2)
 
 
 def _gaps(flow: Flow) -> None:
@@ -271,7 +284,10 @@ def _gaps(flow: Flow) -> None:
     rows = []
     for stat, direction, confidence in found:
         r = stat.ratios[scope]
-        advice = (stat.advice or {}).get(direction) or leaks.ADVICE.get((stat.kind, direction), "écart à corriger")
+        advice = leaks.gap_advice(stat, direction, scope)
+        check = leaks._checked(stat, scope)
+        if check is not None and check.verdict == "fuite" and check.measured:
+            advice += f" ({check.badge})"
         reference = (f"{round(100 * stat.reference)} %" if stat.reference is not None else
                      f"{round(100 * stat.band[0])}–{round(100 * stat.band[1])} %" if stat.band else "–")
         gap = round(100 * stat.gap(scope))
@@ -281,7 +297,7 @@ def _gaps(flow: Flow) -> None:
             (reference, "regular", INK2, None),
             (f"{'+' if direction == 'plus' else '−'}{gap} pts", "regular", INK, None),
             (lambda page, x, y, c=confidence: pill(page, x, y, c, c == "solide")),
-            (leaks._cap(advice), "regular", INK2, None),
+            (advice, "regular", INK2, None),
         ])
     table(flow, [("Situation", 158, "left"), (s.solver_who, 72, "right"), ("Théorie", 50, "right"),
                  ("Écart", 44, "right"), ("Confiance", 58, "left"), ("À faire", CW - 382, "left")], rows, size=8.2)

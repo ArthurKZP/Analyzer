@@ -17,6 +17,9 @@ et passent au solveur : contre un récréatif, l'exploitation prime.
 3. Ses plus gros pots à deux au flop contre les réguliers, deux par ligne (pot, positions, dernière street) : passés
    au solveur, l'EV perdue par situation et ses décisions les plus chères ; contre les récréatifs, à revoir à la main.
 4. Les mains de départ qui perdent nettement plus que le fold, contre les réguliers.
+5. Chaque écart net est vérifié en jeu (analyzer/leakcheck.py) : ce qu'il rapporte ou coûte sur ses mains, la
+   réponse de ses adversaires (dans ses pots à deux, et leurs fréquences préflop face aux repères d'un régulier
+   solide), le plan de jeu suggéré pour la c-bet.
 """
 from __future__ import annotations
 
@@ -24,8 +27,8 @@ from dataclasses import dataclass, replace
 from typing import Optional
 from urllib.parse import urlencode
 
-from . import handplay, ring
-from .leaks import HAND_LEAKS, POT_STAKE, SCOPES, Pick, Report, Stat, _hand_leak, rank, street_stake
+from . import handplay, leakcheck, ring
+from .leaks import HAND_LEAKS, POT_STAKE, SCOPES, Pick, Report, Stat, _hand_leak, chances, kept, rank, street_stake
 from .models import BET, CALL, FOLD, RAISE, VOLUNTARY, Hand
 from .stats import HandReader, Ratio
 from .theory import coach, exploit, postflop, review, studyspots
@@ -356,6 +359,7 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None) -> Report:
     lines = handplay.ring_lines()
     plays = handplay.collect(hands, hero, handplay.Theory(None, lines), review.hero_losses(solver["digests"]))
     rows = stats(hands, hero, kinds, plays, pots)
+    leakcheck.attach(rows, leakcheck.ring_checks(rows, parts["reg"], hero, pots, plays, kinds))
     regular = {h.hand_id for h in parts["reg"]}
     hand_leaks = [_hand_leak(x, len(parts["reg"]), "reg", FORMAT)
                   for x in handplay.losers([p for p in plays if p.hand_id in regular])[:HAND_LEAKS]]
@@ -372,4 +376,5 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None) -> Report:
                   rank(rows, solver["groups"], solver["analyzed"], digests=solver["digests"], extra=hand_leaks),
                   [], opponents, table_format=FORMAT,
                   context={"charts": bool(lines), "plans": plans, "pots": len(pots),
-                           "formats": sorted({h.table_format for h in hands}, key=lambda f: (len(f), f))})
+                           "formats": sorted({h.table_format for h in hands}, key=lambda f: (len(f), f))},
+                  exploits=kept(rows), opportunities=chances(rows))
