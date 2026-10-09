@@ -145,6 +145,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.summary())
             if parts == ["api", "fichiers"]:  # tes historiques importés
                 return self._json(library.files_view())
+            if len(parts) == 3 and parts[:2] == ["api", "import"]:  # l'avancement d'un import (barre)
+                job = library.import_status(parts[2])
+                return self._json(job) if job else self._error(404, "Import inconnu.")
             if parts == ["api", "alias"]:  # les pseudos regroupés sous un alias
                 return self._json(aliases.groups())
             if parts == ["api", "periode"]:  # la période d'analyse
@@ -197,6 +200,9 @@ class Handler(BaseHTTPRequestHandler):
                 if parts[2] == "leaks":
                     return self._html(student.leaks_page(table_format=self._format()))
                 return self._html(student.self_page(parts[2], table_format=self._format()))
+            if len(parts) == 5 and parts[:2] == ["api", "eleves"] and parts[3] == "import":
+                job = library.student(parts[2]).import_status(parts[4])
+                return self._json(job) if job else self._error(404, "Import inconnu.")
             if len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] in ("leaks", "revue", "fichiers", "periode"):
                 student = library.student(parts[2])
                 if parts[3] == "fichiers":
@@ -528,6 +534,9 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "import"]:
             files = self._import_files()
             return files if files is None else self._json(library.import_files(files))
+        if parts == ["api", "import", "lancer"]:  # en arrière-plan : son avancement, GET /api/import/<id>
+            files = self._import_files()
+            return files if files is None else self._json(library.start_import(files))
         if len(parts) == 3 and parts[:2] == ["api", "fichiers"] and parts[2] in ("retirer", "retablir"):
             return self._file_action(library, parts[2])
         if parts == ["api", "periode"]:
@@ -572,6 +581,9 @@ class Handler(BaseHTTPRequestHandler):
             if parts[3:] == ["import"]:
                 files = self._import_files()
                 return files if files is None else self._json(student.import_files(files))
+            if parts[3:] == ["import", "lancer"]:
+                files = self._import_files()
+                return files if files is None else self._json(student.start_import(files))
             if len(parts) == 5 and parts[3] == "fichiers" and parts[4] in ("retirer", "retablir"):
                 return self._file_action(student, parts[4])
             if parts[3:] == ["periode"]:

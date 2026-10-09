@@ -39,17 +39,18 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   (voir plus bas).
 - **Mon jeu** : ton *Bilan* contre tous tes adversaires — en tête, tes résultats **tous formats confondus**, en
   heads-up et aux tables à plusieurs ; puis, au choix *Heads-up* / *Tables à plusieurs* (retenu avec le Leakfinding
-  et Mon préflop), le même plan : résultat et courbe (réel, EV all-in, avec et sans abattage), **tes écarts les plus
+  et Mon préflop), le même plan : résultat et courbe (réel en vert, EV all-in en jaune, à l'abattage en bleu, sans
+  abattage en rouge : les couleurs des trackers, avec le cumul de chacune en bout de courbe), **tes écarts les plus
   importants** avant le détail de tes stats (aux tables à plusieurs, sur toutes tes mains, contre les réguliers et
   contre les récréatifs), résultats par adversaire avec recherche, filtre par type et tri par mains, résultat,
   bb/100, date ou nom (aux tables à plusieurs : mains ensemble, pots disputés et ton résultat dans ces pots), pertes
-  sans abattage (heads-up) ; *Leakfinding*, *Mains de départ* (ce que rapporte chaque main, voir
-  plus bas), *Mon préflop*, *Mes spots*, *Face au solveur* (tes erreurs postflop, voir plus bas) et *Tables à
-  plusieurs*. *Mon préflop* compare tes décisions préflop à la solution heads-up, ou, aux tables à plusieurs (choix
-  *Heads-up* / *Tables à plusieurs* en haut de la page, retenu avec celui du Leakfinding), à tes charts avec les mêmes
-  cartes : un nœud par situation et positions (premier à parler, face à l'open de telle position, face au 3bet après
-  ton open), avec la grille de la stratégie, tes fréquences face aux charts et tes écarts main par main ; une table
-  sans charts à elle prend ceux du 6-max à même nombre de joueurs derrière, et les mains contre les récréatifs sont
+  sans abattage (heads-up) ; *Leakfinding*, *Mains de départ* (ce que rapporte chaque main, voir plus bas), *Mon
+  préflop*, *Mes spots*, *Face au solveur* (tes erreurs postflop, voir plus bas) et *Tables à plusieurs*. *Mon
+  préflop* compare tes décisions préflop à la solution heads-up, ou, aux tables à plusieurs (choix *Heads-up* /
+  *Tables à plusieurs* en haut de la page, retenu avec celui du Leakfinding), à tes charts avec les mêmes cartes :
+  un nœud par situation et positions (premier à parler, face à l'open de telle position, face au 3bet après ton
+  open), avec la grille de la stratégie, tes fréquences face aux charts et tes écarts main par main ; une table sans
+  charts à elle prend ceux du 6-max à même nombre de joueurs derrière, et les mains contre les récréatifs sont
   exclues.
 - **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Réguliers* et *Récréatifs* : le
   leakfinding de ceux que tu croises le plus, chacun avec ses leaks à exploiter et ce que montrent ses lignes, puis
@@ -72,13 +73,15 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
 - **Importer des mains** : glisse tes historiques ou choisis-les — des fichiers `.txt`, un dossier (avec ses
   sous-dossiers) ou une **archive `.zip`** avec ses dossiers (et les archives qu'elle contient). Chaque historique
   qui apporte des mains entre dans la base de données (son texte d'origine compris, voir « Base de données ») ; les
-  doublons, les formats non reconnus et les autres fichiers de l'archive (PDF, images…) sont signalés. Une
-  archive : 20 000 historiques et 1 Go décompressé au plus, 200 Mo par envoi (une archive de 150 Mo environ). Le
-  dossier des mains (`hands/` par défaut) reste une boîte d'arrivée : un historique ou un `.zip` qu'on y dépose
-  est importé au lancement de l'application. Sous l'import, **tes historiques importés** (site, format, mains,
-  dates) : *Retirer* efface leurs mains de la base et des analyses (une main présente aussi dans un autre historique
-  reste) ; l'historique est gardé pour être *rétabli*, et le réimporter le rétablit aussi (resté dans la boîte
-  d'arrivée, il n'est pas réimporté au lancement).
+  doublons, les formats non reconnus et les autres fichiers de l'archive (PDF, images…) sont signalés. Une archive :
+  20 000 historiques et 1 Go décompressé au plus, 200 Mo par envoi (une archive de 150 Mo environ). Le dossier des
+  mains (`hands/` par défaut) reste une boîte d'arrivée : un historique ou un `.zip` qu'on y dépose est importé au
+  lancement de l'application. Une **barre d'avancement** suit l'import : lecture et envoi des fichiers, lecture des
+  historiques (fichier par fichier, mains lues sur le total), puis mise à jour de tes analyses (mains relues), avec
+  le temps qu'il reste ; on peut quitter la page et y revenir, un seul import à la fois. Sous l'import, **tes
+  historiques importés** (site, format, mains, dates) : *Retirer* efface leurs mains de la base et des analyses (une
+  main présente aussi dans un autre historique reste) ; l'historique est gardé pour être *rétabli*, et le réimporter
+  le rétablit aussi (resté dans la boîte d'arrivée, il n'est pas réimporté au lancement).
 
 Options : `--dossier` (dossier des historiques), `--port`, `--hero`, `--sans-navigateur`.
 Les analyses sont calculées à la première ouverture d'une page puis gardées en mémoire ; un import les recalcule.
@@ -1082,12 +1085,14 @@ pèse environ 0,9 Ko par main, historique d'origine compris.
 
 ### Cache des calculs
 
-Les calculs longs et toujours identiques sont gardés dans `~/.analyzer/cache/analyses.sqlite` : les mains lues
-(par fichier d'historique : un fichier inchangé ne se relit pas), les équités (abattages, tapis préflop) et les clés
-du spot postflop de chaque main (pour savoir si elle est déjà analysée sans reconstruire son arbre). Ce cache n'est
-pas sauvegardé : il se reconstruit tout seul, et on peut l'effacer sans rien perdre. `ANALYZER_CACHE=0` le coupe.
-Ordre de grandeur (4 cœurs) : les douze pages de *Mon jeu* et d'un adversaire se calculent en 1 seconde environ
-avec 793 mains (au lieu de 45) et en 6 à 7 secondes avec 8 000 mains, puis restent en mémoire.
+Les calculs longs et toujours identiques sont gardés dans `~/.analyzer/cache/analyses.sqlite` : les mains lues (par
+fichier d'historique : un fichier inchangé ne se relit pas), les équités (abattages, tapis préflop) et les clés du
+spot postflop de chaque main (pour savoir si elle est déjà analysée sans reconstruire son arbre) ; avec une base en
+ligne (PostgreSQL), les mains de chaque espace aussi (une base locale se relit aussi vite, sans recopier toutes les
+mains dans le cache après chaque import). Ce cache n'est pas sauvegardé : il se reconstruit tout seul, et on peut
+l'effacer sans rien perdre. `ANALYZER_CACHE=0` le coupe. Ordre de grandeur (4 cœurs) : les douze pages de *Mon jeu*
+et d'un adversaire se calculent en 1 seconde environ avec 793 mains (au lieu de 45) et en 6 à 7 secondes avec 8 000
+mains, puis restent en mémoire.
 
 Les pages restent légères quel que soit le nombre de mains : dans l'application, *Spots* ne contient plus les
 mains (le serveur filtre, trie et envoie la liste par pages de 150, puis le détail d'une main quand on l'ouvre :
@@ -1165,7 +1170,8 @@ analyzer/
                        (synthesis.py), son rapport PDF (report_pdf.py) et sa présentation (report_pptx.py),
                        entraîneur (trainer.py, static/trainer.*), plan de jeu suggéré (plan_page.py), coach
                        (coach_chat.py, static/coach.*) et son serveur MCP pour l'abonnement Claude
-                       (mcp_server.py), sauvegardes en arrière-plan (backups.py), interface
+                       (mcp_server.py), sauvegardes en arrière-plan (backups.py), avancement d'un import
+                       (import_job.py), interface
                        (static/, dont l'explorateur explorer.*)
   backup.py            sauvegarde et restauration de la base et des études (commande `sauvegarde`)
   blobs.py             stockage des gros fichiers (arbres des études) : un dossier ici, un stockage objet en ligne

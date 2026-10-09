@@ -116,12 +116,15 @@ def hand_line(hand: Hand, tags: dict[str, str], villain: str) -> list[tuple[str,
 
 # --- Graphique -------------------------------------------------------------------
 
+# Les couleurs des trackers : résultat réel en vert, EV all-in en jaune, à l'abattage en bleu, sans abattage en rouge.
 SERIES = [
-    ("Résultat réel", "--series-1"),
-    ("EV all-in", "--series-2"),
-    ("À l'abattage", "--series-3"),
-    ("Sans abattage", "--series-4"),
+    ("Résultat réel", "--curve-real"),
+    ("EV all-in", "--curve-ev"),
+    ("À l'abattage", "--curve-sd"),
+    ("Sans abattage", "--curve-nosd"),
 ]
+END_LABELS = ["Réel", "EV all-in", "Abattage", "Sans abattage"]  # en bout de courbe, avec le cumul
+END_GAP = 14  # écart minimum entre deux étiquettes de bout de courbe
 
 
 CHART_POINTS = 1500  # au-delà, la courbe garde les creux et les sommets de chaque tranche de mains
@@ -147,10 +150,28 @@ def chart_sample(curve: list[tuple[float, ...]], limit: int = CHART_POINTS) -> l
     return sorted(keep)
 
 
+def spread_labels(ends: list[tuple[int, float]], top: float, bottom: float, gap: float = END_GAP) -> dict[int, float]:
+    """La hauteur des étiquettes de bout de courbe ({courbe: y}) : chacune à la hauteur de sa courbe, écartées d'au
+    moins gap (descendues l'une sous l'autre, puis remontées si la dernière déborde en bas)."""
+    order = sorted(ends, key=lambda e: e[1])
+    ys: list[float] = []
+    for _, y in order:
+        ys.append(max(y, top) if not ys else max(y, ys[-1] + gap))
+    if ys and ys[-1] > bottom:
+        ys[-1] = bottom
+        for k in range(len(ys) - 2, -1, -1):
+            ys[k] = min(ys[k], ys[k + 1] - gap)
+    return {s: y for (s, _), y in zip(order, ys)}
+
+
 def chart_svg(curve: list[tuple[float, ...]]) -> str:
     if not curve:
         return ""
-    width, height, pad_l, pad_r, pad_t, pad_b = 880, 300, 56, 16, 16, 32
+    last = curve[-1]
+    values_end = [num(last[s], 0, sign=True) for s in range(len(SERIES))]
+    longest = max(len(f"{END_LABELS[s]} {values_end[s]}") for s in range(len(SERIES)))
+    # à droite, la place des étiquettes de bout de courbe (6,4 unités par caractère en 11 px : large)
+    width, height, pad_l, pad_r, pad_t, pad_b = 880, 300, 56, round(20 + 6.4 * longest), 16, 32
     values = [v for point in curve for v in point] + [0.0]
     lo, hi = min(values), max(values)
     step = _nice_step((hi - lo) / 5 or 1)
@@ -177,9 +198,17 @@ def chart_svg(curve: list[tuple[float, ...]]) -> str:
         xticks.append(f'<text class="tick" x="{x(i):.1f}" y="{height - 10}" text-anchor="middle">{i}</text>')
     lines = []
     kept = chart_sample(curve)
-    for s, (_, var) in enumerate(SERIES):
+    for s in reversed(range(len(SERIES))):  # le résultat réel par-dessus les autres
         pts = " ".join(f"{x(i):.1f},{y(curve[i][s]):.1f}" for i in kept)
-        lines.append(f'<polyline class="line" data-series="{s}" style="stroke:var({var})" points="{pts}"/>')
+        lines.append(f'<polyline class="line" data-series="{s}" style="stroke:var({SERIES[s][1]})" points="{pts}"/>')
+    # En bout de courbe : son nom et son cumul (relié à la courbe quand les étiquettes s'écartent).
+    xe = width - pad_r
+    placed = spread_labels([(s, y(last[s])) for s in range(len(SERIES))], pad_t + 4, height - pad_b - 4)
+    ends = "".join(
+        f'<g class="end" data-end="{s}"><line class="lead" x1="{xe}" y1="{y(last[s]):.1f}" x2="{xe + 8}" '
+        f'y2="{placed[s]:.1f}"/><circle cx="{xe}" cy="{y(last[s]):.1f}" r="4" style="fill:var({var})"/>'
+        f'<text x="{xe + 12}" y="{placed[s] + 4:.1f}">{END_LABELS[s]} <tspan class="v">{values_end[s]}</tspan></text></g>'
+        for s, (_, var) in enumerate(SERIES))
     data = json.dumps([[round(v, 1) for v in curve[i]] for i in kept])
     sampled = f" data-idx='{json.dumps(kept)}' data-n=\"{n}\"" if len(kept) < n else ""
     # Le script redessine l'axe vertical et les courbes quand on en masque (cases de la légende).
@@ -188,7 +217,7 @@ def chart_svg(curve: list[tuple[float, ...]]) -> str:
   data-y0="{pad_t}" data-y1="{height - pad_b}">
   <svg viewBox="0 0 {width} {height}" role="img" aria-label="Résultat cumulé en big blinds, main par main">
     <g class="yaxis">{''.join(grid)}</g>{''.join(xticks)}
-    {''.join(lines)}
+    {''.join(lines)}<g class="ends">{ends}</g>
     <line class="cross" x1="0" x2="0" y1="{pad_t}" y2="{height - pad_b}" visibility="hidden"/>
     <rect class="hit" x="{pad_l}" y="{pad_t}" width="{width - pad_l - pad_r}" height="{height - pad_t - pad_b}"/>
   </svg>
@@ -845,6 +874,7 @@ STYLE = """:root {
   --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
   --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
   --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+  --curve-real: #008300; --curve-ev: #eda100; --curve-sd: #2a78d6; --curve-nosd: #e34948;
   --alert: #d03b3b; --alert-bg: rgba(208,59,59,0.08); --good: #006300;
   --hi-bg: rgba(235,104,52,0.14); --lo-bg: rgba(42,120,214,0.12);
   --sc: #0b0b0b; --sh: #d03b3b; --sd: #2a78d6; --sclub: #008300;
@@ -856,6 +886,7 @@ STYLE = """:root {
     --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
     --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+    --curve-real: #008300; --curve-ev: #c98500; --curve-sd: #3987e5; --curve-nosd: #e34948;
     --alert: #e66767; --alert-bg: rgba(230,103,103,0.12); --good: #0ca30c;
     --hi-bg: rgba(217,89,38,0.22); --lo-bg: rgba(57,135,229,0.22);
     --sc: #ffffff; --sh: #e66767; --sd: #6da7ec; --sclub: #0ca30c;
@@ -867,6 +898,7 @@ STYLE = """:root {
   --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
   --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+  --curve-real: #008300; --curve-ev: #c98500; --curve-sd: #3987e5; --curve-nosd: #e34948;
   --alert: #e66767; --alert-bg: rgba(230,103,103,0.12); --good: #0ca30c;
   --hi-bg: rgba(217,89,38,0.22); --lo-bg: rgba(57,135,229,0.22);
   --sc: #ffffff; --sh: #e66767; --sd: #6da7ec; --sclub: #0ca30c;
@@ -920,6 +952,11 @@ table.duel tr.ok .lvl { color: var(--good); font-weight: 700; }
 .chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .chart .cross { stroke: var(--axis); stroke-width: 1; }
 .chart .hit { fill: transparent; cursor: crosshair; }
+.chart .end { pointer-events: none; }
+.chart .end text { fill: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .end .v { fill: var(--ink); font-weight: 600; }
+.chart .end circle { stroke: var(--surface); stroke-width: 2; }
+.chart .end .lead { stroke: var(--axis); stroke-width: 1; }
 .tooltip { position: absolute; top: 8px; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 170px; }
 .tooltip .row { display: flex; align-items: center; gap: 8px; }
 .tooltip .row i { width: 14px; height: 2px; display: inline-block; }
@@ -1112,8 +1149,7 @@ document.querySelectorAll('.chart').forEach(function (chart) {
   var svg = chart.querySelector('svg'), hit = chart.querySelector('.hit');
   var cross = chart.querySelector('.cross'), tip = chart.querySelector('.tooltip');
   var x0 = +chart.dataset.x0, x1 = +chart.dataset.x1, y0 = +chart.dataset.y0, y1 = +chart.dataset.y1;
-  var names = ['Résultat réel', 'EV all-in', "À l'abattage", 'Sans abattage'];
-  var vars = ['--series-1', '--series-2', '--series-3', '--series-4'];
+  var names = __NAMES__, vars = __VARS__, GAP = __GAP__;
   var shown = names.map(function () { return true; });
   function fmt(v) { return (v > 0 ? '+' : '') + v.toFixed(0).replace('-', '\\u2212') + ' bb'; }
   // Courbes masquées (cases de la légende) : l'échelle verticale suit celles qui restent ; le choix est gardé.
@@ -1151,6 +1187,28 @@ document.querySelectorAll('.chart').forEach(function (chart) {
       var s = +pl.dataset.series;
       pl.style.display = shown[s] ? '' : 'none';
       if (shown[s]) pl.setAttribute('points', pts.map(function (p, i) { return x(i).toFixed(1) + ',' + y(p[s]).toFixed(1); }).join(' '));
+    });
+    placeEnds(y);
+  }
+  // Étiquettes de bout de courbe : à la hauteur de leur courbe, écartées d'au moins GAP (comme spread_labels).
+  function placeEnds(y) {
+    var ends = [], last = pts[pts.length - 1];
+    svg.querySelectorAll('g.end').forEach(function (g) {
+      var s = +g.dataset.end;
+      g.style.display = shown[s] ? '' : 'none';
+      if (shown[s]) ends.push({ g: g, y: y(last[s]) });
+    });
+    ends.sort(function (a, b) { return a.y - b.y; });
+    ends.forEach(function (e, k) { e.at = k ? Math.max(e.y, ends[k - 1].at + GAP) : Math.max(e.y, y0 + 4); });
+    if (ends.length && ends[ends.length - 1].at > y1 - 4) {
+      ends[ends.length - 1].at = y1 - 4;
+      for (var k = ends.length - 2; k >= 0; k--) ends[k].at = Math.min(ends[k].at, ends[k + 1].at - GAP);
+    }
+    ends.forEach(function (e) {
+      var lead = e.g.querySelector('line');
+      e.g.querySelector('circle').setAttribute('cy', e.y.toFixed(1));
+      lead.setAttribute('y1', e.y.toFixed(1)); lead.setAttribute('y2', e.at.toFixed(1));
+      e.g.querySelector('text').setAttribute('y', (e.at + 4).toFixed(1));
     });
   }
   try {
@@ -1204,4 +1262,5 @@ document.querySelectorAll('.chart').forEach(function (chart) {
   });
   svg.addEventListener('blur', function () { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); });
 });
-"""
+""".replace("__NAMES__", json.dumps([name for name, _ in SERIES], ensure_ascii=False)).replace(
+    "__VARS__", json.dumps([var for _, var in SERIES])).replace("__GAP__", str(END_GAP))

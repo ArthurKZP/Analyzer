@@ -17,7 +17,7 @@ import hashlib
 import json
 import zlib
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from .. import store
 from ..models import Hand, hand_from_dict, hand_to_dict
@@ -97,12 +97,14 @@ def _insert_hands(db: Database, space_id: int, file_id: Optional[int], hands: li
 
 
 def import_text(db: Database, space_id: int, name: str, text: str, path: Optional[str] = None,
-                size: Optional[int] = None, mtime: Optional[int] = None) -> tuple[list[Hand], int, bool]:
-    """Importe un historique : (ses mains, combien sont nouvelles, déjà importé ?). ValueError : format inconnu."""
+                size: Optional[int] = None, mtime: Optional[int] = None,
+                on_hands: Optional[Callable[[int], None]] = None) -> tuple[list[Hand], int, bool]:
+    """Importe un historique : (ses mains, combien sont nouvelles, déjà importé ?). ValueError : format inconnu.
+    on_hands(n) : n mains lues (l'avancement d'un import)."""
     from ..parsers import parse_text
     digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
     existing = db.one("SELECT id, retire_le FROM fichiers WHERE espace_id = ? AND empreinte = ?", (space_id, digest))
-    hands = parse_text(text)  # ValueError : format non reconnu
+    hands = parse_text(text, on_hands)  # ValueError : format non reconnu
     if existing is not None and existing[1] is not None and path is None:  # retiré, puis importé à nouveau
         return hands, restore_file(db, space_id, existing[0]), False
     if existing is not None:
@@ -258,22 +260,34 @@ def _reread_outdated(db: Database, space_id: int, version: str) -> None:
                                _participants(row[0], h))
 
 
-def load(db: Database, space_id: int) -> list[Hand]:
-    """Les mains de l'espace, dans l'ordre chronologique (gardées aussi dans le cache des calculs, tant que l'espace
-    ne change pas)."""
+def load(db: Database, space_id: int, progress: Optional[Callable[[int, int], None]] = None) -> list[Hand]:
+    """Les mains de l'espace, dans l'ordre chronologique ; progress(k, n) : k mains relues sur n, toutes les 1 000.
+
+    Une base distante (PostgreSQL) les garde aussi dans le cache des calculs, tant que l'espace ne change pas ; une
+    base locale se relit aussi vite que ce cache, sans le réécrire en entier après chaque import."""
     version = reader_version()
     if db.value("SELECT 1 FROM mains WHERE espace_id = ? AND lecture != ? LIMIT 1", (space_id, version)):
         _reread_outdated(db, space_id, version)
     n, last = db.one("SELECT COUNT(*), MAX(id) FROM mains WHERE espace_id = ?", (space_id,))
+    cached_space = db.dialect != "sqlite"
+    if not cached_space:
+        store.forget_prefix("mains", f"{db.url}|{space_id}|")  # une copie d'avant : la place est rendue
     if not n:
         return []
     key = f"{db.url}|{space_id}|{n}|{last}|{version}"
-    cached = store.get("mains", key)
+    cached = store.get("mains", key) if cached_space else None
     if cached is not None:
         return cached[1]
-    hands = [hand_from_dict(_unpack(blob)) for (blob,) in
-             db.all("SELECT donnees FROM mains WHERE espace_id = ?", (space_id,))]
+    rows = db.all("SELECT donnees FROM mains WHERE espace_id = ?", (space_id,))
+    hands = []
+    for k, (blob,) in enumerate(rows):
+        hands.append(hand_from_dict(_unpack(blob)))
+        if progress is not None and k % 1000 == 0:
+            progress(k, len(rows))
+    if progress is not None:
+        progress(len(rows), len(rows))
     hands.sort(key=lambda h: (h.date, h.hand_id))
-    store.forget_prefix("mains", f"{db.url}|{space_id}|")  # l'ancienne version de l'espace
-    store.put("mains", key, (key, hands))
+    if cached_space:
+        store.forget_prefix("mains", f"{db.url}|{space_id}|")  # l'ancienne version de l'espace
+        store.put("mains", key, (key, hands))
     return hands

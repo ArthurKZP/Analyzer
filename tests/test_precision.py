@@ -107,15 +107,24 @@ class RefineTest(HomeTest):
 
 class ChartTest(unittest.TestCase):
     def test_legend_and_chart(self):
-        from analyzer.report import SCRIPT, chart_svg, legend
+        from analyzer.report import SCRIPT, chart_svg, legend, spread_labels
         curve = [(0.0, 0.0, 0.0, 0.0), (5.0, 3.0, 8.0, -3.0), (2.0, 4.0, 6.0, -4.0)]
         html = legend(curve)
         self.assertEqual(html.count('type="checkbox" checked'), 4)
+        self.assertIn("var(--curve-nosd)", html)  # sans abattage : la couleur rouge des trackers
         svg = chart_svg(curve)
         self.assertIn('<g class="yaxis">', svg)
         self.assertEqual(svg.count("data-series="), 4)
         self.assertIn('data-y0="16"', svg)
+        self.assertEqual(svg.count('<g class="end"'), 4)  # en bout de courbe : son nom et son cumul
+        self.assertIn('Sans abattage <tspan class="v">\u22124</tspan>', svg)
+        self.assertLess(svg.index('data-series="3"'), svg.index('data-series="0"'))  # le réel par-dessus
         self.assertIn("analyzer.courbes-masquees", SCRIPT)
+        self.assertIn('"--curve-real"', SCRIPT)
+        # étiquettes trop proches : écartées, et la dernière remontée dans le graphique
+        placed = spread_labels([(0, 100.0), (1, 104.0), (2, 200.0), (3, 290.0)], 20.0, 284.0)
+        self.assertEqual(placed, {0: 100.0, 1: 114.0, 2: 200.0, 3: 284.0})
+        self.assertEqual(spread_labels([(0, 280.0), (1, 282.0)], 20.0, 284.0), {0: 270.0, 1: 284.0})
 
 
 if __name__ == "__main__":

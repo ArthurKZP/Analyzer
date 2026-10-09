@@ -49,6 +49,10 @@ def looks_like(text: str) -> bool:
     return HAND_SEPARATOR in text and "Site: Betclic" in text
 
 
+def count_hands(text: str) -> int:
+    return text.count(HAND_SEPARATOR)
+
+
 def split_hands(text: str) -> Iterator[str]:
     for chunk in text.split(HAND_SEPARATOR):
         if chunk.strip():

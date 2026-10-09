@@ -8,7 +8,7 @@ import zipfile
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from .. import store
 from ..models import Hand
@@ -21,11 +21,27 @@ MAX_ZIP_SIZE = 1024 ** 3       # 1 Go une fois décompressée (garde-fou contre 
 MAX_ZIP_DEPTH = 2              # archives dans l'archive
 
 
-def parse_text(text: str) -> list[Hand]:
+def parse_text(text: str, on_hands: Optional[Callable[[int], None]] = None) -> list[Hand]:
+    """Les mains d'un historique (ValueError : format non reconnu) ; on_hands(n) : n mains lues, toutes les 100."""
     for parser in PARSERS:
         if parser.looks_like(text):
-            return list(parser.parse(text))
+            if on_hands is None:
+                return list(parser.parse(text))
+            hands = []
+            for hand in parser.parse(text):
+                hands.append(hand)
+                if len(hands) % 100 == 0:
+                    on_hands(len(hands))
+            return hands
     raise ValueError("Format d'historique non reconnu (sites supportés : Betclic, Winamax, Unibet).")
+
+
+def count_hands(text: str) -> int:
+    """Combien de mains compte un historique, vite (sans le lire) : l'avancement d'un import ; 0 si format inconnu."""
+    for parser in PARSERS:
+        if parser.looks_like(text):
+            return parser.count_hands(text)
+    return 0
 
 
 def decode(data: bytes) -> str:

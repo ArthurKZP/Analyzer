@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from analyzer.app.import_job import FINISH_COST, READ_COST, ImportJob
 from analyzer.app.library import Library, UnknownPlayer
 from analyzer.app.server import start
 
@@ -174,6 +175,38 @@ class LibraryTest(IsolatedHome):
         self.assertEqual(files, [("piege.txt", 4)])  # le nom d'origine ne sert jamais de chemin
         self.assertEqual(result["state"]["hands"], 4)
         self.assertEqual(lib.import_files([{"name": "x.txt", "content": content}])["added"], 0)
+
+    def test_import_progress(self):
+        job = ImportJob("essai", known=100)  # 100 mains déjà là ; lire une main coûte READ_COST fois la relire
+        job.plan([10, 30])
+        job.reading(5)
+        self.assertEqual(job.view()["progress"], round(5 * READ_COST / (40 * READ_COST + 140 * (1 + FINISH_COST)), 3))
+        job.file_done(10)
+        job.reading(30)
+        job.file_done(30)
+        self.assertEqual(job.view()["hands"], [40, 40])
+        job.loading(70, 120)  # des doublons : 120 mains à relire, pas 140
+        view = job.view()
+        self.assertEqual((view["step"], view["progress"]),
+                         ("analyses", round((40 * READ_COST + 70) / (40 * READ_COST + 120 * (1 + FINISH_COST)), 3)))
+        job.finish({"added": 20})
+        self.assertEqual((job.view()["state"], job.view()["progress"]), ("done", 1.0))
+
+    def test_import_in_background(self):
+        lib = Library(self.folder)
+        self.addCleanup(lib.solves.shutdown)
+        content = FIXTURE.read_text(encoding="utf-8")
+        job = lib.start_import([{"name": "a.txt", "content": content}, {"name": "vide.txt", "content": ""}])
+        self.assertEqual(job["step"], "lecture")
+        deadline = time.time() + 30
+        while lib.import_status(job["id"])["state"] == "running" and time.time() < deadline:
+            time.sleep(0.02)
+        done = lib.import_status(job["id"])
+        self.assertEqual((done["state"], done["progress"], done["step"]), ("done", 1.0, "analyses"))
+        self.assertEqual((done["files"], done["hands"], done["loaded"]), ([2, 2], [4, 4], [4, 4]))
+        self.assertEqual([f["status"] for f in done["result"]["files"]], ["importé", "vide"])
+        self.assertEqual(len(lib.hands), 4)
+        self.assertIsNone(lib.import_status("inconnu"))
 
 
 def make_zip(entries: dict) -> bytes:
@@ -455,6 +488,13 @@ class ServerTest(unittest.TestCase):
         body = json.dumps({"files": [{"name": "s.txt", "content": FIXTURE.read_text(encoding="utf-8")}]})
         status, _, data = self.request("POST", "/api/eleves/anna/import", body, headers)
         self.assertEqual((status, json.loads(data)["added"]), (200, 4))
+        job = json.loads(self.request("POST", "/api/eleves/anna/import/lancer", body, headers)[2])
+        deadline = time.time() + 20
+        while job["state"] == "running" and time.time() < deadline:
+            time.sleep(0.05)
+            job = json.loads(self.request("GET", f"/api/eleves/anna/import/{job['id']}")[2])
+        self.assertEqual((job["state"], job["result"]["added"]), ("done", 0))  # déjà dans sa base
+        self.assertEqual(self.request("GET", "/api/eleves/anna/import/inconnu")[0], 404)
         self.assertEqual([s["id"] for s in json.loads(self.request("GET", "/api/eleves")[2])], ["anna"])
         for page in ("leaks", "preflop", "solveur", "spots", "mains"):
             self.assertEqual(self.request("GET", f"/eleve/anna/{page}")[0], 200, page)
@@ -505,6 +545,18 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(data)["files"][0]["status"], "déjà importé")
         self.assertEqual(self.request("POST", "/api/import", "pas du json")[0], 400)
+        # en arrière-plan, avec son avancement (la barre de la page Importer)
+        status, _, data = self.request("POST", "/api/import/lancer", body, {"Content-Type": "application/json"})
+        job = json.loads(data)
+        self.assertEqual((status, job["state"] in ("running", "done")), (200, True))
+        deadline = time.time() + 20
+        while job["state"] == "running" and time.time() < deadline:
+            time.sleep(0.05)
+            job = json.loads(self.request("GET", f"/api/import/{job['id']}")[2])
+        self.assertEqual((job["state"], job["progress"]), ("done", 1.0))
+        self.assertEqual(job["result"]["files"][0]["status"], "déjà importé")
+        self.assertEqual(self.request("GET", "/api/import/inconnu")[0], 404)
+        self.assertEqual(self.request("POST", "/api/import/lancer", "pas du json")[0], 400)
 
 
 if __name__ == "__main__":

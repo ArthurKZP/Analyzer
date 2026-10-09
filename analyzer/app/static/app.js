@@ -482,7 +482,8 @@
         el('button', { type: 'button', class: 'link', onclick: () => reload(result) }, 'Relire le dossier'),
         ' (si tu y as déposé des historiques à la main)');
     const imported = el('div', { class: 'imported' });
-    showPanel(el('div', { class: 'import' }, drop, input, result, folder, imported));
+    showPanel(el('div', { class: 'import', 'data-owner': student || '' }, drop, input, result, folder, imported));
+    if (importing && importing.owner === (student || '') && importing.view) showProgress(importing.owner, importing.view);
     showFiles(imported, student);
   }
 
@@ -573,20 +574,116 @@
     });
   }
 
+  // L'import en cours (un à la fois) : à qui il est ('' : toi, sinon l'élève) et son dernier avancement, que la page
+  // Importer retrouve si on la quitte puis y revient.
+  let importing = null;
+  const count = (n) => Number(n || 0).toLocaleString('fr-FR');
+
+  function importResult(owner) {
+    const box = document.querySelector('.import');
+    return box && box.dataset.owner === owner ? box.querySelector('.result') : null;
+  }
+
+  // La barre d'avancement : l'étape, la part faite (0 à 1), le détail (non annoncés à chaque pas : aria-live off).
+  function showProgress(owner, view) {
+    if (!importing) return;  // un import déjà fini (en erreur)
+    importing.view = view;
+    const result = importResult(owner);
+    if (!result) return;
+    let box = result.querySelector('.progress');
+    if (!box) {
+      result.textContent = '';
+      box = el('div', { class: 'progress', 'aria-live': 'off' },
+        el('div', { class: 'progress-head' }, el('b', { class: 'progress-step' }), el('span', { class: 'progress-pct' })),
+        el('div', { class: 'progress-bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100' }, el('span')),
+        el('div', { class: 'progress-detail muted small' }));
+      result.append(box);
+    }
+    const pct = Math.floor(100 * Math.min(Math.max(view.value, 0), 1));
+    box.querySelector('.progress-step').textContent = view.step;
+    box.querySelector('.progress-pct').textContent = pct + ' %';
+    const bar = box.querySelector('.progress-bar');
+    bar.setAttribute('aria-valuenow', String(pct));
+    bar.setAttribute('aria-valuetext', view.step + ' : ' + pct + ' %');
+    bar.firstChild.style.width = pct + '%';
+    box.querySelector('.progress-detail').textContent = view.detail || '';
+  }
+
+  // POST avec l'avancement de l'envoi (fetch ne le donne pas) ; la réponse JSON, ou une erreur.
+  function postWithProgress(url, body, onProgress) {
+    return new Promise((ok, ko) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+      xhr.onload = () => {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (e) { /* réponse illisible */ }
+        if (xhr.status >= 200 && xhr.status < 300) ok(data); else ko(new Error(data.error || 'Import impossible.'));
+      };
+      xhr.onerror = () => ko(new Error('Le serveur ne répond pas.'));
+      xhr.send(body);
+    });
+  }
+
+  // Ce que fait le serveur : lire les historiques, puis mettre les analyses à jour ; et le temps qu'il reste, estimé
+  // d'après l'avancement depuis le début.
+  function jobView(job, student, started) {
+    const done = job.progress || 0;
+    const elapsed = (Date.now() - started) / 1000;
+    let left = '';
+    if (done > 0.05 && elapsed > 3) {
+      const s = Math.max(1, Math.round(elapsed * (1 - done) / done));
+      left = ' · encore environ ' + (s < 60 ? s + ' s' : Math.round(s / 60) + ' min');
+    }
+    if (job.step === 'analyses') {
+      return { step: student ? 'Mise à jour de ses analyses' : 'Mise à jour de tes analyses', value: 0.15 + 0.85 * done,
+        detail: count(job.loaded[0]) + ' mains relues sur ' + count(job.loaded[1]) + left };
+    }
+    const [files, total] = job.files, [hands, all] = job.hands;
+    return { step: 'Lecture des historiques', value: 0.15 + 0.85 * done,
+      detail: !total ? 'Préparation…' : 'Fichier ' + count(Math.min(files + 1, total)) + ' sur ' + count(total) + ' · '
+        + count(hands) + ' mains lues sur ' + count(all) + left };
+  }
+
+  // Importer : lire les fichiers (5 % de la barre), les envoyer (10 %), puis le serveur les lit et met les analyses à
+  // jour (85 %, son avancement demandé toutes les 0,4 s).
   async function upload(fileList, result, student) {
     if (!fileList || !fileList.length) {
       result.textContent = 'Aucun historique (.txt) ni archive .zip dans ce que tu as déposé.';
       return;
     }
-    result.textContent = 'Import en cours…';
+    const owner = student || '';
+    if (importing) {
+      (importResult(owner) || result).append(el('p', { class: 'small error' },
+        'Un import est déjà en cours : dépose ces fichiers quand il sera fini.'));
+      return;
+    }
+    importing = { owner, view: null };
+    const list = [...fileList];
     try {
-      const files = await Promise.all([...fileList].map(readUpload));
-      const url = student ? '/api/eleves/' + encodeURIComponent(student) + '/import' : '/api/import';
-      const res = await fetch(url, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Import impossible.');
+      let read = 0;
+      showProgress(owner, { step: 'Lecture des fichiers', value: 0, detail: '0 sur ' + count(list.length) });
+      const files = await Promise.all(list.map((f) => readUpload(f).then((item) => {
+        read += 1;
+        showProgress(owner, { step: 'Lecture des fichiers', value: 0.05 * read / list.length,
+          detail: count(read) + ' sur ' + count(list.length) });
+        return item;
+      })));
+      const base = student ? '/api/eleves/' + encodeURIComponent(student) + '/import' : '/api/import';
+      let job = await postWithProgress(base + '/lancer', JSON.stringify({ files }), (f) =>
+        showProgress(owner, { step: 'Envoi des fichiers', value: 0.05 + 0.1 * f, detail: Math.floor(100 * f) + ' %' }));
+      const started = Date.now();
+      while (job.state === 'running') {
+        showProgress(owner, jobView(job, student, started));
+        await new Promise((ok) => setTimeout(ok, 400));
+        const res = await fetch(base + '/' + encodeURIComponent(job.id));
+        const next = await res.json();
+        if (!res.ok) throw new Error(next.error || 'Import impossible.');
+        job = next;
+      }
+      if (job.state === 'error') throw new Error(job.error || 'Import impossible.');
+      const data = job.result;
       frame.dataset.src = '';
       if (student) {
         await loadStudents();
@@ -595,12 +692,18 @@
         state = data.state;
         renderSidebar();
       }
-      showImportResult(data, result, student);
-      const box = document.querySelector('.import .imported');
-      if (box) showFiles(box, student);
+      importing = null;
+      const box = importResult(owner);
+      if (box) {
+        showImportResult(data, box, student);
+        const files = document.querySelector('.import .imported');
+        if (files) showFiles(files, student);
+      }
     } catch (err) {
-      result.textContent = '';
-      result.append(el('p', { class: 'error' }, err.message || String(err)));
+      importing = null;
+      const box = importResult(owner) || result;
+      box.textContent = '';
+      box.append(el('p', { class: 'error' }, err.message || String(err)));
     }
   }
 

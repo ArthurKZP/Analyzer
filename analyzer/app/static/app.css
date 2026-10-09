@@ -111,6 +111,14 @@ a { color: var(--accent); }
 .primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 6px; padding: 7px 16px; font-weight: 600; cursor: pointer; }
 .link { background: none; border: 0; color: var(--accent); padding: 0; cursor: pointer; text-decoration: underline; }
 .result { margin-top: 16px; }
+.progress { max-width: 560px; }
+.progress-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.progress-pct { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.progress-bar { height: 8px; border-radius: 4px; background: var(--grid); overflow: hidden; }
+.progress-bar span { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--accent);
+  transition: width 0.3s ease; }
+.progress-detail { margin-top: 6px; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { .progress-bar span { transition: none; } }
 .imported { margin-top: 28px; }
 .imported h3 { font-size: 15px; margin: 0 0 8px; }
 .imported table { width: 100%; border-collapse: collapse; font-size: 13px; }

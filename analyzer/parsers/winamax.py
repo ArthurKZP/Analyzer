@@ -48,6 +48,10 @@ def looks_like(text: str) -> bool:
     return text.lstrip().startswith(START) or ("\n" + START) in text
 
 
+def count_hands(text: str) -> int:
+    return text.count("\n" + START) + text.lstrip().startswith(START)
+
+
 def parse(text: str) -> Iterator[Hand]:
     for chunk in re.split(r"\n(?=" + re.escape(START) + ")", text):
         if chunk.strip().startswith(START):

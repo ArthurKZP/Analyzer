@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import base64
 import binascii
+import secrets
 import threading
+import traceback
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from html import escape
 from pathlib import Path
@@ -19,7 +22,7 @@ from ..db import hands as db_hands
 from ..cli import detect_hero, unify_hero
 from ..lines import villain_lines
 from ..models import CALL, RAISE, Hand
-from ..parsers import read_zip
+from ..parsers import count_hands, read_zip
 from ..report import build_plan_page, build_report, format_switch, html_page
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
@@ -32,6 +35,7 @@ from . import bilan_page, synthesis
 from .report_pdf import build_pdf
 from .report_pptx import build_pptx
 from .bluffs_page import build_bluffs_page
+from .import_job import ImportJob
 from .field_leaks_page import build_group_page, build_list_page, build_player_page
 from .field_page import build_players_page
 from .settings_page import build_settings_page
@@ -131,6 +135,8 @@ class Library:
         self.api, self.pages = api, pages
         self.display_name: Optional[str] = None  # nom de l'élève (rapport)
         self._students: dict[str, Library] = {}
+        self._imports: dict[str, ImportJob] = {}  # les imports suivis (barre d'avancement), les derniers
+        self._import_pool: Optional[ThreadPoolExecutor] = None  # un import à la fois, en arrière-plan
         self.solves = solves or SolveQueue()
         self.backups = backups or Backups()
         self.coach = Coach(self)
@@ -139,10 +145,11 @@ class Library:
         self.reload()
 
     # --- chargement -------------------------------------------------------------
-    def reload(self) -> None:
-        """Importe les historiques nouveaux du dossier, puis lit les mains de l'espace dans la base."""
+    def reload(self, progress=None) -> None:
+        """Importe les historiques nouveaux du dossier, puis lit les mains de l'espace dans la base (progress(k, n) :
+        k mains relues sur n)."""
         db_hands.sync_folder(self.db, self.space_id, self.folder)
-        hands = db_hands.load(self.db, self.space_id)
+        hands = db_hands.load(self.db, self.space_id, progress)
         mapping = aliases.load()  # les pseudos regroupés sous un alias prennent son nom
         aliases.apply(hands, mapping)
         pseudos = Counter((h.hero, h.site) for h in hands if h.hero)  # tes pseudos, tels que tes historiques les marquent
@@ -1437,25 +1444,65 @@ class Library:
         return {"added": added, "files": self.files_view(), "state": self.summary()}
 
     # --- import -----------------------------------------------------------------
-    def import_files(self, files: list[dict]) -> dict:
+    def import_files(self, files: list[dict], job: Optional[ImportJob] = None) -> dict:
         """Importe dans la base les historiques reconnus (le texte d'origine est gardé ; un historique ou une main
-        déjà importés ne le sont pas deux fois).
+        déjà importés ne le sont pas deux fois) ; job : son avancement, pour la barre de la page Importer.
 
         Chaque fichier : {"name", "content"} (texte), ou {"name", "zip"} (archive zip en base64, dossiers compris :
         chacun de ses historiques s'importe comme un fichier)."""
+        items = files[:MAX_IMPORT_FILES]
+        if job is not None:  # les mains à lire, comptées d'abord (les archives s'ouvrent deux fois : c'est rapide)
+            job.plan([count_hands(text) for text in self._import_texts(items)])
         results: list[dict] = []
         added = 0
-        for item in files[:MAX_IMPORT_FILES]:
+        for item in items:
             name = str(item.get("name") or "fichier")[:200]
             if isinstance(item.get("zip"), str):
-                added += self._import_zip(name, item["zip"], results)
+                added += self._import_zip(name, item["zip"], results, job)
             else:
-                added += self._import_one(name, item.get("content"), results)
+                added += self._import_one(name, item.get("content"), results, job)
         if added:
-            self.reload()
+            self.reload(job.loading if job is not None else None)
         return {"files": results, "added": added, "state": self.summary()}
 
-    def _import_zip(self, name: str, data: str, results: list[dict]) -> int:
+    @staticmethod
+    def _import_texts(items: list[dict]):
+        """Les textes d'un import, archives ouvertes (ceux qui ne se lisent pas sont laissés de côté)."""
+        for item in items:
+            if isinstance(item.get("zip"), str):
+                try:
+                    yield from (text for _, text in read_zip(base64.b64decode(item["zip"], validate=True)).files)
+                except (binascii.Error, ValueError):
+                    continue
+            elif isinstance(item.get("content"), str):
+                yield item["content"]
+
+    def start_import(self, files: list[dict]) -> dict:
+        """Lance l'import en arrière-plan (un à la fois) ; son avancement se lit avec import_status."""
+        job = ImportJob(secrets.token_hex(8), db_hands.count(self.db, self.space_id))
+        with self._lock:
+            self._imports[job.id] = job
+            for old in list(self._imports)[:-10]:  # les 10 derniers
+                del self._imports[old]
+            if self._import_pool is None:
+                self._import_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="import")
+            pool = self._import_pool
+        pool.submit(self._run_import, job, files)
+        return job.view()
+
+    def _run_import(self, job: ImportJob, files: list[dict]) -> None:
+        try:
+            job.finish(self.import_files(files, job))
+        except Exception as exc:  # noqa: BLE001 — l'import échoue, la page le dit
+            traceback.print_exc()
+            job.fail(f"Import impossible : {exc}")
+
+    def import_status(self, job_id: str) -> Optional[dict]:
+        """L'avancement d'un import lancé par start_import (None : inconnu)."""
+        job = self._imports.get(job_id)
+        return job.view() if job is not None else None
+
+    def _import_zip(self, name: str, data: str, results: list[dict], job: Optional[ImportJob] = None) -> int:
         try:
             content = read_zip(base64.b64decode(data, validate=True))
         except binascii.Error:
@@ -1466,7 +1513,7 @@ class Library:
             results.append({"name": name, "status": reason, "hands": 0, "new": 0})
             return 0
         start = len(results)
-        added = sum(self._import_one(f"{name} › {path}"[:300], text, results) for path, text in content.files)
+        added = sum(self._import_one(f"{name} › {path}"[:300], text, results, job) for path, text in content.files)
         results.extend({"name": f"{name} › {path}"[:300], "status": "illisible (chiffré ou abîmé)", "hands": 0, "new": 0}
                        for path in content.unreadable)
         parts = [f"{len(content.files)} historique(s)"]
@@ -1476,17 +1523,23 @@ class Library:
                         "hands": sum(r["hands"] for r in results[start:]), "new": added})
         return added
 
-    def _import_one(self, name: str, content, results: list[dict]) -> int:
+    def _import_one(self, name: str, content, results: list[dict], job: Optional[ImportJob] = None) -> int:
         if not isinstance(content, str) or not content.strip():
             results.append({"name": name, "status": "vide", "hands": 0, "new": 0})
+            if job is not None and isinstance(content, str):
+                job.file_done(0)
             return 0
         try:
             # le nom d'origine n'est qu'une étiquette (jamais un chemin) : celui du fichier, ou sa place dans l'archive
             label = name if " › " in name else Path(name.replace("\\", "/")).name
-            hands, new, _ = db_hands.import_text(self.db, self.space_id, label, content)
+            hands, new, _ = db_hands.import_text(self.db, self.space_id, label, content,
+                                                 on_hands=job.reading if job is not None else None)
         except ValueError:
             results.append({"name": name, "status": "format non reconnu", "hands": 0, "new": 0})
             return 0
+        finally:
+            if job is not None:
+                job.file_done(count_hands(content))
         detail = {"sites": sorted({h.site for h in hands}), "formats": _formats(hands)}
         status = "importé" if new else "déjà importé"
         results.append(dict(detail, name=name, status=status, hands=len(hands), new=new))

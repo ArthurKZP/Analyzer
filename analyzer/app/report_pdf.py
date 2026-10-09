@@ -20,7 +20,8 @@ TOP, BOTTOM = 48.0, H - 54.0
 INK, INK2, MUTED = pw.rgb("#0b0b0b"), pw.rgb("#52514e"), pw.rgb("#898781")
 GRID, AXIS = pw.rgb("#e1e0d9"), pw.rgb("#c3c2b7")
 TILE = pw.rgb("#f4f3ef")
-ACCENT, ORANGE = pw.rgb("#2a78d6"), pw.rgb("#eb6834")
+ACCENT = pw.rgb("#2a78d6")
+REAL_LINE, EV_LINE = pw.rgb("#008300"), pw.rgb("#eda100")  # comme le graphique de l'application (trackers)
 WIN, LOSS = pw.rgb("#006300"), pw.rgb("#d03b3b")
 HI_BG, LO_BG = pw.rgb("#fbe1d6"), pw.rgb("#dde9f8")  # trop souvent, pas assez (et « solide », « indicatif »)
 WHITE = (1.0, 1.0, 1.0)
@@ -153,7 +154,7 @@ def table(flow: Flow, columns: Sequence[tuple[str, float, str]], rows: Sequence[
 
 def _head(flow: Flow) -> None:
     s, page = flow.s, flow.page
-    page.text(M, TOP, "ANALYZER · LEAKFINDING", "bold", 8.5, ACCENT)
+    page.text(M, TOP, f"{NAME.upper()} · LEAKFINDING", "bold", 8.5, ACCENT)
     page.text(W - M, TOP, f"Rapport du {s.generated:%d/%m/%Y}", "regular", 8.5, MUTED, align="right")
     page.text(M, TOP + 28, s.who, "bold", 22, INK)
     line = " · ".join(x for x in (s.format_label, f"{num(s.report.hands, 0)} mains", s.dates) if x)
@@ -216,12 +217,12 @@ def _curve(flow: Flow) -> None:
         page.line(left, py(tick), left + plot_w, py(tick), color, width)
         page.text(left - 5, py(tick) + 2.6, num(tick, 0), "regular", 7, MUTED, align="right")
         tick += step
-    page.polyline([(px(i), py(ev)) for i, _, ev in points], ORANGE, 1.0)
-    page.polyline([(px(i), py(net)) for i, net, _ in points], ACCENT, 1.5)
+    page.polyline([(px(i), py(ev)) for i, _, ev in points], EV_LINE, 1.0)
+    page.polyline([(px(i), py(net)) for i, net, _ in points], REAL_LINE, 1.5)
     page.text(left + plot_w, top + height - 4, f"{num(n, 0)} mains", "regular", 7, MUTED, align="right")
     page.text(left, top + height - 4, "0", "regular", 7, MUTED)
     x = left + 4
-    for label, color in (("Résultat réel", ACCENT), ("EV all-in", ORANGE)):
+    for label, color in (("Résultat réel", REAL_LINE), ("EV all-in", EV_LINE)):
         page.line(x, top + 6, x + 14, top + 6, color, 2)
         x += 18 + page.text(x + 18, top + 8.5, label, "regular", 7.5, INK2) + 14
     flow.y = top + height + 6
