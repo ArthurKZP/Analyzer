@@ -14,6 +14,9 @@ Gardés dans la base (réglage « parametres » du compte). Ils valent pour ton 
 - formats : les formats que tu joues, parmi « HU » (heads-up) et « ring » (tables de 3 à 9 joueurs) ; ceux que tu ne
   joues pas sortent des menus et des choix de format. None : tous ceux de tes mains.
 - min_hands : mains minimum contre un adversaire pour qu'il ait sa fiche dans l'Étude du field.
+- references : les joueurs de référence, [{"name": …, "pseudos": […]}] : un bon joueur dont tu as importé les
+  historiques (ses pseudos y sont marqués comme héros) ; ses mains sortent de tes analyses et il est étudié à part
+  (menu Joueurs de référence). Chaque pseudo n'appartient qu'à un joueur de référence.
 """
 from __future__ import annotations
 
@@ -24,10 +27,12 @@ from . import db
 KEY = "parametres"
 FORMATS = ("HU", "ring")
 FORMAT_NAMES = {"HU": "Heads-up", "ring": "Tables à plusieurs"}
-DEFAULTS = {"hero": None, "hero_excluded": [], "hero_added": [], "coach": None, "formats": None, "min_hands": 50}
+DEFAULTS = {"hero": None, "hero_excluded": [], "hero_added": [], "coach": None, "formats": None, "min_hands": 50,
+            "references": []}
 MIN_HANDS_RANGE = (10, 5000)
 MAX_NAME = 60      # caractères du nom
 MAX_PSEUDOS = 200  # pseudos retirés ou ajoutés
+MAX_REFERENCES = 20  # joueurs de référence
 
 
 def load() -> dict:
@@ -37,6 +42,47 @@ def load() -> dict:
     if isinstance(found, dict):
         out.update({k: v for k, v in found.items() if k in DEFAULTS})
     return out
+
+
+def _name(value: object, what: str) -> str:
+    value = " ".join(value.split()) if isinstance(value, str) else ""
+    if not 0 < len(value) <= MAX_NAME:
+        raise ValueError(f"{what} : de 1 à {MAX_NAME} caractères.")
+    return value
+
+
+def reference_id(name: str) -> str:
+    """L'identifiant d'un joueur de référence dans les adresses (son nom simplifié)."""
+    from .cli import slugify
+    return slugify(name)[:40] or "joueur"
+
+
+def _references(value: object) -> list[dict]:
+    if not isinstance(value, list) or len(value) > MAX_REFERENCES:
+        raise ValueError(f"Joueurs de référence : {MAX_REFERENCES} au plus.")
+    out, idents, owned = [], set(), set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"name", "pseudos"}:
+            raise ValueError("Joueur de référence invalide.")
+        name = _name(item["name"], "Le nom du joueur de référence")
+        pseudos = _pseudos(item["pseudos"])
+        if not pseudos:
+            raise ValueError(f"« {name} » : choisis au moins un pseudo.")
+        ident = reference_id(name)
+        if ident in idents:
+            raise ValueError(f"Deux joueurs de référence portent le nom « {name} ».")
+        if owned & set(pseudos):
+            raise ValueError(f"Le pseudo « {sorted(owned & set(pseudos))[0]} » est déjà celui d'un autre joueur de "
+                             "référence.")
+        idents.add(ident)
+        owned |= set(pseudos)
+        out.append({"name": name, "pseudos": pseudos})
+    return out
+
+
+def reference_pseudos(conf: dict) -> set[str]:
+    """Les pseudos des joueurs de référence (ils ne sont pas les tiens)."""
+    return {p for ref in conf["references"] for p in ref["pseudos"]}
 
 
 def _pseudos(value: object) -> list[str]:
@@ -54,9 +100,9 @@ def check(changes: object) -> dict:
     for key, value in changes.items():
         if key == "hero":
             if value is not None:
-                value = " ".join(value.split()) if isinstance(value, str) else ""
-                if not 0 < len(value) <= MAX_NAME:
-                    raise ValueError(f"Ton nom : de 1 à {MAX_NAME} caractères.")
+                value = _name(value, "Ton nom")
+        elif key == "references":
+            value = _references(value)
         elif key in ("hero_excluded", "hero_added"):
             value = _pseudos(value)
         elif key == "coach":

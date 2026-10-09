@@ -129,8 +129,9 @@ def _feature(board: list[str], street: str) -> Optional[str]:
     return coach.card_class(board[:n - 1], board[n - 1])
 
 
-def player_bets(hands: Iterable[Hand], names: Iterable[str]) -> list[Bet]:
-    """Toutes les mises et relances de ces joueurs après le flop, avec leur intention quand les cartes sont montrées."""
+def player_bets(hands: Iterable[Hand], names: Iterable[str], all_cards: bool = False) -> list[Bet]:
+    """Toutes les mises et relances de ces joueurs après le flop, avec leur intention quand les cartes sont montrées
+    (all_cards : dès qu'elles sont connues, même sans abattage — les mains d'un héros)."""
     names = set(names)
     out = []
     for h in hands:
@@ -149,7 +150,7 @@ def player_bets(hands: Iterable[Hand], names: Iterable[str]) -> list[Bet]:
             live = [p for p in h.seats if p not in folded]
             pct = 100.0 * a.amount / a.pot_before if a.kind == BET and a.pot_before else None
             bet = Bet(h, i, a.player, a.street, label, size, pct, times[i], _feature(h.board, a.street), len(live) > 2)
-            if known(h, a.player):
+            if known(h, a.player) or (all_cards and len(h.hole_cards.get(a.player, [])) == 2):
                 bet.intent, bet.description = intent_of(h.hole_cards[a.player], h.board[:BOARD_SIZE[a.street]], a.street)
             out.append(bet)
     return out

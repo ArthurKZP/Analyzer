@@ -117,6 +117,13 @@ SCRIPT = """
     me.querySelector('.st-add-go').addEventListener('click', add);
     me.querySelector('.st-add').addEventListener('keydown', function (e) { if (e.key === 'Enter') add(); });
   }
+  // le lien d'un joueur de référence : sa page, dans l'application
+  document.querySelectorAll('a[data-ref]').forEach(function (a) {
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (window.parent !== window) window.parent.location.hash = '#/references';
+    });
+  });
   var prec = document.querySelector('[data-precision]');
   if (prec) prec.addEventListener('change', function (e) {
     send('/api/precision', { precision: Number(e.target.value) }, prec);
@@ -139,8 +146,11 @@ def _hero_html(view: dict) -> str:
     for p in pseudos:
         where = ", ".join(p["sites"]) if p["sites"] else "ajouté par toi"
         detail = f"{escape(where)} · {num(p['hands'], 0)} mains"
+        if p.get("reference"):  # le pseudo d'un joueur de référence : étudié à part
+            detail += f' · joueur de référence : <a href="#" data-ref>{escape(p["reference"])}</a>'
         rows.append(f'<label class="st-opt"><input type="checkbox" class="st-pseudo" value="{escape(p["name"])}"'
-                    f'{" data-added" if p["added"] else ""}{" checked" if p["included"] else ""}>'
+                    f'{" data-added" if p["added"] else ""}{" checked" if p["included"] else ""}'
+                    f'{" disabled" if p.get("reference") else ""}>'
                     f'<span><b>{escape(p["name"])}</b> <span class="muted">{detail}</span></span></label>')
     if not pseudos:
         rows.append('<p class="note">Aucun pseudo marqué comme toi pour l\'instant : importe tes historiques.</p>')
@@ -167,9 +177,11 @@ placeholder="pseudo à ajouter">
 <div class="st-status" aria-live="polite"></div>
 <p class="note">Les pseudos que tes historiques marquent comme toi sont proposés et cochés d'office (un nouveau
 pseudo rejoint le regroupement tout seul). Décoche ceux qui ne sont pas toi (les mains d'un autre joueur importées chez
-toi) : leurs mains sortent de tes analyses ; recoche-les pour les remettre. Ajoute un pseudo à toi que tes historiques
-ne marquent pas : ses mains sans héros repéré rejoignent le regroupement. Le nom est libre, sauf celui d'un adversaire.
-Un adversaire qui a plusieurs pseudos se regroupe dans l'onglet <b>Joueurs et alias</b>.</p>
+toi) : leurs mains sortent de tes analyses ; recoche-les pour les remettre. Le pseudo d'un bon joueur dont tu as importé
+les mains peut devenir un <b>joueur de référence</b> (menu du même nom) : son jeu est étudié à part et comparé au tien.
+Ajoute un pseudo à toi que tes historiques ne marquent pas : ses mains sans héros repéré rejoignent le regroupement. Le
+nom est libre, sauf celui d'un adversaire. Un adversaire qui a plusieurs pseudos se regroupe dans l'onglet <b>Joueurs et
+alias</b>.</p>
 </div>"""
 
 

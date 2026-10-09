@@ -27,8 +27,8 @@ python -m analyzer app
 L'application s'ouvre dans ton navigateur (http://127.0.0.1:8765). Tout reste sur ton ordinateur :
 le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
 
-- **Menu latéral** : « Mon jeu », « Étude du field », « Études du solveur », « Entraîneur », « Élèves », « Importer
-  des mains », « Sauvegarde », « Paramètres » et la liste de tes adversaires (recherche sans tenir compte des accents,
+- **Menu latéral** : « Mon jeu », « Étude du field », « Joueurs de référence », « Études du solveur », « Entraîneur »,
+  « Élèves », « Importer des mains », « Sauvegarde », « Paramètres » et la liste de tes adversaires (recherche sans tenir compte des accents,
   tri par mains jouées, meilleur ou pire résultat, plus récents ou nom, filtre réguliers / récréatifs ; le tri et le
   filtre sont gardés d'une visite à l'autre), avec le nombre de mains et ton résultat contre chacun : ceux du
   heads-up (leur fiche) ou, au choix *Heads-up* / *À plusieurs*, ceux des tables à plusieurs vus au moins 10 mains
@@ -57,6 +57,8 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   leakfinding de ceux que tu croises le plus, chacun avec ses leaks à exploiter et ce que montrent ses lignes, puis
   sa fiche détaillée (voir *Étude du field : le leakfinding de tes adversaires*) ; *Bluffs des réguliers* (où ils
   bluffent en heads-up, ensemble puis un par un, voir plus bas).
+- **Joueurs de référence** : un bon joueur dont tu as importé les historiques, étudié pour apprendre de lui et
+  comparé à toi : *Toi et lui*, *Value et bluffs*, et son jeu analysé comme le tien (voir *Joueurs de référence*).
 - **Paramètres** : *Général* (tes pseudos réunis sous un nom, les formats que tu joues, coach ou non, le seuil de
   l'Étude du field, la précision du solveur) et *Joueurs et alias* : tes adversaires en heads-up et aux tables à
   plusieurs, réguliers et récréatifs, avec recherche, tri et leur type réglable (le même partout). **Alias** : un
@@ -791,6 +793,36 @@ agressif par nature), passif sous 30 % (35 %) avec moins de 40 % de folds face a
 prudent au-delà de 55 % de folds ou sous 18 % de VPIP (50 % en heads-up). Chaque groupe a sa fiche : son plan, ses
 joueurs et leurs chiffres, leurs leaks et leurs lignes réunis (« Quand un récréatif passif mise la river… »).
 
+## Joueurs de référence
+
+Menu **Joueurs de référence** : un bon joueur dont tu as importé les historiques — ceux où il est le héros, sur un ou
+plusieurs sites : toutes ses cartes y sont connues, pas seulement à l'abattage. Pour en créer un, coche ses pseudos
+(ceux que tes historiques marquent comme héros) et donne-lui un nom : ses mains sortent de tes analyses (ses pseudos
+sont décochés dans *Paramètres › Toi*, marqués « joueur de référence ») et il est étudié à part, sur toutes ses mains
+(sans période). *Retirer* le supprime ; ses pseudos restent hors des tiens, à recocher s'ils sont à toi. Au choix
+*Heads-up* / *Tables à plusieurs* (par défaut, le format où il a le plus de mains) :
+
+- **Toi et lui** : vos résultats côte à côte (winrate, sans et avec abattage, EV all-in), **ce qu'il fait
+  autrement** — vos fréquences qui s'écartent nettement (test de deux proportions à 90 %, au moins 20 occasions
+  chacun), les plus marquées d'abord, et qui de vous deux est dans le repère d'un régulier solide —, vos mains et vos
+  winrates **par position** (aux tables à plusieurs, avec VPIP, PFR et 3bet), puis **toutes vos fréquences** avec
+  l'écart et le repère (heads-up : les stats du rapport ; tables à plusieurs : celles de l'Étude du field). Tes mains
+  sont celles de la période choisie dans *Mon jeu*. Les winrates par position varient beaucoup d'un échantillon à
+  l'autre ; les fréquences se stabilisent bien plus vite : ce sont elles qui disent ce qu'il fait autrement.
+- **Value et bluffs** : chaque mise ou relance après le flop, rangée par street, ligne (c-bet, barrel, mise après
+  check, check-raise, relance…) et taille, avec ce qu'il avait au moment de miser — value (top paire ou mieux), value
+  fine (paire moyenne ou faible), semi-bluff (un tirage avant la river), bluff (rien) — en barre et en %, et la part de
+  ses mises qui ont fait coucher tout le monde ; les tiennes à côté. Ses cartes sont toujours connues : ses lignes se
+  lisent sans le biais de l'abattage (on ne voit pas seulement les mains payées). À la river, la part de bluffs d'une
+  range équilibrée pour sa taille de mise (un tiers pour une mise du pot). Puis ses bluffs et sa value fine les plus
+  récents, main par main (board, ses cartes, la suite, son résultat), à revoir au solveur quand il ne restait que
+  deux joueurs au flop.
+- **Bilan**, **Tables à plusieurs**, **Préflop**, **Mains de départ** : son jeu analysé comme le tien (« ton », « tes »
+  le désignent), courbe de résultats comprise.
+
+Code : `analyzer/reference.py` (résultats, comparaison, lignes), `analyzer/app/reference_page.py` (pages),
+`Library.reference` (ses mains, lues dans ton espace).
+
 ## Paramètres
 
 Menu **Paramètres**, onglet *Général* (gardé dans la base, pour ton espace : chaque élève garde son pseudo et tous
@@ -803,7 +835,8 @@ ses formats) :
   regroupement tout seul. Décoche ceux qui ne sont pas toi (les mains d'un autre joueur importées chez toi) : leurs
   mains sortent de tes analyses ; recoche-les pour les remettre. *Ajouter un pseudo* : un pseudo à toi que tes
   historiques ne marquent pas (proposé parmi les joueurs des mains sans héros repéré) ; ses mains sans héros repéré
-  rejoignent le regroupement. Il reste toujours au moins un pseudo coché.
+  rejoignent le regroupement. Il reste toujours au moins un pseudo coché. Le pseudo d'un **joueur de référence**
+  (menu du même nom) n'est jamais le tien : il apparaît décoché, avec le nom du joueur.
 - **Ce que tu joues** : heads-up et/ou tables à plusieurs. Un format que tu ne joues pas sort des menus : ses onglets
   (*Mes spots* et *Face au solveur* pour le heads-up, *Tables à plusieurs* sinon), le choix de format des pages (le
   bilan, le Leakfinding, Mon préflop, les mains de départ et l'Étude du field s'ouvrent sur l'autre), l'onglet
@@ -1167,7 +1200,8 @@ analyzer/
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
                        solveur » (review_page.py), leakfinding (leaks_page.py), bluffs des adversaires
                        (bluffs_page.py), étude du field (field_page.py : les joueurs et les alias ; field_leaks_page.py : le
-                       leakfinding des adversaires), paramètres (settings_page.py), bilan des tables à plusieurs
+                       leakfinding des adversaires), joueurs de référence (reference_page.py : toi et lui, sa value
+                       et ses bluffs), paramètres (settings_page.py), bilan des tables à plusieurs
                        (bilan_page.py), mains de départ (hands_page.py), synthèse du Leakfinding
                        (synthesis.py), son rapport PDF (report_pdf.py) et sa présentation (report_pptx.py),
                        entraîneur (trainer.py, static/trainer.*), plan de jeu suggéré (plan_page.py), coach
@@ -1181,7 +1215,10 @@ analyzer/
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
   field.py             étude du field : leaks à exploiter d'un adversaire, sa value et ses bluffs par ligne, style
                        des récréatifs (passif, agressif, prudent)
-  settings.py          tes paramètres : tes pseudos réunis, les formats que tu joues, coach, seuil du field
+  reference.py         joueurs de référence : vos résultats et vos fréquences côte à côte, ses lignes de value et de
+                       bluff avec toutes ses cartes connues
+  settings.py          tes paramètres : tes pseudos réunis, les formats que tu joues, coach, seuil du field, tes
+                       joueurs de référence
   aliases.py           alias : les pseudos d'un même joueur regroupés sous un nom (appliqué à la lecture des mains)
   period.py            période d'analyse : toutes les mains, les N dernières, les N derniers jours, d'une date à une autre
   pdfwriter.py         PDF sans dépendance : pages A4, texte Helvetica (accents), symboles des cartes, formes, courbes

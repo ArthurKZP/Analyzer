@@ -11,11 +11,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from html import escape
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import quote
 
 from .. import aliases, bluffs, db, field, handplay, leaks, players, ring, ring_leaks, settings, spots, store, students
 from .. import period as periods
+from .. import reference as refstudy
 from ..db import analyses as db_analyses
 from ..db import documents
 from ..db import hands as db_hands
@@ -41,6 +42,7 @@ from .field_page import build_players_page
 from .settings_page import build_settings_page
 from .hands_page import build_hands_page
 from .leaks_page import build_leaks_page
+from .reference_page import build_comparison_page, build_lines_page
 from .ring_page import build_ring_page
 from .plan_page import build_coach_page
 from .review_page import build_review_page
@@ -53,6 +55,8 @@ HEADS_UP_ONLY = ('<p class="note">Aucune main heads-up : cette page analyse tes 
                  'plusieurs (3 à 9 joueurs, ensemble) ont leur Leakfinding, leur préflop, leurs mains de départ et leurs '
                  'stats par position (onglet Tables à plusieurs).</p>')
 SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks", "tables", "mains")
+REFERENCE_PAGES = ("comparaison", "lignes", "bilan", "tables", "preflop", "mains")  # un joueur de référence
+REFERENCE_PREFIX = "ref:"  # sa période d'analyse se garde sous cette clé
 FIELD_PAGES = ("regs", "recs", "bluffs", "joueurs")  # Étude du field (« joueurs » : aussi dans Paramètres)
 MAX_IMPORT_FILES = 5000  # fichiers (ou archives zip) par import
 
@@ -89,6 +93,10 @@ def _ring_replay(hand: Hand) -> str:
             'rel="noopener">revoir ↗</a>')
 
 
+def _round(x: Optional[float], digits: int = 1) -> Optional[float]:
+    return None if x is None else round(x, digits)
+
+
 def _digest_count() -> int:
     """Le nombre de mains passées au solveur : les pages qui s'en servent sont recalculées quand il change."""
     return db_analyses.count(db.current())
@@ -106,15 +114,17 @@ class Library:
 
     def __init__(self, folder: Path | str, hero: Optional[str] = None, solves: Optional[SolveQueue] = None,
                  backups: Optional[Backups] = None, api: str = "/api", pages: str = "/moi", space: str = "moi",
-                 space_name: str = "Moi"):
+                 space_name: str = "Moi", source: Optional[Callable[[], list[Hand]]] = None):
         """folder : la boîte d'arrivée des historiques (importés dans la base au chargement) ; space : l'espace de la
         base (« moi », ou « eleve:<identifiant> ») ; solves, backups : ceux de la bibliothèque principale, partagés par
         celles des élèves (une résolution à la fois) ; api, pages : préfixes des adresses de ses pages et de leurs
-        actions."""
+        actions. source : les mains d'un joueur de référence, lues dans ton espace (pas d'espace à lui ; space ne sert
+        qu'à garder sa période) ; hero : son nom."""
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
         self.db = db.current()
-        self.space_id = db_hands.space(self.db, space, space_name, hero)
+        self._source = source
+        self.space_id = None if source is not None else db_hands.space(self.db, space, space_name, hero)
         self.space_key = space
         self.period = periods.load(space)  # la période d'analyse de l'espace (toutes les mains par défaut)
         self._period_day = date.today()
@@ -135,6 +145,8 @@ class Library:
         self.api, self.pages = api, pages
         self.display_name: Optional[str] = None  # nom de l'élève (rapport)
         self._students: dict[str, Library] = {}
+        self._references: dict[str, Library] = {}  # les joueurs de référence ouverts
+        self._reference_hands: dict[str, list[Hand]] = {}  # leurs mains (nom -> mains), lues avec les tiennes
         self._imports: dict[str, ImportJob] = {}  # les imports suivis (barre d'avancement), les derniers
         self._import_pool: Optional[ThreadPoolExecutor] = None  # un import à la fois, en arrière-plan
         self.solves = solves or SolveQueue()
@@ -148,6 +160,8 @@ class Library:
     def reload(self, progress=None) -> None:
         """Importe les historiques nouveaux du dossier, puis lit les mains de l'espace dans la base (progress(k, n) :
         k mains relues sur n)."""
+        if self._source is not None:  # un joueur de référence : ses mains, lues avec les tiennes
+            return self._reload_reference()
         db_hands.sync_folder(self.db, self.space_id, self.folder)
         hands = db_hands.load(self.db, self.space_id, progress)
         mapping = aliases.load()  # les pseudos regroupés sous un alias prennent son nom
@@ -155,6 +169,8 @@ class Library:
         pseudos = Counter((h.hero, h.site) for h in hands if h.hero)  # tes pseudos, tels que tes historiques les marquent
         seen = Counter(name for h in hands for name in h.seats)  # tous les joueurs (ton nom n'est pas le leur)
         unmarked = Counter(name for h in hands if not h.hero for name in h.seats)
+        if self.is_me:  # les mains de tes joueurs de référence : à part (Paramètres)
+            hands = self._take_references(hands)
         if self.is_me and not self.hero_override:  # tes pseudos réunis sous ton nom (Paramètres)
             hero, mine = self._group_me(hands, pseudos, settings.load())
         else:  # --hero (ligne de commande) ou le pseudo de l'élève, sinon le plus fréquent : ses pseudos sous celui-là
@@ -171,11 +187,48 @@ class Library:
             self.players_seen, self.unmarked_seen = seen, unmarked
             self._select()
 
+    def _take_references(self, hands: list[Hand]) -> list[Hand]:
+        """Met à part les mains de tes joueurs de référence (celles où l'historique marque un de leurs pseudos comme
+        héros), sous leur nom, et renvoie les autres ; leurs bibliothèques déjà ouvertes se relisent à la prochaine
+        visite."""
+        refs = settings.load()["references"]
+        owner = {p: ref["name"] for ref in refs for p in ref["pseudos"]}
+        taken: dict[str, list[Hand]] = {ref["name"]: [] for ref in refs}
+        rest = []
+        for h in hands:
+            name = owner.get(h.hero)
+            if name is None:
+                rest.append(h)
+                continue
+            h.rename(h.hero, name)  # sans effet si un autre joueur de la main porte ce nom : elle n'est pas comptée
+            if h.hero == name:
+                taken[name].append(h)
+        with self._lock:
+            self._reference_hands = taken
+            self._references.clear()
+        return rest
+
+    def _reload_reference(self) -> None:
+        """Les mains d'un joueur de référence (source), analysées comme les tiennes : il est le héros de chacune."""
+        hero = self.hero_override
+        mine = [h for h in self._source() if hero in h.seats]
+        heads_up = [h for h in mine if len(h.seats) == 2 and h.button and h.bb]
+        ring = [h for h in mine if len(h.seats) > 2 and h.button and h.bb]
+        with self._lock:
+            self._all_hands, self._all_ring = heads_up, ring
+            self.by_id = {h.hand_id: h for h in heads_up + ring}
+            self.hero = hero
+            self.hero_pseudos = Counter((hero, h.site) for h in mine)
+            self.players_seen = Counter(name for h in mine for name in h.seats)
+            self.unmarked_seen = Counter()
+            self._select()
+
     @staticmethod
     def my_pseudos(pseudos: Counter, conf: dict) -> set[str]:
         """Tes pseudos : ceux que tes historiques marquent comme toi, sans ceux que tu as retirés, avec ceux que tu as
-        ajoutés (Paramètres)."""
-        return ({p for p, _ in pseudos} - set(conf["hero_excluded"])) | set(conf["hero_added"])
+        ajoutés (Paramètres) ; jamais ceux d'un joueur de référence."""
+        return (({p for p, _ in pseudos} - set(conf["hero_excluded"])) | set(conf["hero_added"])) \
+            - settings.reference_pseudos(conf)
 
     def _group_me(self, hands: list[Hand], pseudos: Counter, conf: dict) -> tuple[Optional[str], list[Hand]]:
         """Réunit tes pseudos sous ton nom : renvoie ce nom (celui que tu as choisi, sinon ton pseudo le plus fréquent)
@@ -203,8 +256,8 @@ class Library:
 
     @property
     def is_me(self) -> bool:
-        """Ton espace (pas celui d'un élève) : tes Paramètres s'y appliquent."""
-        return self.space_key == "moi"
+        """Ton espace (pas celui d'un élève ni d'un joueur de référence) : tes Paramètres s'y appliquent."""
+        return self.space_key == "moi" and self._source is None
 
     def _select(self) -> None:
         """Les mains de la période (sous self._lock) ; les analyses se refont."""
@@ -318,8 +371,10 @@ class Library:
                 row["sites"].append(site)
         for pseudo in added - set(by_name):  # ses mains : celles sans héros marqué où il joue
             by_name[pseudo] = {"name": pseudo, "sites": [], "hands": self.unmarked_seen.get(pseudo, 0), "added": True}
+        owners = {p: ref["name"] for ref in conf["references"] for p in ref["pseudos"]}
         for row in by_name.values():
-            row["included"] = row["name"] not in excluded
+            row["reference"] = owners.get(row["name"])  # le pseudo d'un joueur de référence : pas le tien
+            row["included"] = row["name"] not in excluded and row["reference"] is None
         pseudos = sorted(by_name.values(), key=lambda r: (r["added"], -r["hands"], r["name"].lower()))
         # à ajouter : les joueurs des mains sans héros marqué (ailleurs, ce sont tes adversaires)
         mine = self.my_pseudos(self.hero_pseudos, conf) | {self.hero or ""}
@@ -361,7 +416,7 @@ class Library:
         if conf["hero"] and conf["hero"] not in mine and conf["hero"] in self.players_seen:
             checked["hero"] = None  # ton nom était un pseudo que tu retires : ton pseudo le plus fréquent le remplace
         settings.save(checked)
-        if {"hero", "hero_excluded", "hero_added"} & set(checked):
+        if {"hero", "hero_excluded", "hero_added", "references"} & set(checked):
             self.reload()
         else:
             with self._lock:
@@ -776,6 +831,135 @@ class Library:
         meta = students.create(name, pseudo)
         return dict(self.student(meta["id"]).summary(), id=meta["id"], name=meta["name"], pseudo=meta.get("pseudo"))
 
+    # --- joueurs de référence --------------------------------------------------------------
+    def references_conf(self) -> list[dict]:
+        """Tes joueurs de référence (Paramètres), avec leur identifiant d'adresse."""
+        return [dict(ref, id=settings.reference_id(ref["name"])) for ref in settings.load()["references"]]
+
+    def reference(self, ident: str) -> "Library":
+        """La bibliothèque d'un joueur de référence (ouverte à la première visite) : ses mains, lues dans ton espace,
+        analysées comme les tiennes ; elle partage la file du solveur."""
+        meta = next((r for r in self.references_conf() if r["id"] == ident), None)
+        if meta is None:
+            raise UnknownPlayer(ident)
+        with self._lock:
+            lib = self._references.get(ident)
+        if lib is None:
+            name = meta["name"]
+            lib = Library(self.folder, name, solves=self.solves, backups=self.backups, api=f"/api/references/{ident}",
+                          pages=f"/reference/{ident}", space=REFERENCE_PREFIX + ident, space_name=name,
+                          source=lambda: self._reference_hands.get(name, []))
+            lib.display_name = name
+            with self._lock:
+                lib = self._references.setdefault(ident, lib)
+        return lib
+
+    def references_summary(self) -> list[dict]:
+        """Tes joueurs de référence : nom, pseudos (sites et mains), mains et winrate de chaque format, dates."""
+        sites: dict[str, list[str]] = {}
+        for (pseudo, site), _ in self.hero_pseudos.most_common():
+            sites.setdefault(pseudo, []).append(site)
+        out = []
+        for meta in self.references_conf():
+            lib = self.reference(meta["id"])
+            every = lib._all_hands + lib._all_ring
+            heads_up, tables = refstudy.result(lib._all_hands, lib.hero), refstudy.result(lib._all_ring, lib.hero)
+            first = min((h.date for h in every), default=None)
+            last = max((h.date for h in every), default=None)
+            out.append({"id": meta["id"], "name": meta["name"],
+                        "pseudos": [{"name": p, "sites": sites.get(p, []),
+                                     "hands": sum(n for (q, _), n in self.hero_pseudos.items() if q == p)}
+                                    for p in meta["pseudos"]],
+                        "hands": heads_up.hands, "ring_hands": tables.hands,
+                        "bb100": _round(heads_up.bb100), "ring_bb100": _round(tables.bb100),
+                        "sites": sorted({h.site for h in every}),
+                        "first": first.strftime("%d/%m/%Y") if first else None,
+                        "last": last.strftime("%d/%m/%Y") if last else None})
+        return out
+
+    def references_view(self) -> dict:
+        """La page des joueurs de référence : les tiens (references_summary) et les pseudos qui peuvent le devenir,
+        ceux que tes historiques marquent comme héros (sites, mains ; « mine » : un de tes pseudos aujourd'hui)."""
+        conf = settings.load()
+        taken, mine = settings.reference_pseudos(conf), self.my_pseudos(self.hero_pseudos, conf)
+        rows: dict[str, dict] = {}
+        for (pseudo, site), n in self.hero_pseudos.most_common():
+            if pseudo in taken:
+                continue
+            row = rows.setdefault(pseudo, {"name": pseudo, "sites": [], "hands": 0, "mine": pseudo in mine})
+            row["hands"] += n
+            if site not in row["sites"]:
+                row["sites"].append(site)
+        candidates = sorted(rows.values(), key=lambda r: (r["mine"], -r["hands"], r["name"].lower()))
+        return {"references": self.references_summary(), "candidates": candidates, "hero": self.hero}
+
+    def create_reference(self, name: object, pseudos: object) -> dict:
+        """Nouveau joueur de référence : un nom et ses pseudos, parmi ceux que tes historiques marquent comme héros. Ses
+        pseudos sortent des tiens (Paramètres › Toi) ; ValueError si la demande ne va pas."""
+        conf = settings.load()
+        refs = conf["references"]
+        wanted = settings.check({"references": refs + [{"name": name, "pseudos": pseudos}]})["references"][-1]
+        marked = {p for p, _ in self.hero_pseudos}
+        for p in wanted["pseudos"]:
+            if p not in marked:
+                raise ValueError(f"« {p} » n'est le héros d'aucun de tes historiques : choisis un pseudo dont tu as "
+                                 "importé les mains (toutes ses cartes y sont connues).")
+        if wanted["name"] == self.hero:
+            raise ValueError(f"« {wanted['name']} » est ton nom (tes pseudos réunis) : choisis un autre nom.")
+        if wanted["name"] in self.players_seen and wanted["name"] not in wanted["pseudos"]:
+            raise ValueError(f"« {wanted['name']} » est déjà le nom d'un joueur de tes mains : choisis un autre nom.")
+        excluded = sorted(set(conf["hero_excluded"]) | set(wanted["pseudos"]), key=str.lower)
+        added = [p for p in conf["hero_added"] if p not in wanted["pseudos"]]
+        settings.save({"references": refs + [wanted], "hero_excluded": excluded, "hero_added": added})
+        self.reload()
+        return dict(self.references_view(), id=settings.reference_id(wanted["name"]), state=self.summary())
+
+    def remove_reference(self, ident: str) -> dict:
+        """Retire un joueur de référence : ses pseudos restent hors des tiens (recoche-les dans Paramètres › Toi s'ils
+        sont à toi)."""
+        conf = settings.load()
+        kept = [r for r in conf["references"] if settings.reference_id(r["name"]) != ident]
+        if len(kept) == len(conf["references"]):
+            raise UnknownPlayer(ident)
+        settings.save({"references": kept})
+        self.reload()
+        return dict(self.references_view(), state=self.summary())
+
+    def reference_page(self, ident: str, page: str, table_format: Optional[str] = None) -> str:
+        """Une page d'un joueur de référence : « comparaison » (toi et lui), « lignes » (sa value et ses bluffs), ou une
+        page de son jeu analysée comme les tiennes (bilan, tables, préflop, mains de départ)."""
+        if page not in REFERENCE_PAGES:
+            raise KeyError(page)
+        lib = self.reference(ident)
+        if not table_format and lib.leak_formats():  # par défaut, le format où il a le plus de mains
+            table_format = max(lib.leak_formats(), key=lambda f: f[1])[0]
+        if page not in ("comparaison", "lignes"):  # son jeu, analysé comme le tien : « tu » le désigne
+            note = (f'<p class="note" style="margin:0 0 12px">Le jeu de <b>{escape(lib.hero or "")}</b>, analysé comme le '
+                    "tien : ici, « ton » et « tes » le désignent.</p>")
+            return lib.self_page(page, table_format=table_format).replace("<main>\n", "<main>\n" + note, 1)
+        fmt = lib._leak_format(table_format)  # UnknownPlayer s'il n'a pas de mains
+
+        def build():
+            ring_game = fmt != "HU"
+            mine = self.ring if ring_game else self.hands
+            his = lib.ring if ring_game else lib.hands
+            me, him = self.hero or "", lib.hero or ""
+            switch = format_switch(lib.leak_formats(), fmt)
+            context = {"me": me, "him": him, "format": fmt, "switch": switch, "my_hands": len(mine),
+                       "his_hands": len(his), "period": periods.label(self.period)}
+            if page == "lignes":
+                return build_lines_page(refstudy.lines(his, him, mine, me), context)
+            if ring_game:
+                rows = refstudy.compare_ring(field.ring_ratios(mine, [me]), field.ring_ratios(his, [him]))
+                positions = (ring.analyze(mine, me, merge=True), ring.analyze(his, him, merge=True))
+            else:
+                rows = refstudy.compare_hu(self.all_stats().get(me), lib.all_stats().get(him))
+                positions = None
+            return build_comparison_page(rows, (refstudy.result(mine, me), refstudy.result(his, him)),
+                                         (refstudy.by_position(mine, me), refstudy.by_position(his, him)),
+                                         positions, context)
+        return self._cached(("reference", ident, page, fmt, lib.version), build)
+
     def load_hand2note(self) -> dict:
         """Télécharge les charts 6-max de Hand2Note Guide (usage personnel) : les pots à deux au flop s'ouvrent au
         solveur."""
@@ -808,12 +992,14 @@ class Library:
         return sorted(rows, key=lambda r: -r["total_bb"])
 
     def find_hand(self, hand_id: str) -> Optional[tuple[Hand, str]]:
-        """Une main et son joueur : parmi les tiennes, puis celles des élèves."""
+        """Une main et son joueur : parmi les tiennes, puis celles des élèves et de tes joueurs de référence."""
         hand = self.by_id.get(hand_id)
         if hand is not None and self.hero:
             return hand, self.hero
-        for meta in students.all_students():
-            lib = self.student(meta["id"])
+        libs = [self.student(meta["id"]) for meta in students.all_students()]
+        if self.is_me:
+            libs += [self.reference(meta["id"]) for meta in self.references_conf()]
+        for lib in libs:
             if hand_id in lib.by_id and lib.hero:
                 return lib.by_id[hand_id], lib.hero
         return None

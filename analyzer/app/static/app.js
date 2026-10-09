@@ -11,6 +11,9 @@
     parametres: [['general', 'Général'], ['joueurs', 'Joueurs et alias']],
     eleve: [['leaks', 'Leakfinding'], ['mains', 'Mains de départ'], ['preflop', 'Préflop'], ['solveur', 'Face au solveur'], ['spots', 'Mains'],
       ['tables', 'Tables à plusieurs'], ['importer', 'Importer']],
+    // un joueur de référence : la comparaison avec toi, sa value et ses bluffs, puis son jeu analysé comme le tien
+    reference: [['comparaison', 'Toi et lui'], ['lignes', 'Value et bluffs'], ['bilan', 'Bilan'], ['tables', 'Tables à plusieurs'],
+      ['preflop', 'Préflop'], ['mains', 'Mains de départ']],
     adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
       ['solveur', 'Face au solveur'], ['bluffs', 'Ses bluffs']],
     // L'explorateur part du préflop ; les séries heads-up (SRP, pots 3bet et 4bet), les séries 6-max et les coups joués
@@ -18,7 +21,7 @@
     etudes: [['explorateur', 'Explorateur'], ['plan', 'Plan de jeu suggéré'], ['hu', 'Heads-up'], ['6max', '6-max'],
       ['coups', 'Coups joués']],
   };
-  const FORMAT_TABS = ['bilan', 'leaks', 'preflop'];  // pages qui ont un choix heads-up / tables à plusieurs
+  const FORMAT_TABS = ['bilan', 'leaks', 'preflop', 'comparaison', 'lignes'];  // pages qui ont un choix heads-up / tables à plusieurs
   // Les formats que tu joues (Paramètres) : sans choix, tous. Un format que tu ne joues pas sort des menus.
   const plays = (fmt) => !state || !state.settings || !state.settings.plays || state.settings.plays.includes(fmt);
   const HIDDEN_TABS = { HU: { moi: ['spots', 'solveur'], field: ['bluffs'], etudes: ['hu'] },
@@ -31,6 +34,7 @@
   let state = null;
   let route = null;
   let students = [];
+  let references = { references: [], candidates: [] };  // tes joueurs de référence (et les pseudos qui peuvent le devenir)
   const hasHands = () => !!(state && (state.hands || state.ring_hands));  // heads-up ou tables à plusieurs, sur la période
   const hasAnyHands = () => !!(state && state.period && (state.period.all_hands || state.period.all_ring));  // toutes
 
@@ -91,6 +95,8 @@
     if (parts[0] === 'parametres') return { view: 'parametres', tab: tabOf('parametres', parts[1], 'general') };
     if (parts[0] === 'eleves') return { view: 'eleves' };
     if (parts[0] === 'eleve' && parts[1]) return { view: 'eleve', student: parts[1], tab: tabOf('eleve', parts[2], 'leaks') };
+    if (parts[0] === 'references') return { view: 'references' };
+    if (parts[0] === 'reference' && parts[1]) return { view: 'reference', ref: parts[1], tab: tabOf('reference', parts[2], 'comparaison') };
     return hasHands() || hasAnyHands() ? { view: 'moi', tab: 'bilan' } : { view: 'importer' };
   }
 
@@ -106,6 +112,8 @@
     if (r.view === 'sauvegarde') return '#/sauvegarde';
     if (r.view === 'eleves') return '#/eleves';
     if (r.view === 'eleve') return '#/eleve/' + encodeURIComponent(r.student) + '/' + r.tab;
+    if (r.view === 'references') return '#/references';
+    if (r.view === 'reference') return '#/reference/' + encodeURIComponent(r.ref) + '/' + r.tab;
     return '#/importer';
   }
 
@@ -124,10 +132,18 @@
       if (r.tab === 'groupe') return '/field/groupe/' + encodeURIComponent(r.group) + query;
       return '/field/' + r.tab + query;
     }
-    const space = r.view === 'eleve' ? '/eleve/' + encodeURIComponent(r.student) : '/moi';
+    const space = r.view === 'eleve' ? '/eleve/' + encodeURIComponent(r.student)
+      : r.view === 'reference' ? '/reference/' + encodeURIComponent(r.ref) : '/moi';
     // le dernier format choisi (heads-up ou tables à plusieurs), le même pour le bilan, le Leakfinding et le préflop
     const fmt = FORMAT_TABS.includes(r.tab) ? pref('format:' + space) : null;
     return space + '/' + r.tab + (fmt ? '?format=' + encodeURIComponent(fmt) : '');
+  }
+
+  async function loadReferences() {
+    try {
+      const res = await fetch('/api/references');
+      if (res.ok) references = await res.json();
+    } catch (e) { /* hors ligne : la liste d'avant */ }
   }
 
   async function loadStudents() {
@@ -142,6 +158,7 @@
     closePeriod();  // une autre page : le panneau de la période se ferme
     if (route.view === 'field' && location.hash !== hashFor(route)) history.replaceState(null, '', hashFor(route));  // #/moi/bluffs
     if (route.view === 'eleves' || route.view === 'eleve') await loadStudents();
+    if (route.view === 'references' || route.view === 'reference') await loadReferences();
     closeDrawer();
     renderHeader();
     renderTabs();
@@ -151,6 +168,14 @@
     if (route.view === 'entraineur' || route.view === 'etudes' || route.view === 'parametres') return showFrame(srcFor(route));
     if (route.view === 'sauvegarde') return showBackup();
     if (route.view === 'eleves') return showStudents();
+    if (route.view === 'references') return showReferences();
+    if (route.view === 'reference') {
+      if (!references.references.some((x) => x.id === route.ref)) {
+        return showPanel(el('div', { class: 'welcome' }, el('h2', {}, 'Joueur de référence introuvable'),
+          el('a', { href: '#/references' }, 'Voir les joueurs de référence')));
+      }
+      return showFrame(srcFor(route));
+    }
     if (route.view === 'eleve') {
       if (!students.some((s) => s.id === route.student)) {
         return showPanel(el('div', { class: 'welcome' }, el('h2', {}, 'Élève introuvable'), el('a', { href: '#/eleves' }, 'Voir les élèves')));
@@ -218,6 +243,13 @@
           + (s.ring_hands ? ' · ' + s.ring_hands + ' mains aux tables à plusieurs' : '')
         : s.ring_hands ? s.ring_hands + ' mains aux tables à plusieurs · ' + (s.hero || '')
           : 'Pas encore de mains : importe ses historiques') : '';
+    } else if (route.view === 'references') {
+      title.textContent = 'Joueurs de référence';
+      subtitle.textContent = 'Apprendre d\'un bon joueur : sa value et ses bluffs, toutes ses cartes connues, et ce qu\'il fait autrement que toi';
+    } else if (route.view === 'reference') {
+      const r = references.references.find((x) => x.id === route.ref);
+      title.textContent = r ? r.name : 'Joueur de référence';
+      subtitle.textContent = r ? refSummary(r) : '';
     } else if (route.view === 'entraineur') {
       title.textContent = 'Entraîneur';
       subtitle.textContent = 'Joue des mains sur les spots résolus : le solveur juge chaque décision';
@@ -255,7 +287,7 @@
     const tabs = $('tabs');
     tabs.textContent = '';
     const list = tabsOf(route.view);
-    tabs.hidden = !list.length || (!hasHands() && !hasAnyHands() && !['etudes', 'eleve', 'parametres'].includes(route.view));
+    tabs.hidden = !list.length || (!hasHands() && !hasAnyHands() && !['etudes', 'eleve', 'parametres', 'reference'].includes(route.view));
     for (const [id, label] of list) {
       const r = Object.assign({}, route, { tab: id });
       tabs.append(el('a', { href: hashFor(r), 'aria-current': id === route.tab ? 'page' : null }, label));
@@ -264,7 +296,7 @@
 
   function markActive() {
     document.querySelectorAll('.nav a').forEach((a) => {
-      const view = route.view === 'eleve' ? 'eleves' : route.view;
+      const view = route.view === 'eleve' ? 'eleves' : route.view === 'reference' ? 'references' : route.view;
       a.setAttribute('aria-current', a.dataset.view === view ? 'page' : 'false');
     });
     document.querySelectorAll('.opps a').forEach((a) => {
@@ -786,6 +818,72 @@
       el('h3', {}, 'Nouvel élève'), form, message));
   }
 
+  // ---------- joueurs de référence ----------
+  // Un bon joueur dont tu as importé les historiques (il y est le héros) : ses pseudos sortent des tiens, il est
+  // étudié à part et comparé à toi.
+  function refSummary(r) {
+    const parts = [];
+    if (r.ring_hands) parts.push(r.ring_hands + ' mains aux tables à plusieurs (' + signed(r.ring_bb100) + ' bb/100)');
+    if (r.hands) parts.push(r.hands + ' mains heads-up (' + signed(r.bb100) + ' bb/100)');
+    if (!parts.length) parts.push('aucune main lue');
+    if (r.first) parts.push(r.first + ' → ' + r.last);
+    parts.push('pseudos : ' + r.pseudos.map((p) => p.name + (p.sites.length ? ' (' + p.sites.join(', ') + ')' : '')).join(', '));
+    return parts.join(' · ');
+  }
+
+  function showReferences() {
+    const list = references.references.map((r) => el('div', { class: 'ref-card' },
+      el('a', { class: 'student', href: '#/reference/' + encodeURIComponent(r.id) + '/comparaison' },
+        el('b', {}, r.name), el('span', { class: 'muted small' }, refSummary(r))),
+      el('button', { type: 'button', class: 'link', onclick: async () => {
+        if (!confirm('Retirer ' + r.name + ' des joueurs de référence ? Ses pseudos restent hors des tiens (Paramètres › Toi pour les recocher).')) return;
+        const res = await fetch('/api/references/' + encodeURIComponent(r.id) + '/retirer', { method: 'POST' });
+        if (!res.ok) return;
+        const data = await res.json();
+        references = data;
+        state = data.state;
+        renderSidebar();
+        showReferences();
+      } }, 'Retirer')));
+    const name = el('input', { type: 'text', maxlength: '60', placeholder: 'Son nom', 'aria-label': 'Nom du joueur de référence' });
+    const message = el('p', { class: 'small', 'aria-live': 'polite' });
+    const boxes = references.candidates.map((c) => el('label', { class: 'ref-opt' },
+      el('input', { type: 'checkbox', value: c.name, onchange: (e) => {
+        if (e.target.checked && !name.value.trim()) name.value = c.name;
+      } }),
+      el('span', {}, el('b', {}, c.name), ' ', el('span', { class: 'muted small' },
+        (c.sites.length ? c.sites.join(', ') + ' · ' : '') + c.hands + ' mains'
+        + (c.mine ? ' · aujourd\'hui un de tes pseudos : ses mains sortiront de tes analyses' : '')))));
+    const form = el('form', { class: 'ref-form', onsubmit: async (e) => {
+      e.preventDefault();
+      const pseudos = boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value);
+      if (!pseudos.length) { message.textContent = 'Coche au moins un pseudo.'; return; }
+      if (!name.value.trim()) { message.textContent = 'Donne-lui un nom.'; name.focus(); return; }
+      message.textContent = 'Création…';
+      const res = await fetch('/api/references', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.value.trim(), pseudos }) });
+      const data = await res.json();
+      if (!res.ok) { message.textContent = data.error || 'Création impossible.'; return; }
+      references = data;
+      state = data.state;
+      renderSidebar();
+      frame.dataset.src = '';  // tes pages se recalculent : ses mains n'en font plus partie
+      location.hash = '#/reference/' + encodeURIComponent(data.id) + '/comparaison';
+    } },
+    el('fieldset', {}, el('legend', {}, 'Ses pseudos'), boxes.length ? boxes
+      : el('p', { class: 'muted small' }, 'Aucun pseudo disponible : importe d\'abord ses historiques (ceux où il est le héros).')),
+    el('div', { class: 'student-form' }, name, el('button', { type: 'submit', class: 'primary' }, 'Créer le joueur de référence')));
+    showPanel(el('div', { class: 'students' },
+      el('p', {}, 'Un bon joueur dont tu as importé les historiques, où il est le héros : toutes ses cartes y sont connues, '
+        + 'pas seulement à l\'abattage. Merlin compare ses fréquences aux tiennes, lit sa value et ses bluffs ligne par ligne, '
+        + 'et analyse son jeu comme le tien (bilan, positions, préflop, mains de départ).'),
+      list.length ? el('div', { class: 'student-list' }, list) : el('p', { class: 'muted' }, 'Aucun joueur de référence pour l\'instant.'),
+      el('h3', {}, 'Nouveau joueur de référence'),
+      el('p', { class: 'small muted' }, 'Coche ses pseudos (ceux que tes historiques marquent comme héros, sur un ou plusieurs sites) : '
+        + 'ses mains sortent de tes analyses et sont étudiées à part.'),
+      form, message));
+  }
+
   // ---------- sauvegarde ----------
   const size = (n) => (n >= 1e9 ? num(n / 1e9, 1) + ' Go' : n >= 1e6 ? num(n / 1e6, 1) + ' Mo' : Math.max(1, Math.round(n / 1e3)) + ' Ko');
   let backupTimer = null;
@@ -877,11 +975,12 @@
     }
     if (e.data.type !== 'analyzer-page') return;
     const parts = String(e.data.path).split('/').filter(Boolean).map(decodeURIComponent);
-    if (FORMAT_TABS.includes(parts[parts.length - 1]) && (parts[0] === 'moi' || parts[0] === 'eleve')) {
-      // le format choisi (bilan, Leakfinding, préflop) : gardé pour la prochaine fois
+    if (FORMAT_TABS.includes(parts[parts.length - 1]) && ['moi', 'eleve', 'reference'].includes(parts[0])) {
+      // le format choisi (bilan, Leakfinding, préflop) : gardé pour la prochaine fois ; un joueur de référence part du
+      // format où il a le plus de mains, son choix se garde tel quel
       const fmt = new URLSearchParams(e.data.search || '').get('format');
       const space = '/' + parts.slice(0, -1).map(encodeURIComponent).join('/');
-      pref('format:' + space, fmt && fmt !== 'HU' ? fmt : null);
+      pref('format:' + space, parts[0] === 'reference' ? fmt || null : fmt && fmt !== 'HU' ? fmt : null);
     }
     let r = null;
     if (parts[0] === 'p' && parts.length === 3) r = { view: 'adv', player: parts[1], tab: parts[2] };
@@ -893,6 +992,7 @@
     else if (parts[0] === 'etudes' && parts.length <= 2) r = { view: 'etudes', tab: !parts[1] || HU_SERIES.includes(parts[1]) ? 'hu' : parts[1] };
     else if (parts[0] === 'entraineur' && parts.length === 1) r = { view: 'entraineur' };
     else if (parts[0] === 'eleve' && parts.length === 3) r = { view: 'eleve', student: parts[1], tab: parts[2] };
+    else if (parts[0] === 'reference' && parts.length === 3) r = { view: 'reference', ref: parts[1], tab: parts[2] };
     if (!r) return;
     if (r.view === 'field') {  // le format de la page : gardé pour les pages suivantes du field
       const fmt = new URLSearchParams(e.data.search || '').get('format');
@@ -901,7 +1001,7 @@
     }
     frame.dataset.src = srcFor(r);
     if (route && route.view === r.view && route.player === r.player && route.tab === r.tab && route.group === r.group
-      && (route.fmt || null) === (r.fmt || null)) return;
+      && route.ref === r.ref && (route.fmt || null) === (r.fmt || null)) return;
     route = r;
     history.replaceState(null, '', hashFor(r));
     renderHeader();

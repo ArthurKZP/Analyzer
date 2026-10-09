@@ -185,6 +185,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.leaks_state(table_format=self._format()))
             if parts == ["api", "eleves"]:
                 return self._json(library.students_summary())
+            if parts == ["api", "references"]:  # tes joueurs de référence, et les pseudos qui peuvent le devenir
+                return self._json(library.references_view())
+            if len(parts) == 3 and parts[0] == "reference":  # une page d'un joueur de référence
+                return self._html(library.reference_page(parts[1], parts[2], self._format()))
             if len(parts) == 3 and parts[0] == "eleve":
                 student = library.student(parts[1])
                 if parts[2] == "rapport":
@@ -219,8 +223,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(owner.hand_fiche(parts[-1]))
                 query = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
                 return self._json(owner.spots_search(query))
-            if parts == ["api", "mains"] or (len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] == "mains"):
-                owner = library if len(parts) == 2 else library.student(parts[2])
+            if parts == ["api", "mains"] or (len(parts) == 4 and parts[:2] in (["api", "eleves"], ["api", "references"])
+                                             and parts[3] == "mains"):
+                owner = (library if len(parts) == 2 else library.student(parts[2]) if parts[1] == "eleves"
+                         else library.reference(parts[2]))
                 query = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
                 return self._json(owner.hands_detail(query))
             if len(parts) == 3 and parts[0] == "p":
@@ -574,6 +580,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.create_student(name, pseudo))
             except ValueError as exc:
                 return self._error(400, str(exc))
+        if parts == ["api", "references"]:  # un nouveau joueur de référence : son nom et ses pseudos
+            payload = self._small_json()
+            if not isinstance(payload, dict):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.create_reference(payload.get("name"), payload.get("pseudos")))
+            except ValueError as exc:
+                return self._error(400, str(exc))
+        if len(parts) == 4 and parts[:2] == ["api", "references"] and parts[3] == "retirer":
+            try:
+                return self._json(library.remove_reference(parts[2]))
+            except UnknownPlayer:
+                return self._error(404, "Joueur de référence inconnu.")
         if len(parts) >= 4 and parts[:2] == ["api", "eleves"]:
             try:
                 student = library.student(parts[2])
