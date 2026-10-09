@@ -1,0 +1,94 @@
+Poker Hand #HD100000001: Hold'em No Limit ($25/$50) - 2026/09/22 09:27:57
+Table 'Exemple GG' 6-max Seat #4 is the button
+Seat 1: e1f2a3b4 ($4,500 in chips)
+Seat 2: f2a3b4c5 ($10,097.5 in chips)
+Seat 3: a3b4c5d6 ($9,933.87 in chips)
+Seat 4: Hero ($7,040.95 in chips)
+Seat 5: b4c5d6e7 ($8,894.25 in chips)
+Seat 6: c5d6e7f8 ($8,281.76 in chips)
+b4c5d6e7: posts small blind $25
+c5d6e7f8: posts big blind $50
+a3b4c5d6: posts missed blind $25
+a3b4c5d6: posts big blind $50
+*** HOLE CARDS ***
+Dealt to e1f2a3b4
+Dealt to f2a3b4c5
+Dealt to a3b4c5d6
+Dealt to Hero [2h 9h]
+Dealt to b4c5d6e7
+Dealt to c5d6e7f8
+e1f2a3b4: raises $130 to $180
+f2a3b4c5: folds
+a3b4c5d6: calls $130
+Hero: folds
+b4c5d6e7: folds
+c5d6e7f8: folds
+*** FLOP *** [2s 8s Js]
+e1f2a3b4: checks
+a3b4c5d6: checks
+*** TURN *** [2s 8s Js] [Qs]
+e1f2a3b4: checks
+a3b4c5d6: checks
+*** RIVER *** [2s 8s Js Qs] [Jd]
+e1f2a3b4: checks
+a3b4c5d6: checks
+e1f2a3b4: shows [Kc Kh] (Pair of Kings and Pair of Jacks)
+a3b4c5d6: shows [5d 3s] (Queen High Flush)
+*** SHOWDOWN ***
+a3b4c5d6 collected $437 from pot
+*** SUMMARY ***
+Total pot $460 | Rake $23 | Jackpot $0 | Bingo $0 | Fortune $0 | Tax $0
+Board [2s 8s Js Qs Jd]
+Seat 1: e1f2a3b4 showed [Kc Kh] and lost with Pair of Kings and Pair of Jacks
+Seat 2: f2a3b4c5 folded before Flop (didn't bet)
+Seat 3: a3b4c5d6 showed [5d 3s] and won ($437) with Queen High Flush
+Seat 4: Hero (button) folded before Flop (didn't bet)
+Seat 5: b4c5d6e7 (small blind) folded before Flop
+Seat 6: c5d6e7f8 (big blind) folded before Flop
+
+
+Poker Hand #HD100000002: Hold'em No Limit  ($1/$2) - 2026/03/03 09:09:43
+Table 'Exemple GG' 6-max Seat #5 is the button
+Seat 1: a1b2c3d4 ($224.69 in chips)
+Seat 2: b2c3d4e5 ($219.45 in chips)
+Seat 3: c3d4e5f6 ($243.83 in chips)
+Seat 5: d4e5f6a7 ($219.74 in chips)
+Seat 6: Hero ($235.81 in chips)
+Hero: posts small blind $1
+a1b2c3d4: posts big blind $2
+*** HOLE CARDS ***
+Dealt to a1b2c3d4
+Dealt to b2c3d4e5
+Dealt to c3d4e5f6
+Dealt to d4e5f6a7
+Dealt to Hero [4h 8d]
+b2c3d4e5: folds
+c3d4e5f6: raises $4 to $6
+d4e5f6a7: folds
+Hero: folds
+a1b2c3d4: raises $18 to $24
+c3d4e5f6: raises $36.75 to $60.75
+a1b2c3d4: raises $163.94 to $224.69 and is all-in
+c3d4e5f6: calls $163.94
+a1b2c3d4: shows [Qh Qc]
+c3d4e5f6: shows [Js Ah]
+*** FIRST FLOP *** [3h Ad Qs]
+*** FIRST TURN *** [3h Ad Qs] [Tc]
+*** FIRST RIVER *** [3h Ad Qs Tc] [7s]
+*** SECOND FLOP *** [9d 6h 4c]
+*** SECOND TURN *** [9d 6h 4c] [2h]
+*** SECOND RIVER *** [9d 6h 4c 2h] [5h]
+*** FIRST SHOWDOWN ***
+a1b2c3d4 collected $221.19 from pot
+*** SECOND SHOWDOWN ***
+a1b2c3d4 collected $221.19 from pot
+*** SUMMARY ***
+Total pot $450.38 | Rake $6 | Jackpot $2 | Bingo $0 | Fortune $0
+Hand was run two times
+FIRST Board [3h Ad Qs Tc 7s]
+SECOND Board [9d 6h 4c 2h 5h]
+Seat 1: a1b2c3d4 (big blind) showed [Qh Qc] and won ($221.19) with Three Queens, and won ($221.19) with Pair of Queens
+Seat 2: b2c3d4e5 folded before Flop (didn't bet)
+Seat 3: c3d4e5f6 showed [Js Ah] and lost with Pair of Aces, and lost with Ace-High
+Seat 5: d4e5f6a7 (button) folded before Flop (didn't bet)
+Seat 6: Hero (small blind) folded before Flop

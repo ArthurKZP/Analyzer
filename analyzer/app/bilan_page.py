@@ -142,7 +142,7 @@ def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, 
     res = results(hands, hero)
     if not res["hands"]:
         body = (f'{head}<p class="note">Aucune main à une table de 3 joueurs ou plus. Importe des historiques 3-max, '
-                "6-max ou de 7 à 9 joueurs (Betclic, Winamax, Unibet).</p>")
+                "6-max ou de 7 à 9 joueurs.</p>")
         return html_page(f"Mon jeu — {hero}", body, embed)
     shown = [(scope, label, fs) for scope, label, fs in scopes if fs is not None]
     formats = sorted({h.table_format for h in hands}, key=lambda f: (ring.h_size(f), f))

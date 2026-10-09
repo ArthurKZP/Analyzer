@@ -28,6 +28,8 @@ def tearDownModule():
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SITES = Path(__file__).parent / "sites"
+# les exemples Betclic, Unibet et Winamax (les autres sites ont leurs tests dans test_sites)
+FIRST_SITES = [SITES / name for name in ("betclic_6max.txt", "unibet.txt", "winamax.txt")]
 
 
 def decisions(played):
@@ -63,7 +65,7 @@ class ReadTest(unittest.TestCase):
         self.assertEqual(self.read("HAND02").outcome, Outcome("3bet", "sd_win", "toppair", False))
         self.assertEqual(self.read("HAND03").outcome, Outcome("allin", "sd_lose"))  # tapis préflop
         self.assertEqual(self.read("HAND04").outcome, Outcome("won"))  # il folde à ta relance
-        sites = {h.table_format + h.site: h for h in load_hands([SITES])}
+        sites = {h.table_format + h.site: h for h in load_hands(FIRST_SITES)}
         self.assertEqual(handplay.read(sites["6-maxUnibet"], "Hero").outcome, Outcome("multi", "sd_win", "pair"))
         self.assertEqual(handplay.read(sites["3-maxWinamax"], "Hero").outcome, Outcome("3bet", "sd_lose", "strong", False))
         self.assertEqual(handplay.read(sites["HUWinamax"], "Hero").outcome, Outcome("srp", "win_f", "air", True))
@@ -72,7 +74,7 @@ class ReadTest(unittest.TestCase):
                          ["p:srp", "e:srp:fold_f", "f:srp:toppair", "i:srp:ip"])
 
     def test_tables(self):
-        hands = {h.table_format + h.site: h for h in load_hands([SITES])}
+        hands = {h.table_format + h.site: h for h in load_hands(FIRST_SITES)}
         kings = handplay.read(hands["3-maxWinamax"], "Hero")
         self.assertEqual((kings.combo, kings.position, kings.opponent), ("KK", "BB", None))
         self.assertEqual(decisions(kings), [("vs_open", "raise", -1.0)])
@@ -89,7 +91,7 @@ class ReadTest(unittest.TestCase):
             "SB:raise BB:raise SB:raise BB:call": {"SB": {"QTs": 0.1}, "BB": {}},
         }}
         theory = handplay.Theory(None, lines)
-        hand = next(h for h in load_hands([SITES]) if h.site == "Unibet")
+        hand = next(h for h in load_hands(FIRST_SITES) if h.site == "Unibet")
         iso = handplay.read(hand, "Hero", theory)
         self.assertEqual(iso.decisions[0].theory, {"raise": 0.2, "call": 0.4, "fold": 0.4})
         self.assertEqual(handplay._chart_open(lines["6-max"], "SB", "QTs"), {"raise": 0.5, "fold": 0.5})
@@ -217,7 +219,7 @@ class PageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": tmp}):
             folder = Path(tmp) / "mains"
             folder.mkdir()
-            for path in list(FIXTURES.glob("*.txt")) + list(SITES.glob("*.txt")):
+            for path in list(FIXTURES.glob("*.txt")) + FIRST_SITES:
                 shutil.copy(path, folder / path.name)
             lib = Library(folder)
             page = lib.self_page("mains")

@@ -1541,6 +1541,6 @@ class Library:
             if job is not None:
                 job.file_done(count_hands(content))
         detail = {"sites": sorted({h.site for h in hands}), "formats": _formats(hands)}
-        status = "importé" if new else "déjà importé"
+        status = "importé" if new else "déjà importé" if hands else "aucune main lue"  # ex. des tournois
         results.append(dict(detail, name=name, status=status, hands=len(hands), new=new))
         return new

@@ -12,9 +12,9 @@ from typing import Callable, Iterable, Optional
 
 from .. import store
 from ..models import Hand
-from . import betclic, unibet, winamax
+from . import betclic, ipoker, partypoker, pokerstars, unibet, winamax, wpn
 
-PARSERS = [betclic, winamax, unibet]
+PARSERS = [betclic, winamax, unibet, pokerstars, wpn, ipoker, partypoker]
 EXTENSIONS = {".txt", ".log", ".hh"}
 MAX_ZIP_FILES = 20_000         # historiques dans une archive
 MAX_ZIP_SIZE = 1024 ** 3       # 1 Go une fois décompressée (garde-fou contre les archives piégées)
@@ -33,7 +33,8 @@ def parse_text(text: str, on_hands: Optional[Callable[[int], None]] = None) -> l
                 if len(hands) % 100 == 0:
                     on_hands(len(hands))
             return hands
-    raise ValueError("Format d'historique non reconnu (sites supportés : Betclic, Winamax, Unibet).")
+    raise ValueError("Format d'historique non reconnu (sites supportés : Betclic, Winamax, Unibet, PokerStars, "
+                     "GGPoker, HHPoker, WPN, iPoker, partypoker).")
 
 
 def count_hands(text: str) -> int:

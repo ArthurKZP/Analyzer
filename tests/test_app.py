@@ -164,12 +164,14 @@ class LibraryTest(IsolatedHome):
         result = lib.import_files([
             {"name": "../../piege.txt", "content": content},
             {"name": "copie.txt", "content": content},
-            {"name": "autre.txt", "content": "PokerStars Hand #1"},
+            {"name": "autre.txt", "content": "Partie n° 1"},
+            {"name": "tournoi.txt", "content": "PokerStars Hand #1: Tournament #2, $1+$0.10 USD Hold'em No Limit - "
+                                               "Level I (10/20) - 2023/11/01 10:00:00 ET"},
             {"name": "vide.txt", "content": "  "},
         ])
         self.assertEqual(result["added"], 4)
         self.assertEqual([f["status"] for f in result["files"]],
-                         ["importé", "déjà importé", "format non reconnu", "vide"])
+                         ["importé", "déjà importé", "format non reconnu", "aucune main lue", "vide"])
         self.assertEqual(list(self.folder.iterdir()), [])  # rien dans le dossier : tout est dans la base
         files = lib.db.all("SELECT nom, mains FROM fichiers WHERE espace_id = ?", (lib.space_id,))
         self.assertEqual(files, [("piege.txt", 4)])  # le nom d'origine ne sert jamais de chemin

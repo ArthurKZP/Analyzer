@@ -152,6 +152,20 @@ class Hand:
         folded = {a.player for a in self.actions if a.kind == FOLD}
         return {a.player for a in self.actions} - folded
 
+    def place_button(self, seat: int) -> None:
+        """Le bouton d'après sa place à la table. Bouton mort (place vide, joueur absent ou qui ne joue pas la main) :
+        le joueur servi juste avant, le dernier à parler au préflop après les blindes."""
+        if not self.seats:
+            return
+        for s in self.seats.values():
+            s.is_button = s.seat == seat
+        if self.button is not None:
+            return
+        blinds = {self.small_blind, self.big_blind}
+        before = sorted(self.seats.values(), key=lambda s: (s.seat > seat, -s.seat))  # en remontant depuis le bouton
+        chosen = next((s for s in before if s.name not in blinds), before[0])
+        chosen.is_button = True
+
     def went_to_showdown(self) -> bool:
         """Abattage : au moins deux joueurs vont au bout sans se coucher (la définition de PokerTracker et Hold'em
         Manager). La ligne « Showdown » de l'historique ne suffit pas : selon le site ou la version du format, elle

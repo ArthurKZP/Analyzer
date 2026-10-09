@@ -168,7 +168,7 @@ def build_ring_page(scopes: list[tuple[str, str, list]], hero: str, embed: bool 
     shown = [(scope, label, stats[0]) for scope, label, stats in scopes if stats]
     if not shown:
         body = ('<p class="note">Aucune main à une table de 3 joueurs ou plus. Importe des historiques 3-max, 6-max ou de '
-                "7 à 9 joueurs (Betclic, Winamax, Unibet) : tes stats par position s'afficheront ici.</p>")
+                "7 à 9 joueurs : tes stats par position s'afficheront ici.</p>")
         if not ranges:  # les charts servent aussi à l'explorateur (coup à plusieurs), même sans mains
             body += ('<p><button type="button" class="rg-load">Charger les charts 100 bb de Hand2Note Guide (6-max et '
                      '3-max)</button> <span class="muted small">pour étudier les coups à plusieurs dans l\'explorateur ; '

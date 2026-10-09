@@ -80,7 +80,7 @@ class SchemaAndHandsTest(DatabaseCase):
         self.assertEqual(hands.import_text(self.db, other, "hu.txt", SAMPLE)[1], 4)  # chaque espace a ses mains
         self.assertEqual([s["key"] for s in hands.spaces(self.db)], ["eleve:paul", "moi"])
         with self.assertRaises(ValueError):
-            hands.import_text(self.db, me, "x.txt", "PokerStars Hand #1")
+            hands.import_text(self.db, me, "x.txt", "Partie n° 1")
 
     def test_remove_and_restore_files(self):
         """Retirer un historique efface ses mains, sauf celles qu'un historique importé après lui contient aussi ; il reste

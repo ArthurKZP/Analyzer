@@ -23,6 +23,8 @@ def tearDownModule():
     release_module()
 
 SITES = Path(__file__).parent / "sites"
+# les exemples Betclic, Unibet et Winamax (les autres sites ont leurs tests dans test_sites)
+FIRST_SITES = [SITES / name for name in ("betclic_6max.txt", "unibet.txt", "winamax.txt")]
 
 
 def hand(name, index=0):
@@ -59,7 +61,7 @@ class ReadTest(unittest.TestCase):
 
 class AnalyzeTest(unittest.TestCase):
     def test_formats_positions_and_page(self):
-        hands = load_hands([SITES])
+        hands = load_hands(FIRST_SITES)
         stats = ring.analyze(hands, "Hero")
         self.assertEqual([fs.table_format for fs in stats], ["6-max", "3-max"])  # le HU n'en fait pas partie
         six = stats[0]

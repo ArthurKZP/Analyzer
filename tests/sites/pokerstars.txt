@@ -1,0 +1,113 @@
+PokerStars Hand #200000000001:  Hold'em No Limit ($0.02/$0.05 USD) - 2026/11/06 18:25:01 CET [2026/11/06 12:25:01 ET]
+Table 'Exemple I' 6-max Seat #6 is the button
+Seat 4: Absent ($0 in chips) is sitting out
+Seat 1: Hero ($6.08 in chips)
+Seat 2: Joueur2 ($6.40 in chips)
+Seat 3: Joueur3 ($5.09 in chips)
+Seat 5: Revenant ($5 in chips)
+Seat 6: Joueur6 ($10.15 in chips)
+Hero: posts small blind $0.02
+Joueur2: posts big blind $0.05
+Revenant: posts small blind $0.02
+*** HOLE CARDS ***
+Dealt to Hero [Tc Ks]
+Joueur3: calls $0.05
+Revenant: raises $0.10 to $0.15
+Joueur6: folds
+Hero: folds
+Joueur2: folds
+Joueur3: calls $0.10
+*** FLOP *** [Jh 5s 9s]
+Joueur3: checks
+Revenant: bets $0.05
+Joueur3: calls $0.05
+*** TURN *** [Jh 5s 9s] [8c]
+Joueur3: checks
+Revenant: bets $0.10
+Joueur3: calls $0.10
+*** RIVER *** [Jh 5s 9s 8c] [Ad]
+Joueur3: checks
+Revenant: checks
+*** SHOW DOWN ***
+Joueur3: shows [Qs Kd] (high card Ace)
+Revenant: shows [Kh 9c] (a pair of Nines)
+Revenant collected $0.65 from pot
+*** SUMMARY ***
+Total pot $0.69 | Rake $0.04
+Board [Jh 5s 9s 8c Ad]
+Seat 4: Absent
+Seat 1: Hero (small blind) folded before Flop
+Seat 2: Joueur2 (big blind) folded before Flop
+Seat 3: Joueur3 showed [Qs Kd] and lost with high card Ace
+Seat 5: Revenant showed [Kh 9c] and won ($0.65) with a pair of Nines
+Seat 6: Joueur6 (button) folded before Flop (didn't bet)
+
+
+
+PokerStars Hand #200000000002:  Hold'em No Limit ($0.02/$0.05 USD) - 2026/11/07 18:59:00 CET [2026/11/07 12:59:00 ET]
+Table 'Exemple II' 6-max Seat #1 is the button
+Seat 1: Joueur1 ($4.93 in chips)
+Seat 2: Hero ($6.13 in chips)
+Seat 3: Joueur3 ($5.65 in chips)
+Seat 4: Joueur4 ($6.77 in chips)
+Seat 5: Villain ($5 in chips)
+Seat 6: Revenant ($4.98 in chips)
+Hero: posts small blind $0.02
+Joueur3: posts big blind $0.05
+Revenant: posts small & big blinds $0.07
+*** HOLE CARDS ***
+Dealt to Hero [7s Td]
+Joueur4: folds
+Villain: raises $0.15 to $0.20
+Revenant: folds
+Joueur1: folds
+Hero: folds
+Joueur3: folds
+Uncalled bet ($0.15) returned to Villain
+Villain collected $0.19 from pot
+Villain: doesn't show hand
+*** SUMMARY ***
+Total pot $0.19 | Rake $0
+Seat 1: Joueur1 (button) folded before Flop (didn't bet)
+Seat 2: Hero (small blind) folded before Flop
+Seat 3: Joueur3 (big blind) folded before Flop
+Seat 4: Joueur4 folded before Flop (didn't bet)
+Seat 5: Villain collected ($0.19)
+Seat 6: Revenant folded before Flop (didn't bet)
+
+
+
+PokerStars Zoom Hand #200000000003:  Hold'em No Limit ($0.05/$0.10) - 2026/11/07 19:00:00 CET [2026/11/07 13:00:00 ET]
+Table 'Exemple Zoom' 6-max Seat #1 is the button
+Seat 1: Hero ($10 in chips)
+Seat 2: Joueur2 ($10 in chips)
+Seat 3: Joueur3 ($10 in chips)
+Seat 4: Joueur4 ($10 in chips)
+Seat 5: Joueur5 ($10 in chips)
+Seat 6: Joueur6 ($10 in chips)
+Joueur2: posts small blind $0.05
+Joueur3: posts big blind $0.10
+*** HOLE CARDS ***
+Dealt to Hero [Ah Qd]
+Joueur4: folds
+Joueur5: folds
+Joueur6: folds
+Hero: raises $0.15 to $0.25
+Joueur2: folds
+Joueur3: calls $0.15
+*** FLOP *** [Kd 7c 2h]
+Joueur3: checks
+Hero: bets $0.18
+Joueur3: folds
+Uncalled bet ($0.18) returned to Hero
+Hero collected $0.53 from pot
+Hero: doesn't show hand
+*** SUMMARY ***
+Total pot $0.55 | Rake $0.02
+Board [Kd 7c 2h]
+Seat 1: Hero (button) collected ($0.53)
+Seat 2: Joueur2 (small blind) folded before Flop
+Seat 3: Joueur3 (big blind) folded on the Flop
+Seat 4: Joueur4 folded before Flop (didn't bet)
+Seat 5: Joueur5 folded before Flop (didn't bet)
+Seat 6: Joueur6 folded before Flop (didn't bet)

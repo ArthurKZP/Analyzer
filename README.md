@@ -12,10 +12,11 @@ Le paquet Python garde le nom `analyzer` : les commandes restent `python -m anal
 
 - Python 3.10+, **aucune dépendance** à installer (Pillow seulement pour lire de nouvelles captures de ranges ;
   Rust et git seulement pour installer le solveur postflop).
-- Sites supportés : **Betclic.fr**, **Winamax** et **Unibet** (cash game NLHE). Les mains **heads-up** ont toute
-  l'analyse ; celles des **tables de 3 à 9 joueurs**, réunies sous *Tables à plusieurs*, ont leurs stats par
-  position, leur Leakfinding, leur préflop face aux charts et leurs pots à deux au solveur (voir *Sites et formats
-  de table*). D'autres sites peuvent être ajoutés (voir plus bas).
+- Sites supportés (cash game NLHE) : **Betclic.fr**, **Winamax**, **Unibet**, **PokerStars**, **GGPoker**,
+  **HHPoker** (PokerMaster), **Winning Poker Network** (WPN), **iPoker** et **partypoker**. Les mains **heads-up**
+  ont toute l'analyse ; celles des **tables de 3 à 9 joueurs**, réunies sous *Tables à plusieurs*, ont leurs stats
+  par position, leur Leakfinding, leur préflop face aux charts et leurs pots à deux au solveur (voir *Sites et
+  formats de table*). D'autres sites peuvent être ajoutés (voir plus bas).
 
 ## Application
 
@@ -104,8 +105,8 @@ python -m analyzer --jours 30            # … celles des 30 derniers jours
 python -m analyzer --depuis 2026-09-01 --jusqu-au 2026-09-30   # … d'une date à une autre (l'une suffit)
 ```
 
-Ton pseudo est détecté automatiquement (tag `Hero` de Betclic, « Dealt to » de Winamax, compte entre crochets
-d'Unibet) ; sinon passe `--hero TonPseudo`.
+Ton pseudo est détecté automatiquement (tag `Hero` de Betclic, compte entre crochets d'Unibet, ailleurs la ligne
+« Dealt to » qui montre tes cartes) ; sinon passe `--hero TonPseudo`.
 Le terminal affiche un résumé ; le rapport complet est écrit dans `reports/<adversaire>.html`, la page
 préflop dans `reports/<adversaire>-preflop.html` et le visualiseur dans `reports/<adversaire>-spots.html`
 (ouvre-les dans ton navigateur, ils fonctionnent hors ligne).
@@ -629,8 +630,8 @@ par pot 4bet sur 4 cœurs : une vingtaine d'heures pour 430 mains, à étaler su
 Le rapport de ce qu'un joueur doit travailler en priorité : onglet *Leakfinding* de *Mon jeu* pour toi, et menu
 *Élèves* pour tes élèves. Chaque élève a son espace dans la base de données (ses historiques et ses mains,
 sauvegardés ; son dossier `~/.analyzer/eleves/<élève>/` sert de boîte d'arrivée) : ajoute-le
-(nom, et son pseudo à la table si tu le connais), importe les historiques qu'il t'envoie (Betclic, Winamax ou Unibet), et son
-rapport se construit. **Deux rapports** : *Heads-up* et *Tables à plusieurs* (toutes ses tables de 3 à 9 joueurs
+(nom, et son pseudo à la table si tu le connais), importe les historiques qu'il t'envoie (de tous les sites lus par
+Merlin), et son rapport se construit. **Deux rapports** : *Heads-up* et *Tables à plusieurs* (toutes ses tables de 3 à 9 joueurs
 ensemble ; les boutons en haut de la page, le dernier choisi est gardé), voir plus bas pour les tables à plusieurs.
 
 - **Les leaks à travailler** : les cinq plus importants, avec leur preuve chiffrée, leur confiance et la façon de les
@@ -1136,7 +1137,8 @@ Les fichiers autonomes (`python -m analyzer`, rapport téléchargé) gardent tou
 
 ```
 analyzer/
-  parsers/             lecture des historiques : betclic.py, winamax.py, unibet.py
+  parsers/             lecture des historiques : betclic.py, winamax.py, unibet.py, pokerstars.py (PokerStars,
+                       GGPoker, HHPoker), wpn.py, ipoker.py, partypoker.py
   ring.py              tables à 3 joueurs et plus : tes stats par position, tes adversaires et leurs fréquences
   models.py            modèle commun (Hand, Action, Seat)
   stats.py             lecture des situations HU et agrégation des stats
@@ -1208,10 +1210,17 @@ reports/               rapports générés (ignorés par git)
 | Betclic | étiquette `[Hero]` | heure de chaque action (temps de réflexion) ; un joueur qui arrive et poste petite et grosse blinde : la petite est morte (hors de sa mise) |
 | Winamax | ligne « Dealt to » | pot du résumé net du rake ; aux tables anonymes, « Incognito 2 » devient « Incognito-<identifiant> » (ligne *Player Info*) pour ne pas mélanger deux joueurs assis à la même place |
 | Unibet | compte entre crochets (`Pseudo[Unibet_…]`) | joueurs « sitting out » écartés (pas servis) ; gains lus sur « X wins » : le « won » du résumé compte la mise non payée rendue (« Uncalled bet returned »), qui ne doit pas l'être deux fois ; blindes d'entrée (« new player's blind » vivante, « missed small blind » morte) |
+| PokerStars | ligne « Dealt to » avec les cartes | mains Zoom comprises ; tournois et argent fictif écartés ; « All-in Cash Out » : le joueur reçoit le montant encaissé, frais déduits, et pas le pot ; un joueur qui revient : « small & big blinds » (la grosse vivante, la petite morte), petite blinde manquée morte |
+| GGPoker | `Hero` (ses adversaires : des identifiants) | tout le monde est servi (« Dealt to X » sans cartes) : le héros est celui dont on voit les cartes ; rake, jackpot et autres frais comptent ensemble ; « run it twice » : le premier tableau, les gains additionnés ; EV Cashout : la prime payée et le montant reçu comptent dans le résultat ; blinde manquée morte |
+| HHPoker | ligne « Dealt to » avec les cartes | format PokerStars (« PokerMaster Hand # ») ; antes mortes ; mains regardées sans toi gardées pour l'étude des adversaires |
+| WPN | ligne « Dealt to » | pas de deux-points après le nom ; pot du résumé net du rake et des frais du jackpot ; gains sur « collected », sinon dans le résumé ; « run it twice » comme GGPoker ; **bomb pots écartés** (pas de préflop : ils fausseraient les stats) |
+| iPoker | ligne « Dealt to » | cartes couleur puis rang (« D2 S10 » : 2♦ 10♠) ; « Raise X » : relance à X, « Allin X » : ce que le joueur ajoute ; pot du résumé net du rake ; tables anonymes regardées (tous les joueurs « Player N ») écartées |
+| partypoker | ligne « Dealt to » | montants entre crochets, ce que le joueur ajoute ; l'en-tête donne parfois la cave (« €25 EUR NL ») : les blindes viennent des blindes postées ; ni pot ni rake écrits : ils se déduisent des mises et des gains ; « big blind + dead » (la grosse vivante, la petite morte) |
 
 Ton pseudo peut changer d'un site à l'autre : le héros de chaque main prend le nom de tes pseudos réunis (celui que
 tu choisis dans *Paramètres*, sinon ton pseudo le plus fréquent), pour que *Mon jeu* réunisse tous les sites. Chaque
-joueur reçoit sa position (BTN, SB, BB, CO, HJ, UTG…) d'après le bouton et les blindes postées. L'import indique,
+joueur reçoit sa position (BTN, SB, BB, CO, HJ, UTG…) d'après le bouton et les blindes postées (bouton mort, sur une
+place vide ou un joueur absent : le dernier à parler avant les blindes fait le bouton). L'import indique,
 par fichier, le site et le nombre de mains en HU, 3-max, 6-max ou à 7-9 joueurs. Les mains heads-up (deux joueurs
 servis) ont toute l'analyse ; celles des tables de 3 joueurs et plus sont réunies sous *Tables à plusieurs*.
 L'**abattage** se déduit des actions, comme dans PokerTracker : une main y va quand au moins deux joueurs restent
@@ -1262,8 +1271,8 @@ tapis préflop. L'explorateur montre le préflop de toute la table et les vraies
 
 ### Ajouter un site
 
-Crée `analyzer/parsers/<site>.py` avec deux fonctions, `looks_like(text) -> bool` et
-`parse(text) -> Iterator[Hand]`, puis ajoute le module à `PARSERS` dans
+Crée `analyzer/parsers/<site>.py` avec trois fonctions, `looks_like(text) -> bool`, `count_hands(text) -> int` (la
+barre d'avancement de l'import) et `parse(text) -> Iterator[Hand]`, puis ajoute le module à `PARSERS` dans
 `analyzer/parsers/__init__.py`. Le reste (stats, rapport) fonctionne sans modification.
 Les montants d'une `Action` sont des incréments (`amount`) et le total engagé sur la street (`to`).
 

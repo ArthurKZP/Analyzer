@@ -83,7 +83,8 @@ class BetclicParserTest(unittest.TestCase):
 
     def test_unknown_format_is_rejected(self):
         with self.assertRaises(ValueError):
-            parse_text("PokerStars Hand #1: Hold'em No Limit")
+            parse_text("Partie n° 1 : Hold'em No Limit")
+        self.assertEqual(parse_text("PokerStars Hand #1: Hold'em No Limit"), [])  # un format connu, sans main lisible
 
     def test_duplicates_are_removed(self):
         hands = load_hands([FIXTURES, FIXTURES / "betclic_sample.txt"])

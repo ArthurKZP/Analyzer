@@ -1,0 +1,68 @@
+***** Hand History for Game 600000001 *****
+€2/€4 EUR NL Texas Hold'em - Thursday, March 23, 22:39:18 CET 2026
+Table Exemple (Real Money)
+Seat 3 is the button
+Total number of players : 6/6
+Seat 1: Revenant ( €693.92 EUR )
+Seat 4: Hero ( €861.10 EUR )
+Seat 6: Joueur6 ( €400 EUR )
+Seat 5: Villain ( €400 EUR )
+Seat 2: Joueur2 ( €400 EUR )
+Seat 3: Joueur3 ( €410.86 EUR )
+Hero posts small blind [€2 EUR].
+Villain posts big blind [€4 EUR].
+Revenant posts big blind + dead [6 €].
+** Dealing down cards **
+Dealt to Hero [  9h Jd ]
+Joueur6 folds
+Revenant checks
+Joueur2 folds
+Joueur3 folds
+Your time bank will be activated in 6 secs. If you do not want it to be used, please act now.
+Hero raises [€14 EUR]
+Villain calls [€12 EUR]
+Revenant calls [€12 EUR]
+** Dealing Flop ** [ 6s, 6h, Qh ]
+Hero checks
+Villain checks
+Revenant checks
+** Dealing Turn ** [ 2c ]
+Hero bets [€23.33 EUR]
+Villain folds
+Revenant raises [€93.32 EUR]
+Hero folds
+Revenant does not show cards.
+Revenant wins €162.65 EUR
+
+
+
+***** Hand History for Game 600000002 *****
+€25 EUR NL Texas Hold'em - Monday,November 6, 13:33:33 CET 2026
+Table Exemple (Real Money)
+Seat 1 is the button
+Total number of players : 3/6
+Seat 1: Joueur1 ( €25 EUR )
+Seat 5: Villain ( €47.68 EUR )
+Seat 6: Hero ( €26.16 EUR )
+Villain posts small blind [€0.10 EUR].
+Hero posts big blind [€0.25 EUR].
+** Dealing down cards **
+Dealt to Hero [ Kd, Jh ]
+Joueur1 folds
+Villain raises [ €0.52 EUR ]
+Hero raises [ €2.25 EUR ]
+Villain calls [ €1.88 EUR ]
+** Dealing Flop ** [ Ts, 5h, 4h ]
+Villain checks
+Hero bets [ €0.50 EUR ]
+Villain calls [ €0.50 EUR ]
+** Dealing Turn ** [ 3s ]
+Villain bets [ €3.73 EUR ]
+Hero calls [ €3.73 EUR ]
+** Dealing River ** [ 7c ]
+Villain bets [ €8.38 EUR ]
+Hero is all-In  [ €19.43 EUR ]
+Villain calls [ €11.05 EUR ]
+Villain shows [ Ad, Qh ]high card.
+Hero shows [ Kd, Jh ]high card.
+Villain wins €50.32 EUR from the main pot with High card

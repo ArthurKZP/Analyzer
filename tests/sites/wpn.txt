@@ -1,0 +1,151 @@
+Hand #400000001 - Holdem(No Limit) - $10.00/$20.00 - 2026/08/26 03:30:50 UTC
+Exemple 6-max Seat #1 is the button
+Seat 1: Joueur1 ($4028.23)
+Seat 2: Arrivant will be allowed to play after the button
+Seat 3: Hero ($2000.00)
+Seat 4: Villain ($2058.25)
+Seat 5: Patient ($2000.00)
+Seat 6: Joueur6 ($2171.24)
+Hero posts the small blind $10.00
+Villain posts the big blind $20.00
+Patient waits for big blind
+*** HOLE CARDS ***
+Dealt to Hero [Ac 6d]
+Joueur6 folds
+Joueur1 folds
+Hero raises $50.00 to $60.00
+Villain folds
+Uncalled bet ($40.00) returned to Hero
+Hero does not show
+*** SUMMARY ***
+Total pot $40.00
+Seat 1: Joueur1 (button) folded on the Pre-Flop
+Seat 3: Hero did not show and won $40.00
+Seat 4: Villain (big blind) folded on the Pre-Flop
+Seat 6: Joueur6 folded on the Pre-Flop and did not bet
+
+Hand #400000002 - Holdem(No Limit) - $5.00/$10.00 - 2026/10/23 15:28:34 UTC
+Exemple 6-max Seat #5 is the button
+Seat 1: Joueur1 ($1807.73)
+Seat 2: Hero ($1086.00)
+Seat 3: Joueur3 ($268.49)
+Seat 4: Joueur4 ($1327.93)
+Seat 5: Absent ($1000.00) is sitting out
+Seat 6: Villain ($1000.00)
+Villain posts the small blind $5.00
+Joueur1 sits out
+Hero posts the big blind $10.00
+*** HOLE CARDS ***
+Dealt to Hero [9s Ad]
+Joueur3 folds
+Joueur4 folds
+Villain raises $20.00 to $25.00
+Hero calls $15.00
+*** FLOP *** [7s 4d Kc]
+Main pot $47.75 | Rake $2.25
+Villain checks
+Hero checks
+*** TURN *** [7s 4d Kc] [Kd]
+Main pot $47.75 | Rake $2.25
+Villain bets $75.00
+Hero folds
+Uncalled bet ($75.00) returned to Villain
+Villain does not show
+*** SUMMARY ***
+Total pot $47.75 | Rake $2.01 | JP Fee $0.24
+Board [7s 4d Kc Kd]
+Seat 2: Hero (big blind) folded on the Turn
+Seat 3: Joueur3 folded on the Pre-Flop and did not bet
+Seat 4: Joueur4 folded on the Pre-Flop and did not bet
+Seat 6: Villain did not show and won $47.75
+
+Hand #400000003 - Holdem(No Limit) - $10.00/$20.00 - 2026/08/26 03:54:38 UTC
+Exemple 6-max Seat #4 is the button
+Seat 1: Joueur1 ($2198.58)
+Seat 2: Joueur2 ($1335.28)
+Seat 3: Hero ($2250.18)
+Seat 4: Villain ($2035.00)
+Seat 6: Joueur6 ($2566.49)
+Joueur6 posts the small blind $10.00
+Joueur1 posts the big blind $20.00
+*** HOLE CARDS ***
+Dealt to Hero [3d 5d]
+Joueur2 raises $45.00 to $45.00
+Hero folds
+Villain raises $140.00 to $140.00
+Joueur6 folds
+Joueur1 folds
+Joueur2 raises $270.00 to $315.00
+Villain calls $175.00
+*** FLOP *** [3s 6s Qh]
+Main pot $657.00 | Rake $3.00
+Joueur2 checks
+Villain checks
+*** TURN *** [3s 6s Qh] [Qd]
+Main pot $657.00 | Rake $3.00
+Joueur2 checks
+Villain bets $197.10
+Joueur2 raises $1020.28 to $1020.28 and is all-in
+Villain calls $823.18
+*** RUN IT TWICE ***
+*** RIVER 1 *** [3s 6s Qh Qd] [Jc]
+Main pot 1 $1348.78 | Rake $1.50
+*** SHOW DOWN 1 ***
+Main pot 1 $1348.78 | Rake $1.50
+Joueur2 shows [Ks Ts] (a pair of Queens [Qh Qd Ks Jc Ts])
+Villain shows [Jd Js] (a full house, Jacks full of Queens [Js Jd Jc Qh Qd])
+Villain collected $1348.78 from main pot 1
+*** RIVER 2 *** [3s 6s Qh Qd] [Td]
+Main pot 2 $1348.78 | Rake $1.50
+*** SHOW DOWN 2 ***
+Main pot 2 $1348.78 | Rake $1.50
+Joueur2 shows [Ks Ts] (two pair, Queens and Tens [Qh Qd Ts Td Ks])
+Villain shows [Jd Js] (two pair, Queens and Jacks [Qh Qd Js Jd Td])
+Villain collected $1348.78 from main pot 2
+*** SUMMARY ***
+Total pot $2697.56 | Rake $2.76 | JP Fee $0.24
+Board 1 [3s 6s Qh Qd Jc]
+Seat 1: Joueur1 (big blind) folded on the Pre-Flop
+Seat 2: Joueur2 showed [Ks Ts] and lost with a pair of Queens [Qh Qd Ks Jc Ts]
+Seat 3: Hero folded on the Pre-Flop and did not bet
+Seat 4: Villain (button) showed [Jd Js] and won $1348.78 with a full house, Jacks full of Queens [Js Jd Jc Qh Qd]
+Seat 6: Joueur6 (small blind) folded on the Pre-Flop
+Board 2 [3s 6s Qh Qd Td]
+Seat 1: Joueur1 (big blind) folded on the Pre-Flop
+Seat 2: Joueur2 showed [Ks Ts] and lost with two pair, Queens and Tens [Qh Qd Ts Td Ks]
+Seat 3: Hero folded on the Pre-Flop and did not bet
+Seat 4: Villain (button) showed [Jd Js] and won $1348.78 with two pair, Queens and Jacks [Qh Qd Js Jd Td]
+Seat 6: Joueur6 (small blind) folded on the Pre-Flop
+
+Hand #400000004 - Holdem(No Limit) - $3.00/$6.00 - 2026/01/17 06:38:51 UTC
+Exemple 6-max Seat #1 is the button
+Seat 1: Joueur1 ($638.82)
+Seat 2: Joueur2 ($1460.18)
+Seat 3: Hero ($600.00)
+Seat 4: Villain ($817.80)
+Joueur1 posts ante $30.00
+Joueur2 posts ante $30.00
+Hero posts ante $30.00
+Villain posts ante $30.00
+*** HOLE CARDS ***
+Main pot $120.00 | Rake $0.00
+Dealt to Hero [Th 4c]
+*** FLOP *** [Qh 3c 6d]
+Main pot $117.00 | Rake $3.00
+Joueur2 checks
+Hero checks
+Villain checks
+Joueur1 bets $60.00
+Joueur2 folds
+Hero folds
+Villain folds
+Uncalled bet ($60.00) returned to Joueur1
+Joueur1 does not show
+*** SUMMARY ***
+BombPot
+Total pot $117.00 | Rake $3.00
+Board [Qh 3c 6d]
+Seat 1: Joueur1 did not show and won $117.00
+Seat 2: Joueur2 folded on the Flop
+Seat 3: Hero folded on the Flop
+Seat 4: Villain folded on the Flop

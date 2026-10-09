@@ -223,7 +223,7 @@
       subtitle.textContent = 'Joue des mains sur les spots résolus : le solveur juge chaque décision';
     } else {
       title.textContent = 'Importer des mains';
-      subtitle.textContent = 'Historiques Betclic, Winamax, Unibet (.txt, dossier ou archive .zip) — les mains déjà présentes sont ignorées';
+      subtitle.textContent = 'Historiques de cash game NLHE (.txt, dossier ou archive .zip) — les mains déjà présentes sont ignorées';
     }
     document.title = (route.view === 'adv' ? route.player : title.textContent) + ' — Merlin';
   }
@@ -462,8 +462,8 @@
       el('div', { class: 'drop-title' }, 'Dépose tes historiques ici'),
       el('div', { class: 'muted' }, 'ou'),
       el('button', { type: 'button', class: 'primary', onclick: () => input.click() }, 'Choisir des fichiers'),
-      el('div', { class: 'muted small' }, 'Betclic, Winamax, Unibet (.txt) : plusieurs fichiers à la fois, un dossier, '
-        + 'ou une archive .zip avec ses dossiers'));
+      el('div', { class: 'muted small' }, 'Betclic, Winamax, Unibet, PokerStars, GGPoker, HHPoker, WPN, iPoker, partypoker '
+        + '(.txt) : plusieurs fichiers à la fois, un dossier, ou une archive .zip avec ses dossiers'));
     input.addEventListener('change', () => upload(input.files, result, student));
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
@@ -730,11 +730,16 @@
     if (singles.length > 20) {  // une archive ou un dossier : le bilan, puis le détail sur demande
       const count = {};
       singles.forEach((f) => { count[f.status] = (count[f.status] || 0) + 1; });
-      const plural = { 'importé': 'importés', 'déjà importé': 'déjà importés', vide: 'vides', 'format non reconnu': 'au format non reconnu' };
+      const plural = { 'importé': 'importés', 'déjà importé': 'déjà importés', vide: 'vides', 'format non reconnu': 'au format non reconnu',
+        'aucune main lue': 'sans main lue' };
       result.append(el('p', {}, singles.length + ' fichiers : '
         + Object.entries(count).map(([k, n]) => n + ' ' + (n > 1 && plural[k] || k)).join(', ') + '.'));
       result.append(el('details', {}, el('summary', {}, 'Détail par fichier'), table));
     } else result.append(table);
+    if (data.files.some((f) => f.status === 'aucune main lue')) {
+      result.append(el('p', { class: 'small' }, 'Merlin lit les parties de cash game en No Limit Hold\'em : les tournois '
+        + 'et les autres variantes sont laissés de côté.'));
+    }
     if (data.files.some((f) => f.formats && Object.keys(f.formats).some((k) => k !== 'HU'))) {
       result.append(el('p', { class: 'small' }, 'Les mains heads-up vont dans toute l\'analyse (adversaires, solveur, '
         + 'leakfinding) ; celles des tables à 3 joueurs et plus ont leur leakfinding (6-max, 3-max), leurs mains de '
