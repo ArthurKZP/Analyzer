@@ -73,7 +73,11 @@ KIND_SCRIPT = """
 document.querySelectorAll('select.lk-kind').forEach(function (sel) {
   sel.addEventListener('change', function () {
     fetch('/api/joueurs', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: sel.dataset.name, kind: sel.value || null }) }).then(function () { location.reload(); });
+      body: JSON.stringify({ name: sel.dataset.name, kind: sel.value || null }) }).then(function () {
+      // le menu de l'application (les « réc. » des adversaires) suit
+      if (window.parent !== window) window.parent.postMessage({ type: 'analyzer-refresh' }, location.origin);
+      location.reload();
+    });
   });
 });
 """

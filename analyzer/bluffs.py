@@ -470,6 +470,50 @@ def clusters(profs: list[Profile], gap: float = CLUSTER_GAP) -> list[Cluster]:
 
 # --- 4. Ce qui ressort ------------------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class Voice:
+    """Qui agit dans les textes : un joueur (« Villain mise », puis il, ses) ou un groupe (« les réguliers misent »,
+    puis ils, leurs), pour qu'on sache toujours de qui on parle."""
+    subject: str = "il"
+    plural: bool = False
+
+    def verb(self, singular: str, plural: str) -> str:
+        return plural if self.plural else singular
+
+    @property
+    def pron(self) -> str:       # il / ils
+        return "ils" if self.plural else "il"
+
+    @property
+    def poss(self) -> str:       # ses / leurs (pluriel)
+        return "leurs" if self.plural else "ses"
+
+    @property
+    def poss_one(self) -> str:   # sa / leur (féminin singulier)
+        return "leur" if self.plural else "sa"
+
+    @property
+    def obj(self) -> str:        # relance-le / relance-les
+        return "les" if self.plural else "le"
+
+    @property
+    def of(self) -> str:         # « de Villain », « d'Adversaire1 », « des réguliers » ; rien pour « il »
+        if self.subject == "il":
+            return ""
+        if self.subject.startswith("les "):
+            return "des " + self.subject[4:]
+        return ("d'" if self.subject[:1].lower() in "aeiouyàâäéèêëîïôöùûü" else "de ") + self.subject
+
+
+def voice_of(names: list[str]) -> Voice:
+    """Un joueur : son nom ; plusieurs : « ces joueurs »."""
+    return Voice(names[0]) if len(names) == 1 else Voice("ces joueurs", plural=True)
+
+
+def _cap(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
 @dataclass
 class Pattern:
     source: str         # fréquences, abattage, timing
@@ -493,12 +537,14 @@ def _where(street: str, value: str) -> str:
     return f"sur un flop {value}" if street == "flop" else f"quand {CARD_TEXT.get(value, value)} tombe"
 
 
-def _freq_pattern(f: Freq, shown: list[Shown]) -> Pattern:
+def _freq_pattern(f: Freq, shown: list[Shown], voice: Voice = Voice()) -> Pattern:
     direction, conf = f.verdict
     p, ref = f.rate, f.reference
+    v = voice
     pot = f" ({FAMILY_NAMES[f.family]})" if f.family else " (autres pots)"
-    title = f"{f.spot.label}{pot} : il mise {'bien plus' if direction == 'plus' else 'bien moins'} " + (
-        "que la théorie " if f.solver is not None else "que d'habitude ") + _where(f.spot.street, f.feature)
+    title = (f"{f.spot.label}{pot} : {v.subject} {v.verb('mise', 'misent')} "
+             f"{'bien plus' if direction == 'plus' else 'bien moins'} "
+             + ("que la théorie " if f.solver is not None else "que d'habitude ") + _where(f.spot.street, f.feature))
     against = f"{_pct(ref)} pour le solveur" if f.solver is not None else f"{_pct(ref)} sur les autres cartes"
     many = f" de {len(f.players)} joueurs (moyenne des joueurs : un gros volume ne compte pas plus)" \
         if len(f.players) > 1 else ""
@@ -506,53 +552,60 @@ def _freq_pattern(f: Freq, shown: list[Shown]) -> Pattern:
     seen = [s for s in shown if s.street == f.spot.street and s.feature == f.feature]
     if seen:  # ce que montrent ses mises vues à l'abattage sur ces cartes (toutes lignes)
         what = "bluff(s)" if f.spot.street == "river" else "sans main faite"
-        evidence += (f" ; à l'abattage, {sum(s.bluff for s in seen)} {what} sur {len(seen)} de ses mises montrées "
-                     "sur ces cartes")
+        evidence += (f" ; à l'abattage, {sum(s.bluff for s in seen)} {what} sur {len(seen)} de {v.poss} mises "
+                     "montrées sur ces cartes")
     if direction == "plus":
-        advice = ("Ses mises y sont plus légères : défends plus large (paie tes bluff-catchers) et relance-le plus "
-                  "souvent, en bluff comme en value.")
+        advice = (f"{_cap(v.poss)} mises y sont plus légères : défends plus large (paie tes bluff-catchers) et "
+                  f"relance-{v.obj} plus souvent, en bluff comme en value.")
     else:
-        advice = ("Quand il mise malgré tout, c'est surtout de la value : folde tes bluff-catchers faibles. Ses checks y "
-                  "cachent les bluffs qu'il abandonne : attaque le pot quand il checke.")
+        advice = (f"Quand {v.pron} {v.verb('mise', 'misent')} malgré tout, c'est surtout de la value : folde tes "
+                  f"bluff-catchers faibles. {_cap(v.poss)} checks y cachent les bluffs "
+                  f"qu'{v.pron} {v.verb('abandonne', 'abandonnent')} : attaque le pot quand {v.pron} "
+                  f"{v.verb('checke', 'checkent')}.")
     return Pattern("fréquences", f.spot.street, direction, conf, title, evidence, advice,
                    _score(conf, abs(p - ref), f.sample.opps))
 
 
-def _shown_pattern(g: Group) -> Pattern:
+def _shown_pattern(g: Group, voice: Voice = Voice()) -> Pattern:
     direction, conf = g.verdict
     r, share = g.ratio, _rate(g.sample)
+    v = voice
+    of = v.of
     if g.dimension == "line":
-        what = f"sa ligne « {g.value} »"
+        what = f"la ligne « {g.value} » {of}" if of else f"{v.poss_one} ligne « {g.value} »"
     elif g.dimension == "size":
-        what = f"ses mises {g.value}"
+        what = f"les mises {g.value} {of}" if of else f"{v.poss} mises {g.value}"
     else:
-        what = f"ses mises {_where(g.street, g.value)}"
+        what = f"les mises {of} {_where(g.street, g.value)}" if of else f"{v.poss} mises {_where(g.street, g.value)}"
     verdict = "souvent des bluffs" if direction == "plus" else "presque toujours de la value"
     title = f"{STREET_AT[g.street]}, {what} : {verdict}"
     if g.street == "river":
         evidence = (f"{r.hits} bluff(s) sur {r.opps} montrées ({_pct(share)}), contre {_pct(g.reference)} "
                     "pour la théorie à ces tailles")
-        advice = ("Paie tes bluff-catchers dans cette ligne : il bluffe plus que l'équité qu'il te faut pour payer."
+        advice = (f"Paie tes bluff-catchers dans cette ligne : {v.pron} {v.verb('bluffe', 'bluffent')} plus que "
+                  "l'équité qu'il te faut pour payer."
                   if direction == "plus" else
-                  "Folde tes bluff-catchers dans cette ligne : il ne bluffe pas assez pour que payer rapporte.")
+                  f"Folde tes bluff-catchers dans cette ligne : {v.pron} ne {v.verb('bluffe', 'bluffent')} pas assez "
+                  "pour que payer rapporte.")
     else:
         evidence = (f"{r.hits} sans main faite (bluffs et semi-bluffs) sur {r.opps} montrées "
-                    f"({_pct(share)}), contre {_pct(g.reference)} pour l'ensemble de ses mises à cette street")
-        advice = ("Ses mises y sont souvent sans main faite : défends plus large et relance-le."
+                    f"({_pct(share)}), contre {_pct(g.reference)} pour l'ensemble de {v.poss} mises à cette street")
+        advice = (f"{_cap(v.poss)} mises y sont souvent sans main faite : défends plus large et relance-{v.obj}."
                   if direction == "plus" else
-                  "Ses mises y sont presque toujours de la value : folde tes bluff-catchers faibles.")
+                  f"{_cap(v.poss)} mises y sont presque toujours de la value : folde tes bluff-catchers faibles.")
     if len(_by_player(g.items)) > 1:
         evidence += " (moyenne des joueurs)"
     return Pattern("abattage", g.street, direction, conf, title, evidence, advice,
                    _score(conf, abs(share - g.reference), g.sample.opps))
 
 
-def patterns(freqs: list[Freq], groups: list[Group], times: list[dict]) -> list[Pattern]:
+def patterns(freqs: list[Freq], groups: list[Group], times: list[dict], voice: Voice = Voice()) -> list[Pattern]:
     """Ce qui ressort, du plus net au moins net. Deux groupes de mains montrées identiques (une ligne qui n'a
-    qu'une taille, par exemple) ne comptent qu'une fois."""
+    qu'une taille, par exemple) ne comptent qu'une fois. voice : de qui on parle (un joueur, les réguliers…)."""
+    v = voice
     shown = [s for g in groups for s in g.items]
     shown = list({(s.hand.hand_id, s.index): s for s in shown}.values())
-    out = [_freq_pattern(f, shown) for f in freqs if f.verdict]
+    out = [_freq_pattern(f, shown, v) for f in freqs if f.verdict]
     seen: set = set()
     for g in groups:
         if not g.verdict:
@@ -561,14 +614,15 @@ def patterns(freqs: list[Freq], groups: list[Group], times: list[dict]) -> list[
         if key in seen:
             continue
         seen.add(key)
-        out.append(_shown_pattern(g))
+        out.append(_shown_pattern(g, v))
     for t in times:
         if abs(t["bluff"] - t["value"]) >= 2 and max(t["bluff"], t["value"]) >= 1.5 * min(t["bluff"], t["value"]):
             slower = t["bluff"] > t["value"]
-            title = (f"Timing {STREET_AT[t['street']].lower().replace('au ', 'au ').replace('à la ', 'à la ')} : il "
-                     f"{'réfléchit plus longtemps' if slower else 'va plus vite'} quand il bluffe")
-            evidence = (f"médiane {t['bluff']:.0f} s pour ses bluffs ({t['n'][0]}), {t['value']:.0f} s pour sa value "
-                        f"({t['n'][1]})")
+            title = (f"Timing {STREET_AT[t['street']].lower()} : {v.subject} "
+                     f"{v.verb('réfléchit', 'réfléchissent') + ' plus longtemps' if slower else v.verb('va', 'vont') + ' plus vite'}"
+                     f" quand {v.pron} {v.verb('bluffe', 'bluffent')}")
+            evidence = (f"médiane {t['bluff']:.0f} s pour {v.poss} bluffs ({t['n'][0]}), {t['value']:.0f} s pour "
+                        f"{v.poss_one} value ({t['n'][1]})")
             advice = ("Une mise lente est plus souvent un bluff : paie plus volontiers." if slower else
                       "Une mise rapide est plus souvent un bluff ; une mise lente, de la value.")
             conf = "solide" if min(t["n"]) >= 8 else "à confirmer"
@@ -595,10 +649,11 @@ class Report:
     clusters: list = field(default_factory=list)  # … et les groupes de profils proches
 
 
-def analyze(hands: list[Hand], names: Iterable[str], hero: str) -> Report:
+def analyze(hands: list[Hand], names: Iterable[str], hero: str, voice: Optional[Voice] = None) -> Report:
     """Tout ce qu'on sait de ses bluffs : fréquences par carte, mains montrées, patterns ; pour plusieurs joueurs,
-    leurs profils et leurs groupes."""
+    leurs profils et leurs groupes. voice : de qui parlent les textes (par défaut son nom, ou « ces joueurs »)."""
     names = list(names)
+    voice = voice or voice_of(names)
     mine = [h for h in hands if set(names) & set(h.seats) and hero in h.seats]
     bets = sum(1 for h in mine for a in h.actions
                if a.player in names and a.street != "preflop" and a.kind in (BET, RAISE))
@@ -606,7 +661,7 @@ def analyze(hands: list[Hand], names: Iterable[str], hero: str) -> Report:
     shown = shown_bets(mine, names, hero)
     groups = shown_groups(shown)
     times = timing(shown)
-    report = Report(names, len(mine), bets, freqs, shown, groups, times, patterns(freqs, groups, times))
+    report = Report(names, len(mine), bets, freqs, shown, groups, times, patterns(freqs, groups, times, voice))
     if len(names) > 1:
         seen = Counter(n for h in mine for n in set(names) & set(h.seats))
         report.profiles = sorted(profiles(freqs, shown, dict(seen)), key=lambda p: -p.hands)

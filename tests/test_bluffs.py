@@ -101,6 +101,15 @@ class PatternTest(unittest.TestCase):
         found = bluffs.patterns([f], bluffs.shown_groups(items), times)
         first = found[0]
         self.assertEqual(first.title, "2e barrel (SRP) : il mise bien plus que la théorie quand une overcard tombe")
+        # de qui on parle : un joueur nommé, ou les réguliers (au pluriel)
+        named = bluffs.patterns([f], bluffs.shown_groups(items), times, bluffs.Voice("Villain"))
+        self.assertEqual(named[0].title, "2e barrel (SRP) : Villain mise bien plus que la théorie quand une overcard tombe")
+        many = bluffs.patterns([f], bluffs.shown_groups(items), times, bluffs.Voice("les réguliers", plural=True))
+        self.assertEqual(many[0].title,
+                         "2e barrel (SRP) : les réguliers misent bien plus que la théorie quand une overcard tombe")
+        self.assertIn("relance-les", many[0].advice)
+        self.assertTrue(any(p.source == "timing" and "les réguliers réfléchissent plus longtemps quand ils bluffent"
+                            in p.title for p in many))
         self.assertIn("90 % sur 20 occasions, contre 50 % pour le solveur", first.evidence)
         self.assertIn("3 sans main faite sur 6", first.evidence)  # ses mises montrées sur ces cartes
         self.assertTrue(any(p.source == "timing" and "plus longtemps" in p.title for p in found))
@@ -158,6 +167,7 @@ class PopulationTest(unittest.TestCase):
                                  players=[{"name": n, "hands": h, "shown": 0, "river": 0, "top": None,
                                            "weight": profs[n].weight, "share": profs[n].share, "group": profs[n].group}
                                           for n, h in hands.items()])
-        for text in ("Profils des réguliers", "A (900), B (400), C (200)", "Trop peu de mains pour un profil : F",
-                     "Part des occasions", "moyenne des joueurs"):
+        for text in ("Profils des réguliers", "A (900), B (400), C (200)", "Trop peu de mains pour un profil : 1 régulier",
+                     "Part des occasions", "moyenne des joueurs", "Leurs mises selon la carte", "Ils misent"):
             self.assertIn(text, page)
+        self.assertNotIn("Il mise", page)  # plusieurs joueurs : on parle d'eux au pluriel

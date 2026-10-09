@@ -19,8 +19,13 @@
       <a href="#/eleves" data-view="eleves">Élèves</a>
       <a href="#/importer" data-view="importer">Importer des mains</a>
       <a href="#/sauvegarde" data-view="sauvegarde">Sauvegarde</a>
+      <a href="#/parametres" data-view="parametres">Paramètres</a>
     </nav>
     <div class="opp-head">Adversaires <span id="opp-count"></span></div>
+    <div class="opp-fmt" id="opp-fmt" role="group" aria-label="Format des adversaires" hidden>
+      <button type="button" data-fmt="HU" aria-pressed="true">Heads-up</button>
+      <button type="button" data-fmt="ring" aria-pressed="false">À plusieurs</button>
+    </div>
     <input class="search" id="opp-search" type="search" placeholder="Rechercher un joueur" aria-label="Rechercher un adversaire">
     <div class="opp-sorts">
       <select id="opp-sort" aria-label="Trier les adversaires">

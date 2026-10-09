@@ -6,7 +6,9 @@
   const TABS = {
     moi: [['bilan', 'Bilan'], ['leaks', 'Leakfinding'], ['mains', 'Mains de départ'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots'],
       ['solveur', 'Face au solveur'], ['tables', 'Tables à plusieurs']],
-    field: [['bluffs', 'Bluffs des réguliers'], ['joueurs', 'Les joueurs']],  // étude du field : tes adversaires
+    // étude du field : le leakfinding de tes adversaires (réguliers, récréatifs), les bluffs des réguliers en heads-up
+    field: [['regs', 'Réguliers'], ['recs', 'Récréatifs'], ['bluffs', 'Bluffs des réguliers']],
+    parametres: [['general', 'Général'], ['joueurs', 'Joueurs et alias']],
     eleve: [['leaks', 'Leakfinding'], ['mains', 'Mains de départ'], ['preflop', 'Préflop'], ['solveur', 'Face au solveur'], ['spots', 'Mains'],
       ['tables', 'Tables à plusieurs'], ['importer', 'Importer']],
     adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
@@ -17,6 +19,14 @@
       ['coups', 'Coups joués']],
   };
   const FORMAT_TABS = ['bilan', 'leaks', 'preflop'];  // pages qui ont un choix heads-up / tables à plusieurs
+  // Les formats que tu joues (Paramètres) : sans choix, tous. Un format que tu ne joues pas sort des menus.
+  const plays = (fmt) => !state || !state.settings || !state.settings.plays || state.settings.plays.includes(fmt);
+  const HIDDEN_TABS = { HU: { moi: ['spots', 'solveur'], field: ['bluffs'], etudes: ['hu'] },
+    ring: { moi: ['tables'], etudes: ['6max'] } };
+  function tabsOf(view) {
+    const hidden = ['HU', 'ring'].filter((f) => !plays(f)).flatMap((f) => HIDDEN_TABS[f][view] || []);
+    return (TABS[view] || []).filter(([id]) => !hidden.includes(id));
+  }
   const HU_SERIES = ['srp', '3bet', '4bet'];  // anciens onglets des études : l'onglet Heads-up
   let state = null;
   let route = null;
@@ -62,7 +72,10 @@
   // ---------- navigation ----------
   function parseRoute() {
     const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
-    const tabOf = (view, name, fallback) => (TABS[view].some(([id]) => id === name) ? name : fallback);
+    const tabOf = (view, name, fallback) => {
+      const list = tabsOf(view);
+      return list.some(([id]) => id === name) ? name : list.some(([id]) => id === fallback) ? fallback : (list[0] || [fallback])[0];
+    };
     if (parts[0] === 'importer') return { view: 'importer' };
     if (parts[0] === 'etudes' && HU_SERIES.includes(parts[1])) return { view: 'etudes', tab: 'hu', family: parts[1] };
     if (parts[0] === 'etudes') return { view: 'etudes', tab: tabOf('etudes', parts[1], 'explorateur') };
@@ -71,7 +84,11 @@
     if (parts[0] === 'adversaire' && parts[1]) return { view: 'adv', player: parts[1], tab: tabOf('adv', parts[2], 'plan') };
     if (parts[0] === 'moi' && parts[1] === 'bluffs') return { view: 'field', tab: 'bluffs' };  // ancienne adresse
     if (parts[0] === 'moi') return { view: 'moi', tab: tabOf('moi', parts[1], 'bilan') };
-    if (parts[0] === 'field') return { view: 'field', tab: tabOf('field', parts[1], 'bluffs') };
+    if (parts[0] === 'field' && parts[1] === 'joueurs') return { view: 'parametres', tab: 'joueurs' };  // ancienne adresse
+    if (parts[0] === 'field' && parts[1] === 'joueur' && parts[2]) return { view: 'field', tab: 'joueur', player: parts[2], fmt: parts[3] || null };
+    if (parts[0] === 'field' && parts[1] === 'groupe' && parts[2]) return { view: 'field', tab: 'groupe', group: parts[2], fmt: parts[3] || null };
+    if (parts[0] === 'field') return { view: 'field', tab: tabOf('field', parts[1], 'regs') };
+    if (parts[0] === 'parametres') return { view: 'parametres', tab: tabOf('parametres', parts[1], 'general') };
     if (parts[0] === 'eleves') return { view: 'eleves' };
     if (parts[0] === 'eleve' && parts[1]) return { view: 'eleve', student: parts[1], tab: tabOf('eleve', parts[2], 'leaks') };
     return hasHands() || hasAnyHands() ? { view: 'moi', tab: 'bilan' } : { view: 'importer' };
@@ -80,7 +97,10 @@
   function hashFor(r) {
     if (r.view === 'adv') return '#/adversaire/' + encodeURIComponent(r.player) + '/' + r.tab;
     if (r.view === 'moi') return '#/moi/' + r.tab;
+    if (r.view === 'field' && r.tab === 'joueur') return '#/field/joueur/' + encodeURIComponent(r.player) + (r.fmt ? '/' + r.fmt : '');
+    if (r.view === 'field' && r.tab === 'groupe') return '#/field/groupe/' + encodeURIComponent(r.group) + (r.fmt ? '/' + r.fmt : '');
     if (r.view === 'field') return '#/field/' + r.tab;
+    if (r.view === 'parametres') return '#/parametres/' + r.tab;
     if (r.view === 'etudes') return '#/etudes/' + r.tab;
     if (r.view === 'entraineur') return '#/entraineur';
     if (r.view === 'sauvegarde') return '#/sauvegarde';
@@ -91,9 +111,19 @@
 
   function srcFor(r) {
     if (r.view === 'adv') return '/p/' + encodeURIComponent(r.player) + '/' + r.tab;
-    if (r.view === 'etudes') return r.tab === 'explorateur' ? '/explorateur/preflop' : '/etudes/' + r.tab + (r.family ? '#' + r.family : '');
+    if (r.view === 'etudes') {  // l'explorateur part du 6-max quand tu ne joues pas le heads-up
+      if (r.tab === 'explorateur') return '/explorateur/preflop' + (plays('HU') ? '' : '#table=6-max');
+      return '/etudes/' + r.tab + (r.family ? '#' + r.family : '');
+    }
     if (r.view === 'entraineur') return '/entraineur';
-    if (r.view === 'field') return '/field/' + r.tab;
+    if (r.view === 'parametres') return '/parametres/' + r.tab;
+    if (r.view === 'field') {  // le format choisi en dernier dans l'Étude du field (ou celui de la fiche)
+      const fmt = r.fmt || pref('format:/field');
+      const query = fmt ? '?format=' + encodeURIComponent(fmt) : '';
+      if (r.tab === 'joueur') return '/field/joueur/' + encodeURIComponent(r.player) + query;
+      if (r.tab === 'groupe') return '/field/groupe/' + encodeURIComponent(r.group) + query;
+      return '/field/' + r.tab + query;
+    }
     const space = r.view === 'eleve' ? '/eleve/' + encodeURIComponent(r.student) : '/moi';
     // le dernier format choisi (heads-up ou tables à plusieurs), le même pour le bilan, le Leakfinding et le préflop
     const fmt = FORMAT_TABS.includes(r.tab) ? pref('format:' + space) : null;
@@ -118,7 +148,7 @@
     markActive();
     if (route.view === 'importer') return showImport();
     // sans mains : les spots d'étude suffisent à l'entraîneur et à l'explorateur
-    if (route.view === 'entraineur' || route.view === 'etudes') return showFrame(srcFor(route));
+    if (route.view === 'entraineur' || route.view === 'etudes' || route.view === 'parametres') return showFrame(srcFor(route));
     if (route.view === 'sauvegarde') return showBackup();
     if (route.view === 'eleves') return showStudents();
     if (route.view === 'eleve') {
@@ -160,9 +190,18 @@
         ? state.hands + ' mains contre ' + state.opponents.length + ' adversaire(s) · ' + state.first + ' → ' + state.last
           + (state.ring_hands ? ' · ' + state.ring_hands + ' mains aux tables à plusieurs' : '')
         : state.ring_hands ? state.ring_hands + ' mains aux tables à plusieurs' : '';
+    } else if (route.view === 'field' && route.tab === 'joueur') {
+      title.textContent = route.player;
+      subtitle.textContent = 'Étude du field : ses leaks à exploiter, sa value et ses bluffs ligne par ligne';
+    } else if (route.view === 'field' && route.tab === 'groupe') {
+      title.textContent = 'Récréatifs ' + ({ passif: 'passifs', agressif: 'agressifs', prudent: 'prudents' }[route.group] || 'sans style marqué');
+      subtitle.textContent = 'Étude du field : comment les jouer, leurs leaks et leurs lignes réunis';
     } else if (route.view === 'field') {
       title.textContent = 'Étude du field';
-      subtitle.textContent = 'Comment jouent tes adversaires : les bluffs des réguliers, qui est régulier ou récréatif';
+      subtitle.textContent = 'Comment jouent tes adversaires : leurs leaks à exploiter, leur value et leurs bluffs';
+    } else if (route.view === 'parametres') {
+      title.textContent = 'Paramètres';
+      subtitle.textContent = 'Ton pseudo, ce que tu joues, tes élèves, le type de tes adversaires et leurs alias';
     } else if (route.view === 'etudes') {
       title.textContent = 'Études du solveur';
       subtitle.textContent = 'Coups résolus avec GTOpen, gardés sur ton ordinateur pour être réexplorés';
@@ -215,8 +254,8 @@
   function renderTabs() {
     const tabs = $('tabs');
     tabs.textContent = '';
-    const list = TABS[route.view] || [];
-    tabs.hidden = !list.length || (!hasHands() && !hasAnyHands() && route.view !== 'etudes' && route.view !== 'eleve');
+    const list = tabsOf(route.view);
+    tabs.hidden = !list.length || (!hasHands() && !hasAnyHands() && !['etudes', 'eleve', 'parametres'].includes(route.view));
     for (const [id, label] of list) {
       const r = Object.assign({}, route, { tab: id });
       tabs.append(el('a', { href: hashFor(r), 'aria-current': id === route.tab ? 'page' : null }, label));
@@ -229,18 +268,36 @@
       a.setAttribute('aria-current', a.dataset.view === view ? 'page' : 'false');
     });
     document.querySelectorAll('.opps a').forEach((a) => {
-      a.setAttribute('aria-current', route.view === 'adv' && a.dataset.name === route.player ? 'page' : 'false');
+      const current = a.dataset.fmt === 'ring' ? route.view === 'field' && route.tab === 'joueur' : route.view === 'adv';
+      a.setAttribute('aria-current', current && a.dataset.name === route.player ? 'page' : 'false');
     });
   }
 
   // ---------- menu latéral ----------
+  // Le menu des adversaires : ceux du heads-up (leur fiche) ou ceux des tables à plusieurs (leur fiche du field), selon
+  // les formats que tu joues ; avec les deux, un choix (gardé).
+  function oppFormat() {
+    const both = plays('HU') && plays('ring') && state.opponents.length && (state.ring_opponents || []).length;
+    if (both) return pref('opp-fmt') === 'ring' ? 'ring' : 'HU';
+    return plays('HU') && (state.opponents.length || !(state.ring_opponents || []).length) ? 'HU' : 'ring';
+  }
+
   function renderSidebar() {
     $('hero-name').textContent = state.hero ? 'Toi : ' + state.hero : 'Aucune main chargée';
+    // Paramètres : les Élèves si tu es coach, l'entraîneur (spots heads-up) si tu joues le heads-up
+    document.querySelector('.nav a[data-view="eleves"]').hidden = !(state.settings ? state.settings.coach : true);
+    document.querySelector('.nav a[data-view="entraineur"]').hidden = !plays('HU');
+    const fmt = oppFormat();
+    const switcher = $('opp-fmt');
+    const both = plays('HU') && plays('ring') && state.opponents.length && (state.ring_opponents || []).length;
+    switcher.hidden = !both;
+    switcher.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.fmt === fmt)));
+    const source = fmt === 'HU' ? state.opponents : (state.ring_opponents || []);
     const plain = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();  // sans accents
     const q = plain($('opp-search').value.trim()), kind = $('opp-kind').value, sort = $('opp-sort').value;
     const list = $('opps');
     list.textContent = '';
-    const shown = state.opponents.filter((o) => (!q || plain(o.name).includes(q)) && (!kind || o.kind === kind));
+    const shown = source.filter((o) => (!q || plain(o.name).includes(q)) && (!kind || o.kind === kind));
     const day = (d) => d.split('/').reverse().join('-');  // jj/mm/aaaa -> aaaa-mm-jj, pour comparer
     const order = {
       hands: (a, b) => b.hands - a.hands, net: (a, b) => b.net_bb - a.net_bb, loss: (a, b) => a.net_bb - b.net_bb,
@@ -248,16 +305,17 @@
       name: (a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }),
     }[sort] || ((a, b) => b.hands - a.hands);
     shown.sort((a, b) => order(a, b) || b.hands - a.hands);
-    const total = state.opponents.length;
+    const total = source.length;
     $('opp-count').textContent = !total ? '' : shown.length === total ? '(' + total + ')' : '(' + shown.length + ' / ' + total + ')';
     for (const o of shown) {
-      list.append(el('li', {}, el('a', { href: '#/adversaire/' + encodeURIComponent(o.name), 'data-name': o.name },
+      const href = fmt === 'HU' ? '#/adversaire/' + encodeURIComponent(o.name) : '#/field/joueur/' + encodeURIComponent(o.name) + '/ring';
+      list.append(el('li', {}, el('a', { href, 'data-name': o.name, 'data-fmt': fmt },
         el('span', { class: 'n' }, o.name, o.kind === 'rec' ? el('span', { class: 'k', title: 'Récréatif' }, 'réc.') : null),
         el('span', { class: 'h' }, o.hands + ' mains'),
         el('span', { class: 'r ' + tone(o.net_bb) }, signed(o.net_bb) + ' bb'))));
     }
     if (!shown.length) {
-      list.append(el('li', { class: 'muted' }, state.opponents.length ? 'Aucun joueur ne correspond.'
+      list.append(el('li', { class: 'muted' }, source.length ? 'Aucun joueur ne correspond.'
         : state.period && state.period.kind !== 'all' ? 'Aucun adversaire sur cette période.' : 'Aucun adversaire pour l\'instant.'));
     }
     if (route) markActive();
@@ -705,8 +763,8 @@
   // Une page du cadre a suivi un lien interne (ex. « voir les mains ») : on met l'onglet à jour.
   window.addEventListener('message', (e) => {
     if (e.origin !== location.origin || !e.data) return;
-    if (e.data.type === 'analyzer-refresh') {  // une page a changé les noms des joueurs (alias) : le menu suit
-      loadState().catch(() => {});
+    if (e.data.type === 'analyzer-refresh') {  // une page a changé les noms (alias) ou les Paramètres : le menu suit
+      loadState().then(() => { renderHeader(); renderTabs(); markActive(); }).catch(() => {});
       return;
     }
     if (e.data.type !== 'analyzer-page') return;
@@ -721,12 +779,21 @@
     if (parts[0] === 'p' && parts.length === 3) r = { view: 'adv', player: parts[1], tab: parts[2] };
     else if (parts[0] === 'moi' && parts.length === 2) r = parts[1] === 'bluffs' ? { view: 'field', tab: 'bluffs' } : { view: 'moi', tab: parts[1] };
     else if (parts[0] === 'field' && parts.length === 2) r = { view: 'field', tab: parts[1] };
+    else if (parts[0] === 'field' && parts.length === 3 && parts[1] === 'joueur') r = { view: 'field', tab: 'joueur', player: parts[2] };
+    else if (parts[0] === 'field' && parts.length === 3 && parts[1] === 'groupe') r = { view: 'field', tab: 'groupe', group: parts[2] };
+    else if (parts[0] === 'parametres' && parts.length === 2) r = { view: 'parametres', tab: parts[1] };
     else if (parts[0] === 'etudes' && parts.length <= 2) r = { view: 'etudes', tab: !parts[1] || HU_SERIES.includes(parts[1]) ? 'hu' : parts[1] };
     else if (parts[0] === 'entraineur' && parts.length === 1) r = { view: 'entraineur' };
     else if (parts[0] === 'eleve' && parts.length === 3) r = { view: 'eleve', student: parts[1], tab: parts[2] };
     if (!r) return;
+    if (r.view === 'field') {  // le format de la page : gardé pour les pages suivantes du field
+      const fmt = new URLSearchParams(e.data.search || '').get('format');
+      if (fmt && ['regs', 'recs'].includes(r.tab)) pref('format:/field', fmt === 'HU' ? 'HU' : 'ring');
+      if (fmt && (r.tab === 'joueur' || r.tab === 'groupe')) r.fmt = fmt === 'HU' ? 'HU' : 'ring';
+    }
     frame.dataset.src = srcFor(r);
-    if (route && route.view === r.view && route.player === r.player && route.tab === r.tab) return;
+    if (route && route.view === r.view && route.player === r.player && route.tab === r.tab && route.group === r.group
+      && (route.fmt || null) === (r.fmt || null)) return;
     route = r;
     history.replaceState(null, '', hashFor(r));
     renderHeader();
@@ -735,6 +802,7 @@
   });
 
   $('opp-search').addEventListener('input', renderSidebar);
+  $('opp-fmt').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { pref('opp-fmt', b.dataset.fmt); renderSidebar(); }));
   [['opp-sort', 'hands'], ['opp-kind', '']].forEach(([id, fallback]) => {  // tri et type gardés d'une visite à l'autre
     const select = $(id), saved = pref(id);
     select.value = saved !== null && select.querySelector('option[value="' + saved + '"]') ? saved : fallback;

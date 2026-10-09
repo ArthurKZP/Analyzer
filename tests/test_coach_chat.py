@@ -271,7 +271,8 @@ class CoachChatTest(unittest.TestCase):
         with mock.patch.object(bluffs, "analyze", return_value=report) as built:
             text, error = Coach(lib)._run_tool("bluffs_adversaire", {"adversaire": "réguliers"})
         self.assertFalse(error, text)
-        self.assertEqual(built.call_args.args[1:], (["Villain"], "Hero"))  # le groupe des réguliers
+        self.assertEqual(built.call_args.args[1:3], (["Villain"], "Hero"))  # le groupe des réguliers
+        self.assertEqual(built.call_args.args[3], bluffs.Voice("les réguliers", plural=True))  # nommés au pluriel
         data = json.loads(text)
         self.assertEqual((data["adversaire"], data["patterns"][0]["conseil"]), ("les réguliers", "Paie plus large."))
         self.assertEqual(data["frequences_par_carte"][0], {"situation": "2e barrel", "pot": "SRP", "carte": "Overcard",

@@ -4,13 +4,14 @@ from __future__ import annotations
 import base64
 import binascii
 import threading
+from collections import Counter
 from datetime import date
 from html import escape
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
-from .. import aliases, bluffs, db, handplay, leaks, players, ring, ring_leaks, spots, store, students
+from .. import aliases, bluffs, db, field, handplay, leaks, players, ring, ring_leaks, settings, spots, store, students
 from .. import period as periods
 from ..db import analyses as db_analyses
 from ..db import documents
@@ -31,7 +32,9 @@ from . import bilan_page, synthesis
 from .report_pdf import build_pdf
 from .report_pptx import build_pptx
 from .bluffs_page import build_bluffs_page
+from .field_leaks_page import build_group_page, build_list_page, build_player_page
 from .field_page import build_players_page
+from .settings_page import build_settings_page
 from .hands_page import build_hands_page
 from .leaks_page import build_leaks_page
 from .ring_page import build_ring_page
@@ -46,7 +49,7 @@ HEADS_UP_ONLY = ('<p class="note">Aucune main heads-up : cette page analyse tes 
                  'plusieurs (3 à 9 joueurs, ensemble) ont leur Leakfinding, leur préflop, leurs mains de départ et leurs '
                  'stats par position (onglet Tables à plusieurs).</p>')
 SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks", "tables", "mains")
-FIELD_PAGES = ("bluffs", "joueurs")  # Étude du field
+FIELD_PAGES = ("regs", "recs", "bluffs", "joueurs")  # Étude du field (« joueurs » : aussi dans Paramètres)
 MAX_IMPORT_FILES = 5000  # fichiers (ou archives zip) par import
 
 
@@ -62,7 +65,8 @@ def _excluded_note(excluded: dict) -> str:
 
 
 def _note(text: str) -> str:
-    return f'<p class="note">{escape(text)} Le type de chaque adversaire se règle en haut de sa fiche.</p>'
+    return (f'<p class="note">{escape(text)} Le type de chaque adversaire se règle dans Paramètres › Joueurs et alias '
+            "(ou en haut de sa fiche).</p>")
 
 
 def _kind_note(kind: dict) -> str:
@@ -121,6 +125,7 @@ class Library:
         self._all_ring: list[Hand] = []
         self.by_id: dict[str, Hand] = {}
         self.hero: Optional[str] = None
+        self.hero_pseudos: Counter = Counter()  # (pseudo, site) -> mains où tes historiques te marquent ainsi
         self.api, self.pages = api, pages
         self.display_name: Optional[str] = None  # nom de l'élève (rapport)
         self._students: dict[str, Library] = {}
@@ -138,7 +143,13 @@ class Library:
         hands = db_hands.load(self.db, self.space_id)
         mapping = aliases.load()  # les pseudos regroupés sous un alias prennent son nom
         aliases.apply(hands, mapping)
-        hero = mapping.get(self.hero_override, self.hero_override) if self.hero_override else detect_hero(hands)
+        pseudos = Counter((h.hero, h.site) for h in hands if h.hero)  # tes pseudos, tels que tes historiques les marquent
+        if self.hero_override:  # --hero (ligne de commande) ou le pseudo de l'élève
+            hero = mapping.get(self.hero_override, self.hero_override)
+        else:  # ton choix dans les Paramètres, s'il est encore dans tes mains ; sinon le plus fréquent
+            chosen = settings.load()["hero"] if self.is_me else None
+            chosen = mapping.get(chosen, chosen) if chosen else None
+            hero = chosen if chosen and any(p == chosen for p, _ in pseudos) else detect_hero(hands)
         unify_hero(hands, hero)
         heads_up = [h for h in hands if hero and hero in h.seats and len(h.seats) == 2 and h.button and h.bb]
         ring = [h for h in hands if hero and hero in h.seats and len(h.seats) > 2 and h.button and h.bb]
@@ -146,7 +157,13 @@ class Library:
             self._all_hands, self._all_ring = heads_up, ring
             self.by_id = {h.hand_id: h for h in heads_up + ring}  # le solveur résout aussi leurs pots à deux
             self.hero = hero
+            self.hero_pseudos = pseudos
             self._select()
+
+    @property
+    def is_me(self) -> bool:
+        """Ton espace (pas celui d'un élève) : tes Paramètres s'y appliquent."""
+        return self.space_key == "moi"
 
     def _select(self) -> None:
         """Les mains de la période (sous self._lock) ; les analyses se refont."""
@@ -245,11 +262,63 @@ class Library:
         kinds = self.ring_kinds()
         return {h.hand_id: ring_leaks.versus(h, self.hero, kinds) for h in self.ring} if self.hero else {}
 
+    # --- paramètres ------------------------------------------------------------------------
+    def settings_view(self) -> dict:
+        """Tes paramètres et de quoi les choisir : les pseudos que tes historiques marquent comme toi, tes mains par
+        format (toutes périodes), tes élèves, la précision du solveur."""
+        conf = settings.load()
+        by_name: dict[str, dict] = {}
+        for (pseudo, site), n in self.hero_pseudos.items():
+            row = by_name.setdefault(pseudo, {"name": pseudo, "sites": [], "hands": 0})
+            row["hands"] += n
+            if site not in row["sites"]:
+                row["sites"].append(site)
+        pseudos = sorted(by_name.values(), key=lambda r: (-r["hands"], r["name"].lower()))
+        return {"hero": self.hero, "chosen_hero": conf["hero"], "pseudos": pseudos,
+                "formats": {"HU": len(self._all_hands), "ring": len(self._all_ring)}, "plays": conf["formats"],
+                "coach": conf["coach"], "students": len(students.all_students()), "min_hands": conf["min_hands"],
+                "precision": self.solves.precision()[1], "period": periods.label(self.period)}
+
+    def settings_page(self) -> str:
+        return build_settings_page(self.settings_view())
+
+    def set_settings(self, changes: object) -> dict:
+        """Enregistre des paramètres (settings.check ; ValueError sinon) ; ton pseudo se choisit parmi ceux que tes
+        historiques marquent comme toi. Les pages se recalculent."""
+        checked = settings.check(changes)
+        hero = checked.get("hero")
+        if hero is not None and not any(p == hero for p, _ in self.hero_pseudos):
+            raise ValueError("Ce pseudo n'est pas marqué comme toi dans tes historiques.")
+        settings.save(checked)
+        if "hero" in checked:
+            self.reload()
+        else:
+            with self._lock:
+                self._select()
+        return self.summary()
+
+    def _app_settings(self) -> dict:
+        """Ce que le menu de l'application montre : les formats que tu joues (None : tous), les Élèves, le seuil
+        de l'Étude du field."""
+        conf = settings.load()
+        return {"plays": conf["formats"] if self.is_me else None,
+                "coach": settings.coach_shown(len(students.all_students()), conf["coach"]),
+                "min_hands": conf["min_hands"]}
+
+    SIDEBAR_RING_MIN = 10  # mains ensemble minimum pour qu'un adversaire des tables à plusieurs soit dans le menu
+
     def summary(self) -> dict:
         period = self.period_view()
         opponents = self.opponents()
         kinds = self.kinds()
+        ring_kinds = self.ring_kinds() if self.ring else {}
         return {
+            "settings": self._app_settings(),
+            # les adversaires des tables à plusieurs (menu de l'application), avec assez de mains ensemble
+            "ring_opponents": [
+                {"name": o["name"], "hands": o["hands"], "net_bb": round(o["net_bb"], 1), "bb100": round(o["bb100"], 1),
+                 "last": o["last"].strftime("%d/%m/%Y"), "kind": ring_kinds[o["name"]]["kind"]}
+                for o in self.ring_opponents() if o["hands"] >= self.SIDEBAR_RING_MIN],
             "hero": self.hero,
             "period": period,  # la période d'analyse ; hands, ring_hands, first, last : ceux de la période
             "folder": str(self.folder),
@@ -423,8 +492,9 @@ class Library:
 
     def _hands_page(self) -> str:
         """Ce que rapporte chaque main de départ ; le détail d'une main se demande à hands_detail."""
+        shown = [fmt for fmt, _ in self.leak_formats()]  # les formats que tu joues
         formats = {fmt: handplay.aggregate(plays, self._kind_map() if fmt == "HU" else self._ring_versus())
-                   for fmt, plays in self._plays().items()}
+                   for fmt, plays in self._plays().items() if fmt in shown}
         return build_hands_page(formats, api=f"{self.api}/mains")
 
     def hands_detail(self, query: dict[str, str]) -> dict:
@@ -470,16 +540,113 @@ class Library:
         return spots.hand_record(hand, self.hero, hand.opponent_of(self.hero))
 
     # --- étude du field -------------------------------------------------------------------
-    def field_page(self, page: str) -> str:
-        """Étude du field : les bluffs des réguliers (heads-up), tes adversaires et leur type."""
+    def field_page(self, page: str, table_format: Optional[str] = None) -> str:
+        """Étude du field : le leakfinding des réguliers et des récréatifs, les bluffs des réguliers (heads-up), tes
+        adversaires et leur type."""
         if page not in FIELD_PAGES:
             raise KeyError(page)
         if page == "bluffs":
             return self.self_page("bluffs")
         if not self.hands and not self.ring:
             raise UnknownPlayer("moi")
+        if page in ("regs", "recs"):
+            return self.field_list(page[:3], table_format)
         return build_players_page(self.summary()["opponents"] if self.hands else [], self.ring_opponents_view(),
                                   aliases.groups())
+
+    def _field_format(self, table_format: Optional[str]) -> str:
+        """Le format d'une page du field : celui demandé s'il a des mains, sinon le premier que tu joues."""
+        formats = [fmt for fmt, _ in self.leak_formats()]
+        if not formats:
+            raise UnknownPlayer("aucune main")
+        wanted = "HU" if table_format == "HU" else ring_leaks.FORMAT if table_format else None
+        return wanted if wanted in formats else formats[0]
+
+    def _field_rows(self, fmt: str) -> list[dict]:
+        """Tes adversaires d'un format, du plus joué au moins joué : mains, ton résultat, type."""
+        if fmt == "HU":
+            kinds = self.kinds()
+            return [{"name": o["name"], "hands": o["hands"], "net_bb": o["net_bb"], "bb100": o["bb100"],
+                     "info": kinds[o["name"]]} for o in self.opponents()]
+        kinds = self.ring_kinds()
+        return [{"name": o["name"], "hands": o["hands"], "net_bb": o["net_bb"], "bb100": o["bb100"],
+                 "info": kinds[o["name"]]} for o in self.ring_opponents()]
+
+    def _field_index(self, fmt: str) -> dict[str, list[Hand]]:
+        """Les mains d'un format par joueur (pour étudier chacun sans relire toutes les mains)."""
+        def build():
+            index: dict[str, list[Hand]] = {}
+            for h in self.hands if fmt == "HU" else self.ring:
+                for name in h.seats:
+                    index.setdefault(name, []).append(h)
+            return index
+        return self._cached(("field_index", fmt), build)
+
+    def field_study(self, fmt: str, names: tuple) -> "field.Study":
+        """L'étude d'un adversaire ou d'un groupe (field.study), gardée en cache."""
+        def build():
+            index = self._field_index(fmt)
+            hands = list({h.hand_id: h for n in names for h in index.get(n, [])}.values())
+            hands.sort(key=lambda h: h.date)
+            if fmt == "HU":
+                stats = self.all_stats()
+                found = [stats[n] for n in names if n in stats]
+                ps = found[0] if len(found) == 1 else field.merge_stats(found)
+                return field.study(hands, names, "HU", ps)
+            return field.study(hands, names, "ring")
+        return self._cached(("field_study", fmt, names), build)
+
+    def _field_switch(self, fmt: str) -> str:
+        return format_switch(self.leak_formats(), fmt)
+
+    def field_list(self, kind: str, table_format: Optional[str] = None) -> str:
+        """Les réguliers (« reg ») ou les récréatifs (« rec ») que tu croises le plus, avec leurs leaks à exploiter ;
+        les récréatifs aussi par style."""
+        fmt = self._field_format(table_format)
+        min_hands = settings.load()["min_hands"]
+        kinds_key = self._kinds_key() if fmt == "HU" else (self._ring_kinds_key(),)
+
+        def build():
+            every = [r for r in self._field_rows(fmt) if r["info"]["kind"] == kind]
+            rows = [(r, self.field_study(fmt, (r["name"],))) for r in every if r["hands"] >= min_hands]
+            names = tuple(r["name"] for r, _ in rows)
+            population = self.field_study(fmt, names) if len(names) > 1 else None
+            groups = []
+            if kind == "rec":
+                for style in field.STYLE_ORDER:
+                    members = [r for r, st in rows if st.style[0] == style]
+                    if members:
+                        groups.append({"style": style, "members": members,
+                                       "study": self.field_study(fmt, tuple(m["name"] for m in members))})
+            return build_list_page(kind, fmt, rows, population, min_hands, len(every), self._field_switch(fmt), groups)
+        return self._cached(("field", kind, fmt, min_hands) + tuple(kinds_key), build)
+
+    def field_player(self, name: str, table_format: Optional[str] = None) -> str:
+        """La fiche d'un adversaire dans l'Étude du field : ses leaks, sa value et ses bluffs par ligne."""
+        rows = {fmt: next((r for r in self._field_rows(fmt) if r["name"] == name), None)
+                for fmt, _ in self.leak_formats()}
+        rows = {fmt: r for fmt, r in rows.items() if r}
+        if not rows:
+            raise UnknownPlayer(name)
+        wanted = "HU" if table_format == "HU" else ring_leaks.FORMAT if table_format else None
+        fmt = wanted if wanted in rows else next(iter(rows))
+        row = rows[fmt]
+        switch = format_switch([(f, r["hands"]) for f, r in rows.items()], fmt)
+        fiche = f"/#/adversaire/{quote(name, safe='')}/plan" if "HU" in rows else ""
+        return build_player_page(row, self.field_study(fmt, (name,)), fmt, row["info"], switch, fiche)
+
+    def field_group(self, style: str, table_format: Optional[str] = None) -> str:
+        """La fiche d'un groupe de récréatifs (un style) : ses joueurs, son plan, ses leaks et ses lignes réunis."""
+        if style not in field.STYLES:
+            raise KeyError(style)
+        fmt = self._field_format(table_format)
+        min_hands = settings.load()["min_hands"]
+        rows = [r for r in self._field_rows(fmt) if r["info"]["kind"] == "rec" and r["hands"] >= min_hands]
+        members = [(r, st) for r in rows for st in [self.field_study(fmt, (r["name"],))] if st.style[0] == style]
+        if not members:
+            raise UnknownPlayer(style)
+        study = self.field_study(fmt, tuple(r["name"] for r, _ in members))
+        return build_group_page(style, fmt, study, members, self._field_switch(fmt))
 
     def _population_bluffs(self) -> str:
         """Les bluffs des réguliers, ensemble puis un par un."""
@@ -492,10 +659,11 @@ class Library:
             rows.append({"name": name, "hands": report.hands, "shown": len(report.shown),
                          "river": sum(1 for s in report.shown if s.street == "river" and s.bluff),
                          "top": top.title if top else None})
-        note = ("Les réguliers ensemble : " + ", ".join(regs) + "." if regs else "Aucun adversaire classé régulier.")
+        note = (f"Les {len(regs)} réguliers ensemble (chacun dans « Adversaire par adversaire », en bas de page)."
+                if len(regs) > 1 else "Un seul régulier." if regs else "Aucun adversaire classé régulier.")
         if recs:
-            note += f" Les récréatifs ({', '.join(recs)}) ont chacun leur page, dans leur fiche."
-        report = bluffs.analyze(self.hands, regs, self.hero)
+            note += f" Les {len(recs)} récréatifs n'y sont pas : ils ont leur page, dans l'onglet Récréatifs."
+        report = bluffs.analyze(self.hands, regs, self.hero, bluffs.Voice("les réguliers", plural=True))
         profile = {p.name: p for p in report.profiles}
         for row in rows:
             prof = profile.get(row["name"])
@@ -503,7 +671,8 @@ class Library:
                        group=prof.group if prof else None)
         groups = []
         for cluster in report.clusters:  # ce qui ressort de chaque groupe, ses membres pesant chacun au plus 1
-            sub = bluffs.analyze(self.hands, cluster.names, self.hero) if len(cluster.members) > 1 else None
+            sub = (bluffs.analyze(self.hands, cluster.names, self.hero, bluffs.Voice("les joueurs du groupe", plural=True))
+                   if len(cluster.members) > 1 else None)
             groups.append({"cluster": cluster, "patterns": (sub.patterns if sub else [])[:3]})
         return build_bluffs_page(report, "des réguliers", note=_note(note),
                                  players=sorted(rows, key=lambda r: -r["hands"]), groups=groups)
@@ -581,9 +750,13 @@ class Library:
     # --- leakfinding ----------------------------------------------------------------------
     def leak_formats(self) -> list[tuple[str, int]]:
         """Les formats de tes mains et leur nombre : le heads-up, puis les tables à plusieurs (3 à 9 joueurs
-        ensemble) ; un rapport chacun."""
+        ensemble) ; un rapport chacun. Dans ton espace, seulement ceux que tu joues (Paramètres)."""
         out = [("HU", len(self.hands))] if self.hands else []
-        return out + ([(ring_leaks.FORMAT, len(self.ring))] if self.ring else [])
+        out += [(ring_leaks.FORMAT, len(self.ring))] if self.ring else []
+        if not self.is_me:
+            return out
+        kept = settings.enabled_formats([fmt for fmt, _ in out])
+        return [(fmt, n) for fmt, n in out if fmt in kept]
 
     def _leak_format(self, table_format: Optional[str]) -> str:
         """Le format demandé (par défaut le heads-up, ou les tables à plusieurs) ; « 6-max », « 3-max »… : les tables

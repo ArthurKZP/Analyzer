@@ -59,7 +59,7 @@ class LibraryTest(IsolatedHome):
         self.assertIn("Les bluffs de Villain", lib.player_page("Villain", "bluffs"))
         population = lib.self_page("bluffs")
         self.assertIn("Les bluffs des réguliers", population)
-        self.assertIn("Les réguliers ensemble : Villain.", population)
+        self.assertIn("Un seul régulier.", population)  # plus de liste de noms en tête de page
         self.assertIs(lib.field_page("bluffs"), population)  # Étude du field : le même onglet
         field = lib.field_page("joueurs")
         self.assertIn("<h2>En heads-up</h2>", field)

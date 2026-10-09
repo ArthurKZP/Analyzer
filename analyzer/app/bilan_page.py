@@ -129,7 +129,7 @@ def opponents_table(opponents: list[dict]) -> str:
             '<th class="num" data-sort="bb100">bb/100 (pots)</th><th data-sort="last">Dernière main</th></tr></thead>'
             f'<tbody>{"".join(rows)}</tbody></table></div><p class="note">Ton résultat dans les pots disputés ensemble '
             "(chacun y a mis de l'argent de lui-même), en bb ; bb/100 : pour 100 de ces pots. Le type se règle dans "
-            "Étude du field › Les joueurs.</p></div>")
+            "Paramètres › Joueurs et alias.</p></div>")
 
 
 def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, Optional[ring.FormatStats]]],

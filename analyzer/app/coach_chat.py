@@ -610,7 +610,8 @@ class Coach:
 
     def _bluffs(self, who) -> dict:
         label, names, kind = self._targets(who)
-        report = bluffs.analyze(self.library.hands, names, self.library.hero)
+        voice = bluffs.Voice(label, plural=True) if label.startswith("les ") else bluffs.Voice(label)
+        report = bluffs.analyze(self.library.hands, names, self.library.hero, voice)
         pct = lambda x: None if x is None else round(100 * x)  # noqa: E731
         freqs = [{"situation": f.spot.label, "pot": bluffs.FAMILY_NAMES.get(f.family, "autres pots"),
                   "carte": bluffs.feature_label(f.spot.street, f.feature), "lui_pct": pct(f.rate),

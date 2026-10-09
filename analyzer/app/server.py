@@ -168,7 +168,15 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 2 and parts[0] == "moi":
                 return self._html(library.self_page(parts[1], table_format=self._format()))
             if len(parts) == 2 and parts[0] == "field":  # Étude du field
-                return self._html(library.field_page(parts[1]))
+                return self._html(library.field_page(parts[1], self._format()))
+            if len(parts) == 3 and parts[0] == "field" and parts[1] == "joueur":  # la fiche d'un adversaire
+                return self._html(library.field_player(parts[2], self._format()))
+            if len(parts) == 3 and parts[0] == "field" and parts[1] == "groupe":  # un groupe de récréatifs
+                return self._html(library.field_group(parts[2], self._format()))
+            if parts == ["parametres", "general"]:  # Paramètres
+                return self._html(library.settings_page())
+            if parts == ["parametres", "joueurs"]:  # … les types des adversaires et les alias
+                return self._html(library.field_page("joueurs"))
             if parts == ["api", "leaks"]:
                 return self._json(library.leaks_state(table_format=self._format()))
             if parts == ["api", "eleves"]:
@@ -524,6 +532,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._file_action(library, parts[2])
         if parts == ["api", "periode"]:
             return self._period(library)
+        if parts == ["api", "parametres"]:  # tes paramètres (pseudo, formats, coach, seuil du field)
+            try:
+                return self._json(library.set_settings(self._small_json()))
+            except ValueError as exc:
+                return self._error(400, str(exc))
         if parts in (["api", "alias"], ["api", "alias", "defaire"]):
             payload = self._small_json()
             alias = payload.get("alias") if isinstance(payload, dict) else None

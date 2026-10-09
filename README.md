@@ -26,10 +26,12 @@ python -m analyzer app
 L'application s'ouvre dans ton navigateur (http://127.0.0.1:8765). Tout reste sur ton ordinateur :
 le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
 
-- **Menu latéral** : « Mon jeu », « Étude du field », « Études du solveur », « Importer des mains » et la liste de
-  tes adversaires heads-up (recherche sans tenir compte des accents, tri par mains jouées, meilleur ou pire résultat,
-  plus récents ou nom, filtre réguliers / récréatifs ; le tri et le filtre sont gardés d'une visite à l'autre), avec
-  le nombre de mains et ton résultat contre chacun.
+- **Menu latéral** : « Mon jeu », « Étude du field », « Études du solveur », « Entraîneur », « Élèves », « Importer
+  des mains », « Sauvegarde », « Paramètres » et la liste de tes adversaires (recherche sans tenir compte des accents,
+  tri par mains jouées, meilleur ou pire résultat, plus récents ou nom, filtre réguliers / récréatifs ; le tri et le
+  filtre sont gardés d'une visite à l'autre), avec le nombre de mains et ton résultat contre chacun : ceux du
+  heads-up (leur fiche) ou, au choix *Heads-up* / *À plusieurs*, ceux des tables à plusieurs vus au moins 10 mains
+  (leur fiche de l'Étude du field).
 - **Adversaire** : onglets *Plan de jeu*, *Préflop* (tes décisions et ses fréquences face au solveur),
   *Rapport*, *Spots* et *Face au solveur* (tes mains postflop contre lui comparées au solveur, et ses écarts
   à exploiter). En haut de la fiche, son type : régulier ou récréatif (voir « Face au solveur »). Les liens « voir les mains » et « rejouer » ouvrent directement l'onglet Spots
@@ -49,12 +51,16 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   ton open), avec la grille de la stratégie, tes fréquences face aux charts et tes écarts main par main ; une table
   sans charts à elle prend ceux du 6-max à même nombre de joueurs derrière, et les mains contre les récréatifs sont
   exclues.
-- **Étude du field** : comment jouent tes adversaires. *Bluffs des réguliers* (où ils bluffent, ensemble puis un par
-  un, voir plus bas) et *Les joueurs* : tes adversaires en heads-up et aux tables à plusieurs, réguliers et
+- **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Réguliers* et *Récréatifs* : le
+  leakfinding de ceux que tu croises le plus, chacun avec ses leaks à exploiter et ce que montrent ses lignes, puis
+  sa fiche détaillée (voir *Étude du field : le leakfinding de tes adversaires*) ; *Bluffs des réguliers* (où ils
+  bluffent en heads-up, ensemble puis un par un, voir plus bas).
+- **Paramètres** : *Général* (ton pseudo, les formats que tu joues, coach ou non, le seuil de l'Étude du field, la
+  précision du solveur) et *Joueurs et alias* : tes adversaires en heads-up et aux tables à plusieurs, réguliers et
   récréatifs, avec recherche, tri et leur type réglable (le même partout). **Alias** : un même joueur peut avoir
   plusieurs pseudos (un par site, ou un pseudo changé) ; coche-les dans ces listes et donne-leur un nom : ses mains,
   ses stats et son type sont réunis sous ce nom partout dans l'application (tes mains et celles de tes élèves), sa
-  fiche rappelle ses pseudos, et « Défaire » les sépare à nouveau.
+  fiche rappelle ses pseudos, et « Défaire » les sépare à nouveau. Voir *Paramètres* plus bas.
 - **Entraîneur** : joue des mains sur les spots résolus, le solveur juge chaque décision (voir plus bas).
 - **Sauvegarde** : tes calculs vers un dossier synchronisé ou un stockage en ligne (voir plus bas).
 - **Période d'analyse** (en haut de *Mon jeu*, de l'*Étude du field*, d'une fiche d'adversaire ou d'un élève) :
@@ -593,7 +599,7 @@ des comparaisons à la théorie : *Face au solveur* et *Mon préflop* de « Mon 
 par joueur (dans la base de données, incluse dans les sauvegardes) : le même aux tables à plusieurs, où la suggestion
 lit ses fréquences à la taille de table où il a le plus joué (récréatif quand au moins deux signaux concordent : il
 joue trop de mains, limpe, paie trop d'ouvertures, ne folde presque jamais face à la c-bet, paie beaucoup sans
-relancer). Il se règle aussi dans *Étude du field › Les joueurs* et dans le Leakfinding.
+relancer). Il se règle aussi dans *Paramètres › Joueurs et alias*, dans la fiche du field et dans le Leakfinding.
 
 Ou bouton **Analyser les mains restantes** dans l'onglet (la page se complète au fur et à mesure, on peut la
 fermer). Les plus gros pots passent d'abord. Compte 3 minutes par SRP, 2 par pot 3bet et un quart de minute
@@ -741,10 +747,71 @@ heads-up et aux tables à plusieurs (3 à 9 joueurs ensemble).
 
   Le détail est calculé à la demande par l'application ; les liens du leakfinding y mènent directement.
 
+## Étude du field : le leakfinding de tes adversaires
+
+Onglets *Réguliers* et *Récréatifs* de l'*Étude du field* (au choix *Heads-up* / *Tables à plusieurs*, retenu) : les
+joueurs de ce type que tu as croisés au moins N mains (*Paramètres*, 50 par défaut ; aux tables à plusieurs, les
+mains à la même table), du plus fréquent au moins fréquent. Pour chacun, une carte : ses mains, ton résultat contre
+lui, ses **leaks à exploiter** (les trois plus nets) et ce que disent ses lignes à l'abattage, puis *Analyse
+détaillée*. En tête, les réguliers (ou les récréatifs) **en général** : leurs fréquences réunies.
+
+**Un leak** : une fréquence nettement hors des repères d'un régulier solide (l'intervalle de confiance à 90 % hors du
+repère, au moins 15 occasions ; « à confirmer » quand l'écart est net sur peu de mains), avec l'exploit qui en
+découle : « Folde trop face à la c-bet — Fold vs c-bet 62 % sur 45 (repère 35–52 %) → c-bet large et petit contre
+lui ». En heads-up, les stats et les repères du rapport d'adversaire (préflop au bouton et en BB, c-bets, barrels,
+folds face aux mises, check-raises, abattage) ; aux tables à plusieurs, VPIP, PFR, limp, 3bet, fold face au 3bet,
+défense des blindes face au vol, c-bet, 2e barrel, fold face à la c-bet, aux mises de la turn et de la river,
+check-raise, mise quand l'agresseur checke, abattage et agressivité après le flop, face aux repères d'un régulier
+6-max à 100 bb (`analyzer/field.py`, `RING_DEFS`).
+
+**La fiche d'un joueur** (un clic sur son nom, ou dans le menu des adversaires des tables à plusieurs) : ses mains,
+ton résultat, son type (réglable) et son style, VPIP / PFR, agressivité, folds face aux mises, abattage ; tous ses
+leaks ; **Value ou bluff ?** : chaque mise ou relance après le flop, rangée par street, ligne (c-bet, barrel, mise
+après check, après call, check-raise, relance, donk…) et taille, avec ce qu'il a montré à l'abattage — value (top
+paire ou mieux), value fine (paire moyenne ou faible), semi-bluff (un tirage avant la river), bluff — et le verdict
+de la ligne (à la river, sa part de bluffs face à l'équité qu'il te faut pour payer). En tête, **ce qui distingue sa
+value de ses bluffs**, street par street : la taille (« plus grosse pour la value : 80 % du pot, 45 % en bluff »),
+le temps de réflexion, la carte tombée (« les bluffs viennent surtout quand une overcard tombe »), les pots à deux
+ou à plusieurs, et les tailles qui disent sa main (« ses mises petites sont souvent des bluffs, ses grosses
+rarement ») ; il faut au moins deux mains de value et deux bluffs montrés à une street pour comparer. Puis ce qu'il
+montre quand il checke (pièges, ou rien) et ses mains montrées par ligne préflop (ses opens, ses 3bets…). Aux tables
+à plusieurs, toutes les mains allées à l'abattage comptent, même celles où tu n'étais plus : l'historique montre les
+cartes. Un joueur du heads-up garde aussi sa fiche complète (plan de jeu, rapport, ses bluffs), liée depuis celle-ci.
+
+**Les récréatifs par style**, pour les jouer par groupe : *passifs* (peu d'agressivité après le flop, ils paient
+beaucoup : value-bet fin et gros, ne bluffe pas, respecte leurs mises), *agressifs* (beaucoup de mises et de relances :
+paie plus large, piège, bluffe moins), *prudents* (ils foldent beaucoup face aux mises ou jouent peu de mains : vole,
+c-bet souvent, respecte leurs relances). Seuils : agressivité d'après le flop d'au moins 50 % (60 % en heads-up, plus
+agressif par nature), passif sous 30 % (35 %) avec moins de 40 % de folds face aux mises ou beaucoup d'abattages,
+prudent au-delà de 55 % de folds ou sous 18 % de VPIP (50 % en heads-up). Chaque groupe a sa fiche : son plan, ses
+joueurs et leurs chiffres, leurs leaks et leurs lignes réunis (« Quand un récréatif passif mise la river… »).
+
+## Paramètres
+
+Menu **Paramètres**, onglet *Général* (gardé dans la base, pour ton espace : chaque élève garde son pseudo et tous
+ses formats) :
+
+- **Ton pseudo** : les pseudos que tes historiques marquent comme toi (« Dealt to … »), avec leur site et leurs
+  mains ; ils sont tous réunis sous ton pseudo principal, le plus fréquent par défaut, ou celui que tu choisis.
+- **Ce que tu joues** : heads-up et/ou tables à plusieurs. Un format que tu ne joues pas sort des menus : ses onglets
+  (*Mes spots* et *Face au solveur* pour le heads-up, *Tables à plusieurs* sinon), le choix de format des pages (le
+  bilan, le Leakfinding, Mon préflop, les mains de départ et l'Étude du field s'ouvrent sur l'autre), l'onglet
+  *Heads-up* ou *6-max* des études, l'entraîneur (spots heads-up), *Bluffs des réguliers* (heads-up), et les
+  adversaires du menu ; l'explorateur part du 6-max. Tes mains restent gardées : recoche le format pour le retrouver.
+- **Coaching** : *Je suis coach* montre les **Élèves** dans le menu, *Je ne coache pas* les cache ; par défaut, ils
+  apparaissent dès que tu as un élève.
+- **Étude du field** : le nombre de mains minimum contre un adversaire pour qu'il ait sa fiche (50 par défaut).
+- **Solveur** : la précision des résolutions (la même qu'à côté de *Résoudre* dans l'explorateur).
+
+L'onglet *Joueurs et alias* : le type de chaque adversaire (régulier ou récréatif) et les alias (voir *Application*).
+Code : `analyzer/settings.py`, `analyzer/app/settings_page.py`.
+
 ## Bluffs des adversaires
 
 L'onglet *Ses bluffs* (fiche d'un adversaire) et *Bluffs des réguliers* (*Étude du field*, tous les réguliers ensemble,
-puis un par un) cherchent où un joueur bluffe : dans quelles lignes, sur quelles cartes, avec quelles tailles. Deux sources :
+puis un par un) cherchent où un joueur bluffe : dans quelles lignes, sur quelles cartes, avec quelles tailles. Chaque
+constat dit de qui il parle : le joueur par son nom (« Villain mise bien plus que la théorie… »), les réguliers au
+pluriel (« les réguliers misent… »). Deux sources :
 
 - **Ses fréquences**, sur toutes ses mains : à chaque situation (c-bet, 2e et 3e barrels, c-bet retardée, probe, mise
   quand l'agresseur checke, autres mises à la river), sa fréquence de mise selon la carte qui vient de tomber
@@ -1085,7 +1152,8 @@ analyzer/
   app/                 application : serveur local (server.py), bibliothèque de mains et cache
                        (library.py), résolutions et sessions du solveur (solves.py), page « Face au
                        solveur » (review_page.py), leakfinding (leaks_page.py), bluffs des adversaires
-                       (bluffs_page.py), étude du field (field_page.py), bilan des tables à plusieurs
+                       (bluffs_page.py), étude du field (field_page.py : les joueurs et les alias ; field_leaks_page.py : le
+                       leakfinding des adversaires), paramètres (settings_page.py), bilan des tables à plusieurs
                        (bilan_page.py), mains de départ (hands_page.py), synthèse du Leakfinding
                        (synthesis.py), son rapport PDF (report_pdf.py) et sa présentation (report_pptx.py),
                        entraîneur (trainer.py, static/trainer.*), plan de jeu suggéré (plan_page.py), coach
@@ -1096,6 +1164,9 @@ analyzer/
   blobs.py             stockage des gros fichiers (arbres des études) : un dossier ici, un stockage objet en ligne
   store.py             cache sur disque des calculs longs (SQLite : mains lues, équités, clés des spots)
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
+  field.py             étude du field : leaks à exploiter d'un adversaire, sa value et ses bluffs par ligne, style
+                       des récréatifs (passif, agressif, prudent)
+  settings.py          tes paramètres : ton pseudo, les formats que tu joues, coach, seuil de l'étude du field
   aliases.py           alias : les pseudos d'un même joueur regroupés sous un nom (appliqué à la lecture des mains)
   period.py            période d'analyse : toutes les mains, les N dernières, les N derniers jours, d'une date à une autre
   pdfwriter.py         PDF sans dépendance : pages A4, texte Helvetica (accents), symboles des cartes, formes, courbes
