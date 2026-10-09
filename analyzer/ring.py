@@ -64,31 +64,48 @@ class FormatStats:
     formats: list[str] = field(default_factory=list)  # les tailles de table réunies (MERGED)
 
 
-def read(hand: Hand, hero: str) -> dict[str, bool]:
-    """Ce que la main dit de toi : {stat: fait ?} pour chaque occasion rencontrée."""
-    out: dict[str, bool] = {}
-    pos = hand.position(hero)
+def read(hand: Hand, player: str) -> dict[str, bool]:
+    """Ce que la main dit de ce joueur : {stat: fait ?} pour chaque occasion rencontrée (read_all). Gardé sur la main
+    (le joueur qu'on étudie, toi le plus souvent) : les pages suivantes le relisent sans calcul. À lire sans le
+    modifier."""
+    memo = hand.__dict__.get("_ring_reads")
+    if memo is None:
+        memo = hand.__dict__["_ring_reads"] = {}
+    found = memo.get(player)
+    if found is None:
+        found = memo[player] = read_all(hand).get(player, {})
+    return found
+
+
+def read_all(hand: Hand) -> dict[str, dict[str, bool]]:
+    """Ce que la main dit de chaque joueur servi, en un seul passage : {joueur: {stat: fait ?}} pour chaque occasion
+    rencontrée (open, limp, 3bet, flat, défense face au vol, fold face au 3bet après son open, VPIP, PFR, c-bet et fold
+    face à la c-bet au flop, abattage)."""
+    out: dict[str, dict[str, bool]] = {p: {} for p in hand.seats}
     pre = [a for a in hand.actions if a.street == "preflop" and a.kind in VOLUNTARY]
     raises = limpers = callers = 0
     opener = None
-    first_done = hero_open = facing_3bet_done = False
-    folded = set()
-    acted = False
+    first_done: set[str] = set()
+    opened: set[str] = set()  # ceux qui ont ouvert (leur première décision : une relance, personne n'étant entré)
+    faced_3bet: set[str] = set()
+    folded: set[str] = set()
     for a in pre:
-        if a.player == hero:
-            acted = True
-            if not first_done:
-                first_done = True
+        mine = out.get(a.player)
+        if mine is not None:
+            if a.player not in first_done:
+                first_done.add(a.player)
                 if raises == 0 and limpers == 0:
-                    out["open"], out["limp"] = a.kind == RAISE, a.kind == CALL
-                    hero_open = a.kind == RAISE
+                    mine["open"], mine["limp"] = a.kind == RAISE, a.kind == CALL
+                    if a.kind == RAISE:
+                        opened.add(a.player)
                 elif raises == 1:
-                    out["threebet"], out["flat"] = a.kind == RAISE, a.kind == CALL
-                    if pos in ("SB", "BB") and hand.position(opener) in STEAL_FROM and limpers == 0 and callers == 0:
-                        out["fold_steal"], out["threebet_steal"] = a.kind == FOLD, a.kind == RAISE
-            elif hero_open and raises == 2 and not facing_3bet_done:
-                facing_3bet_done = True
-                out["fold_3bet"] = a.kind == FOLD
+                    mine["threebet"], mine["flat"] = a.kind == RAISE, a.kind == CALL
+                    if (hand.position(a.player) in ("SB", "BB") and hand.position(opener) in STEAL_FROM and limpers == 0
+                            and callers == 0):
+                        mine["fold_steal"], mine["threebet_steal"] = a.kind == FOLD, a.kind == RAISE
+            elif a.player in opened and raises == 2 and a.player not in faced_3bet:
+                faced_3bet.add(a.player)
+                mine["fold_3bet"] = a.kind == FOLD
         if a.kind == RAISE:
             raises += 1
             if raises == 1:
@@ -100,28 +117,32 @@ def read(hand: Hand, hero: str) -> dict[str, bool]:
                 callers += 1
         elif a.kind == FOLD:
             folded.add(a.player)
-    if acted:
-        out["vpip"] = any(a.player == hero and a.kind in (CALL, RAISE) for a in pre)
-        out["pfr"] = any(a.player == hero and a.kind == RAISE for a in pre)
-    if hero in folded or len(hand.board) < 3:
+    vpip = {a.player for a in pre if a.kind in (CALL, RAISE)}
+    pfr = {a.player for a in pre if a.kind == RAISE}
+    for player in first_done:  # ceux qui ont agi
+        if player in out:
+            out[player]["vpip"], out[player]["pfr"] = player in vpip, player in pfr
+    if len(hand.board) < 3:
         return out
     aggressor = next((a.player for a in reversed(pre) if a.kind == RAISE), None)
     on_flop = [p for p in hand.seats if p not in folded]
     flop = [a for a in hand.actions if a.street == "flop" and a.kind in VOLUNTARY]
-    if aggressor == hero:
-        mine = next((k for k, a in enumerate(flop) if a.player == hero), None)
-        if mine is not None and not any(a.kind in (BET, RAISE) for a in flop[:mine]):
-            out["cbet_hu" if len(on_flop) == 2 else "cbet_multi"] = flop[mine].kind == BET
-    elif aggressor in on_flop:
-        bet = next((k for k, a in enumerate(flop) if a.kind in (BET, RAISE)), None)
-        if bet is not None and flop[bet].player == aggressor and flop[bet].kind == BET:
-            answer = next((a for a in flop[bet + 1:] if a.player == hero or a.kind == RAISE), None)
-            if answer is not None and answer.player == hero:
-                out["fold_cbet"] = answer.kind == FOLD
-    folded_later = any(a.player == hero and a.kind == FOLD for a in hand.actions)
-    out["wtsd"] = hand.showdown and not folded_later
-    if out["wtsd"]:
-        out["wsd"] = hand.net(hero) > 0  # une mise non payée rendue en side pot n'est pas un gain
+    first_bet = next((k for k, a in enumerate(flop) if a.kind in (BET, RAISE)), None)
+    cbet = first_bet is not None and flop[first_bet].player == aggressor and flop[first_bet].kind == BET
+    folded_later = {a.player for a in hand.actions if a.kind == FOLD}
+    for player in on_flop:
+        mine = out[player]
+        if player == aggressor:
+            first = next((k for k, a in enumerate(flop) if a.player == player), None)
+            if first is not None and (first_bet is None or first_bet >= first):
+                mine["cbet_hu" if len(on_flop) == 2 else "cbet_multi"] = flop[first].kind == BET
+        elif aggressor in on_flop and cbet:
+            answer = next((a for a in flop[first_bet + 1:] if a.player == player or a.kind == RAISE), None)
+            if answer is not None and answer.player == player:
+                mine["fold_cbet"] = answer.kind == FOLD
+        mine["wtsd"] = hand.showdown and player not in folded_later
+        if mine["wtsd"]:
+            mine["wsd"] = hand.net(player) > 0  # une mise non payée rendue en side pot n'est pas un gain
     return out
 
 
@@ -139,7 +160,10 @@ def analyze(hands: list[Hand], hero: str, merge: bool = False) -> list[FormatSta
         by_pos: dict[str, PositionStats] = {}
         for h in mine:
             pos = h.position(hero) or "?"
-            for ps in (total, by_pos.setdefault(pos, PositionStats(pos))):
+            at = by_pos.get(pos)
+            if at is None:  # (setdefault créerait ses stats à chaque main)
+                at = by_pos[pos] = PositionStats(pos)
+            for ps in (total, at):
                 ps.hands += 1
                 ps.net_bb += h.net(hero) / h.bb
             for key, made in read(h, hero).items():
@@ -178,23 +202,30 @@ def size_class(players: int) -> str:
 
 
 def profiles(hands: list[Hand], names: set[str]) -> dict[str, dict]:
-    """Les fréquences de ces joueurs (read) à chaque taille de table : {joueur: {taille: {"hands": n, stat: Ratio}}}."""
+    """Les fréquences de ces joueurs (read_all) à chaque taille de table : {joueur: {taille: {"hands": n, stat:
+    Ratio}}}."""
     out: dict[str, dict] = {}
     for h in hands:
         if h.size <= 2 or not h.bb:
             continue
         size = size_class(h.size)
-        for name in names & set(h.seats):
-            st = out.setdefault(name, {}).setdefault(size, {"hands": 0})
+        every = read_all(h)
+        for name in names & h.seats.keys():
+            sizes = out.get(name)
+            if sizes is None:
+                sizes = out[name] = {}
+            st = sizes.get(size)
+            if st is None:
+                st = sizes[size] = {"hands": 0}
             st["hands"] += 1
-            for key, made in read(h, name).items():
-                st.setdefault(key, Ratio()).add(made)
+            for key, made in every[name].items():
+                r = st.get(key)
+                if r is None:
+                    r = st[key] = Ratio()
+                r.opps += 1
+                if made:
+                    r.hits += 1
     return out
-
-
-def in_pot(hand: Hand, player: str) -> bool:
-    """Le joueur a mis de l'argent dans le pot de lui-même (call, relance, mise ; pas une blinde)."""
-    return any(a.player == player and a.kind in (CALL, RAISE, BET) for a in hand.actions)
 
 
 def opponents(hands: list[Hand], hero: str) -> list[dict]:
@@ -204,16 +235,21 @@ def opponents(hands: list[Hand], hero: str) -> list[dict]:
     for h in hands:
         if h.size <= 2 or hero not in h.seats or not h.bb:
             continue
-        mine = in_pot(h, hero)
+        in_the_pot = {a.player for a in h.actions if a.kind in (CALL, RAISE, BET)}  # de lui-même (pas une blinde)
+        mine = hero in in_the_pot
+        net_bb = h.net(hero) / h.bb
         for name in h.seats:
             if name == hero:
                 continue
-            row = rows.setdefault(name, {"name": name, "hands": 0, "pots": 0, "net_bb": 0.0, "last": None})
+            row = rows.get(name)
+            if row is None:
+                row = rows[name] = {"name": name, "hands": 0, "pots": 0, "net_bb": 0.0, "last": h.date}
             row["hands"] += 1
-            row["last"] = max(row["last"] or h.date, h.date)
-            if mine and in_pot(h, name):
+            if h.date > row["last"]:
+                row["last"] = h.date
+            if mine and name in in_the_pot:
                 row["pots"] += 1
-                row["net_bb"] += h.net(hero) / h.bb
+                row["net_bb"] += net_bb
     out = list(rows.values())
     for row in out:
         row["bb100"] = 100 * row["net_bb"] / row["pots"] if row["pots"] else 0.0

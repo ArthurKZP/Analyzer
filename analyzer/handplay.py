@@ -26,7 +26,7 @@ y ajoutent l'EV perdue après le flop.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from .cards import combo_notation
@@ -295,6 +295,19 @@ def ring_lines(formats: Optional[tuple[str, ...]] = None) -> dict[str, dict]:
         if data:
             out[table_format] = {key: {pos: ring_ranges.parse_range(text) for pos, text in entry["ranges"].items()}
                                  for key, entry in data["lines"].items() if isinstance(entry.get("ranges"), dict)}
+    return out
+
+
+def with_losses(plays: list[Played], hands: list[Hand], losses: Optional[dict[str, float]] = None) -> list[Played]:
+    """Les mains de départ déjà lues (collect, sur plus de mains) de ces mains-là, avec l'EV perdue de ces analyses du
+    solveur : comme collect sur ces mains, sans les relire (une main dont l'EV perdue change est copiée)."""
+    wanted = {h.hand_id for h in hands}
+    losses = losses or {}
+    out = []
+    for p in plays:
+        if p.hand_id in wanted:
+            loss = losses.get(p.hand_id)
+            out.append(p if p.solver_loss == loss else replace(p, solver_loss=loss))
     return out
 
 

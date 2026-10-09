@@ -258,7 +258,9 @@ def lines(his_hands: Iterable[Hand], him: str, my_hands: Iterable[Hand], me: str
                       ("mine", field_study.player_bets(my_hands, [me], all_cards=True))):
         for b in bets:
             key = (b.street, b.label, b.size)
-            row = rows.setdefault(key, LineRow(b.street, b.label, b.size, LineStats(), LineStats()))
+            row = rows.get(key)
+            if row is None:
+                row = rows[key] = LineRow(b.street, b.label, b.size, LineStats(), LineStats())
             getattr(row, who).bets.append(b)
     order = {s: k for k, s in enumerate(POSTFLOP)}
     kept = [r for r in rows.values() if max(r.his.count, r.mine.count) >= MIN_LINE]

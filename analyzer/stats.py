@@ -18,7 +18,7 @@ OUTCOMES = {FOLD: "fold", CALL: "call", RAISE: "raise", CHECK: "check", BET: "be
 PF_LEVEL_NAMES = {1: "3bet", 2: "4bet"}
 
 
-@dataclass
+@dataclass(slots=True)
 class Ratio:
     hits: int = 0
     opps: int = 0
@@ -345,7 +345,9 @@ def analyze(hands: list[Hand]) -> dict[str, PlayerStats]:
         ev = allin_ev(hand)
         eff_bb = hand.effective_stack() / hand.bb
         for p in hand.seats:
-            st = stats.setdefault(p, PlayerStats(p))
+            st = stats.get(p)
+            if st is None:  # (setdefault créerait ses stats à chaque main)
+                st = stats[p] = PlayerStats(p)
             pos = reader.pos(p)
             st.hands += 1
             st.hands_by_pos[pos] += 1

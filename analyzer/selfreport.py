@@ -80,6 +80,8 @@ OPP_STYLE = """
 table.opp-table th.sorted { color: var(--ink); }
 table.opp-table th.sorted::after { content: " ▼"; font-size: 9px; }
 table.opp-table th.sorted.asc::after { content: " ▲"; }
+.opp-more { font: inherit; font-size: 13px; margin: 10px 0 0; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
 """
 
 OPP_SCRIPT = """
@@ -88,6 +90,13 @@ document.querySelectorAll('.opp-box').forEach(function (box) {
   var q = box.querySelector('.opp-q'), kind = box.querySelector('.opp-kind'), sort = box.querySelector('.opp-sort');
   var flip = box.querySelector('.opp-dir'), count = box.querySelector('.opp-count'), heads = box.querySelectorAll('th[data-sort]');
   if (!sort) return;  // un seul adversaire : pas de barre
+  // des milliers d'adversaires : seules les STEP premières lignes (du tri, de la recherche) sont affichées, la suite
+  // à la demande ; la recherche les trouve tous
+  var STEP = 100, limit = STEP, more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'opp-more';
+  (box.querySelector('.scroll') || body.parentNode).insertAdjacentElement('afterend', more);
+  more.addEventListener('click', function () { limit += 4 * STEP; apply(); });
   var key = 'analyzer-adversaires', saved = {};
   try { saved = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (e) { saved = {}; }
   var state = { sort: saved.sort || 'hands', asc: !!saved.asc, kind: saved.kind || '' };
@@ -105,11 +114,14 @@ document.querySelectorAll('.opp-box').forEach(function (box) {
     });
     rows.forEach(function (row) {
       var ok = (!text || plain(row.dataset.name).indexOf(text) >= 0) && (!state.kind || row.dataset.kind === state.kind);
-      row.hidden = !ok;
       if (ok) shown++;
+      row.hidden = !ok || shown > limit;
       body.appendChild(row);
     });
     count.textContent = shown === rows.length ? rows.length + ' adversaire(s)' : shown + ' sur ' + rows.length + ' adversaire(s)';
+    more.hidden = shown <= limit;
+    more.textContent = 'Voir ' + Math.min(4 * STEP, shown - limit) + ' adversaire(s) de plus ('
+      + Math.min(limit, shown) + ' affichés sur ' + shown + ')';
     heads.forEach(function (th) {
       th.classList.toggle('sorted', th.dataset.sort === k);
       th.classList.toggle('asc', th.dataset.sort === k && (k === 'name' ? !state.asc : state.asc));
@@ -117,15 +129,16 @@ document.querySelectorAll('.opp-box').forEach(function (box) {
     flip.textContent = (k === 'name' ? !state.asc : state.asc) ? '▲' : '▼';
     try { localStorage.setItem(key, JSON.stringify({ sort: state.sort, asc: state.asc, kind: state.kind })); } catch (e) {}
   }
-  q.addEventListener('input', apply);
-  if (kind) kind.addEventListener('change', function () { state.kind = kind.value; apply(); });
-  sort.addEventListener('change', function () { state.sort = sort.value; state.asc = false; apply(); });
-  flip.addEventListener('click', function () { state.asc = !state.asc; apply(); });
+  q.addEventListener('input', function () { limit = STEP; apply(); });
+  if (kind) kind.addEventListener('change', function () { state.kind = kind.value; limit = STEP; apply(); });
+  sort.addEventListener('change', function () { state.sort = sort.value; state.asc = false; limit = STEP; apply(); });
+  flip.addEventListener('click', function () { state.asc = !state.asc; limit = STEP; apply(); });
   heads.forEach(function (th) {
     th.addEventListener('click', function () {
       if (state.sort === th.dataset.sort) state.asc = !state.asc;
       else { state.sort = th.dataset.sort; state.asc = false; }
       sort.value = state.sort;
+      limit = STEP;
       apply();
     });
   });

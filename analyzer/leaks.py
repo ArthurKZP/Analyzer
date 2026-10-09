@@ -606,20 +606,25 @@ def rec_notes(stats: list[Stat]) -> list[str]:
     return notes
 
 
-def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None) -> Report:
-    """Le rapport complet d'un joueur (ses mains, ses adversaires classés réguliers ou récréatifs)."""
+def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Optional[list] = None,
+          stats_all: Optional[dict] = None) -> Report:
+    """Le rapport complet d'un joueur (ses mains, ses adversaires classés réguliers ou récréatifs). plays : ses mains de
+    départ déjà lues (handplay.collect avec la solution préflop, sur ces mains ou plus), stats_all : stats.analyze de
+    ces mains — de quoi ne pas les relire."""
     if kinds is None:
         names = sorted({h.opponent_of(hero) for h in hands if h.opponent_of(hero)})
         kinds = players.classify(names, analyze(hands))
     parts = split(hands, hero, kinds)
-    stats = {scope: analyze(parts[scope]) for scope, _ in SCOPES}
+    stats = {scope: stats_all if scope == "all" and stats_all is not None else analyze(parts[scope])
+             for scope, _ in SCOPES}
     winrate = {scope: stats[scope][hero].bb_per_100 if hero in stats[scope] else None for scope, _ in SCOPES}
     info = {scope: _pct_info(stats[scope].get(hero)) for scope, _ in SCOPES}
     rows = preflop_stats(stats, hero, parts) + postflop_stats(parts, hero)
     solver = solver_review(parts["reg"], hero)
     picks = interesting(parts, hero, solver["digests"])
-    plays = handplay.collect(parts["reg"], hero, handplay.Theory(preflop.load_solution()),
-                             review.hero_losses(solver["digests"]))
+    losses = review.hero_losses(solver["digests"])
+    plays = (handplay.with_losses(plays, parts["reg"], losses) if plays is not None else
+             handplay.collect(parts["reg"], hero, handplay.Theory(preflop.load_solution()), losses))
     leakcheck.attach(rows, leakcheck.hu_checks(rows, parts["reg"], hero, stats["reg"], plays))
     hand_leaks = [_hand_leak(x, len(parts["reg"])) for x in handplay.losers(plays)[:HAND_LEAKS]]
     opponents: dict = {"reg": [], "rec": []}

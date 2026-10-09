@@ -110,7 +110,13 @@ class Pot:
 
 def pot_of(hand: Hand) -> Optional[Pot]:
     """Le pot à deux joueurs au flop d'une main à une table à plusieurs, ou None : pot à plusieurs, limpé, tapis avant
-    le flop, troisième joueur qui a mis de l'argent avant de se coucher…"""
+    le flop, troisième joueur qui a mis de l'argent avant de se coucher… (gardé sur la main : les pages le relisent)"""
+    if "_pot" not in hand.__dict__:
+        hand.__dict__["_pot"] = _pot_of(hand)
+    return hand.__dict__["_pot"]
+
+
+def _pot_of(hand: Hand) -> Optional[Pot]:
     if len(hand.seats) <= 2:
         return None
     pair = postflop.flop_pair(hand)
@@ -336,7 +342,8 @@ def _pots(hands: list[Hand], hero: str) -> dict[str, Pot]:
 def stats(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Optional[list] = None,
           pots: Optional[dict[str, Pot]] = None) -> list[Stat]:
     """Ses stats face à la théorie, sans le solveur : préflop face aux charts, après le flop face aux plans de jeu, sur
-    toutes ses mains, contre les réguliers et contre les récréatifs (kinds : le type de ses adversaires)."""
+    toutes ses mains, contre les réguliers et contre les récréatifs (kinds : le type de ses adversaires ; plays : ses
+    mains de départ déjà lues avec ses charts, handplay.collect, sur ces mains ou plus)."""
     hands = mine(hands, hero)
     parts = split(hands, hero, kinds or {})
     scope_of = {h.hand_id: scope for scope in ("reg", "rec") for h in parts[scope]}
@@ -344,26 +351,34 @@ def stats(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
         pots = _pots(hands, hero)
     if plays is None:
         plays = handplay.collect(hands, hero, handplay.Theory(None, handplay.ring_lines()))
+    else:  # celles de ces mains, sans l'EV perdue (le préflop face aux charts n'en a pas besoin)
+        ids = {h.hand_id for h in hands}
+        plays = [p for p in plays if p.hand_id in ids]
     totals = {scope: len(parts[scope]) for scope, _ in SCOPES}
     return preflop_stats(plays, scope_of, totals) + postflop_stats(hands, hero, pots, scope_of)
 
 
-def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None) -> Report:
+def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Optional[list] = None,
+          found: Optional[dict] = None) -> Report:
     """Le rapport d'un joueur aux tables à plusieurs (toutes ses mains de 3 joueurs et plus ; kinds : le type de ses
-    adversaires, players.classify)."""
+    adversaires, players.classify). plays : ses mains de départ déjà lues avec ses charts (handplay.collect, sur ces
+    mains ou plus) ; found : ring.analyze de chaque portée (parts) — de quoi ne pas les relire."""
     kinds = kinds or {}
     hands = mine(hands, hero)
     parts = split(hands, hero, kinds)
     pots = _pots(hands, hero)
     solver = solver_review(parts["reg"], hero, pots)
     lines = handplay.ring_lines()
-    plays = handplay.collect(hands, hero, handplay.Theory(None, lines), review.hero_losses(solver["digests"]))
+    losses = review.hero_losses(solver["digests"])
+    plays = (handplay.with_losses(plays, hands, losses) if plays is not None else
+             handplay.collect(hands, hero, handplay.Theory(None, lines), losses))
     rows = stats(hands, hero, kinds, plays, pots)
     leakcheck.attach(rows, leakcheck.ring_checks(rows, parts["reg"], hero, pots, plays, kinds))
     regular = {h.hand_id for h in parts["reg"]}
     hand_leaks = [_hand_leak(x, len(parts["reg"]), "reg", FORMAT)
                   for x in handplay.losers([p for p in plays if p.hand_id in regular])[:HAND_LEAKS]]
-    found = {scope: ring.analyze(parts[scope], hero, merge=True) for scope, _ in SCOPES}
+    if found is None:
+        found = {scope: ring.analyze(parts[scope], hero, merge=True) for scope, _ in SCOPES}
     info = {scope: {k: found[scope][0].total.ratios[k] if found[scope] else Ratio() for k in ("vpip", "pfr", "wtsd", "wsd")}
             for scope, _ in SCOPES}
     winrate = {scope: found[scope][0].total.bb100 if found[scope] else None for scope, _ in SCOPES}

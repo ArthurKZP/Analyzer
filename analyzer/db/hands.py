@@ -6,7 +6,9 @@
 - sync_folder : le dossier des mains sert de boîte d'arrivée : ses fichiers nouveaux ou modifiés sont importés
   (un fichier inchangé, même taille et même date, n'est pas relu).
 - load : les mains d'un espace, dans l'ordre chronologique. Si le code de lecture a changé depuis l'import, les
-  historiques concernés sont relus depuis le texte gardé.
+  historiques concernés sont relus depuis le texte gardé. Les mains lues sont aussi gardées dans le cache des calculs,
+  par blocs de numéros de ligne (CACHE_BLOCK) : relire un bloc gardé est cinq fois plus rapide que le JSON de la base,
+  et un import ne refait que le dernier bloc.
 - files, remove_file, restore_file : les historiques importés ; en retirer un efface ses mains (celles qu'un autre
   historique contient aussi restent) et le garde, marqué retiré : le dossier des mains ne le réimporte pas, et il se
   rétablit d'un clic (ou en l'important à nouveau).
@@ -24,6 +26,7 @@ from ..models import Hand, hand_from_dict, hand_to_dict
 from . import Database, now
 
 CHUNK = 500  # numéros de main par requête « IN (…) »
+CACHE_BLOCK = 5000  # lignes de la table des mains par bloc du cache des mains lues (selon leur numéro de ligne)
 
 
 def _pack(data) -> bytes:
@@ -268,34 +271,56 @@ def _reread_outdated(db: Database, space_id: int, version: str) -> None:
                                _participants(row[0], h))
 
 
-def load(db: Database, space_id: int, progress: Optional[Callable[[int, int], None]] = None) -> list[Hand]:
-    """Les mains de l'espace, dans l'ordre chronologique ; progress(k, n) : k mains relues sur n, toutes les 1 000.
+def rows(db: Database, space_id: int) -> tuple[int, int]:
+    """(nombre de mains de l'espace, dernier numéro de ligne) : de quoi relire ensuite seulement les mains ajoutées."""
+    found = db.one("SELECT COUNT(*), MAX(id) FROM mains WHERE espace_id = ?", (space_id,))
+    return int(found[0] or 0), int(found[1] or 0)
 
-    Une base distante (PostgreSQL) les garde aussi dans le cache des calculs, tant que l'espace ne change pas ; une
-    base locale se relit aussi vite que ce cache, sans le réécrire en entier après chaque import."""
+
+def load_after(db: Database, space_id: int, seen: tuple[int, int]) -> Optional[tuple[list[Hand], tuple[int, int]]]:
+    """Les mains ajoutées depuis un chargement (seen : rows à ce moment), dans l'ordre d'ajout, et le nouveau rows ;
+    None quand il faut tout relire (des mains retirées depuis, ou lues par un autre code de lecture)."""
+    count, last = seen
+    if db.value("SELECT 1 FROM mains WHERE espace_id = ? AND lecture != ? AND fichier_id IS NOT NULL LIMIT 1",
+                (space_id, reader_version())):  # à relire depuis leur historique (comme le fait load)
+        return None
+    if db.value("SELECT COUNT(*) FROM mains WHERE espace_id = ? AND id <= ?", (space_id, last), 0) != count:
+        return None
+    found = db.all("SELECT id, donnees FROM mains WHERE espace_id = ? AND id > ? ORDER BY id", (space_id, last))
+    hands = [hand_from_dict(_unpack(blob)) for _, blob in found]
+    return hands, (count + len(found), found[-1][0] if found else last)
+
+
+def load(db: Database, space_id: int, progress: Optional[Callable[[int, int], None]] = None) -> list[Hand]:
+    """Les mains de l'espace, dans l'ordre chronologique ; progress(k, n) : k mains relues sur n, à chaque bloc.
+
+    Bloc par bloc (CACHE_BLOCK lignes de la table, selon leur numéro) : celui que le cache des calculs garde, pour ce
+    contenu (nombre de mains, premier et dernier numéro) et ce code de lecture, se relit de là ; les autres, depuis la
+    base, puis sont gardés. Les blocs d'avant (mains retirées, ajoutées) sont effacés du cache."""
     version = reader_version()
     if db.value("SELECT 1 FROM mains WHERE espace_id = ? AND lecture != ? LIMIT 1", (space_id, version)):
         _reread_outdated(db, space_id, version)
-    n, last = db.one("SELECT COUNT(*), MAX(id) FROM mains WHERE espace_id = ?", (space_id,))
-    cached_space = db.dialect != "sqlite"
-    if not cached_space:
-        store.forget_prefix("mains", f"{db.url}|{space_id}|")  # une copie d'avant : la place est rendue
-    if not n:
-        return []
-    key = f"{db.url}|{space_id}|{n}|{last}|{version}"
-    cached = store.get("mains", key) if cached_space else None
-    if cached is not None:
-        return cached[1]
-    rows = db.all("SELECT donnees FROM mains WHERE espace_id = ?", (space_id,))
-    hands = []
-    for k, (blob,) in enumerate(rows):
-        hands.append(hand_from_dict(_unpack(blob)))
-        if progress is not None and k % 1000 == 0:
-            progress(k, len(rows))
-    if progress is not None:
-        progress(len(rows), len(rows))
+    blocks = db.all(f"SELECT id / {CACHE_BLOCK} AS bloc, COUNT(*), MIN(id), MAX(id) FROM mains WHERE espace_id = ? "
+                    "GROUP BY bloc ORDER BY bloc", (space_id,))
+    prefix = f"{db.url}|{space_id}|"
+    total = sum(n for _, n, _, _ in blocks)
+    hands: list[Hand] = []
+    keys: set[str] = set()
+    for block, n, first, last in blocks:
+        key = f"{prefix}{block}|{n}|{first}|{last}|{version}|{_MODEL}"
+        keys.add(key)
+        part = store.get("mains", key)
+        if part is None:
+            rows = db.all("SELECT donnees FROM mains WHERE espace_id = ? AND id BETWEEN ? AND ?",
+                          (space_id, first, last))
+            part = [hand_from_dict(_unpack(blob)) for (blob,) in rows]
+            store.put("mains", key, part)
+        hands.extend(part)
+        if progress is not None:
+            progress(len(hands), total)
+    store.keep_only("mains", prefix, keys)  # les blocs d'un contenu d'avant
     hands.sort(key=lambda h: (h.date, h.hand_id))
-    if cached_space:
-        store.forget_prefix("mains", f"{db.url}|{space_id}|")  # l'ancienne version de l'espace
-        store.put("mains", key, (key, hands))
     return hands
+
+
+_MODEL = store.fingerprint(Path(__file__).parent.parent / "models.py")  # la forme des objets gardés dans le cache

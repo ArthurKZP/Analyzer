@@ -1167,20 +1167,42 @@ pèse environ 0,9 Ko par main, historique d'origine compris.
 
 ### Cache des calculs
 
-Les calculs longs et toujours identiques sont gardés dans `~/.analyzer/cache/analyses.sqlite` : les mains lues (par
-fichier d'historique : un fichier inchangé ne se relit pas), les équités (abattages, tapis préflop) et les clés du
-spot postflop de chaque main (pour savoir si elle est déjà analysée sans reconstruire son arbre) ; avec une base en
-ligne (PostgreSQL), les mains de chaque espace aussi (une base locale se relit aussi vite, sans recopier toutes les
-mains dans le cache après chaque import). Ce cache n'est pas sauvegardé : il se reconstruit tout seul, et on peut
-l'effacer sans rien perdre. `ANALYZER_CACHE=0` le coupe. Ordre de grandeur (4 cœurs) : les douze pages de *Mon jeu*
-et d'un adversaire se calculent en 1 seconde environ avec 793 mains (au lieu de 45) et en 6 à 7 secondes avec 8 000
-mains, puis restent en mémoire.
+Les calculs longs et toujours identiques sont gardés dans `~/.analyzer/cache/analyses.sqlite` : les mains lues (celles
+de chaque espace de la base, par blocs de 5 000 lignes : un import ne refait que le dernier bloc ; pour la ligne de
+commande, par fichier d'historique : un fichier inchangé ne se relit pas), les équités (abattages, tapis préflop) et
+les clés du spot postflop de chaque main (pour savoir si elle est déjà analysée sans reconstruire son arbre). Ce cache
+n'est pas sauvegardé : il se reconstruit tout seul, et on peut l'effacer sans rien perdre. `ANALYZER_CACHE=0` le
+coupe. Ordre de grandeur (4 cœurs) : les douze pages de *Mon jeu* et d'un adversaire se calculent en 1 seconde
+environ avec 793 mains (au lieu de 45) et en 6 à 7 secondes avec 8 000 mains, puis restent en mémoire.
 
 Les pages restent légères quel que soit le nombre de mains : dans l'application, *Spots* ne contient plus les
 mains (le serveur filtre, trie et envoie la liste par pages de 150, puis le détail d'une main quand on l'ouvre :
 50 Ko au lieu de 9 Mo pour 8 000 mains) ; la courbe de résultats garde la forme de la série avec au plus
 1 500 points ; les tableaux de mains montrées du rapport s'arrêtent aux 40 plus récentes (toutes dans *Spots*).
 Les fichiers autonomes (`python -m analyzer`, rapport téléchargé) gardent toutes les mains dans la page.
+
+### Avec beaucoup de mains
+
+Une base de plus de 100 000 mains reste fluide :
+
+- **Chargement** : le ramasse-miettes de Python (qui parcourt tous les objets en mémoire à chacun de ses passages)
+  attend la fin du chargement, puis les mains lues sont mises à l'écart de ses passages (`analyzer/memory.py`) ; les
+  actions et les places sont des objets compacts, et les textes répétés (pseudos, cartes, positions) sont partagés.
+- **Import** : seules les mains ajoutées sont lues ; elles rejoignent celles déjà en mémoire, avec ce qui a déjà été
+  calculé sur ces dernières. Tout est relu seulement quand il le faut : un historique retiré, un alias ou tes pseudos
+  changés, un autre code de lecture.
+- **Pages** : ce qui se lit sur chaque main (stats par position, pot, famille de la main) est gardé sur la main ; le
+  résultat et les décisions préflop de chaque main, comme les stats des tables à plusieurs, sont calculés une seule
+  fois pour le bilan, les tables à plusieurs, le leakfinding et les mains de départ. Après chaque chargement,
+  l'application prépare en arrière-plan les pages principales (*Mon jeu*, bilan, leakfinding, mains de départ,
+  préflop, spots), une à la fois, et s'efface dès que tu ouvres une page.
+- **Listes d'adversaires** : 100 lignes à la fois (« Voir … de plus »), la recherche porte sur toute la liste.
+
+Ordre de grandeur avec 140 000 mains (28 000 en HU, 110 000 aux tables à plusieurs) : le chargement prend 4 secondes
+au lieu de 19 (16 la première fois, le temps de garder les blocs) et 0,8 Go de mémoire au lieu de 1,35 ; un import de
+164 mains, 3 secondes au lieu de 14 ; le leakfinding des tables à plusieurs, 3 secondes au lieu de 9, et leur bilan, 6
+au lieu de 11. Une trentaine de secondes après le lancement, toutes les pages principales sont prêtes et s'ouvrent
+aussitôt.
 
 ## Contenu du rapport
 
@@ -1244,8 +1266,8 @@ analyzer/
                        ranges des tables à plusieurs (ring_ranges.py), ton préflop face aux charts
                        (ring_preflop.py), arbre préflop 6-max pour l'explorateur (ring_tree.py), tes ranges ajustées
                        (custom_ranges.py, ordre des mains dans data/hand_order.json)
-  app/                 application : serveur local (server.py), bibliothèque de mains et cache
-                       (library.py), résolutions et sessions du solveur (solves.py), page « Face au
+  app/                 application : serveur local (server.py), bibliothèque de mains, cache et préchargement
+                       des pages (library.py), résolutions et sessions du solveur (solves.py), page « Face au
                        solveur » (review_page.py), leakfinding (leaks_page.py), bluffs des adversaires
                        (bluffs_page.py), étude du field (field_page.py : les joueurs et les alias ; field_leaks_page.py : le
                        leakfinding des adversaires), joueurs de référence (reference_page.py : toi et lui, sa value
@@ -1260,6 +1282,7 @@ analyzer/
   backup.py            sauvegarde et restauration de la base et des études (commande `sauvegarde`)
   blobs.py             stockage des gros fichiers (arbres des études) : un dossier ici, un stockage objet en ligne
   store.py             cache sur disque des calculs longs (SQLite : mains lues, équités, clés des spots)
+  memory.py            grosse base de mains : ramasse-miettes en pause pendant un chargement, mains mises à l'écart
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
   field.py             étude du field : leaks à exploiter d'un adversaire, sa value et ses bluffs par ligne, style
                        des récréatifs (passif, agressif, prudent)

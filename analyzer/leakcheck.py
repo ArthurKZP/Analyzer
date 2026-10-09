@@ -688,8 +688,12 @@ def population(hands: list[Hand], names: set[str]) -> dict[str, Ratio]:
     """Leurs fréquences avant le flop aux tables à plusieurs (ring.read), ensemble."""
     out: dict[str, Ratio] = defaultdict(Ratio)
     for h in hands:
-        for player in names & set(h.seats):
-            for key, made in ring.read(h, player).items():
+        players = names & h.seats.keys()
+        if not players:
+            continue
+        every = ring.read_all(h)
+        for player in players:
+            for key, made in every[player].items():
                 out[key].add(made)
     return dict(out)
 

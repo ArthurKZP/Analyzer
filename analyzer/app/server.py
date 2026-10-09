@@ -678,7 +678,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if outdated:  # le code de lecture a changé : une fois, les historiques gardés sont relus
         print(f"Lecture améliorée : {outdated} mains relues une fois depuis tes historiques (quelques minutes pour une "
               "grosse base)…", flush=True)
-    library = Library(args.dossier, args.hero)
+    library = Library(args.dossier, args.hero, warm_up=True)  # les pages se calculent en arrière-plan
     server = start(library, args.port)
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     print(f"{len(library.hands) + len(library.ring)} mains, toi : {library.hero or 'inconnu'}")

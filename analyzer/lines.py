@@ -190,7 +190,9 @@ def pooled_by_size(lines: list[Line]) -> list[Line]:
     for ln in lines:
         label = "Toutes ses relances" if not ln.size else "Toutes ses mises"
         key = (ln.street, ln.size)
-        pool = pooled.setdefault(key, Line(ln.street, label, ln.size))
+        pool = pooled.get(key)
+        if pool is None:
+            pool = pooled[key] = Line(ln.street, label, ln.size)
         pool.count += ln.count
         pool.replies.update(ln.replies)
         pool.required.extend(ln.required)

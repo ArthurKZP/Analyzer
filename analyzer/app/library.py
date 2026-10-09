@@ -5,6 +5,7 @@ import base64
 import binascii
 import secrets
 import threading
+import time
 import traceback
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +15,8 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import quote
 
-from .. import aliases, bluffs, db, field, handplay, leaks, players, ring, ring_leaks, settings, spots, store, students
+from .. import (aliases, bluffs, db, field, handplay, leaks, memory, players, ring, ring_leaks, settings, spots, store,
+               students)
 from .. import period as periods
 from .. import reference as refstudy
 from ..db import analyses as db_analyses
@@ -109,17 +111,22 @@ def _formats(hands: list[Hand]) -> dict[str, int]:
         counts[h.table_format] = counts.get(h.table_format, 0) + 1
     return counts
 
+_WARMING = threading.Lock()  # un préchargement à la fois (toi, tes élèves)
+_WARM = threading.local()  # .active : ce fil est celui du préchargement
+
+
 class Library:
     """Les mains d'un dossier et les pages d'analyse, calculées à la demande puis gardées en cache."""
 
     def __init__(self, folder: Path | str, hero: Optional[str] = None, solves: Optional[SolveQueue] = None,
                  backups: Optional[Backups] = None, api: str = "/api", pages: str = "/moi", space: str = "moi",
-                 space_name: str = "Moi", source: Optional[Callable[[], list[Hand]]] = None):
+                 space_name: str = "Moi", source: Optional[Callable[[], list[Hand]]] = None, warm_up: bool = False):
         """folder : la boîte d'arrivée des historiques (importés dans la base au chargement) ; space : l'espace de la
         base (« moi », ou « eleve:<identifiant> ») ; solves, backups : ceux de la bibliothèque principale, partagés par
         celles des élèves (une résolution à la fois) ; api, pages : préfixes des adresses de ses pages et de leurs
         actions. source : les mains d'un joueur de référence, lues dans ton espace (pas d'espace à lui ; space ne sert
-        qu'à garder sa période) ; hero : son nom."""
+        qu'à garder sa période) ; hero : son nom. warm_up : après chaque chargement, les pages principales se calculent
+        en arrière-plan (l'application ; jamais dans les tests)."""
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
         self.db = db.current()
@@ -147,36 +154,72 @@ class Library:
         self._students: dict[str, Library] = {}
         self._references: dict[str, Library] = {}  # les joueurs de référence ouverts
         self._reference_hands: dict[str, list[Hand]] = {}  # leurs mains (nom -> mains), lues avec les tiennes
+        self._snapshot: Optional[dict] = None  # ce qui a décidé de tes mains au dernier chargement (_load_new)
         self._imports: dict[str, ImportJob] = {}  # les imports suivis (barre d'avancement), les derniers
         self._import_pool: Optional[ThreadPoolExecutor] = None  # un import à la fois, en arrière-plan
         self.solves = solves or SolveQueue()
         self.backups = backups or Backups()
         self.coach = Coach(self)
+        self.warm_up = warm_up
+        self._busy = 0  # pages en calcul pour une demande (le préchargement attend qu'il n'y en ait plus)
         if solves is None:
             self.solves.on_done.append(lambda job: self.backups.schedule())
         self.reload()
 
     # --- chargement -------------------------------------------------------------
-    def reload(self, progress=None) -> None:
+    def reload(self, progress=None, new_only: bool = False) -> None:
         """Importe les historiques nouveaux du dossier, puis lit les mains de l'espace dans la base (progress(k, n) :
-        k mains relues sur n)."""
+        k mains relues sur n). new_only : après un import, seulement les mains ajoutées depuis le dernier chargement
+        (celles déjà en mémoire gardent ce qui a été lu d'elles), sauf si autre chose a changé (alias, pseudos, mains
+        retirées…) : tout est alors relu."""
         if self._source is not None:  # un joueur de référence : ses mains, lues avec les tiennes
             return self._reload_reference()
+        with memory.loading() as state:  # des millions d'objets : le ramasse-miettes attend la fin du chargement
+            if new_only and self._load_new(progress):
+                state.release = False  # rien de remplacé : rien à rendre
+            else:
+                self._load(progress)
+
+    @staticmethod
+    def _count(hands: list[Hand], pseudos: Counter, seen: Counter, unmarked: Counter) -> None:
+        """Compte tes pseudos tels que tes historiques les marquent (pseudo, site), tous les joueurs, et ceux des mains
+        sans héros marqué."""
+        for h in hands:
+            marked = h.hero
+            seen.update(h.seats.keys())
+            if marked:
+                pseudos[(marked, h.site)] += 1
+            else:
+                unmarked.update(h.seats.keys())
+
+    @staticmethod
+    def _conf_key(conf: dict) -> tuple:
+        """Ce qui, dans tes Paramètres, décide quelles mains sont les tiennes."""
+        return (conf["hero"], tuple(sorted(conf["hero_excluded"])), tuple(sorted(conf["hero_added"])),
+                tuple(sorted((ref["name"], tuple(sorted(ref["pseudos"]))) for ref in conf["references"])))
+
+    def _load(self, progress=None) -> None:
         db_hands.sync_folder(self.db, self.space_id, self.folder)
         hands = db_hands.load(self.db, self.space_id, progress)
         mapping = aliases.load()  # les pseudos regroupés sous un alias prennent son nom
         aliases.apply(hands, mapping)
-        pseudos = Counter((h.hero, h.site) for h in hands if h.hero)  # tes pseudos, tels que tes historiques les marquent
-        seen = Counter(name for h in hands for name in h.seats)  # tous les joueurs (ton nom n'est pas le leur)
-        unmarked = Counter(name for h in hands if not h.hero for name in h.seats)
+        pseudos: Counter = Counter()  # tes pseudos, tels que tes historiques les marquent
+        seen: Counter = Counter()  # tous les joueurs (ton nom n'est pas le leur)
+        unmarked: Counter = Counter()  # ceux des mains sans héros marqué
+        self._count(hands, pseudos, seen, unmarked)
         if self.is_me:  # les mains de tes joueurs de référence : à part (Paramètres)
             hands = self._take_references(hands)
+        conf = settings.load()
+        snapshot: Optional[dict] = {"rows": db_hands.rows(self.db, self.space_id), "mapping": mapping,
+                                    "conf": self._conf_key(conf)}
         if self.is_me and not self.hero_override:  # tes pseudos réunis sous ton nom (Paramètres)
-            hero, mine = self._group_me(hands, pseudos, settings.load())
+            hero, mine, pseudo_set, owners = self._group_me(hands, pseudos, conf)
+            snapshot.update(path="moi", mine=pseudo_set, owners=owners)
         else:  # --hero (ligne de commande) ou le pseudo de l'élève, sinon le plus fréquent : ses pseudos sous celui-là
             hero = mapping.get(self.hero_override, self.hero_override) if self.hero_override else detect_hero(hands)
             unify_hero(hands, hero)
             mine = [h for h in hands if hero and hero in h.seats and (not h.hero or h.hero == hero)]
+            snapshot = dict(snapshot, path="pseudo") if self.hero_override else None  # le plus fréquent : tout relire
         heads_up = [h for h in mine if len(h.seats) == 2 and h.button and h.bb]
         ring = [h for h in mine if len(h.seats) > 2 and h.button and h.bb]
         with self._lock:
@@ -185,15 +228,65 @@ class Library:
             self.hero = hero
             self.hero_pseudos = pseudos
             self.players_seen, self.unmarked_seen = seen, unmarked
+            self._snapshot = snapshot
             self._select()
 
-    def _take_references(self, hands: list[Hand]) -> list[Hand]:
+    def _load_new(self, progress=None) -> bool:
+        """Ajoute les mains importées depuis le dernier chargement, lues comme lui (alias, joueurs de référence, tes
+        pseudos sous ton nom) ; False s'il faut tout relire : mains retirées ou relues, alias, Paramètres ou pseudos
+        changés, ou ton nom (le pseudo le plus fréquent) qui en change."""
+        snap = self._snapshot
+        if snap is None:
+            return False
+        found = db_hands.load_after(self.db, self.space_id, snap["rows"])
+        if found is None:
+            return False
+        new, rows = found
+        mapping, conf = aliases.load(), settings.load()
+        if mapping != snap["mapping"] or self._conf_key(conf) != snap["conf"]:
+            return False
+        aliases.apply(new, mapping)
+        pseudos, seen, unmarked = Counter(self.hero_pseudos), Counter(self.players_seen), Counter(self.unmarked_seen)
+        self._count(new, pseudos, seen, unmarked)
+        if snap["path"] == "moi" and self.my_pseudos(pseudos, conf) != snap["mine"]:
+            return False  # un pseudo de plus (ou de moins) : les mains d'avant sans héros marqué changent de main
+        if self.is_me:  # les mains de tes joueurs de référence : à part, avec celles d'avant
+            new = self._take_references(new, keep=True)
+        if snap["path"] == "moi":
+            owners = self._owners(new, snap["mine"])
+            counts = snap["owners"] + Counter(me for _, me in owners)
+            top = counts.most_common(2)
+            name = conf["hero"] or (top[0][0] if top else None)
+            if name != self.hero or (not conf["hero"] and len(top) > 1 and top[0][1] == top[1][1]):
+                return False  # ton nom (le pseudo le plus fréquent) change, ou deux pseudos à égalité
+            mine = self._claim(owners, name)
+        else:  # le pseudo donné (un élève) : comme au chargement
+            unify_hero(new, self.hero)
+            mine = [h for h in new if self.hero and self.hero in h.seats and (not h.hero or h.hero == self.hero)]
+            counts = snap.get("owners")
+        heads_up = [h for h in mine if len(h.seats) == 2 and h.button and h.bb]
+        ring = [h for h in mine if len(h.seats) > 2 and h.button and h.bb]
+        order = lambda h: (h.date, h.hand_id)  # noqa: E731
+        with self._lock:
+            self._all_hands = sorted(self._all_hands + heads_up, key=order) if heads_up else self._all_hands
+            self._all_ring = sorted(self._all_ring + ring, key=order) if ring else self._all_ring
+            self.by_id.update({h.hand_id: h for h in heads_up + ring})
+            self.hero_pseudos = pseudos
+            self.players_seen, self.unmarked_seen = seen, unmarked
+            self._snapshot = dict(snap, rows=rows, owners=counts)
+            self._select()
+        if progress is not None:
+            progress(len(new), len(new))
+        return True
+
+    def _take_references(self, hands: list[Hand], keep: bool = False) -> list[Hand]:
         """Met à part les mains de tes joueurs de référence (celles où l'historique marque un de leurs pseudos comme
         héros), sous leur nom, et renvoie les autres ; leurs bibliothèques déjà ouvertes se relisent à la prochaine
-        visite."""
+        visite. keep : des mains ajoutées, mises à part avec celles d'avant."""
         refs = settings.load()["references"]
         owner = {p: ref["name"] for ref in refs for p in ref["pseudos"]}
-        taken: dict[str, list[Hand]] = {ref["name"]: [] for ref in refs}
+        taken: dict[str, list[Hand]] = {ref["name"]: list(self._reference_hands.get(ref["name"], [])) if keep else []
+                                        for ref in refs}
         rest = []
         for h in hands:
             name = owner.get(h.hero)
@@ -230,29 +323,44 @@ class Library:
         return (({p for p, _ in pseudos} - set(conf["hero_excluded"])) | set(conf["hero_added"])) \
             - settings.reference_pseudos(conf)
 
-    def _group_me(self, hands: list[Hand], pseudos: Counter, conf: dict) -> tuple[Optional[str], list[Hand]]:
-        """Réunit tes pseudos sous ton nom : renvoie ce nom (celui que tu as choisi, sinon ton pseudo le plus fréquent)
-        et tes mains. Une main est à toi quand son héros (marqué par l'historique) est un de tes pseudos, ou, sans héros
-        marqué, quand un de tes pseudos y joue : la main d'un pseudo décoché n'est plus la tienne."""
+    def _group_me(self, hands: list[Hand], pseudos: Counter, conf: dict
+                  ) -> tuple[Optional[str], list[Hand], set[str], Counter]:
+        """Réunit tes pseudos sous ton nom : renvoie ce nom (celui que tu as choisi, sinon ton pseudo le plus fréquent),
+        tes mains, tes pseudos et leur nombre de mains. Une main est à toi quand son héros (marqué par l'historique) est
+        un de tes pseudos, ou, sans héros marqué, quand un de tes pseudos y joue : la main d'un pseudo décoché n'est
+        plus la tienne."""
         mine = self.my_pseudos(pseudos, conf)
         if not mine:  # ni héros marqué ni pseudo ajouté : le joueur le plus fréquent
             guess = detect_hero(hands)
             mine = {guess} if guess else set()
+        owners = self._owners(hands, mine)
+        counts = Counter(me for _, me in owners)
+        if not owners:
+            return conf["hero"] or (min(mine, key=str.lower) if mine else None), [], mine, counts
+        name = conf["hero"] or counts.most_common(1)[0][0]
+        return name, self._claim(owners, name), mine, counts
+
+    @staticmethod
+    def _owners(hands: list[Hand], mine: set[str]) -> list[tuple[Hand, str]]:
+        """Les mains où tu joues, et sous quel pseudo : le héros marqué par l'historique, sinon un de tes pseudos
+        assis."""
         owners = []
         for h in hands:
             me = h.hero or next((p for p in h.seats if p in mine), None)
             if me in mine:
                 owners.append((h, me))
-        if not owners:
-            return conf["hero"] or (min(mine, key=str.lower) if mine else None), []
-        name = conf["hero"] or Counter(me for _, me in owners).most_common(1)[0][0]
+        return owners
+
+    @staticmethod
+    def _claim(owners: list[tuple[Hand, str]], name: str) -> list[Hand]:
+        """Tes mains sous ton nom (ta place marquée comme celle du héros)."""
         kept = []
         for h, me in owners:
             h.seats[me].is_hero = True  # sans héros marqué : ta place
             h.rename(me, name)  # sans effet si un autre joueur de la main porte ce nom : elle n'est alors pas comptée
             if h.hero == name:
                 kept.append(h)
-        return name, kept
+        return kept
 
     @property
     def is_me(self) -> bool:
@@ -260,13 +368,55 @@ class Library:
         return self.space_key == "moi" and self._source is None
 
     def _select(self) -> None:
-        """Les mains de la période (sous self._lock) ; les analyses se refont."""
+        """Les mains de la période (sous self._lock) ; les analyses se refont (préchargées si warm_up)."""
         self._period_day = date.today()
         self.hands = periods.select(self._all_hands, self.period, self._period_day)
         self.ring = periods.select(self._all_ring, self.period, self._period_day)  # tables à plusieurs (3 à 9 joueurs)
         self.version += 1
         self._cache.clear()
         self._key_locks.clear()
+        if self.warm_up:
+            threading.Thread(target=self._warm, args=(self.version,), daemon=True, name="prechargement").start()
+
+    # --- préchargement -----------------------------------------------------------
+    WARM_PAGES = ("bilan", "leaks", "mains", "preflop", "tables", "spots")  # dans l'ordre des onglets de Mon jeu
+
+    def _warm_tasks(self):
+        """Ce que l'application demandera sans doute : l'état (le menu), puis les pages de Mon jeu dans l'ordre de leurs
+        onglets, pour chaque format joué."""
+        yield self.summary
+        formats = [fmt for fmt, _ in self.leak_formats()]
+        for page in self.WARM_PAGES:
+            if page == "tables":
+                if ring_leaks.FORMAT in formats:
+                    yield lambda: self.self_page("tables")
+            elif page in ("mains", "spots"):
+                if page == "mains" or "HU" in formats:
+                    yield lambda p=page: self.self_page(p, "HU")
+            else:
+                for fmt in formats:
+                    yield (lambda p=page, f=fmt: self.leaks_page(table_format=f) if p == "leaks"
+                           else self.self_page(p, f))
+
+    def _warm(self, version: int) -> None:
+        """Calcule les pages en arrière-plan, une à la fois et un préchargement à la fois (élèves compris) ; attend
+        qu'aucune page demandée ne soit en calcul avant d'en commencer une ; s'arrête si les mains changent."""
+        with _WARMING:
+            _WARM.active = True
+            try:
+                for task in self._warm_tasks():
+                    while self._busy and self.version == version:
+                        time.sleep(0.2)
+                    if self.version != version:
+                        return
+                    try:
+                        task()
+                    except Exception:  # noqa: BLE001 — une page qui ne se fait pas (pas de mains…) : la suivante
+                        continue
+            except Exception:  # noqa: BLE001 — la liste des pages (les formats joués) : rien à précharger
+                return
+            finally:
+                _WARM.active = False
 
     # --- période d'analyse ----------------------------------------------------------------
     def set_period(self, raw: object) -> dict:
@@ -471,7 +621,16 @@ class Library:
             lock = self._key_locks.setdefault(full_key, threading.Lock())
         with lock:
             if full_key not in self._cache:
-                self._cache[full_key] = build()
+                asked = not getattr(_WARM, "active", False)  # une demande (pas le préchargement)
+                if asked:
+                    with self._lock:
+                        self._busy += 1
+                try:
+                    self._cache[full_key] = build()
+                finally:
+                    if asked:
+                        with self._lock:
+                            self._busy -= 1
                 store.flush()  # les calculs gardés sur disque (équités, spots…) sont écrits tout de suite
             return self._cache[full_key]
 
@@ -551,12 +710,21 @@ class Library:
         bilan."""
         def build():
             hero = self.hero or ""
-            kinds = self.ring_kinds()
-            parts = ring_leaks.split(ring_leaks.mine(self.ring, hero), hero, kinds)
-            scopes = [(scope, label, ring.analyze(parts[scope], hero, merge=True)) for scope, label in leaks.SCOPES]
-            return scopes, leaks.top_stat_gaps(ring_leaks.stats(self.ring, hero, kinds), "reg", 5)
+            found = self._ring_found()
+            scopes = [(scope, label, found[scope]) for scope, label in leaks.SCOPES]
+            stats = ring_leaks.stats(self.ring, hero, self.ring_kinds(), plays=self._plays().get("ring"))
+            return scopes, leaks.top_stat_gaps(stats, "reg", 5)
         key = (("ring_overview",) + documents.revision(db.current(), "plan", "ranges")[2:] + self._ring_kinds_key())
         return self._cached(key, build)
+
+    def _ring_found(self) -> dict:
+        """Tes stats aux tables à plusieurs (ring.analyze, toutes ensemble) sur toutes tes mains, contre les réguliers
+        et contre les récréatifs : pour le bilan, la page des tables et le Leakfinding."""
+        def build():
+            hero = self.hero or ""
+            parts = ring_leaks.split(ring_leaks.mine(self.ring, hero), hero, self.ring_kinds())
+            return {scope: ring.analyze(parts[scope], hero, merge=True) for scope, _ in leaks.SCOPES}
+        return self._cached(("ring_found",) + self._ring_kinds_key(), build)
 
     def _ring_page(self) -> str:
         """Tes stats par position aux tables à plusieurs (toutes ensemble), sur toutes tes mains, contre les réguliers
@@ -814,7 +982,7 @@ class Library:
         if lib is None:
             lib = Library(students.folder(ident), meta.get("pseudo"), solves=self.solves, backups=self.backups,
                           api=f"/api/eleves/{ident}", pages=f"/eleve/{ident}", space=students.PREFIX + ident,
-                          space_name=meta["name"])
+                          space_name=meta["name"], warm_up=self.warm_up)
             lib.display_name = meta["name"]
             with self._lock:
                 lib = self._students.setdefault(ident, lib)
@@ -848,7 +1016,7 @@ class Library:
             name = meta["name"]
             lib = Library(self.folder, name, solves=self.solves, backups=self.backups, api=f"/api/references/{ident}",
                           pages=f"/reference/{ident}", space=REFERENCE_PREFIX + ident, space_name=name,
-                          source=lambda: self._reference_hands.get(name, []))
+                          source=lambda: self._reference_hands.get(name, []), warm_up=self.warm_up)
             lib.display_name = name
             with self._lock:
                 lib = self._references.setdefault(ident, lib)
@@ -1032,11 +1200,13 @@ class Library:
         """Le rapport d'un format, recalculé quand des mains, des analyses du solveur, tes charts, les plans de jeu ou
         le type de tes adversaires changent."""
         changes = (_digest_count(),) + documents.revision(db.current(), "plan", "ranges")[2:]
-        if table_format == "HU":
+        if table_format == "HU":  # (les mains de départ et les stats déjà lues pour les autres pages servent)
             return self._cached(("leaks",) + changes + self._kinds_key(),
-                                lambda: leaks.build(self.hands, self.hero, self.kinds()))
+                                lambda: leaks.build(self.hands, self.hero, self.kinds(), plays=self._plays().get("HU"),
+                                                    stats_all=self.all_stats()))
         return self._cached(("leaks", ring_leaks.FORMAT) + changes + self._ring_kinds_key(),
-                            lambda: ring_leaks.build(self.ring, self.hero or "", self.ring_kinds()))
+                            lambda: ring_leaks.build(self.ring, self.hero or "", self.ring_kinds(),
+                                                     plays=self._plays().get("ring"), found=self._ring_found()))
 
     def leaks_page(self, standalone: bool = False, table_format: Optional[str] = None) -> str:
         fmt = self._leak_format(table_format)
@@ -1647,8 +1817,8 @@ class Library:
                 added += self._import_zip(name, item["zip"], results, job)
             else:
                 added += self._import_one(name, item.get("content"), results, job)
-        if added:
-            self.reload(job.loading if job is not None else None)
+        if added:  # seulement les mains ajoutées, quand rien d'autre n'a changé
+            self.reload(job.loading if job is not None else None, new_only=True)
         return {"files": results, "added": added, "state": self.summary()}
 
     @staticmethod

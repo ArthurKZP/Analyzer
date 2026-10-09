@@ -4,8 +4,9 @@ il n'est pas sauvegardé, et ANALYZER_CACHE=0 le coupe.
 
 Chaque espace (« equite », …) a sa version (VERSIONS) : changer la façon de calculer une valeur demande d'augmenter
 la version, et les anciennes valeurs sont ignorées puis effacées. Les valeurs sont gardées en JSON (texte) ou en
-pickle (objets Python, pour les mains lues). Lecture : tout un espace est chargé en mémoire à la première demande ;
-écriture : groupée, une transaction toutes les WRITE_BATCH valeurs, sur flush() et à la sortie.
+pickle compressé (objets Python, pour les mains lues). Lecture : tout un espace est chargé en mémoire à la première
+demande (les espaces volumineux, clé par clé) ; écriture : groupée, une transaction toutes les WRITE_BATCH valeurs, sur
+flush() et à la sortie.
 """
 from __future__ import annotations
 
@@ -16,10 +17,11 @@ import os
 import pickle
 import sqlite3
 import threading
+import zlib
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-VERSIONS = {"equite": 1, "mains": 1, "spots": 4, "fiches": 1}
+VERSIONS = {"equite": 1, "mains": 2, "spots": 4, "fiches": 1}
 PICKLED = {"mains"}  # espaces gardés en pickle (objets Python)
 BY_KEY = {"mains"}  # espaces volumineux : lus clé par clé, pas chargés en entier
 WRITE_BATCH = 500
@@ -81,13 +83,17 @@ def _connect() -> Optional[sqlite3.Connection]:
     return db
 
 
+UNREADABLE = (ValueError, TypeError, pickle.UnpicklingError, EOFError, AttributeError, ImportError, zlib.error)
+
+
 def _decode(space: str, blob: bytes) -> Any:
-    return pickle.loads(blob) if space in PICKLED else json.loads(blob)
+    return pickle.loads(zlib.decompress(blob)) if space in PICKLED else json.loads(blob)
 
 
 def _encode(space: str, value: Any) -> bytes:
-    return pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL) if space in PICKLED else \
-        json.dumps(value, separators=(",", ":")).encode()
+    if space in PICKLED:  # compressé vite (niveau 1) : quatre à cinq fois plus petit, relu presque aussi vite
+        return zlib.compress(pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL), 1)
+    return json.dumps(value, separators=(",", ":")).encode()
 
 
 def _space(space: str) -> Optional[dict[str, Any]]:
@@ -104,7 +110,7 @@ def _space(space: str) -> Optional[dict[str, Any]]:
         for key, blob in db.execute("SELECT cle, valeur FROM cache WHERE espace = ?", (space,)):
             try:
                 values[key] = _decode(space, blob)
-            except (ValueError, pickle.UnpicklingError, EOFError, AttributeError, ImportError):
+            except UNREADABLE:
                 continue  # valeur illisible (ancienne version du code) : recalculée
     except sqlite3.Error:
         return None
@@ -132,7 +138,7 @@ def _get_one(space: str, key: str) -> Any:
         row = db.execute("SELECT valeur FROM cache WHERE espace = ? AND cle = ? AND version = ?",
                          (space, key, VERSIONS[space])).fetchone()
         return _decode(space, row[0]) if row else None
-    except (sqlite3.Error, ValueError, pickle.UnpicklingError, EOFError, AttributeError, ImportError):
+    except (sqlite3.Error,) + UNREADABLE:
         return None
 
 
@@ -226,6 +232,31 @@ def forget_prefix(space: str, prefix: str) -> None:
         if values:
             for k in [k for k in values if k.startswith(prefix)]:
                 del values[k]
+
+
+def keep_only(space: str, prefix: str, keys: set[str]) -> int:
+    """Efface les valeurs d'un espace dont la clé commence ainsi, sauf celles-ci (sans lire les valeurs) ; renvoie
+    leur nombre."""
+    if not enabled():
+        return 0
+    with _lock:
+        db = _connect()
+        if db is None:
+            return 0
+        _flush_locked()
+        try:
+            found = [r[0] for r in db.execute("SELECT cle FROM cache WHERE espace = ? AND substr(cle, 1, ?) = ?",
+                                              (space, len(prefix), prefix))]
+            drop = [k for k in found if k not in keys]
+            if drop:
+                db.executemany("DELETE FROM cache WHERE espace = ? AND cle = ?", [(space, k) for k in drop])
+        except sqlite3.Error:
+            return 0
+        values = _loaded.get(space)
+        if values:
+            for k in drop:
+                values.pop(k, None)
+        return len(drop)
 
 
 def retain(space: str, keep: Callable[[str], bool]) -> int:
