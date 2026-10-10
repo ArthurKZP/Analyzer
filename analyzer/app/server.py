@@ -464,6 +464,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(404, "Main introuvable.")
             except (ValueError, postflop.Unsupported) as exc:
                 return self._error(400, str(exc))
+        if parts[:3] == ["api", "explorateur", "construction"] and len(parts) <= 4:  # ton arbre, avant la résolution
+            payload = self._small_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str) or (
+                    len(parts) == 4 and parts[3] != "enregistrer"):
+                return self._error(400, "Requête invalide.")
+            try:
+                if len(parts) == 3:
+                    return self._json(library.tree_builder(payload["hand"]))
+                return self._json(library.save_tree_builder(payload["hand"], payload.get("choices")))
+            except NotFound:
+                return self._error(404, "Main introuvable.")
+            except (ValueError, postflop.Unsupported) as exc:
+                return self._error(400, str(exc))
         if parts[:3] == ["api", "explorateur", "arbre"] and len(parts) <= 4:  # tes tailles et tes verrous
             payload = self._small_json()
             if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):

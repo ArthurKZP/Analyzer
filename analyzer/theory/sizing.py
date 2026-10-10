@@ -12,6 +12,11 @@ gardant leur choix courant, street par street :
   presque jamais atteinte, elle prend la plus petite taille.
 
 Le résultat (le plan et le détail des comparaisons) est gardé par flop ; les spots d'étude l'utilisent.
+
+Ton arbre (explorateur, avant la résolution) : certaines situations ont des tailles que tu fixes (ou aucune mise),
+d'autres sont laissées au choix du solveur, parmi des tailles que tu peux changer. Selection(…, fixed=, auto=, base=)
+ne choisit alors que celles-là, les autres gardant tes tailles ; une situation qui ne peut plus arriver (la mise
+qu'elle relance est retirée…) ne se compare pas.
 """
 from __future__ import annotations
 
@@ -314,6 +319,30 @@ def initial_plan(family: str = "srp") -> dict:
     return {s.key: s.initial() for s in situations(family)}
 
 
+def reachable(key: str, plan: dict, keys: set[str]) -> bool:
+    """Une situation peut-elle arriver avec ce plan (les situations de la famille : keys) ? Une relance demande la mise
+    (ou la relance) qu'elle relance ; chaque street déjà jouée de son passé, une mise (ou relance) de son agresseur.
+    Une situation hors du plan garde ses tailles par défaut : elle compte comme possible."""
+    def can(k: str) -> bool:
+        return k not in keys or bool(plan.get(k, [None]))
+
+    kind, where, past, *level = key.split(":")
+    street, player = where
+    for k, letter in enumerate(past):
+        if letter == "x":
+            continue  # une street checkée arrive toujours
+        before = past[:k]
+        options = [c for c in keys if c.split(":")[1] == "ftr"[k] + letter and c.split(":")[2] == before]
+        if options and not any(can(c) and reachable(c, plan, keys) for c in options):
+            return False
+    if kind == "raise":
+        other = "i" if player == "o" else "o"
+        n = int(level[0])
+        parent = f"bet:{street}{other}:{past}" if n == 0 else f"raise:{street}{other}:{past}:{n - 1}"
+        return can(parent) and (parent not in keys or reachable(parent, plan, keys))
+    return True
+
+
 # --- Libellés ------------------------------------------------------------------------------
 
 def size_text(size) -> str:
@@ -434,17 +463,39 @@ class Selection:
 
     def __init__(self, spot, log: Callable[[str], None] = print, threads: int = 0, cards: int = TURN_CARDS,
                  on_start: Optional[Callable[[subprocess.Popen], None]] = None,
-                 stopped: Optional[Callable[[], bool]] = None):
-        """on_start reçoit chaque programme lancé (pour l'arrêter) ; stopped() dit si l'arrêt est demandé."""
+                 stopped: Optional[Callable[[], bool]] = None, fixed: Optional[dict] = None,
+                 auto: Optional[dict] = None, base: Optional[dict] = None):
+        """on_start reçoit chaque programme lancé (pour l'arrêter) ; stopped() dit si l'arrêt est demandé.
+
+        Ton arbre : fixed, des situations aux tailles imposées (une liste vide : pas de mise ni de relance), gardées
+        telles quelles même pendant le choix du flop ; auto, les seules situations à choisir ({clé: tailles comparées,
+        ou None pour celles de la famille}) ; base, les tailles des autres situations. Sans auto : toutes."""
         self.spot, self.log, self.threads, self.cards = spot, log, threads, cards
         self.on_start = on_start
         self.stopped = stopped or (lambda: False)
         self.family = spot.family
         self.profile = PROFILES[spot.family]
+        self.fixed = dict(fixed or {})
+        self.auto = None if auto is None else dict(auto)
         self.plan = initial_plan(spot.family)
+        self.plan.update(base or {})
+        self.plan.update(self.fixed)
+        self.keys = {s.key for s in situations(spot.family)}
         self.report: dict[str, dict] = {}
         self.session: Optional[postflop.Session] = None
         self.root_mass = 0.0
+
+    def _chosen(self) -> list[Situation]:
+        """Les situations à choisir (sans auto : toutes, sauf les fixées), avec leurs tailles comparées."""
+        out = []
+        for sit in situations(self.family):
+            if sit.key in self.fixed or (self.auto is not None and sit.key not in self.auto):
+                continue
+            mine = (self.auto or {}).get(sit.key)
+            if mine:
+                sit = Situation(sit.key, list(mine), min(sit.choose, len(mine)))
+            out.append(sit)
+        return out
 
     def _request(self, plan: dict) -> dict:
         self.spot.plan = plan
@@ -456,12 +507,22 @@ class Selection:
         complet reste deux fois plus petit ; ses tailles se choisissent ensuite, sur les sous-jeux."""
         out = dict(plan)
         for sit in situations(self.family):
-            if sit.street == 2:
+            if sit.street == 2 and sit.key not in self.fixed:  # (tes tailles fixées restent)
                 out[sit.key] = list(self.profile.flop_river) if sit.key.startswith("bet:") else []
         return out
 
     def _flop_situations(self) -> list[Situation]:
-        return [s for s in situations(self.family) if s.street == 0]
+        return [s for s in self._chosen() if s.street == 0]
+
+    def _unreachable(self, sit: Situation) -> bool:
+        """Avec ton arbre, la situation ne peut plus arriver : sa taille de départ est gardée, sans comparaison."""
+        if self.auto is None or reachable(sit.key, self.plan, self.keys):
+            return False
+        self.plan[sit.key] = sit.initial()
+        self.report[sit.key] = {"label": self._label(sit.key), "options": [list(o) for o in sit.options()],
+                                "evs": None, "chosen": list(self.plan[sit.key]), "reach": 0.0, "cards": 0,
+                                "method": "jamais atteinte"}
+        return True
 
     def _label(self, key: str) -> str:
         return label(key, self.family)
@@ -488,6 +549,8 @@ class Selection:
         known: dict[str, tuple[dict, postflop.Session]] = {}  # arbre (plan) -> résolution, sans doublon
         try:
             for sit in self._flop_situations():
+                if self._unreachable(sit):
+                    continue
                 options = sit.options()
                 evs, idents = [], []
                 for opt in options:
@@ -515,7 +578,10 @@ class Selection:
                 session.close()
             raise
         # L'arbre retenu : les ranges de la turn de chaque ligne en viennent.
-        self.session = next(iter(known.values()))[1]
+        if known:
+            self.session = next(iter(known.values()))[1]
+        else:  # rien à choisir au flop (ton arbre) : l'arbre tel quel
+            _, self.session = self._solve(self.plan)
         self.root_mass = _mass(self.session.node([]))
 
     # --- turn et river : sous-jeux ---
@@ -526,9 +592,11 @@ class Selection:
                 continue
             node = self.session.node(path)
             weight = _mass(node) / self.root_mass  # probabilité d'arriver à la turn par cette ligne
+            sits = [s for s in self._chosen() if s.street == street and s.past[0] == line]
+            if not sits:
+                continue  # rien à choisir sur cette ligne (ton arbre)
             cards = sample(node["cards"], self.cards if street == 1 else min(self.cards, RIVER_CARDS))
             bases = [subgame(self.spot, node, card, line) for card in cards]
-            sits = [s for s in situations(self.family) if s.street == street and s.past[0] == line]
             # Pour la turn, la river reste simple (comme au flop) ; elle se choisit ensuite.
             view = self._flop_plan if street == 1 else dict
             # Fréquence de chaque situation dans le sous-jeu, avec le plan courant.
@@ -593,17 +661,20 @@ class Selection:
     def run(self, resume: Optional[dict] = None) -> dict:
         """resume : un choix précédent dont on garde le flop (seule la turn et la river se refont)."""
         start = time.time()
+        if not self._chosen():  # ton arbre : tout est fixé
+            return {"plan": self.plan, "report": self.report, "seconds": 0, "cards": self.cards,
+                    "created": time.strftime("%d/%m/%Y %H:%M"), "method": METHOD}
         try:
             if resume:
                 self.log("  Flop : choix repris…")
                 self.resume_flop(resume)
             else:
-                self.log("  Flop (arbres complets)…")
+                self.log("  Flop (arbres complets)…" if self._flop_situations() else "  Flop : ton arbre, résolu une fois…")
                 self.flop()
-            self.log("  Turn (sous-jeux)…")
-            self.later(1)
-            self.log("  River (sous-jeux)…")
-            self.later(2)
+            for street, name in ((1, "Turn"), (2, "River")):
+                if any(s.street == street for s in self._chosen()):
+                    self.log(f"  {name} (sous-jeux)…")
+                    self.later(street)
         finally:
             if self.session is not None:
                 self.session.close()

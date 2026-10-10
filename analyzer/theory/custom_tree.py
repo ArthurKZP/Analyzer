@@ -9,7 +9,10 @@ Gardées dans la base (document « arbre-perso », une clé par coup ou spot : s
                 "combos": {"AhKh": [0, 1], ...}}]}
 
 « plan » remplace les tailles de ces situations (clés et tailles de native/arbre.rs : un % du pot, « geo », « a » pour
-le tapis, « x3 » pour une relance à trois fois la mise ; une liste vide retire toute mise ou relance). Un verrou fixe la
+le tapis, « x3 » pour une relance à trois fois la mise ; une liste vide retire toute mise ou relance). « auto » : les
+situations dont le solveur choisit lui-même la taille (sizing.Selection), avant la résolution, parmi les tailles
+données ({"candidates": […], "chosen": […] une fois choisies, sinon None}) ; ton arbre construit avant la première
+résolution (Library.tree_builder) les mêle aux tailles fixées. Un verrou fixe la
 stratégie de toutes les mains du joueur à ce nœud : celle de la résolution d'où il a été posé, avec tes changements
 (GTOpen verrouille un nœud entier, comme PioSolver) ; le reste de l'arbre s'adapte à la résolution suivante.
 
@@ -33,21 +36,29 @@ SUITS = "cdhs"
 
 
 def load(ident: str) -> dict:
-    """{"plan": {situation: tailles}, "locks": [verrous]} de ce coup ou de ce spot (vides sans modification)."""
+    """{"plan": {situation: tailles}, "locks": [verrous], "auto": {situation: choix du solveur}} de ce coup ou de ce
+    spot (vides sans modification)."""
     data = documents.get(db.current(), KIND, ident)
     data = data if isinstance(data, dict) else {}
-    return {"plan": dict(data.get("plan") or {}), "locks": list(data.get("locks") or [])}
+    return {"plan": dict(data.get("plan") or {}), "locks": list(data.get("locks") or []),
+            "auto": {k: dict(v) for k, v in (data.get("auto") or {}).items()}}
 
 
 def save(ident: str, data: dict) -> None:
-    if data.get("plan") or data.get("locks"):
-        documents.put(db.current(), KIND, ident, {"plan": data.get("plan") or {}, "locks": data.get("locks") or []})
+    if data.get("plan") or data.get("locks") or data.get("auto"):
+        documents.put(db.current(), KIND, ident, {"plan": data.get("plan") or {}, "locks": data.get("locks") or [],
+                                                  "auto": data.get("auto") or {}})
     else:
         documents.delete(db.current(), KIND, ident)
 
 
 def edited(data: Optional[dict]) -> bool:
-    return bool(data and (data.get("plan") or data.get("locks")))
+    return bool(data and (data.get("plan") or data.get("locks") or data.get("auto")))
+
+
+def pending(data: Optional[dict]) -> dict:
+    """Les situations au choix du solveur qui n'ont pas encore leur taille : {clé: tailles comparées}."""
+    return {k: list(v["candidates"]) for k, v in ((data or {}).get("auto") or {}).items() if not v.get("chosen")}
 
 
 # --- tailles --------------------------------------------------------------------------------------------------
@@ -105,6 +116,7 @@ def set_sizes(ident: str, key: str, sizes: list, base: list) -> int:
     Les verrous sont retirés ; renvoie leur nombre."""
     data = load(ident)
     sizes = check_sizes(key, sizes)
+    data["auto"].pop(key, None)  # (une situation au choix du solveur que tu fixes)
     if sizes == check_sizes(key, list(base)):
         data["plan"].pop(key, None)
     else:
@@ -119,9 +131,10 @@ def reset_sizes(ident: str, key: Optional[str] = None) -> int:
     """Revient aux tailles d'origine d'une situation (ou de toutes) ; les verrous sont retirés (renvoie leur nombre)."""
     data = load(ident)
     if key is None:
-        data["plan"] = {}
+        data["plan"], data["auto"] = {}, {}
     else:
         data["plan"].pop(check_key(key), None)
+        data["auto"].pop(key, None)
     removed = len(data["locks"])
     data["locks"] = []
     save(ident, data)
@@ -129,11 +142,43 @@ def reset_sizes(ident: str, key: Optional[str] = None) -> int:
 
 
 def merged_plan(base: Optional[dict], data: Optional[dict]) -> Optional[dict]:
-    """Le plan de l'arbre : celui d'origine (None : l'arbre par défaut), avec tes tailles par-dessus."""
-    overrides = (data or {}).get("plan") or {}
+    """Le plan de l'arbre : celui d'origine (None : l'arbre par défaut), avec tes tailles par-dessus (et celles que le
+    solveur a choisies pour toi)."""
+    overrides = dict((data or {}).get("plan") or {})
+    overrides.update({k: v["chosen"] for k, v in ((data or {}).get("auto") or {}).items() if v.get("chosen")})
     if not overrides:
         return base
     return {**(base or {}), **overrides}
+
+
+def set_tree(ident: str, plan: dict, auto: dict) -> bool:
+    """Ton arbre construit avant la résolution : plan, les situations aux tailles fixées (une liste vide : aucune
+    mise ou relance) ; auto, celles que le solveur choisit ({clé: tailles comparées}). Remplace tes tailles et tes
+    choix d'avant ; s'ils changent, les tailles déjà choisies par le solveur se choisissent à nouveau (elles dépendent
+    du reste de l'arbre) et les verrous sont retirés. Renvoie True si l'arbre change."""
+    data = load(ident)
+    plan = {check_key(k): check_sizes(k, v) for k, v in plan.items()}
+    auto = {check_key(k): check_sizes(k, v) for k, v in auto.items()}
+    before = (data["plan"], {k: v["candidates"] for k, v in data["auto"].items()})
+    if (plan, auto) == before:
+        return False
+    data["plan"] = plan
+    data["auto"] = {k: {"candidates": v, "chosen": None} for k, v in auto.items()}
+    data["locks"] = []
+    save(ident, data)
+    return True
+
+
+def set_chosen(ident: str, chosen: dict, report: Optional[dict] = None) -> None:
+    """Les tailles que le solveur a choisies pour les situations laissées à son choix (report : le détail de ses
+    comparaisons, par situation)."""
+    data = load(ident)
+    for key, sizes in chosen.items():
+        if key in data["auto"]:
+            data["auto"][key]["chosen"] = list(sizes)
+            if report and key in report:
+                data["auto"][key]["method"] = report[key].get("method")
+    save(ident, data)
 
 
 # --- verrous --------------------------------------------------------------------------------------------------

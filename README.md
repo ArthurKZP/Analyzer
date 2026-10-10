@@ -302,6 +302,20 @@ haut de l'explorateur, et la page *Études du solveur* marque ces études. Les s
 jeu et la référence livrée restent faits avec la théorie. Tes ranges sont gardées dans la base (sauvegardée) ;
 code : `theory/custom_ranges.py`.
 
+**Construire l'arbre avant la résolution** (*Construire l'arbre* en haut de l'explorateur, sur un coup ou un spot
+d'étude, résolu ou non ; dans le choix du flop des *Études du solveur* : *Construire l'arbre d'abord*) : street
+par street, chaque situation (c-bet, check-raise, 2e barrel, probe, relances…) garde ses tailles d'origine, prend
+les tiennes (*Fixées*), n'a plus de mise ni de relance (*Aucune* : sa branche disparaît, le solveur ne l'explore
+pas ; la ligne jouée d'un coup garde les siennes), ou est laissée au solveur (*Le solveur choisit*). Dans ce
+dernier cas, avant la résolution, il compare les tailles que tu lui donnes (par défaut celles de la famille :
+c-bet 33 / 75 % / géo…) et garde celle qui rapporte le plus à celui qui mise (deux à la river), comme le choix des
+tailles des séries, tes autres tailles fixées. Toutes les mises (ou toutes les relances) d'une street se règlent
+d'un coup. Une situation qui ne peut plus arriver (la mise qu'elle relance est retirée…) est grisée et ne coûte
+aucun calcul. *Choisir les tailles, puis résoudre* : quelques minutes par situation laissée au solveur au flop,
+moins à la turn et à la river ; l'arbre se résout ensuite dans une étude à part, et les tailles choisies restent
+avec ton arbre (pas dans la série). Code : `Library.tree_builder`, `sizing.Selection` (`fixed=`, `auto=`),
+`theory/custom_tree.py`.
+
 **Ton arbre : tailles de mise et nœuds verrouillés** (onglet *Arbre* de l'explorateur, sur un coup ou un spot
 d'étude résolu) :
 
@@ -436,8 +450,9 @@ après le call du 4bet. On choisit ses trois cartes parmi les 52 : Merlin propos
 résolus qui s'en approchent, à ouvrir tout de suite (le même flop aux couleurs près, qui a la même stratégie ;
 les mêmes hauteurs avec la même structure de couleurs, rainbow, deux couleurs ou monotone ; la même texture),
 ou résout ce flop (*Résoudre ce flop* : une dizaine de minutes en SRP, 2 à 3 en pot 3bet, moins d'une en pot
-4bet sur 4 cœurs ; l'étude est gardée). Un flop hors série prend les tailles du flop le plus proche dont les
-tailles sont choisies (même texture et même structure de couleurs d'abord) ; un flop de la série jamais
+4bet sur 4 cœurs ; l'étude est gardée ; *Construire l'arbre d'abord* l'ouvre sans le résoudre, pour régler son
+arbre, voir plus haut). Un flop hors série prend les tailles du flop le plus proche dont les tailles sont choisies
+(même texture et même structure de couleurs d'abord) ; un flop de la série jamais
 résolu passe d'abord par son propre choix des tailles. La liste des flops de la série (surlignés quand ils sont
 résolus) reste en dessous. Le spot s'ouvre alors avec ses actions préflop en tête
 du déroulé : un clic y revient au préflop, *changer* sous le flop ramène au choix du flop, et *◀ Retour*

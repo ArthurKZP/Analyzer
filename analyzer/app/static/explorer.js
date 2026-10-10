@@ -497,7 +497,8 @@
       const elapsed = state.elapsed ? ' · ' + (state.elapsed >= 60 ? Math.floor(state.elapsed / 60) + ' min ' : '') + Math.round(state.elapsed % 60) + ' s' : '';
       box.append(el('span', {}, s === 'waiting' ? 'En attente d\'une autre résolution…'
         : state.mode === 'load' ? 'Ouverture de l\'étude enregistrée…' + elapsed
-        : state.mode === 'choose' ? (SPOT ? 'Flop de la série : choix des tailles de mise, puis résolution. '
+        : state.mode === 'choose' ? (state.edits && state.edits.pending ? 'Ton arbre : le solveur choisit les tailles que tu lui as '
+          + 'laissées, puis résout. ' : SPOT ? 'Flop de la série : choix des tailles de mise, puis résolution. '
           : 'Choix des tailles théoriques de ce flop, puis résolution du coup avec elles. ') + (p.stage || '') + elapsed
         : (p.iteration ? 'Résolution : itération ' + p.iteration + ' / ' + state.max_iterations + ' · exploitabilité ' + num(p.exploit_pct) + ' % du pot (objectif ' + num(state.target) + ' %)'
           : p.tree_nodes ? 'Résolution lancée : arbre de ' + p.tree_nodes.toLocaleString('fr-FR') + ' nœuds, première mesure après 10 itérations'
@@ -530,6 +531,11 @@
       loadEstimate();
     }
     if (s === 'done') loadEstimate();
+    if (!['waiting', 'running', 'unsupported', 'unavailable'].includes(s)) {
+      box.append(el('button', { type: 'button', 'aria-expanded': String(cb.open), title: 'Les actions et les tailles de chaque '
+        + 'situation, street par street, avant la résolution', onclick: () => (cb.open ? closeBuilder() : openBuilder()) },
+      cb.open ? 'Fermer ton arbre' : 'Construire l\'arbre'));
+    }
     if (notice) box.append(el('span', { class: 'err' }, notice));
   }
 
@@ -884,8 +890,9 @@
       box.append(el('ul', { class: 'fl-sugg' }, f.suggestions.map((x) => el('li', {},
         el('a', { class: 'fl solved', href: spotHref(x.id) }, cards(x.board)), el('span', { class: 'muted small' }, ' ' + x.relation)))));
     }
-    box.append(el('a', { class: 'fl-go', href: spotHref(f.id) + '#resoudre', title: 'Tailles : ' + f.sizes },
-      'Résoudre ce flop (' + f.cost + ')'));
+    box.append(el('div', { class: 'rg-row' }, el('a', { class: 'fl-go', href: spotHref(f.id) + '#resoudre', title: 'Tailles : ' + f.sizes },
+      'Résoudre ce flop (' + f.cost + ')'), el('a', { class: 'fl-tree', href: spotHref(f.id) + '#arbre',
+      title: 'Choisir les actions et les tailles de chaque street avant la résolution' }, 'Construire l\'arbre d\'abord')));
     box.append(el('div', { class: 'muted small' }, f.sizes_from
       ? 'Tailles du flop le plus proche dont les tailles sont choisies (' + f.sizes_from.match(/../g).map((c) => c[0] + SUITS[c[1]]).join('') + '). L\'étude est gardée.'
       : 'L\'étude est gardée ensuite.'));
@@ -1483,6 +1490,255 @@
     await treeCall('/api/explorateur/arbre/origine', { hand: HAND }, false, () => { tr.pending = {}; tr.edits = []; tr.focus = null; });
   }
 
+  // ---------- ton arbre, avant la résolution : street par street ----------
+  // Chaque situation (c-bet, 2e barrel, check-raise…) garde ses tailles d'origine, prend les tiennes, n'a plus de mise
+  // (sa branche disparaît : le solveur ne l'explore pas), ou est laissée au solveur, qui choisit lui-même sa taille
+  // parmi celles que tu lui donnes, avant la résolution. Une street entière se règle d'un coup.
+  const cb = { data: null, draft: {}, open: false, busy: false, msg: '', street: 0, raises: [true, false, false], quick: {} };
+  const CB_MODES = [['default', 'Origine'], ['fixed', 'Fixées'], ['none', 'Aucune'], ['auto', 'Le solveur choisit']];
+
+  async function openBuilder() {
+    cb.open = true;
+    cb.msg = '';
+    renderBuilder();
+    renderStatus();
+    try {
+      cb.data = await api('/api/explorateur/construction', { hand: HAND });
+      cb.draft = draftOf(cb.data);
+    } catch (e) {
+      cb.msg = e.message;
+    }
+    renderBuilder();
+  }
+
+  function closeBuilder() {
+    cb.open = false;
+    renderBuilder();
+    renderStatus();
+  }
+
+  function draftOf(d) {
+    const out = {};
+    (d.rows || []).forEach((r) => {
+      if (r.mode !== 'default') out[r.key] = { mode: r.mode, sizes: (r.mode === 'auto' ? r.candidates : r.sizes).slice() };
+    });
+    return out;
+  }
+
+  const choiceOf = (r) => cb.draft[r.key] || { mode: 'default', sizes: r.base.slice() };
+
+  function setChoice(r, mode, sizes) {
+    const c = choiceOf(r);
+    if (mode === 'default') delete cb.draft[r.key];
+    else if (mode === 'none') cb.draft[r.key] = { mode, sizes: [] };
+    else cb.draft[r.key] = { mode, sizes: (sizes || (mode === 'auto' ? r.candidates : c.sizes.length ? c.sizes : r.base)).slice() };
+  }
+
+  // Une situation peut-elle encore arriver avec ces choix ? (comme sizing.reachable)
+  function reachableNow() {
+    const rows = cb.data.rows;
+    const keys = new Set(rows.map((r) => r.key));
+    const eff = {};
+    rows.forEach((r) => { const c = choiceOf(r); eff[r.key] = c.mode === 'default' ? r.base : c.sizes; });
+    const can = (k) => !keys.has(k) || eff[k].length > 0;
+    const memo = {};
+    const reach = (k) => {
+      if (k in memo) return memo[k];
+      memo[k] = true;
+      const [kind, where, past, level] = k.split(':');
+      let ok = true;
+      for (let i = 0; ok && i < past.length; i += 1) {
+        if (past[i] === 'x') continue;
+        const before = past.slice(0, i);
+        const opts = rows.filter((r) => r.key.split(':')[1] === 'ftr'[i] + past[i] && r.key.split(':')[2] === before);
+        if (opts.length && !opts.some((r) => can(r.key) && reach(r.key))) ok = false;
+      }
+      if (ok && kind === 'raise') {
+        const other = where[1] === 'o' ? 'i' : 'o';
+        const n = Number(level);
+        const parent = n === 0 ? 'bet:' + where[0] + other + ':' + past : 'raise:' + where[0] + other + ':' + past + ':' + (n - 1);
+        ok = can(parent) && (!keys.has(parent) || reach(parent));
+      }
+      memo[k] = ok;
+      return ok;
+    };
+    const out = {};
+    rows.forEach((r) => { out[r.key] = reach(r.key); });
+    return out;
+  }
+
+  function chipsEditor(r, list, onChange, raise) {
+    const box = el('div', { class: 'cb-sizes' });
+    const chips = el('div', { class: 'tr-chips' });
+    list.forEach((x, k) => chips.append(el('span', { class: 'tr-chip' }, sizeText(x), el('button', {
+      type: 'button', title: 'Retirer cette taille', 'aria-label': 'Retirer ' + sizeText(x),
+      onclick: () => onChange(list.filter((_, j) => j !== k)),
+    }, '×'))));
+    if (!list.length) chips.append(el('span', { class: 'small muted' }, 'Ajoute une taille.'));
+    const push = (size) => { if (!list.some((x) => String(x) === String(size))) onChange(list.concat([size])); };
+    const input = el('input', { type: 'number', min: '1', max: '1000', step: 'any', class: 'tr-in', placeholder: raise ? '60' : '50',
+      'aria-label': 'Nouvelle taille' + (r ? ' : ' + r.title : '') });
+    const unit = raise ? el('select', { 'aria-label': 'Unité de la relance' }, el('option', { value: 'pct' }, '% du pot'),
+      el('option', { value: 'x' }, '× la mise')) : el('span', { class: 'small' }, '% du pot');
+    const add = () => {
+      const v = Number(String(input.value).replace(',', '.'));
+      if (!(v > 0)) { input.focus(); return; }
+      push(raise && unit.value === 'x' ? 'x' + v : v);
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+    chips.append(input, unit, el('button', { type: 'button', class: 'rg-btn', onclick: add }, 'Ajouter'),
+      el('button', { type: 'button', class: 'rg-btn', title: 'La même fraction du pot à chaque street, pour finir à tapis à la river',
+        onclick: () => push('geo') }, '+ géo'),
+      el('button', { type: 'button', class: 'rg-btn', onclick: () => push('a') }, '+ tapis'));
+    box.append(chips);
+    return box;
+  }
+
+  function builderRow(r, reach) {
+    const c = choiceOf(r);
+    const seg = el('div', { class: 'seg cb-modes', role: 'group', 'aria-label': 'Choix : ' + r.title });
+    CB_MODES.forEach(([m, label]) => {
+      const blocked = m === 'none' && r.played;
+      seg.append(el('button', {
+        type: 'button', 'aria-pressed': String(c.mode === m), disabled: blocked,
+        title: blocked ? 'La ligne jouée passe par là : elle garde une mise' : m === 'none' ? (r.raise ? 'Pas de relance : fold ou call seulement'
+          : 'Pas de mise : check seulement ; la branche disparaît de l\'arbre') : m === 'auto' ? 'Le solveur compare ces tailles et garde la meilleure, avant la résolution' : '',
+        onclick: () => { setChoice(r, m); renderBuilder(); },
+      }, m === 'default' ? 'Origine : ' + (r.base.length ? sizesText(r.base) : 'aucune') : label));
+    });
+    const tags = [r.player];
+    if (r.played) tags.push('ligne jouée');
+    if (!reach) tags.push('ne peut plus arriver');
+    const row = el('div', { class: 'cb-row' + (reach ? '' : ' off') + (c.mode !== 'default' ? ' mod' : '') },
+      el('div', { class: 'cb-title' }, el('b', {}, r.title), el('span', { class: 'muted small' }, ' · ' + tags.join(' · '))), seg);
+    if (c.mode === 'fixed' || c.mode === 'auto') {
+      row.append(chipsEditor(r, c.sizes, (list) => { cb.draft[r.key] = { mode: c.mode, sizes: list }; renderBuilder(); }, r.raise));
+    }
+    if (c.mode === 'auto') {
+      row.append(el('div', { class: 'small muted' }, 'Il en garde ' + r.choose + (r.choose > 1 ? ' (river)' : '')
+        + (r.chosen && cb.data.rows.find((x) => x.key === r.key).mode === 'auto' ? ' · déjà choisi : ' + sizesText(r.chosen) : '')));
+    }
+    return row;
+  }
+
+  // Toute une street d'un coup (mises, ou relances) : un choix et ses tailles, appliqués à chaque situation.
+  function quickRow(street, raise) {
+    const rows = cb.data.rows.filter((r) => r.street === street && r.raise === raise);
+    if (!rows.length) return '';
+    const id = street + (raise ? 'r' : 'b');
+    const q = cb.quick[id] || (cb.quick[id] = { mode: 'auto', sizes: [] });
+    const select = el('select', { 'aria-label': 'Choix pour toutes les ' + (raise ? 'relances' : 'mises') + ' de la street',
+      onchange: (e) => { q.mode = e.target.value; renderBuilder(); } },
+    CB_MODES.map(([m, label]) => el('option', { value: m, selected: q.mode === m }, label)));
+    const apply = () => {
+      if (q.mode === 'fixed' && !q.sizes.length) { cb.msg = 'Ajoute au moins une taille à appliquer.'; renderBuilder(); return; }
+      const reach = reachableNow();
+      rows.forEach((r) => {
+        if (q.mode === 'none' && r.played) return;  // la ligne jouée garde sa mise
+        if (q.mode !== 'default' && !reach[r.key]) return;  // une situation qui ne peut plus arriver reste telle quelle
+        setChoice(r, q.mode, q.mode === 'auto' ? (q.sizes.length ? q.sizes : r.candidates) : q.sizes);
+      });
+      cb.msg = '';
+      renderBuilder();
+    };
+    const box = el('div', { class: 'cb-quick' }, el('div', { class: 'rg-row' },
+      el('b', {}, (raise ? 'Toutes les relances' : 'Toutes les mises') + ' (' + rows.length + ')'), select,
+      el('button', { type: 'button', class: 'rg-btn', onclick: apply }, 'Appliquer')));
+    if (q.mode === 'fixed' || q.mode === 'auto') {
+      box.append(chipsEditor(null, q.sizes, (list) => { q.sizes = list; renderBuilder(); }, raise));
+      if (q.mode === 'auto' && !q.sizes.length) box.append(el('div', { class: 'small muted' }, 'Sans taille ajoutée : celles que le solveur compare d\'habitude dans chaque situation.'));
+    }
+    return box;
+  }
+
+  function renderBuilder() {
+    const box = $('builder');
+    const layout = document.querySelector('main.layout');
+    box.hidden = !cb.open;
+    if (layout) layout.hidden = cb.open;
+    box.textContent = '';
+    if (!cb.open) return;
+    const d = cb.data;
+    box.append(el('div', { class: 'cb-head' }, el('h2', {}, 'Ton arbre'),
+      d && d.available ? el('span', { class: 'muted small' }, d.family_title + ' · ' + d.positions.join(' contre ')) : '',
+      el('button', { type: 'button', class: 'rg-btn', onclick: closeBuilder }, 'Fermer')));
+    if (!d) { box.append(el('p', { class: 'muted' }, cb.msg || 'Chargement…')); return; }
+    if (!d.available) { box.append(el('p', {}, d.message)); return; }
+    box.append(el('p', { class: 'small muted cb-intro' }, 'Avant la résolution, pour chaque situation : ses tailles d\'origine, '
+      + 'les tiennes (« Fixées »), aucune mise ou relance (« Aucune » : sa branche disparaît, le solveur ne l\'explore pas), ou '
+      + '« Le solveur choisit » : il compare les tailles que tu lui donnes et garde la meilleure (une à la river : deux), avant '
+      + 'de résoudre. Plus il a de tailles à comparer, plus c\'est long : quelques minutes par situation au flop.'));
+    const reach = reachableNow();
+    const tabs = el('div', { class: 'seg', role: 'group', 'aria-label': 'Street' });
+    STREET_WORDS.forEach((w, st) => {
+      const n = d.rows.filter((r) => r.street === st && cb.draft[r.key]).length;
+      tabs.append(el('button', { type: 'button', 'aria-pressed': String(cb.street === st), onclick: () => { cb.street = st; renderBuilder(); } },
+        w + (n ? ' · ' + n : '')));
+    });
+    const counts = { fixed: 0, none: 0, auto: 0 };
+    Object.values(cb.draft).forEach((c) => { counts[c.mode] += 1; });
+    const summary = [counts.fixed ? counts.fixed + ' fixée(s)' : '', counts.none ? counts.none + ' sans mise ni relance' : '',
+      counts.auto ? counts.auto + ' au choix du solveur' : ''].filter(Boolean).join(' · ') || 'l\'arbre d\'origine';
+    box.append(el('div', { class: 'rg-row' }, tabs, el('span', { class: 'small muted' }, summary)));
+    const st = cb.street;
+    const panel = el('div', { class: 'cb-street' });
+    panel.append(el('div', { class: 'cb-quicks' }, quickRow(st, false), quickRow(st, true)));
+    const rows = d.rows.filter((r) => r.street === st);
+    const raises = rows.filter((r) => r.raise).length;
+    if (raises) {
+      panel.append(el('label', { class: 'small cb-toggle' }, el('input', { type: 'checkbox', checked: cb.raises[st],
+        onchange: (e) => { cb.raises[st] = e.target.checked; renderBuilder(); } }), ' Montrer les relances, une par une (' + raises + ')'));
+    }
+    const lines = [...new Set(rows.map((r) => r.line))];
+    lines.forEach((line) => {
+      const shown = rows.filter((r) => r.line === line && (!r.raise || cb.raises[st]));
+      if (!shown.length) return;
+      if (line) panel.append(el('h4', {}, 'Après : ' + (d.lines[line] || line)));
+      shown.forEach((r) => panel.append(builderRow(r, reach[r.key])));
+    });
+    box.append(panel);
+    const sorted = (x) => JSON.stringify(Object.keys(x).sort().map((k) => [k, x[k]]));
+    const toChoose = counts.auto && (d.pending || sorted(cb.draft) !== sorted(draftOf(d)));
+    const actions = el('div', { class: 'rg-row cb-actions' },
+      el('button', { type: 'button', class: 'rg-btn go', disabled: cb.busy, onclick: () => saveBuilder(true) },
+        toChoose ? 'Choisir les tailles, puis résoudre' : 'Résoudre avec cet arbre'),
+      el('button', { type: 'button', class: 'rg-btn', disabled: cb.busy, onclick: () => saveBuilder(false) }, 'Enregistrer'),
+      Object.keys(cb.draft).length ? el('button', { type: 'button', class: 'rg-btn', disabled: cb.busy,
+        onclick: () => { cb.draft = {}; renderBuilder(); } }, 'Tout remettre à l\'origine') : '');
+    box.append(actions);
+    if (cb.msg) box.append(el('p', { class: 'small' + (cb.msg.endsWith('.') && !/^Arbre|^Rien/.test(cb.msg) ? ' err' : '') }, cb.msg));
+    box.append(el('p', { class: 'small muted' }, 'Tailles comparées d\'habitude : ' + d.compared + '. Ton arbre se résout '
+      + 'dans une étude à part : celle d\'origine reste. Après la résolution, l\'onglet Arbre change encore une situation ou '
+      + 'verrouille un nœud.'));
+  }
+
+  async function saveBuilder(solveAfter) {
+    if (cb.data.locks && !window.confirm('Changer l\'arbre retire tes ' + cb.data.locks + ' verrou(s) : leurs chemins ne mènent '
+      + 'plus aux mêmes nœuds. Continuer ?')) return;
+    cb.busy = true;
+    cb.msg = '';
+    renderBuilder();
+    try {
+      cb.data = await api('/api/explorateur/construction/enregistrer', { hand: HAND, choices: cb.draft });
+      cb.draft = draftOf(cb.data);
+      cb.busy = false;
+      tr.data = null;
+      if (solveAfter) {
+        cb.open = false;
+        renderBuilder();
+        await reopen(true, false);
+        return;
+      }
+      cb.msg = cb.data.changed ? 'Arbre enregistré : « Résoudre » le calcule.' : 'Rien n\'a changé.';
+      await loadState();
+      renderStatus();
+    } catch (e) {
+      cb.msg = e.message;
+    }
+    cb.busy = false;
+    renderBuilder();
+  }
+
   // --- verrou ---
   function lockTargets() {
     const p = node.player;
@@ -1740,6 +1996,12 @@
       await loadState();
     } catch (e) {
       $('status').textContent = e.message;
+      return;
+    }
+    if (/arbre/.test(location.hash)) {  // « Construire l'arbre d'abord » : pas de résolution tout de suite
+      history.replaceState(null, '', location.pathname);
+      await showSpot(false);
+      openBuilder();
       return;
     }
     await showSpot(false);

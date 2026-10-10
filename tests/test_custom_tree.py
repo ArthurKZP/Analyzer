@@ -55,7 +55,8 @@ class SizesTest(IsolatedHome):
         self.assertEqual(custom_tree.load("H1")["plan"], {"bet:fi:": [33, 50]})
         custom_tree.put_lock("H1", {"path": [], "combos": {}, "edits": []})
         self.assertEqual(custom_tree.set_sizes("H1", "raise:fo::0", ["x3"], [50]), 1)  # les verrous sont retirés
-        self.assertEqual(custom_tree.load("H1"), {"plan": {"bet:fi:": [33, 50], "raise:fo::0": ["x3"]}, "locks": []})
+        self.assertEqual(custom_tree.load("H1"), {"plan": {"bet:fi:": [33, 50], "raise:fo::0": ["x3"]}, "locks": [],
+                                                  "auto": {}})
         custom_tree.set_sizes("H1", "bet:fi:", [33], [33])  # comme l'arbre d'origine : plus de modification
         self.assertEqual(custom_tree.load("H1")["plan"], {"raise:fo::0": ["x3"]})
         custom_tree.reset_sizes("H1")
@@ -184,7 +185,7 @@ class LibraryTreeTest(IsolatedHome):
             self.assertEqual(state["locks"][0]["actions"], ["Check", "Mise 13 (25 %)"])
             node = lib.explorer_node("HAND01", path)["node"]
             self.assertEqual(node["lock"]["edited"], ["AdAc", "AsAc"])
-            self.assertEqual(lib.solve("HAND01")["edits"], {"sizes": 0, "locks": 1})
+            self.assertEqual(lib.solve("HAND01")["edits"], {"sizes": 0, "locks": 1, "auto": 0, "pending": 0})
             lib.add_lock("HAND01", path, [{"label": "QQ", "combos": ["QhQd"], "freqs": [0, 1]}], ["?"])  # libellés
             lock = custom_tree.load("HAND01")["locks"][0]
             self.assertEqual([e["label"] for e in lock["edits"]], ["AA", "QQ"])

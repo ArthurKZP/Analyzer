@@ -206,6 +206,24 @@ class LibraryTest(IsolatedHome):
         lib.set_settings({"hero_excluded": ["Villain"]})  # décoché : pas toi
         self.assertEqual({p["name"]: p["role"] for p in lib.pseudos_view()["pseudos"]}, {"Hero": "me", "Villain": "other"})
 
+    def test_tree_builder_of_a_hand(self):
+        """Ton arbre d'un coup joué : ses situations viennent de la famille de son pot ; la ligne jouée garde ses mises."""
+        shutil.copy(FIXTURE, self.folder / "sample.txt")
+        lib = Library(self.folder)
+        try:
+            view = lib.tree_builder("HAND01")
+            rows = {r["key"]: r for r in view["rows"]}
+            self.assertEqual((view["available"], view["family"], rows["bet:fi:"]["played"], rows["bet:ti:x"]["played"]),
+                             (True, "srp", True, False))
+            with self.assertRaises(ValueError):
+                lib.save_tree_builder("HAND01", {"bet:fi:": {"mode": "none"}})  # la c-bet jouée reste dans l'arbre
+            lib.save_tree_builder("HAND01", {"bet:ti:x": {"mode": "none"}, "raise:fi::1": {"mode": "fixed", "sizes": ["x3"]}})
+            plan = lib._spot("HAND01").request()["plan"]
+            self.assertEqual((plan["bet:ti:x"], plan["raise:fi::1"]), ([], ["x3"]))
+            self.assertEqual(lib.solve("HAND01")["edits"], {"sizes": 2, "locks": 0, "auto": 0, "pending": 0})
+        finally:
+            lib.solves.shutdown()
+
     def test_import_progress(self):
         job = ImportJob("essai", known=100)  # 100 mains déjà là ; lire une main coûte READ_COST fois la relire
         job.plan([10, 30])
@@ -571,6 +589,22 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/eleves/inconnu/import", body, headers)[0], 404)
         self.assertEqual(self.request("POST", "/api/eleves", json.dumps({"name": ""}), headers)[0], 400)
         self.assertEqual(self.request("GET", "/moi/leaks")[0], 200)
+
+    def test_tree_builder_routes(self):
+        headers = {"Content-Type": "application/json"}
+        status, _, data = self.request("POST", "/api/explorateur/construction", json.dumps({"hand": "HAND01"}), headers)
+        self.assertEqual((status, json.loads(data)["available"]), (200, True))
+        for path, body, code in (
+                ("/api/explorateur/construction", {"hand": "INCONNUE"}, 404),
+                ("/api/explorateur/construction", {"main": "HAND01"}, 400),
+                ("/api/explorateur/construction/autre", {"hand": "HAND01"}, 400),
+                ("/api/explorateur/construction/enregistrer", {"hand": "HAND01", "choices": {"bet:fi:": {"mode": "none"}}},
+                 400),
+                ("/api/explorateur/construction", {"hand": "HAND04"}, 400)):  # pas de flop : rien à construire
+            self.assertEqual(self.request("POST", path, json.dumps(body), headers)[0], code, (path, body))
+        status, _, data = self.request("POST", "/api/explorateur/construction/enregistrer",
+                                       json.dumps({"hand": "HAND01", "choices": {}}), headers)
+        self.assertEqual((status, json.loads(data)["changed"]), (200, False))
 
     def test_analysis_error_is_not_a_missing_page(self):
         """Une KeyError pendant un calcul est une erreur d'analyse (500, le détail dans le terminal), pas « Page

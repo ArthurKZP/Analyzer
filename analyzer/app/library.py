@@ -1337,6 +1337,20 @@ class Library:
         except postflop.Unsupported as exc:
             return {"hand": hand_id, "state": "unsupported", "message": str(exc)}
         view = self.solves.lookup(spot)
+        waiting = custom_tree.pending(spot.edits)  # ton arbre : des tailles que le solveur choisit d'abord
+        if waiting and view["state"] not in ("waiting", "running"):
+            view = {"job": view["job"], "hand": hand_id, "state": "absent", "live": False, "study": False,
+                    "target": view.get("target")}
+            if start:
+                solver = postflop.status()
+                if not solver["ready"]:
+                    return {"hand": hand_id, "state": "unavailable", "message": solver["message"],
+                            "install": solver["install"]}
+                try:
+                    view = self._choose_tree(hand_id, spot, waiting)
+                except postflop.Unsupported as exc:
+                    return {"hand": hand_id, "state": "unsupported", "message": str(exc)}
+            start = False
         reopen = force and view["state"] == "done" and not view["live"]
         if start and fresh and view["state"] not in ("waiting", "running"):
             solver = postflop.status()
@@ -1363,7 +1377,8 @@ class Library:
             solver = postflop.status()
             view["solver"] = {k: solver[k] for k in ("ready", "message", "install")}
         view["adjusted"] = spot.adjusted
-        view["edits"] = ({"sizes": len(spot.edits["plan"]), "locks": len(spot.edits["locks"])} if spot.edits else None)
+        view["edits"] = ({"sizes": len(spot.edits["plan"]), "locks": len(spot.edits["locks"]),
+                          "auto": len(spot.edits["auto"]), "pending": len(waiting)} if spot.edits else None)
         view["precision"] = self.solves.precision()[1]  # le réglage, pour la prochaine résolution
         return view
 
@@ -1521,6 +1536,141 @@ class Library:
         return {"key": key, "title": title, "raise": key.startswith("raise"), "street": "ftr".index(key.split(":")[1][0]),
                 "base": base, "sizes": list(overrides.get(key, base)), "changed": key in overrides}
 
+    # --- ton arbre, construit avant la résolution ------------------------------------
+    @staticmethod
+    def _builder_family(spot) -> Optional[str]:
+        """La famille dont viennent les situations de l'arbre (et les tailles que le solveur compare), ou None."""
+        if isinstance(spot, studyspots.StudySpot):
+            family = spot.family
+        else:
+            family = spot.size_target or (spot.family if spot.plan else None)
+        return family if family in sizing.PROFILES else None
+
+    @staticmethod
+    def _positions(spot) -> tuple[str, str]:
+        return (spot.oop, spot.ip) if isinstance(spot, studyspots.StudySpot) else spot.positions
+
+    def tree_builder(self, hand_id: str) -> dict:
+        """Ton arbre avant la résolution, street par street : pour chaque situation (c-bet, 2e barrel,
+        check-raise…), ses tailles d'origine et ton choix : « default » (celles d'origine), « fixed » (tes tailles),
+        « none » (aucune mise ou relance : la branche disparaît) ou « auto » (le solveur choisit lui-même parmi des
+        tailles, avant la résolution). « reachable » : la situation peut encore arriver ; « played » : elle est sur la
+        ligne jouée (elle garde une mise)."""
+        spot = self._spot(hand_id)
+        family = self._builder_family(spot)
+        if family is None:
+            return {"hand": hand_id, "available": False,
+                    "message": "Pas de constructeur d'arbre pour ce type de pot : résous le coup, puis change ses "
+                               "tailles dans l'onglet Arbre."}
+        data = spot.edits or {"plan": {}, "locks": [], "auto": {}}
+        positions = self._positions(spot)
+        base_plan = dict(spot.plan or {})
+        played = {p["key"] for p in getattr(spot, "played_sizes", []) if p.get("key")}
+        sits = sorted(sizing.situations(family), key=lambda x: self._situation_order(x.key))
+        keys = {x.key for x in sits}
+        rows, effective = [], {}
+        for sit in sits:
+            key = sit.key
+            base = list(base_plan[key]) if key in base_plan else spot.default_sizes_for(key)
+            auto = data["auto"].get(key)
+            if auto:
+                mode, sizes = "auto", list(auto.get("chosen") or [])
+                effective[key] = sizes or list(auto["candidates"])
+            elif key in data["plan"]:
+                sizes = list(data["plan"][key])
+                mode = "fixed" if sizes else "none"
+                effective[key] = sizes
+            else:
+                mode, sizes = "default", base
+                effective[key] = base
+            rows.append({"key": key, "street": sit.street, "raise": key.startswith("raise"),
+                         "player": positions[sit.player], "line": sit.past,
+                         "title": sizing.label(key, family, positions), "base": base, "sizes": sizes, "mode": mode,
+                         "candidates": list(auto["candidates"]) if auto else list(sit.candidates),
+                         "choose": sit.choose, "chosen": list(auto["chosen"]) if auto and auto.get("chosen") else None,
+                         "played": key in played})
+        for row in rows:
+            row["reachable"] = sizing.reachable(row["key"], effective, keys)
+        profile = sizing.PROFILES[family]
+        turn = {"i": "mise du BTN payée à la turn", "x": "turn checkée", "o": "mise de la BB payée à la turn"}
+        lines = {}
+        for past in sorted({r["line"] for r in rows if r["line"]}, key=lambda x: (len(x), x)):
+            parts = [profile.flop_line.get(past[0], past[0])] + ([turn.get(past[1], past[1])] if len(past) > 1 else [])
+            lines[past] = sizing.rename_roles(", ".join(parts), *positions)
+        return {"hand": hand_id, "available": True, "family": family, "family_title": studyspots.family_title(family),
+                "positions": list(positions), "rows": rows, "lines": lines, "edited": custom_tree.edited(data),
+                "pending": len(custom_tree.pending(data)), "locks": len(data["locks"]),
+                "compared": sizing.description(family)}
+
+    def save_tree_builder(self, hand_id: str, choices: object) -> dict:
+        """Enregistre ton arbre : {clé: {"mode": "default" | "fixed" | "none" | "auto", "sizes": […]}} (sizes : tes
+        tailles, ou celles que le solveur compare) ; les situations absentes gardent leurs tailles d'origine. Les
+        verrous sont retirés si l'arbre change. ValueError si un choix ne va pas."""
+        view = self.tree_builder(hand_id)
+        if not view["available"]:
+            raise ValueError(view["message"])
+        rows = {r["key"]: r for r in view["rows"]}
+        if not isinstance(choices, dict) or len(choices) > len(rows):
+            raise ValueError("Requête invalide.")
+        plan, auto = {}, {}
+        for key, choice in choices.items():
+            row = rows.get(key)
+            if row is None or not isinstance(choice, dict):
+                raise ValueError("Situation inconnue.")
+            mode, sizes = choice.get("mode"), choice.get("sizes") or []
+            if mode == "default":
+                continue
+            if mode == "none":
+                if row["played"]:
+                    raise ValueError(f"{row['title']} : c'est la ligne jouée, elle garde au moins une taille.")
+                plan[key] = []
+            elif mode == "fixed":
+                sizes = custom_tree.check_sizes(key, sizes)
+                if not sizes:
+                    raise ValueError(f"{row['title']} : choisis au moins une taille (ou « aucune »).")
+                if sizes != custom_tree.check_sizes(key, row["base"]):
+                    plan[key] = sizes
+            elif mode == "auto":
+                sizes = custom_tree.check_sizes(key, sizes or row["candidates"])
+                if len(sizes) <= row["choose"]:
+                    raise ValueError(f"{row['title']} : donne au solveur au moins {row['choose'] + 1} tailles à "
+                                     "comparer.")
+                auto[key] = sizes
+            else:
+                raise ValueError("Requête invalide.")
+        changed = custom_tree.set_tree(self._spot(hand_id).ident, plan, auto)
+        return dict(self.tree_builder(hand_id), changed=changed)
+
+    def _choose_tree(self, hand_id: str, spot, waiting: dict) -> dict:
+        """Ton arbre : le solveur choisit d'abord les tailles que tu lui as laissées (sizing.Selection sur le flop de
+        la famille, tes autres tailles gardées), puis le coup se résout avec elles (une étude à part)."""
+        family = self._builder_family(spot)
+        if family in studyspots.RING_FAMILIES:
+            studyspots.ring_spot_ranges(family)  # tes charts 6-max (Unsupported sinon)
+        board = "".join(spot.board if isinstance(spot, studyspots.StudySpot)
+                        else studyspots.normalize_board(family, spot.board))
+        fixed = dict(spot.edits["plan"])
+        base_plan = dict(spot.plan or {})
+        base = {s.key: list(base_plan[s.key]) if s.key in base_plan else spot.default_sizes_for(s.key)
+                for s in sizing.situations(family) if s.key not in fixed and s.key not in waiting}
+        ident = spot.ident
+
+        def choose(job) -> None:
+            def log(message: str) -> None:
+                job.progress["stage"] = message.strip()
+
+            def started(proc) -> None:
+                job.process = proc
+                if job.cancelled:
+                    proc.terminate()
+            study = studyspots.StudySpot(family, studyspots.cards_of(board), plan={})
+            result = sizing.Selection(study, log, on_start=started, stopped=lambda: job.cancelled, fixed=fixed,
+                                      auto=waiting, base=base).run()
+            custom_tree.set_chosen(ident, {k: result["plan"][k] for k in waiting}, result["report"])
+
+        return self.solves.choose_and_solve(f"arbre:{ident}", choose, lambda: self._spot(hand_id), aliases=(ident,),
+                                            keep_live=True)
+
     @staticmethod
     def _situation_order(key: str) -> tuple:
         """Dans l'ordre du coup : par street, puis par ce qui s'est passé avant, la mise avant les relances, le joueur
@@ -1533,9 +1683,9 @@ class Library:
         """L'arbre du coup : ses situations (tailles en jeu, d'origine, modifiées), celle du nœud au bout du chemin, et
         tes verrous."""
         spot = self._spot(hand_id)
-        data = spot.edits or {"plan": {}, "locks": []}
+        data = spot.edits or {"plan": {}, "locks": [], "auto": {}}
         base_plan = dict(getattr(spot, "plan", None) or {})
-        overrides = data["plan"]
+        overrides = custom_tree.merged_plan({}, data) or {}
         keys = sorted(set(base_plan) | set(overrides), key=self._situation_order)
         here = None
         if path is not None:

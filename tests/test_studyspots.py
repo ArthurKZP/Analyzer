@@ -10,7 +10,7 @@ from analyzer.app.library import Library
 from analyzer.app.solves import NeedSession
 from analyzer.app.studies import build_studies_page
 from analyzer.db import documents
-from analyzer.theory import postflop, sizing, studyspots
+from analyzer.theory import custom_tree, postflop, sizing, studyspots
 from analyzer.theory.preflop import load_solution
 from analyzer.theory.studyspots import SRP_FLOPS, TEXTURES, StudySpot, cards_of, flop_texture
 
@@ -323,6 +323,71 @@ class SolveSpotsTest(unittest.TestCase):
             row = next(r for r in lib.spot_set("srp")["rows"] if r["id"] == ident)
             self.assertEqual((row["done"], row["sizes"]), (True, True))
             self.assertIn("C-bet du BTN", build_studies_page())
+        finally:
+            lib.solves.shutdown()
+
+    def test_selection_of_your_tree(self):
+        """Le choix des tailles limité à ton arbre : seules les situations laissées au solveur sont comparées, tes
+        tailles restent, et une situation qui ne peut plus arriver ne coûte aucune résolution."""
+        log = []
+        selection = sizing.Selection(StudySpot("srp", cards_of("KsKd4c"), plan={}), log.append,
+                                     fixed={"bet:fi:": [75], "raise:fo::0": []},
+                                     auto={"raise:fi::1": None, "bet:ti:x": [33, 66]})
+        result = selection.run()
+        self.assertEqual(set(result["report"]), {"raise:fi::1", "bet:ti:x"})
+        self.assertEqual(result["report"]["raise:fi::1"]["method"], "jamais atteinte")
+        self.assertEqual((result["plan"]["bet:fi:"], result["plan"]["raise:fo::0"], result["plan"]["bet:ti:x"]),
+                         ([75], [], [66]))
+        self.assertNotIn("  River (sous-jeux)…", log)  # rien à choisir à la river
+        self.assertEqual(sizing.Selection(StudySpot("srp", cards_of("KsKd4c"), plan={}), log.append,
+                                          fixed={"bet:fi:": [75]}, auto={}).run()["seconds"], 0)
+        self.assertIsNone(studyspots.load_selection("srp", "KsKd4c"))  # rien n'est gardé pour la série
+
+    def test_tree_builder(self):
+        """Ton arbre avant la résolution : une taille fixée, une branche retirée, deux situations au choix du solveur ;
+        il ne choisit que celles-là (tes tailles gardées), puis le spot se résout avec, dans une étude à part."""
+        lib = Library(self.folder / "mains")
+        try:
+            ident = "spot:srp:Jh9h5h"
+            view = lib.tree_builder(ident)
+            rows = {r["key"]: r for r in view["rows"]}
+            self.assertEqual((view["available"], view["positions"], len(rows)), (True, ["BB", "BTN"], 63))
+            self.assertEqual((rows["bet:fi:"]["mode"], rows["bet:fi:"]["candidates"], rows["bet:fi:"]["title"]),
+                             ("default", [33, 75, "geo"], "C-bet"))
+            self.assertEqual((view["lines"]["x"], view["lines"]["ix"]), ("flop checké", "c-bet payée, turn checkée"))
+            # l'arbre par défaut n'a pas de relance à la river : ses sur-relances ne peuvent pas arriver
+            self.assertTrue(all(r["key"].startswith("raise:r") and r["key"].endswith(":1")
+                                for r in view["rows"] if not r["reachable"]))
+            for bad in ({"bet:ti:x": {"mode": "auto", "sizes": [33]}},  # une seule taille : rien à choisir
+                        {"bet:ri:ix": {"mode": "auto", "sizes": [50, 75]}},  # river : deux tailles gardées sur trois
+                        {"bet:xx:": {"mode": "none"}}, {"bet:fi:": {"mode": "peut-être"}},
+                        {"bet:fi:": {"mode": "fixed", "sizes": []}}, ["bet:fi:"]):
+                with self.assertRaises(ValueError, msg=bad):
+                    lib.save_tree_builder(ident, bad)
+            choices = {"bet:fi:": {"mode": "fixed", "sizes": [75]}, "raise:fo::0": {"mode": "none"},
+                       "bet:ti:x": {"mode": "auto", "sizes": [33, 66]}, "bet:to:x": {"mode": "auto"}}
+            out = lib.save_tree_builder(ident, choices)
+            rows = {r["key"]: r for r in out["rows"]}
+            self.assertEqual((out["changed"], out["pending"]), (True, 2))
+            self.assertEqual((rows["bet:fi:"]["mode"], rows["raise:fo::0"]["mode"], rows["bet:to:x"]["candidates"]),
+                             ("fixed", "none", [33, 75, 100, "geo"]))
+            self.assertFalse(rows["raise:fi::1"]["reachable"])  # plus de check-raise : plus de relance face à lui
+            self.assertFalse(rows["bet:to:o"]["reachable"])  # ni de ligne « check-raise payé »
+            self.assertFalse(lib.save_tree_builder(ident, choices)["changed"])
+            self.assertEqual(lib.solve(ident)["state"], "absent")  # le choix d'abord
+            job = lib.solve(ident, start=True)
+            self.assertEqual(job["mode"], "choose")
+            self._wait(lib, job["job"])
+            auto = custom_tree.load(ident)["auto"]
+            # le faux solveur préfère 70 % au bouton, 40 % à la BB
+            self.assertEqual((auto["bet:ti:x"]["chosen"], auto["bet:to:x"]["chosen"]), ([66], [33]))
+            plan = lib._spot(ident).request()["plan"]
+            self.assertEqual((plan["bet:fi:"], plan["raise:fo::0"], plan["bet:ti:x"]), ([75.0], [], [66.0]))
+            state = lib.solve(ident)
+            self.assertEqual((state["state"], state["edits"]["auto"], state["edits"]["pending"]), ("done", 2, 0))
+            self.assertIsNone(studyspots.load_selection("srp", "Jh9h5h"))  # le choix de la série reste à faire
+            lib.save_tree_builder(ident, {})  # l'arbre d'origine
+            self.assertFalse(custom_tree.edited(custom_tree.load(ident)))
         finally:
             lib.solves.shutdown()
 
