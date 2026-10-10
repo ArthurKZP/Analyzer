@@ -513,10 +513,134 @@
         + state.folder + ' · ',
         el('button', { type: 'button', class: 'link', onclick: () => reload(result) }, 'Relire le dossier'),
         ' (si tu y as déposé des historiques à la main)');
-    const imported = el('div', { class: 'imported' });
-    showPanel(el('div', { class: 'import', 'data-owner': student || '' }, drop, input, result, folder, imported));
+    const pseudos = el('div', { class: 'imported pseudos' });
+    const imported = el('div', { class: 'imported files' });
+    showPanel(el('div', { class: 'import', 'data-owner': student || '' }, drop, input, result, folder, pseudos, imported));
     if (importing && importing.owner === (student || '') && importing.view) showProgress(importing.owner, importing.view);
+    showPseudos(pseudos, student);
     showFiles(imported, student);
+  }
+
+  // Après un changement des mains (import, historique retiré, pseudo supprimé…) : les deux listes de la page Importer.
+  function refreshImported(student) {
+    const pseudos = document.querySelector('.import .imported.pseudos');
+    if (pseudos) showPseudos(pseudos, student);
+    const files = document.querySelector('.import .imported.files');
+    if (files) showFiles(files, student);
+  }
+
+  // Les mains par pseudo (le héros que marquent les historiques : les mains importées de son compte) : supprimer celles
+  // d'un ou plusieurs pseudos (les imports suivants écartent leurs mains), ou rétablir un pseudo supprimé.
+  const pseudoApi = (student) => (student ? '/api/eleves/' + encodeURIComponent(student) : '/api') + '/pseudos';
+
+  async function showPseudos(box, student, note) {
+    let view;
+    try {
+      const res = await fetch(pseudoApi(student));
+      view = res.ok ? await res.json() : null;
+    } catch (e) { view = null; }
+    box.textContent = '';
+    if (!view || (!view.pseudos.length && !view.removed.length)) return;
+    const post = async (verb, body) => {
+      const res = await fetch(pseudoApi(student) + '/' + verb, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Action impossible.');
+      frame.dataset.src = '';
+      if (student) { await loadStudents(); renderHeader(); } else { state = data.state; renderSidebar(); }
+      return data;
+    };
+    const quoted = (names) => names.map((n) => '« ' + n + ' »').join(', ');
+    const role = (p) => (p.role === 'reference' ? 'joueur de référence : ' + p.reference
+      : p.role === 'other' ? 'décoché dans Paramètres' : student ? '' : 'toi');
+    const checks = [];
+    const remove = el('button', { type: 'button', class: 'primary danger', disabled: true }, 'Supprimer leurs mains');
+    const picked = () => checks.filter((c) => c.checked).map((c) => c.value);
+    const sync = () => {
+      const names = picked();
+      remove.disabled = !names.length;
+      remove.textContent = !names.length ? 'Supprimer leurs mains' : 'Supprimer les mains de '
+        + (names.length === 1 ? '« ' + names[0] + ' »' : names.length + ' pseudos');
+    };
+    const rows = view.pseudos.map((p) => {
+      const check = el('input', { type: 'checkbox', value: p.name, 'aria-label': 'Choisir ' + p.name });
+      check.addEventListener('change', sync);
+      checks.push(check);
+      const what = role(p);
+      return el('tr', {},
+        el('td', {}, check),
+        el('td', {}, el('b', {}, p.name), what ? el('span', { class: 'muted small' }, ' · ' + what) : ''),
+        el('td', {}, p.sites.join(', ')),
+        el('td', { class: 'num' }, count(p.hands)));
+    });
+    remove.addEventListener('click', async () => {
+      const names = picked();
+      if (!names.length) return;
+      const chosen = view.pseudos.filter((p) => names.includes(p.name));
+      const hands = chosen.reduce((n, p) => n + p.hands, 0);
+      const mine = student ? [] : chosen.filter((p) => p.role === 'me').map((p) => p.name);
+      const warn = mine.length ? 'Attention : ' + quoted(mine) + (mine.length > 1 ? ' sont tes pseudos' : ' est ton pseudo')
+        + ' (tes analyses en dépendent).\n\n' : '';
+      if (!window.confirm(warn + 'Supprimer les ' + count(hands) + ' main(s) importée(s) de ' + quoted(names) + ' ? '
+        + 'Elles quittent la base et toutes les analyses, et les imports suivants écarteront leurs mains. Les '
+        + 'historiques restent gardés : « Rétablir » les remet.')) return;
+      remove.disabled = true;
+      remove.textContent = 'Suppression…';
+      try {
+        const data = await post('supprimer', { names });
+        const back = data.kept ? ' ; ' + count(data.kept) + ' revenue(s) du point de vue d\'un autre pseudo (un autre '
+          + 'historique les contient)' : '';
+        showPseudos(box, student, count(data.removed + data.kept) + ' main(s) supprimée(s)' + back + '.');
+        const files = document.querySelector('.import .imported.files');
+        if (files) showFiles(files, student);
+      } catch (err) {
+        sync();
+        window.alert(err.message || String(err));
+      }
+    });
+    box.append(el('h3', {}, 'Mains par pseudo (' + view.pseudos.length + ')'));
+    if (note) box.append(el('p', { class: 'small', role: 'status' }, note));
+    if (rows.length) {
+      box.append(el('div', { class: 'scroll' }, el('table', {},
+          el('thead', {}, el('tr', {}, el('th', {}, ''), el('th', {}, 'Pseudo'), el('th', {}, 'Site'),
+            el('th', { class: 'num' }, 'Mains'))),
+          el('tbody', {}, rows))),
+        el('div', { class: 'pseudo-actions' }, remove),
+        el('p', { class: 'muted small' }, 'Chaque historique marque un pseudo comme héros : ce sont les mains importées '
+          + 'de son compte. Supprimer efface ces mains de la base (pas celles où ce pseudo n\'est qu\'un joueur de la '
+          + 'table) ; une main qu\'un autre de ces historiques contient aussi revient de ce point de vue. Les imports '
+          + 'suivants écartent ses mains. Pour seulement sortir un pseudo de tes analyses sans rien effacer : '
+          + 'Paramètres.'));
+    }
+    if (view.removed.length) {
+      const back = view.removed.map((r) => {
+        const button = el('button', { type: 'button', class: 'link' }, 'Rétablir');
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            const data = await post('retablir', { name: r.name });
+            showPseudos(box, student, count(data.added) + ' main(s) de « ' + r.name + ' » rétablie(s).');
+            const files = document.querySelector('.import .imported.files');
+            if (files) showFiles(files, student);
+          } catch (err) {
+            button.disabled = false;
+            window.alert(err.message || String(err));
+          }
+        });
+        return el('tr', { class: 'removed' },
+          el('td', {}, r.name),
+          el('td', { class: 'num' }, count(r.hands)),
+          el('td', {}, 'supprimé le ' + day(r.removed)),
+          el('td', {}, button));
+      });
+      box.append(el('h3', { class: 'sub' }, 'Pseudos supprimés (' + view.removed.length + ')'),
+        el('div', { class: 'scroll' }, el('table', {},
+          el('thead', {}, el('tr', {}, el('th', {}, 'Pseudo'), el('th', { class: 'num' }, 'Mains'), el('th', {}, ''),
+            el('th', {}, ''))),
+          el('tbody', {}, back))),
+        el('p', { class: 'muted small' }, '« Rétablir » remet ses mains depuis les historiques gardés, et les imports '
+          + 'suivants les gardent à nouveau.'));
+    }
   }
 
   // Les historiques importés : retirer les mains de l'un d'eux (il reste gardé, pour le rétablir).
@@ -542,7 +666,7 @@
         if (!res.ok) throw new Error(data.error || 'Action impossible.');
         frame.dataset.src = '';
         if (student) { await loadStudents(); renderHeader(); } else { state = data.state; renderSidebar(); }
-        showFiles(box, student);
+        refreshImported(student);
       } catch (err) {
         button.disabled = false;
         window.alert(err.message || String(err));
@@ -728,8 +852,7 @@
       const box = importResult(owner);
       if (box) {
         showImportResult(data, box, student);
-        const files = document.querySelector('.import .imported');
-        if (files) showFiles(files, student);
+        refreshImported(student);
       }
     } catch (err) {
       importing = null;
@@ -747,10 +870,15 @@
       ? el('b', {}, data.added + ' nouvelle(s) main(s) ajoutée(s).')
       : 'Aucune nouvelle main.', ' ',
     data.added ? next : ''));
+    if (data.skipped) {
+      result.append(el('p', { class: 'small' }, count(data.skipped) + ' main(s) de pseudos supprimés écartée(s) : '
+        + '« Rétablir » un pseudo, plus bas, remet ses mains.'));
+    }
     const rows = data.files.map((f) => el('tr', { class: f.archive ? 'archive' : null },
       el('td', {}, f.name),
       el('td', {}, (f.sites || []).join(', ')),
-      el('td', { class: f.status === 'importé' ? 'ok' : f.status === 'déjà importé' || f.archive ? '' : 'ko' }, f.status),
+      el('td', { class: f.status === 'importé' ? 'ok' : f.status === 'déjà importé' || f.skipped || f.archive ? '' : 'ko' },
+        f.status),
       el('td', { class: 'num' }, String(f.hands)),
       el('td', {}, Object.entries(f.formats || {}).map(([k, n]) => n + ' ' + k).join(' · ')),
       el('td', { class: 'num' }, String(f.new))));
@@ -763,7 +891,7 @@
       const count = {};
       singles.forEach((f) => { count[f.status] = (count[f.status] || 0) + 1; });
       const plural = { 'importé': 'importés', 'déjà importé': 'déjà importés', vide: 'vides', 'format non reconnu': 'au format non reconnu',
-        'aucune main lue': 'sans main lue' };
+        'aucune main lue': 'sans main lue', 'écarté (pseudo supprimé)': 'écartés (pseudo supprimé)' };
       result.append(el('p', {}, singles.length + ' fichiers : '
         + Object.entries(count).map(([k, n]) => n + ' ' + (n > 1 && plural[k] || k)).join(', ') + '.'));
       result.append(el('details', {}, el('summary', {}, 'Détail par fichier'), table));

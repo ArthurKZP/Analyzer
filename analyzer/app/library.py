@@ -61,6 +61,7 @@ REFERENCE_PAGES = ("comparaison", "lignes", "bilan", "tables", "preflop", "mains
 REFERENCE_PREFIX = "ref:"  # sa période d'analyse se garde sous cette clé
 FIELD_PAGES = ("regs", "recs", "bluffs", "joueurs")  # Étude du field (« joueurs » : aussi dans Paramètres)
 MAX_IMPORT_FILES = 5000  # fichiers (ou archives zip) par import
+MAX_REMOVED_PSEUDOS = 200  # pseudos dont on supprime les mains d'un coup
 
 
 class UnknownPlayer(KeyError):
@@ -1799,6 +1800,56 @@ class Library:
         self.reload()
         return {"added": added, "files": self.files_view(), "state": self.summary()}
 
+    # --- les mains par pseudo : supprimer celles d'un pseudo, le rétablir ----------------
+    def pseudos_view(self) -> dict:
+        """Les pseudos que les historiques de cet espace marquent comme héros, avec leurs mains et leurs sites, et leur
+        rôle : « me » (toi, ou l'élève), « other » (décoché dans tes Paramètres : pas toi), « reference » (un joueur de
+        référence) ; puis les pseudos dont les mains sont supprimées."""
+        conf = settings.load() if self.is_me else None
+        mine = self.my_pseudos(self.hero_pseudos, conf) if conf is not None else None
+        owners = {p: ref["name"] for ref in conf["references"] for p in ref["pseudos"]} if conf is not None else {}
+        rows: dict[str, dict] = {}
+        for (pseudo, site), n in self.hero_pseudos.items():
+            row = rows.setdefault(pseudo, {"name": pseudo, "sites": [], "hands": 0})
+            row["hands"] += n
+            if site not in row["sites"]:
+                row["sites"].append(site)
+        for row in rows.values():
+            row["reference"] = owners.get(row["name"])
+            row["role"] = ("reference" if row["reference"] else "me" if mine is None or row["name"] in mine
+                           else "other")
+        removed = [{"name": name, "hands": r["hands"], "removed": r["removed"]}
+                   for name, r in db_hands.removed_pseudos(self.db, self.space_id).items()]
+        return {"pseudos": sorted(rows.values(), key=lambda r: (-r["hands"], r["name"].lower())), "removed": removed}
+
+    def _raw_pseudos(self, names: set[str]) -> set[str]:
+        """Ces pseudos tels que les historiques les écrivent (un alias réunit les pseudos qu'il regroupe)."""
+        return set(names) | {p for p, alias in aliases.load().items() if alias in names}
+
+    def remove_pseudos(self, names: object) -> dict:
+        """Supprime les mains importées de ces pseudos, celles où l'historique les marque comme héros
+        (db_hands.remove_pseudos : une main qu'un de tes autres historiques contient aussi revient de ce point de vue) ;
+        ValueError : pas une liste de pseudos marqués comme héros ici."""
+        if not (isinstance(names, list) and 0 < len(names) <= MAX_REMOVED_PSEUDOS
+                and all(isinstance(n, str) for n in names)):
+            raise ValueError("Requête invalide.")
+        heroes = {p for p, _ in self.hero_pseudos}
+        unknown = sorted(set(names) - heroes, key=str.lower)
+        if unknown:
+            raise ValueError(f"« {unknown[0]} » n'est le héros d'aucun historique importé ici.")
+        found = db_hands.remove_pseudos(self.db, self.space_id, self._raw_pseudos(set(names)),
+                                        keep=self._raw_pseudos(heroes - set(names)))
+        self.reload()
+        return dict(found, pseudos=self.pseudos_view(), files=self.files_view(), state=self.summary())
+
+    def restore_pseudo(self, name: object) -> dict:
+        """Rétablit un pseudo supprimé (ses mains reviennent des historiques gardés) ; KeyError s'il ne l'est pas."""
+        if not isinstance(name, str):
+            raise ValueError("Requête invalide.")
+        added = db_hands.restore_pseudo(self.db, self.space_id, name)
+        self.reload()
+        return {"added": added, "pseudos": self.pseudos_view(), "files": self.files_view(), "state": self.summary()}
+
     # --- import -----------------------------------------------------------------
     def import_files(self, files: list[dict], job: Optional[ImportJob] = None) -> dict:
         """Importe dans la base les historiques reconnus (le texte d'origine est gardé ; un historique ou une main
@@ -1811,15 +1862,17 @@ class Library:
             job.plan([count_hands(text) for text in self._import_texts(items)])
         results: list[dict] = []
         added = 0
+        removed = frozenset(db_hands.removed_pseudos(self.db, self.space_id))  # leurs mains sont écartées
         for item in items:
             name = str(item.get("name") or "fichier")[:200]
             if isinstance(item.get("zip"), str):
-                added += self._import_zip(name, item["zip"], results, job)
+                added += self._import_zip(name, item["zip"], results, job, removed)
             else:
-                added += self._import_one(name, item.get("content"), results, job)
+                added += self._import_one(name, item.get("content"), results, job, removed)
         if added:  # seulement les mains ajoutées, quand rien d'autre n'a changé
             self.reload(job.loading if job is not None else None, new_only=True)
-        return {"files": results, "added": added, "state": self.summary()}
+        skipped = sum(r.get("skipped", 0) for r in results if not r.get("archive"))
+        return {"files": results, "added": added, "skipped": skipped, "state": self.summary()}
 
     @staticmethod
     def _import_texts(items: list[dict]):
@@ -1858,7 +1911,8 @@ class Library:
         job = self._imports.get(job_id)
         return job.view() if job is not None else None
 
-    def _import_zip(self, name: str, data: str, results: list[dict], job: Optional[ImportJob] = None) -> int:
+    def _import_zip(self, name: str, data: str, results: list[dict], job: Optional[ImportJob] = None,
+                    removed: frozenset = frozenset()) -> int:
         try:
             content = read_zip(base64.b64decode(data, validate=True))
         except binascii.Error:
@@ -1869,7 +1923,8 @@ class Library:
             results.append({"name": name, "status": reason, "hands": 0, "new": 0})
             return 0
         start = len(results)
-        added = sum(self._import_one(f"{name} › {path}"[:300], text, results, job) for path, text in content.files)
+        added = sum(self._import_one(f"{name} › {path}"[:300], text, results, job, removed)
+                    for path, text in content.files)
         results.extend({"name": f"{name} › {path}"[:300], "status": "illisible (chiffré ou abîmé)", "hands": 0, "new": 0}
                        for path in content.unreadable)
         parts = [f"{len(content.files)} historique(s)"]
@@ -1879,7 +1934,9 @@ class Library:
                         "hands": sum(r["hands"] for r in results[start:]), "new": added})
         return added
 
-    def _import_one(self, name: str, content, results: list[dict], job: Optional[ImportJob] = None) -> int:
+    def _import_one(self, name: str, content, results: list[dict], job: Optional[ImportJob] = None,
+                    removed: frozenset = frozenset()) -> int:
+        """Importe un historique ; removed : les pseudos supprimés, dont les mains sont écartées (comptées à part)."""
         if not isinstance(content, str) or not content.strip():
             results.append({"name": name, "status": "vide", "hands": 0, "new": 0})
             if job is not None and isinstance(content, str):
@@ -1897,6 +1954,8 @@ class Library:
             if job is not None:
                 job.file_done(count_hands(content))
         detail = {"sites": sorted({h.site for h in hands}), "formats": _formats(hands)}
-        status = "importé" if new else "déjà importé" if hands else "aucune main lue"  # ex. des tournois
-        results.append(dict(detail, name=name, status=status, hands=len(hands), new=new))
+        skipped = sum(1 for h in hands if h.hero in removed) if removed else 0
+        status = ("importé" if new else "écarté (pseudo supprimé)" if skipped else "déjà importé" if hands
+                  else "aucune main lue")  # (aucune main lue : ex. des tournois)
+        results.append(dict(detail, name=name, status=status, hands=len(hands), new=new, skipped=skipped))
         return new

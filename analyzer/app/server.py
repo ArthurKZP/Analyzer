@@ -146,6 +146,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.summary())
             if parts == ["api", "fichiers"]:  # tes historiques importés
                 return self._json(library.files_view())
+            if parts == ["api", "pseudos"]:  # les pseudos de tes historiques (leurs mains, celles supprimées)
+                return self._json(library.pseudos_view())
             if len(parts) == 3 and parts[:2] == ["api", "import"]:  # l'avancement d'un import (barre)
                 job = library.import_status(parts[2])
                 return self._json(job) if job else self._error(404, "Import inconnu.")
@@ -208,10 +210,13 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 5 and parts[:2] == ["api", "eleves"] and parts[3] == "import":
                 job = library.student(parts[2]).import_status(parts[4])
                 return self._json(job) if job else self._error(404, "Import inconnu.")
-            if len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] in ("leaks", "revue", "fichiers", "periode"):
+            if len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] in ("leaks", "revue", "fichiers", "periode",
+                                                                                   "pseudos"):
                 student = library.student(parts[2])
                 if parts[3] == "fichiers":
                     return self._json(student.files_view())
+                if parts[3] == "pseudos":
+                    return self._json(student.pseudos_view())
                 if parts[3] == "periode":
                     return self._json(student.period_view())
                 return self._json(student.leaks_state(table_format=self._format()) if parts[3] == "leaks"
@@ -282,6 +287,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(owner.remove_file(file_id) if action == "retirer" else owner.restore_file(file_id))
         except KeyError:
             return self._error(404, "Historique inconnu.")
+
+    def _pseudo_action(self, owner: Library, action: str):
+        """Supprimer les mains d'un ou plusieurs pseudos ({"names": […]}), ou en rétablir un ({"name": …}) : les
+        tiens, ou ceux d'un élève."""
+        payload = self._small_json()
+        if not isinstance(payload, dict):
+            return self._error(400, "Requête invalide.")
+        try:
+            if action == "supprimer":
+                return self._json(owner.remove_pseudos(payload.get("names")))
+            return self._json(owner.restore_pseudo(payload.get("name")))
+        except ValueError as exc:
+            return self._error(400, str(exc))
+        except KeyError:
+            return self._error(404, "Pseudo inconnu : ses mains ne sont pas supprimées.")
 
     def _tree_action(self, library: Library, action: Optional[str], payload: dict):
         """L'onglet Arbre de l'explorateur : l'état (avec le nœud au bout de « path »), tes tailles, le retour à l'arbre
@@ -546,6 +566,8 @@ class Handler(BaseHTTPRequestHandler):
             return files if files is None else self._json(library.start_import(files))
         if len(parts) == 3 and parts[:2] == ["api", "fichiers"] and parts[2] in ("retirer", "retablir"):
             return self._file_action(library, parts[2])
+        if len(parts) == 3 and parts[:2] == ["api", "pseudos"] and parts[2] in ("supprimer", "retablir"):
+            return self._pseudo_action(library, parts[2])
         if parts == ["api", "periode"]:
             return self._period(library)
         if parts == ["api", "parametres"]:  # tes paramètres (pseudo, formats, coach, seuil du field)
@@ -606,6 +628,8 @@ class Handler(BaseHTTPRequestHandler):
                 return files if files is None else self._json(student.start_import(files))
             if len(parts) == 5 and parts[3] == "fichiers" and parts[4] in ("retirer", "retablir"):
                 return self._file_action(student, parts[4])
+            if len(parts) == 5 and parts[3] == "pseudos" and parts[4] in ("supprimer", "retablir"):
+                return self._pseudo_action(student, parts[4])
             if parts[3:] == ["periode"]:
                 return self._period(student)
             if len(parts) == 5 and parts[3] == "leaks" and parts[4] in ("lancer", "arreter"):

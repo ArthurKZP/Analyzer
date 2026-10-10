@@ -81,10 +81,17 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   mains (`hands/` par défaut) reste une boîte d'arrivée : un historique ou un `.zip` qu'on y dépose est importé au
   lancement de l'application. Une **barre d'avancement** suit l'import : lecture et envoi des fichiers, lecture des
   historiques (fichier par fichier, mains lues sur le total), puis mise à jour de tes analyses (mains relues), avec
-  le temps qu'il reste ; on peut quitter la page et y revenir, un seul import à la fois. Sous l'import, **tes
+  le temps qu'il reste ; on peut quitter la page et y revenir, un seul import à la fois. Sous l'import, **les mains
+  par pseudo** : chaque historique marque un pseudo comme héros (les mains importées de son compte), listé avec ses
+  sites et ses mains (toi, décoché dans *Paramètres*, joueur de référence). Coche un ou plusieurs pseudos puis
+  *Supprimer leurs mains* : ces mains quittent la base et toutes les analyses (pas celles où le pseudo n'est qu'un
+  joueur de la table) ; une main qu'un autre historique contient aussi, vue par un autre de tes pseudos, revient de
+  ce point de vue. Le pseudo reste listé dans *Pseudos supprimés* : les imports suivants écartent ses mains (le
+  résultat de l'import les compte à part), et *Rétablir* les remet toutes depuis les historiques gardés. Puis **tes
   historiques importés** (site, format, mains, dates) : *Retirer* efface leurs mains de la base et des analyses (une
   main présente aussi dans un autre historique reste) ; l'historique est gardé pour être *rétabli*, et le réimporter
-  le rétablit aussi (resté dans la boîte d'arrivée, il n'est pas réimporté au lancement).
+  le rétablit aussi (resté dans la boîte d'arrivée, il n'est pas réimporté au lancement). Chaque élève a les mêmes
+  listes dans sa page d'import.
 
 Options : `--dossier` (dossier des historiques), `--port`, `--hero`, `--sans-navigateur`.
 Les analyses sont calculées à la première ouverture d'une page puis gardées en mémoire ; un import les recalcule.
@@ -881,10 +888,11 @@ ses formats) :
   le plus fréquent ; libre, sauf le pseudo d'un adversaire). Les pseudos que tes historiques marquent comme toi
   (« Dealt to … ») sont proposés, cochés d'office, avec leurs sites et leurs mains, et un nouveau pseudo rejoint le
   regroupement tout seul. Décoche ceux qui ne sont pas toi (les mains d'un autre joueur importées chez toi) : leurs
-  mains sortent de tes analyses ; recoche-les pour les remettre. *Ajouter un pseudo* : un pseudo à toi que tes
-  historiques ne marquent pas (proposé parmi les joueurs des mains sans héros repéré) ; ses mains sans héros repéré
-  rejoignent le regroupement. Il reste toujours au moins un pseudo coché. Le pseudo d'un **joueur de référence**
-  (menu du même nom) n'est jamais le tien : il apparaît décoché, avec le nom du joueur.
+  mains sortent de tes analyses ; recoche-les pour les remettre (pour les effacer de la base : *Importer des mains*,
+  « Mains par pseudo »). *Ajouter un pseudo* : un pseudo à toi que tes historiques ne marquent pas (proposé parmi les
+  joueurs des mains sans héros repéré) ; ses mains sans héros repéré rejoignent le regroupement. Il reste toujours au
+  moins un pseudo coché. Le pseudo d'un **joueur de référence** (menu du même nom) n'est jamais le tien : il apparaît
+  décoché, avec le nom du joueur.
 - **Ce que tu joues** : heads-up et/ou tables à plusieurs. Un format que tu ne joues pas sort des menus : ses onglets
   (*Mes spots* et *Face au solveur* pour le heads-up, *Tables à plusieurs* sinon), le choix de format des pages (le
   bilan, le Leakfinding, Mon préflop, les mains de départ et l'Étude du field s'ouvrent sur l'autre), l'onglet
@@ -1138,7 +1146,8 @@ fiches des études :
   `ANALYZER_DB=postgresql://utilisateur:motdepasse@hôte:5432/base` avant de lancer l'application.
 - **Organisation** : un compte (« local » ici, un client en ligne), ses espaces (toi, chaque élève), et dans chaque
   espace ses historiques (texte d'origine compressé, importé une seule fois) et ses mains (une seule fois chacune,
-  même si deux historiques la contiennent ; un historique retiré garde son texte, sans ses mains). Le type des
+  même si deux historiques la contiennent ; un historique retiré garde son texte, sans ses mains ; un pseudo
+  supprimé est noté avec les historiques qui contiennent ses mains, pour les rétablir). Le type des
   adversaires, les alias, les résumés et les données du solveur appartiennent au compte. Si le code de lecture des historiques change, les mains sont relues depuis le texte
   gardé.
 - **À jour partout** : chaque écriture d'un type de données (tailles, ranges, études…) change sa révision dans la

@@ -17,7 +17,7 @@ from analyzer.db import hands as db_hands
 from analyzer.models import CALL, FOLD, RAISE, Action, Seat, hand_from_dict, hand_to_dict
 from analyzer.parsers import load_hands
 from analyzer.stats import HandReader
-from tests.base import IsolatedHome, isolate_module, release_module
+from tests.base import IsolatedHome, isolate_module, release_module, renumbered
 from tests.test_ring_leaks import FOLDS_TO, table_hand
 
 
@@ -30,11 +30,6 @@ def tearDownModule():
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "betclic_sample.txt"
-
-
-def renumbered(text: str, digit: str) -> str:
-    """Le même historique avec d'autres numéros de main (HAND01 -> HAND<digit>1…)."""
-    return text.replace("Hand ID: HAND0", f"Hand ID: HAND{digit}")
 
 
 class MemoryTest(unittest.TestCase):

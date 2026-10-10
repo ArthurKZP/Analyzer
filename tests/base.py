@@ -1,6 +1,7 @@
 """Un dossier d'Analyzer propre à chaque test (sa base de données, son cache) : les tests n'écrivent jamais dans
 ~/.analyzer ni dans la base désignée par ANALYZER_DB."""
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,3 +45,20 @@ def release_module() -> None:
         tmp, patcher = _MODULE.pop()
         patcher.stop()
         tmp.cleanup()
+
+
+def renumbered(text: str, digit: str) -> str:
+    """Le même historique Betclic avec d'autres numéros de main (HAND01 -> HAND<digit>1…)."""
+    return text.replace("Hand ID: HAND0", f"Hand ID: HAND{digit}")
+
+
+def seen_by(text: str, player: str) -> str:
+    """Le même historique Betclic vu par un autre joueur de la table : l'étiquette Hero passe à sa place."""
+    out = []
+    for line in text.split("\n"):
+        found = re.match(r"^(Seat \d+: (.+) \(.*\)) \[([^\]]*)\]$", line)
+        if found:
+            tags = [t for t in found.group(3).split() if t != "Hero"] + (["Hero"] if found.group(2) == player else [])
+            line = f"{found.group(1)} [{' '.join(tags)}]"
+        out.append(line)
+    return "\n".join(out)

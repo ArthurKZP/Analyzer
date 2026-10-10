@@ -177,8 +177,9 @@ placeholder="pseudo à ajouter">
 <div class="st-status" aria-live="polite"></div>
 <p class="note">Les pseudos que tes historiques marquent comme toi sont proposés et cochés d'office (un nouveau
 pseudo rejoint le regroupement tout seul). Décoche ceux qui ne sont pas toi (les mains d'un autre joueur importées chez
-toi) : leurs mains sortent de tes analyses ; recoche-les pour les remettre. Le pseudo d'un bon joueur dont tu as importé
-les mains peut devenir un <b>joueur de référence</b> (menu du même nom) : son jeu est étudié à part et comparé au tien.
+toi) : leurs mains sortent de tes analyses ; recoche-les pour les remettre. Pour effacer de la base les mains importées
+d'un pseudo : page <b>Importer</b>, « Mains par pseudo ». Le pseudo d'un bon joueur dont tu as importé les mains peut
+devenir un <b>joueur de référence</b> (menu du même nom) : son jeu est étudié à part et comparé au tien.
 Ajoute un pseudo à toi que tes historiques ne marquent pas : ses mains sans héros repéré rejoignent le regroupement. Le
 nom est libre, sauf celui d'un adversaire. Un adversaire qui a plusieurs pseudos se regroupe dans l'onglet <b>Joueurs et
 alias</b>.</p>

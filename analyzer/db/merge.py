@@ -2,7 +2,8 @@
 ligne) : rien n'est effacé ni remplacé par plus ancien.
 
 - espaces, historiques et mains : ajoutés s'ils manquent (même clé d'espace, même empreinte d'historique, même
-  site et même numéro de main) ;
+  site et même numéro de main) ; les mains d'un historique retiré ou d'un pseudo supprimé (ici, ou dans la source
+  quand cet espace n'a pas de mains de lui) ne viennent pas ;
 - type des adversaires, résumés du solveur, documents (tailles, plans, résultats…) et fiches d'études : ajoutés,
   ou remplacés par ceux de la source s'ils sont plus récents ;
 - réglages : ajoutés s'ils manquent ; journal de l'entraîneur : les décisions qui manquent.
@@ -13,6 +14,7 @@ from typing import Callable, Optional
 
 from . import Database, training
 from .documents import bump
+from .hands import adopt_removed, removed_pseudos, stored_hero
 from .hands import space as make_space
 
 BATCH = 500
@@ -92,6 +94,7 @@ def _hands(source: Database, target: Database, src_account: int, dst_account: in
             files[row[0]] = found[0]
             if found[1] is not None:
                 retired.add(row[0])
+        removed = adopt_removed(target, dst_space, removed_pseudos(source, src_space), files)  # pseudos supprimés
         cur = source.execute("SELECT id, fichier_id, site, numero, joue_le, format, sb, bb, lecture, donnees "
                              "FROM mains WHERE espace_id = ? ORDER BY id", (src_space,))
         while True:
@@ -99,7 +102,7 @@ def _hands(source: Database, target: Database, src_account: int, dst_account: in
             if not rows:
                 break
             for row in rows:
-                if row[1] in retired:
+                if row[1] in retired or (removed and stored_hero(row[9]) in removed):
                     continue
                 new = target.value("INSERT INTO mains (espace_id, fichier_id, site, numero, joue_le, format, sb, bb, "
                                    "lecture, donnees) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "

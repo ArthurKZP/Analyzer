@@ -16,9 +16,9 @@ from analyzer.db import analyses, cli, documents, hands, legacy, merge, schema, 
 from analyzer.parsers import load_hands
 
 try:
-    from .base import close_storage
+    from .base import close_storage, renumbered, seen_by
 except ImportError:  # lancé par « unittest discover -s tests »
-    from base import close_storage
+    from base import close_storage, renumbered, seen_by
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SITES = Path(__file__).parent / "sites"
@@ -115,6 +115,58 @@ class SchemaAndHandsTest(DatabaseCase):
         (folder / "c.txt").touch()  # même contenu, date changée : toujours retiré
         self.assertEqual(hands.sync_folder(self.db, me, folder), 0)
         self.assertEqual(hands.count(self.db, me), 4)
+
+    def test_remove_and_restore_pseudos(self):
+        """Supprimer les mains d'un pseudo : celles que ses historiques marquent comme les siennes (pas celles où il joue
+        contre toi) ; une main que ton historique contient aussi revient de ton point de vue ; ses mains importées
+        ensuite sont écartées (l'historique gardé) ; rétabli, tout revient."""
+        me = hands.space(self.db, "moi")
+        blocks = ["*** HEADER ***" + b for b in SAMPLE.split("*** HEADER ***")[1:]]  # HAND04, 03, 02, 01
+        self.assertEqual(hands.import_text(self.db, me, "lui.txt", seen_by("".join(blocks[:2]), "Villain"))[1], 2)
+        self.assertEqual(hands.import_text(self.db, me, "moi.txt", SAMPLE)[1], 2)  # 04 et 03 : déjà là, vues par lui
+        self.assertEqual(hands.import_text(self.db, me, "lui2.txt", seen_by(renumbered(SAMPLE, "1"), "Villain"))[1], 4)
+
+        def heroes():
+            return sorted((h.hand_id, h.hero) for h in hands.load(self.db, me))
+
+        self.assertEqual(heroes()[:4], [("HAND01", "Hero"), ("HAND02", "Hero"), ("HAND03", "Villain"),
+                                        ("HAND04", "Villain")])
+        with self.assertRaises(ValueError):
+            hands.remove_pseudos(self.db, me, {"Personne"})
+        found = hands.remove_pseudos(self.db, me, {"Villain"}, keep={"Hero"})
+        self.assertEqual(found, {"removed": 4, "kept": 2, "pseudos": {"Villain": 6}})
+        self.assertEqual(heroes(), [("HAND01", "Hero"), ("HAND02", "Hero"), ("HAND03", "Hero"), ("HAND04", "Hero")])
+        record = hands.removed_pseudos(self.db, me)["Villain"]
+        names = {f["id"]: f["name"] for f in hands.files(self.db, me)}
+        self.assertEqual((record["hands"], sorted(names[f] for f in record["files"])), (6, ["lui.txt", "lui2.txt"]))
+        later = seen_by(renumbered(SAMPLE, "2"), "Villain")  # importées ensuite : écartées, l'historique gardé
+        self.assertEqual(hands.import_text(self.db, me, "lui3.txt", later)[1:], (0, False))
+        self.assertEqual(hands.removed_pseudos(self.db, me)["Villain"]["hands"], 10)
+        self.assertEqual(hands.count(self.db, me), 4)
+
+        target = db.Database(f"sqlite:///{self.root / 'cible.db'}")  # une fusion : le pseudo reste supprimé
+        try:
+            merge.merge(self.db, target, log=lambda m: None)
+            there = hands.space(target, "moi")
+            self.assertEqual((hands.count(target, there), sorted(hands.removed_pseudos(target, there))), (4, ["Villain"]))
+            self.assertEqual(hands.import_text(target, there, "lui5.txt", seen_by(renumbered(SAMPLE, "5"), "Villain"))[1:],
+                             (0, False))
+        finally:
+            target.close()
+        other = db.Database(f"sqlite:///{self.root / 'autre.db'}")  # là-bas, il a ses mains : rien n'y est effacé
+        try:
+            there = hands.space(other, "moi")
+            hands.import_text(other, there, "lui2.txt", seen_by(renumbered(SAMPLE, "1"), "Villain"))
+            merge.merge(self.db, other, log=lambda m: None)
+            self.assertEqual((hands.count(other, there), hands.removed_pseudos(other, there)), (8, {}))
+        finally:
+            other.close()
+
+        with self.assertRaises(KeyError):
+            hands.restore_pseudo(self.db, me, "Hero")
+        self.assertEqual(hands.restore_pseudo(self.db, me, "Villain"), 8)  # 04 et 03 restent de ton point de vue
+        self.assertEqual((hands.count(self.db, me), hands.removed_pseudos(self.db, me)), (12, {}))
+        self.assertEqual(hands.import_text(self.db, me, "lui4.txt", seen_by(renumbered(SAMPLE, "3"), "Villain"))[1], 4)
 
     def test_folder_inbox_and_new_reader(self):
         me = hands.space(self.db, "moi")

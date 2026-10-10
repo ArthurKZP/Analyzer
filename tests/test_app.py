@@ -15,9 +15,9 @@ from analyzer.app.library import Library, UnknownPlayer
 from analyzer.app.server import start
 
 try:
-    from .base import IsolatedHome
+    from .base import IsolatedHome, renumbered, seen_by
 except ImportError:  # lancé par « unittest discover -s tests »
-    from base import IsolatedHome
+    from base import IsolatedHome, renumbered, seen_by
 
 FIXTURE = Path(__file__).parent / "fixtures" / "betclic_sample.txt"
 FAKE_SOLVER = Path(__file__).parent / "fixtures" / "fake_solver.py"
@@ -177,6 +177,34 @@ class LibraryTest(IsolatedHome):
         self.assertEqual(files, [("piege.txt", 4)])  # le nom d'origine ne sert jamais de chemin
         self.assertEqual(result["state"]["hands"], 4)
         self.assertEqual(lib.import_files([{"name": "x.txt", "content": content}])["added"], 0)
+
+    def test_remove_pseudos(self):
+        """Les mains importées d'un autre compte (son pseudo marqué comme héros) : supprimées de la base, écartées des
+        imports suivants, puis rétablies ; celles où il joue contre toi restent."""
+        text = FIXTURE.read_text(encoding="utf-8")
+        lib = Library(self.folder)
+        lib.import_files([{"name": "moi.txt", "content": text},
+                          {"name": "lui.txt", "content": seen_by(renumbered(text, "1"), "Villain")}])
+        view = lib.pseudos_view()
+        self.assertEqual([(p["name"], p["hands"], p["sites"], p["role"]) for p in view["pseudos"]],
+                         [("Hero", 4, ["Betclic"], "me"), ("Villain", 4, ["Betclic"], "me")])
+        for bad in ("Villain", [], ["Personne"], [3]):
+            with self.assertRaises(ValueError):
+                lib.remove_pseudos(bad)
+        out = lib.remove_pseudos(["Villain"])
+        self.assertEqual((out["removed"], out["kept"], lib.hero, out["state"]["hands"]), (4, 0, "Hero", 4))
+        self.assertEqual([p["name"] for p in out["pseudos"]["pseudos"]], ["Hero"])
+        self.assertEqual([(r["name"], r["hands"]) for r in out["pseudos"]["removed"]], [("Villain", 4)])
+        self.assertEqual([o["name"] for o in lib.summary()["opponents"]], ["Villain"])  # toujours ton adversaire
+        result = lib.import_files([{"name": "lui2.txt", "content": seen_by(renumbered(text, "2"), "Villain")}])
+        self.assertEqual((result["added"], result["skipped"], result["files"][0]["status"]),
+                         (0, 4, "écarté (pseudo supprimé)"))
+        with self.assertRaises(KeyError):
+            lib.restore_pseudo("Hero")
+        back = lib.restore_pseudo("Villain")
+        self.assertEqual((back["added"], back["pseudos"]["removed"], len(lib.pseudos_view()["pseudos"])), (8, [], 2))
+        lib.set_settings({"hero_excluded": ["Villain"]})  # décoché : pas toi
+        self.assertEqual({p["name"]: p["role"] for p in lib.pseudos_view()["pseudos"]}, {"Hero": "me", "Villain": "other"})
 
     def test_import_progress(self):
         job = ImportJob("essai", known=100)  # 100 mains déjà là ; lire une main coûte READ_COST fois la relire
@@ -524,6 +552,21 @@ class ServerTest(unittest.TestCase):
         for bad, code in (({"id": "1"}, 400), ({"id": 99999}, 404)):
             self.assertEqual(self.request("POST", "/api/eleves/anna/fichiers/retirer", json.dumps(bad), headers)[0],
                              code, bad)
+        view = json.loads(self.request("GET", "/api/eleves/anna/pseudos")[2])  # ses mains par pseudo : en supprimer
+        self.assertEqual(([(p["name"], p["hands"]) for p in view["pseudos"]], view["removed"]), ([("Hero", 4)], []))
+        status, _, data = self.request("POST", "/api/eleves/anna/pseudos/supprimer", json.dumps({"names": ["Hero"]}),
+                                       headers)
+        data = json.loads(data)
+        self.assertEqual((status, data["removed"], data["state"]["hands"], data["pseudos"]["removed"][0]["name"]),
+                         (200, 4, 0, "Hero"))
+        status, _, data = self.request("POST", "/api/eleves/anna/pseudos/retablir", json.dumps({"name": "Hero"}),
+                                       headers)
+        self.assertEqual((status, json.loads(data)["added"]), (200, 4))
+        for verb, bad, code in (("supprimer", {"names": "Hero"}, 400), ("supprimer", {"names": ["Personne"]}, 400),
+                                ("retablir", {"name": "Personne"}, 404), ("retablir", {"name": 3}, 400)):
+            self.assertEqual(self.request("POST", f"/api/eleves/anna/pseudos/{verb}", json.dumps(bad), headers)[0],
+                             code, bad)
+        self.assertEqual(self.request("GET", "/api/pseudos")[0], 200)
         self.assertEqual(self.request("GET", "/eleve/inconnu/leaks")[0], 404)
         self.assertEqual(self.request("POST", "/api/eleves/inconnu/import", body, headers)[0], 404)
         self.assertEqual(self.request("POST", "/api/eleves", json.dumps({"name": ""}), headers)[0], 400)

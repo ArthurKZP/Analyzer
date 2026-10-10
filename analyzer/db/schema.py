@@ -14,8 +14,8 @@ TYPES = {
 }
 
 # Tables dans l'ordre de leurs dépendances (copie d'une base à l'autre), et celles qui ont une clé automatique.
-TABLES = ("comptes", "espaces", "fichiers", "mains", "participants", "adversaires", "analyses", "reglages",
-          "documents", "etudes", "entrainement", "revisions")
+TABLES = ("comptes", "espaces", "fichiers", "mains", "participants", "pseudos_retires", "adversaires", "analyses",
+          "reglages", "documents", "etudes", "entrainement", "revisions")
 IDENTITY = ("comptes", "espaces", "fichiers", "mains", "entrainement")
 
 MIGRATIONS: list[tuple[int, str, list[str]]] = [
@@ -131,6 +131,16 @@ MIGRATIONS: list[tuple[int, str, list[str]]] = [
     ]),
     (3, "Historiques retirés (leurs mains effacées, l'historique gardé pour le rétablir)", [
         "ALTER TABLE fichiers ADD COLUMN retire_le TEXT",  # NULL : ses mains sont dans la base
+    ]),
+    (4, "Pseudos supprimés (leurs mains effacées et écartées des imports suivants, pour les rétablir)", [
+        """CREATE TABLE pseudos_retires (
+            espace_id {REF} NOT NULL REFERENCES espaces(id) ON DELETE CASCADE,
+            pseudo TEXT NOT NULL,              -- le héros que marquent ses historiques
+            mains INTEGER NOT NULL,            -- ses mains effacées ou écartées depuis
+            fichiers TEXT NOT NULL,            -- les historiques gardés qui les contiennent (JSON : leurs numéros)
+            retire_le TEXT NOT NULL,
+            PRIMARY KEY (espace_id, pseudo)
+        )""",
     ]),
 ]
 
