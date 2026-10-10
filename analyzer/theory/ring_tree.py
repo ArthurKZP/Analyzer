@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .. import handplay
+from ..errors import NotFound
 from . import ring_ranges, studyspots
 from .preflop_tree import MIN_REACH, classes, combos
 
@@ -279,7 +280,7 @@ def line_for_family(family: str) -> list[str]:
     relance, puis l'ouvreur paie ou 4bette…)."""
     info = studyspots.ring_family(family)
     if info is None:
-        raise KeyError(family)
+        raise NotFound(family)
     steps = info["steps"]
     opener, other = steps[0][0], steps[1][0]
     first, second = ORDER.index(opener), ORDER.index(other)

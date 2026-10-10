@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 import secrets
+import sys
 import threading
 import time
 import traceback
@@ -20,6 +22,7 @@ from .. import (aliases, bluffs, db, field, handplay, leaks, memory, players, ri
 from .. import period as periods
 from .. import reference as refstudy
 from ..db import analyses as db_analyses
+from ..errors import NotFound
 from ..db import documents
 from ..db import hands as db_hands
 from ..cli import detect_hero, unify_hero
@@ -45,6 +48,7 @@ from .settings_page import build_settings_page
 from .hands_page import build_hands_page
 from .leaks_page import build_leaks_page
 from .reference_page import build_comparison_page, build_lines_page
+from .ring_page import MAX_SPOTS as MAX_RING_SPOTS
 from .ring_page import build_ring_page
 from .plan_page import build_coach_page
 from .review_page import build_review_page
@@ -64,7 +68,7 @@ MAX_IMPORT_FILES = 5000  # fichiers (ou archives zip) par import
 MAX_REMOVED_PSEUDOS = 200  # pseudos dont on supprime les mains d'un coup
 
 
-class UnknownPlayer(KeyError):
+class UnknownPlayer(NotFound):
     pass
 
 
@@ -112,7 +116,31 @@ def _formats(hands: list[Hand]) -> dict[str, int]:
         counts[h.table_format] = counts.get(h.table_format, 0) + 1
     return counts
 
+_LABEL_RE = re.compile(r'(<(?:(?:th|h[1-4])\b[^>]*|div class="label")>)([^<]+)')
+_SCRIPT_RE = re.compile(r"(<script\b.*?</script>)", re.S)
+_HIS = (("Tes ", "Ses "), ("Ton ", "Son "), ("Ta ", "Sa "))
+
+
+def as_reference(html: str, name: str) -> str:
+    """Une page de ton jeu, pour celui d'un joueur de référence : ses colonnes et ses titres le nomment (« Toi » : son
+    nom ; « Tes statistiques » : « Ses statistiques »…), hors des scripts ; le reste du texte garde le tutoiement."""
+    who = escape(name)
+
+    def label(found: re.Match) -> str:
+        tag, text = found.group(1), found.group(2)
+        if text == "Toi" or text.startswith("Toi ("):
+            return tag + who + text[3:]
+        for mine, his in _HIS:
+            if text.startswith(mine):
+                return tag + his + text[len(mine):]
+        return found.group(0)
+
+    return "".join(part if part.startswith("<script") else _LABEL_RE.sub(label, part)
+                   for part in _SCRIPT_RE.split(html))
+
+
 _WARMING = threading.Lock()  # un préchargement à la fois (toi, tes élèves)
+_MISSING = object()  # (une page pas encore dans le cache)
 _WARM = threading.local()  # .active : ce fil est celui du préchargement
 
 
@@ -614,26 +642,35 @@ class Library:
 
     # --- pages ------------------------------------------------------------------
     def _cached(self, key: tuple, build):
-        """Calcule une seule fois par version, même si deux requêtes arrivent en même temps."""
-        full_key = (self.version,) + key
-        if full_key in self._cache:
-            return self._cache[full_key]
+        """Calcule une seule fois par version, même si deux requêtes arrivent en même temps. Les mains peuvent changer
+        pendant un long calcul (un import, la période, les Paramètres : le cache se vide) : le résultat est rendu à qui
+        l'a demandé, et gardé seulement si la version n'a pas changé."""
+        version = self.version
+        full_key = (version,) + key
+        found = self._cache.get(full_key, _MISSING)
+        if found is not _MISSING:
+            return found
         with self._lock:
             lock = self._key_locks.setdefault(full_key, threading.Lock())
         with lock:
-            if full_key not in self._cache:
-                asked = not getattr(_WARM, "active", False)  # une demande (pas le préchargement)
+            found = self._cache.get(full_key, _MISSING)
+            if found is not _MISSING:
+                return found
+            asked = not getattr(_WARM, "active", False)  # une demande (pas le préchargement)
+            if asked:
+                with self._lock:
+                    self._busy += 1
+            try:
+                found = build()
+            finally:
                 if asked:
                     with self._lock:
-                        self._busy += 1
-                try:
-                    self._cache[full_key] = build()
-                finally:
-                    if asked:
-                        with self._lock:
-                            self._busy -= 1
-                store.flush()  # les calculs gardés sur disque (équités, spots…) sont écrits tout de suite
-            return self._cache[full_key]
+                        self._busy -= 1
+            with self._lock:
+                if self.version == version:
+                    self._cache[full_key] = found
+            store.flush()  # les calculs gardés sur disque (équités, spots…) sont écrits tout de suite
+            return found
 
     def _analysis(self, player: str):
         def build():
@@ -643,7 +680,7 @@ class Library:
 
     def player_page(self, player: str, page: str) -> str:
         if page not in PLAYER_PAGES:
-            raise KeyError(page)
+            raise NotFound(page)
         hands = self.hands_against(player)  # 404 si le joueur est inconnu
         kind = self.kinds()[player]
         if page == "solveur":  # change au fil des analyses : jamais en cache
@@ -669,7 +706,7 @@ class Library:
         """Une page de Mon jeu ; table_format : le heads-up (« HU ») ou les tables à plusieurs (« ring »), pour le
         Leakfinding et le préflop."""
         if page not in SELF_PAGES:
-            raise KeyError(page)
+            raise NotFound(page)
         if page == "tables":  # tables à 3 joueurs et plus : pas besoin de mains heads-up
             changes = documents.revision(db.current(), "plan", "ranges")[2:]  # charts, plans des flops 6-max
             return self._cached(("self", "tables") + changes + self._ring_kinds_key(), self._ring_page)
@@ -731,8 +768,8 @@ class Library:
         """Tes stats par position aux tables à plusieurs (toutes ensemble), sur toutes tes mains, contre les réguliers
         et contre les récréatifs, après tes écarts les plus importants contre les réguliers."""
         scopes, gaps = self._ring_overview()
-        return build_ring_page(scopes, self.hero or "", spots=self.ring_spots(), ranges=ring_ranges.available(),
-                               gaps=gaps)
+        return build_ring_page(scopes, self.hero or "", spots=self.ring_spots(MAX_RING_SPOTS),
+                               ranges=ring_ranges.available(), gaps=gaps)
 
     def _bilan_head(self, fmt: str) -> str:
         """En tête du bilan : le choix du format, et tes résultats tous formats confondus."""
@@ -798,11 +835,11 @@ class Library:
         plays = self._plays().get(query.get("fmt") or "HU")
         name = query.get("main") or ""
         if plays is None or not name:
-            raise KeyError(name)
+            raise NotFound(name)
         actions = {"agg": ("raise", "allin"), "pas": ("call", "check")}.get(query.get("act") or "")
         situation = query.get("sit") or "all"
         if situation != "all" and situation not in dict(handplay.SITUATIONS):
-            raise KeyError(situation)
+            raise NotFound(situation)
         return handplay.detail(plays, self._kind_map() if query.get("fmt", "HU") == "HU" else self._ring_versus(),
                                name=name,
                                kind=query.get("kind") or "", position=query.get("pos") or "", situation=situation,
@@ -831,7 +868,7 @@ class Library:
         """La fiche complète d'une de tes mains heads-up (pour la rejouer)."""
         hand = self.by_id.get(hand_id)
         if hand is None or not self.hero or self.hero not in hand.seats or len(hand.seats) != 2 or not hand.button:
-            raise KeyError(hand_id)
+            raise NotFound(hand_id)
         return spots.hand_record(hand, self.hero, hand.opponent_of(self.hero))
 
     # --- étude du field -------------------------------------------------------------------
@@ -839,7 +876,7 @@ class Library:
         """Étude du field : le leakfinding des réguliers et des récréatifs, les bluffs des réguliers (heads-up), tes
         adversaires et leur type."""
         if page not in FIELD_PAGES:
-            raise KeyError(page)
+            raise NotFound(page)
         if page == "bluffs":
             return self.self_page("bluffs")
         if not self.hands and not self.ring:
@@ -933,7 +970,7 @@ class Library:
     def field_group(self, style: str, table_format: Optional[str] = None) -> str:
         """La fiche d'un groupe de récréatifs (un style) : ses joueurs, son plan, ses leaks et ses lignes réunis."""
         if style not in field.STYLES:
-            raise KeyError(style)
+            raise NotFound(style)
         fmt = self._field_format(table_format)
         min_hands = settings.load()["min_hands"]
         rows = [r for r in self._field_rows(fmt) if r["info"]["kind"] == "rec" and r["hands"] >= min_hands]
@@ -1098,14 +1135,17 @@ class Library:
         """Une page d'un joueur de référence : « comparaison » (toi et lui), « lignes » (sa value et ses bluffs), ou une
         page de son jeu analysée comme les tiennes (bilan, tables, préflop, mains de départ)."""
         if page not in REFERENCE_PAGES:
-            raise KeyError(page)
+            raise NotFound(page)
         lib = self.reference(ident)
         if not table_format and lib.leak_formats():  # par défaut, le format où il a le plus de mains
             table_format = max(lib.leak_formats(), key=lambda f: f[1])[0]
-        if page not in ("comparaison", "lignes"):  # son jeu, analysé comme le tien : « tu » le désigne
-            note = (f'<p class="note" style="margin:0 0 12px">Le jeu de <b>{escape(lib.hero or "")}</b>, analysé comme le '
-                    "tien : ici, « ton » et « tes » le désignent.</p>")
-            return lib.self_page(page, table_format=table_format).replace("<main>\n", "<main>\n" + note, 1)
+        if page not in ("comparaison", "lignes"):  # son jeu, analysé comme le tien
+            name = lib.hero or ""
+            note = (f'<p class="note" style="margin:0 0 12px">Le jeu de <b>{escape(name)}</b>, analysé comme le tien : '
+                    "les colonnes et les titres portent son nom, et dans les textes, « tu », « ton » et « tes » le "
+                    "désignent aussi.</p>")
+            html = as_reference(lib.self_page(page, table_format=table_format), name)
+            return html.replace("<main>\n", "<main>\n" + note, 1)
         fmt = lib._leak_format(table_format)  # UnknownPlayer s'il n'a pas de mains
 
         def build():
@@ -1137,19 +1177,28 @@ class Library:
             self._cache.clear()
         return {"ranges": ring_ranges.available()}
 
-    def ring_spots(self) -> list[dict]:
+    def ring_spots(self, limit: Optional[int] = None) -> list[dict]:
         """Tes coups des tables à plusieurs où il ne reste que deux joueurs au flop, les plus gros pots d'abord :
-        de quoi les ouvrir au solveur (ou pourquoi ils ne se résolvent pas encore)."""
-        rows = []
+        de quoi les ouvrir au solveur (ou pourquoi ils ne se résolvent pas encore). limit : seuls les premiers sont
+        préparés pour le solveur (status, pot_type ; les autres : None), la page n'en montre pas plus."""
+        found = []
         for h in self.ring:
             pair = postflop.flop_pair(h)
-            if not pair or self.hero not in pair:
-                continue
-            villain = pair[1] if pair[0] == self.hero else pair[0]
-            try:
-                status, pot_type = None, postflop.build_spot(h, self.hero).pot_type
-            except postflop.Unsupported as exc:
-                status, pot_type = str(exc), None
+            if pair and self.hero in pair:
+                found.append((h, pair[1] if pair[0] == self.hero else pair[0]))
+        found.sort(key=lambda hv: -round(hv[0].total_pot / hv[0].bb, 1))
+        rows = []
+        for k, (h, villain) in enumerate(found):
+            status = pot_type = None
+            if limit is None or k < limit:
+                try:
+                    pot_type = postflop.build_spot(h, self.hero).pot_type
+                except postflop.Unsupported as exc:
+                    status = str(exc)
+                except Exception:  # noqa: BLE001 — un coup que le solveur ne sait pas lire : la page reste
+                    print(f"Coup {h.hand_id} illisible pour le solveur :", file=sys.stderr)
+                    traceback.print_exc()
+                    status = "Coup illisible pour le solveur (détails dans le terminal)"
             pre = [a for a in h.actions if a.street == "preflop" and a.kind in (RAISE, CALL)]
             rows.append({"id": h.hand_id, "date": h.date, "format": h.table_format, "hero": h.position(self.hero),
                          "villain": h.position(villain), "line": ring_ranges.describe([(h.position(a.player), a.kind)
@@ -1158,7 +1207,7 @@ class Library:
                          "pot_bb": round(sum(a.amount for a in h.actions if a.street == "preflop") / h.bb, 1),
                          "total_bb": round(h.total_pot / h.bb, 1), "net_bb": round(h.net(self.hero) / h.bb, 1),
                          "status": status})
-        return sorted(rows, key=lambda r: -r["total_bb"])
+        return rows
 
     def find_hand(self, hand_id: str) -> Optional[tuple[Hand, str]]:
         """Une main et son joueur : parmi les tiennes, puis celles des élèves et de tes joueurs de référence."""
@@ -1590,7 +1639,7 @@ class Library:
 
         Un flop de la série sans tailles choisies passe d'abord par le choix des tailles (long)."""
         if not studyspots.is_series(family):
-            raise KeyError(family)
+            raise NotFound(family)
         try:
             if family in studyspots.RING_FAMILIES:
                 studyspots.ring_spot_ranges(family)  # tes charts 6-max

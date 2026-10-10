@@ -170,6 +170,27 @@ class IncrementalImportTest(IsolatedHome):
         full.assert_called_once()
 
 
+class PageCacheTest(IsolatedHome):
+    def test_reload_during_a_build(self):
+        """Les mains changent pendant un long calcul (un import, la période…) : la page est rendue à qui l'a demandée,
+        sans rester dans le cache de la nouvelle version (autrefois une KeyError : « Page introuvable »)."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        shutil.copy(FIXTURE, Path(tmp.name) / "sample.txt")
+        lib = Library(tmp.name)
+        before = lib.version
+
+        def build():
+            with lib._lock:
+                lib._select()  # le cache se vide, nouvelle version
+            return "page"
+
+        self.assertEqual(lib._cached(("essai",), build), "page")
+        self.assertEqual(lib.version, before + 1)
+        self.assertFalse([key for key in lib._cache if key[1:] == ("essai",)])
+        self.assertEqual(lib._cached(("essai",), lambda: "neuve"), "neuve")
+
+
 class WarmUpTest(IsolatedHome):
     def test_pages_ready(self):
         tmp = tempfile.TemporaryDirectory()

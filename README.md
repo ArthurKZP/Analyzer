@@ -181,13 +181,16 @@ Pour chaque décision (tes cartes sont toujours connues ; les siennes seulement 
 - **hors range** : le solveur n'amène jamais cette main à ce nœud (ex. un 4bet face à un 3bet avec une main
   qu'il n'ouvre pas) ; ces décisions sont exclues des fréquences.
 
-La page commence par **En bref** : les trois situations qui s'écartent le plus de la théorie, une ligne chacune
-(« Big blind face à l'open : 3bet trop souvent (27 % au lieu de 19 %) ; 3bet au lieu de call avec A7s, A6s,
-K9s… (19 fois) »), classées par le nombre de mains jouées autrement ; les autres sont comptées, et le détail de
-la comparaison est replié. Elle montre ensuite, par nœud, la grille du solveur (couleurs = actions, hauteur = part
-de la main qui arrive ici) avec tes décisions par main (✕ = écart), tes fréquences face à celles du solveur
-**avec exactement les mêmes mains**, et la liste des écarts avec un lien « rejouer ». Pour l'adversaire : ses
-fréquences globales face au solveur et les mains montrées qu'il joue autrement.
+La page commence par **En bref** : les trois situations qui s'écartent le plus de la théorie, classées par le
+nombre de mains jouées autrement, chacune en deux temps. **Le leak**, ce que tu joues : « Trop de 3bet : 27 % de
+tes décisions ici, contre 19 % pour le solveur avec les mêmes mains. Surtout : 3bet au lieu de call avec A7s, A6s,
+K9s… (19 fois). » **Le correctif**, ce qu'il faut jouer à la place : « Moins de 3bet, vers 19 % ici : commence par
+A7s, A6s, K9s… (call plutôt que 3bet). » Les autres situations sont comptées, et le détail de la comparaison est
+replié ; un écart n'est pas toujours une fuite (le Leakfinding vérifie ce qu'il coûte en jeu). Elle montre
+ensuite, par nœud, la grille du solveur (couleurs = actions, hauteur = part de la main qui arrive ici) avec tes
+décisions par main (✕ = écart), tes fréquences face à celles du solveur **avec exactement les mêmes mains**, et la
+liste des écarts avec un lien « rejouer ». Pour l'adversaire : ses fréquences globales face au solveur et les
+mains montrées qu'il joue autrement.
 
 Limites : la lecture des captures est précise à environ 2 % ; la solution est à 100bb et avec ces tailles,
 alors que ta profondeur et vos tailles réelles peuvent différer (la page les affiche). Les pots limpés et
@@ -872,8 +875,9 @@ sont décochés dans *Paramètres › Toi*, marqués « joueur de référence »
   range équilibrée pour sa taille de mise (un tiers pour une mise du pot). Puis ses bluffs et sa value fine les plus
   récents, main par main (board, ses cartes, la suite, son résultat), à revoir au solveur quand il ne restait que
   deux joueurs au flop.
-- **Bilan**, **Tables à plusieurs**, **Préflop**, **Mains de départ** : son jeu analysé comme le tien (« ton », « tes »
-  le désignent), courbe de résultats comprise.
+- **Bilan**, **Tables à plusieurs**, **Préflop**, **Mains de départ** : son jeu analysé comme le tien, courbe de
+  résultats comprise : les colonnes et les titres portent son nom (« Toi » devient son nom, « Tes statistiques »
+  « Ses statistiques »), et dans les textes, « tu », « ton » et « tes » le désignent.
 
 Code : `analyzer/reference.py` (résultats, comparaison, lignes), `analyzer/app/reference_page.py` (pages),
 `Library.reference` (ses mains, lues dans ton espace).
@@ -1291,6 +1295,7 @@ analyzer/
   backup.py            sauvegarde et restauration de la base et des études (commande `sauvegarde`)
   blobs.py             stockage des gros fichiers (arbres des études) : un dossier ici, un stockage objet en ligne
   store.py             cache sur disque des calculs longs (SQLite : mains lues, équités, clés des spots)
+  errors.py            une demande qui ne désigne rien (NotFound : « introuvable »), à part des erreurs d'analyse
   memory.py            grosse base de mains : ramasse-miettes en pause pendant un chargement, mains mises à l'écart
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
   field.py             étude du field : leaks à exploiter d'un adversaire, sa value et ses bluffs par ligne, style

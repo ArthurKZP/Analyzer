@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from .. import NAME, aliases, db
 from ..db import hands as db_hands
+from ..errors import NotFound
 from ..theory import postflop, preflop_tree, ring_tree, studyspots
 from . import trainer
 from .library import Library, UnknownPlayer
@@ -203,7 +204,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._download(student.report_pptx(self._format()),
                                           self._report_name(self._format(), parts[1], "pptx"), PPTX)
                 if parts[2] not in STUDENT_PAGES:
-                    raise KeyError(parts[2])
+                    raise NotFound(parts[2])
                 if parts[2] == "leaks":
                     return self._html(student.leaks_page(table_format=self._format()))
                 return self._html(student.self_page(parts[2], table_format=self._format()))
@@ -266,7 +267,7 @@ class Handler(BaseHTTPRequestHandler):
                                                                    or studyspots.is_ident(parts[1])):
                 page = (STATIC / "explorer.html").read_text(encoding="utf-8")
                 return self._html(page.replace("__HAND__", html.escape(parts[1], quote=True)))
-        except (UnknownPlayer, KeyError):
+        except NotFound:  # (une KeyError pendant un calcul est une erreur d'analyse, plus bas)
             return self._error(404, "Page introuvable.")
         except ConnectionError:
             self.close_connection = True

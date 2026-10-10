@@ -21,6 +21,7 @@ from typing import Callable, Optional
 from .. import db
 from ..cards import RANK_VALUE
 from ..db import documents
+from ..errors import NotFound
 from . import postflop, sizing
 from .preflop import Solution, load_solution
 
@@ -143,7 +144,7 @@ def ring_spot_ranges(family: str) -> dict[str, dict[str, float]]:
     from . import ring_ranges
     info = ring_family(family)
     if info is None:
-        raise KeyError(family)
+        raise NotFound(family)
     found = ring_ranges.lookup(RING_FORMAT, list(info["steps"]))
     if found is None or any(p not in found[1] for p in (info["oop"], info["ip"])):
         raise postflop.Unsupported(f"Pas de ranges 6-max pour « {ring_ranges.describe(list(info['steps']))} » : "
@@ -203,7 +204,7 @@ def family_info(family: str) -> dict:
         return FAMILIES[family]
     info = ring_family(family)
     if info is None:
-        raise KeyError(family)
+        raise NotFound(family)
     return info
 
 

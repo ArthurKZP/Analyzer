@@ -153,6 +153,9 @@ class HeadsUpPotTest(unittest.TestCase):
             rows = lib.ring_spots()
             self.assertEqual([(r["format"], r["hero"], r["villain"], r["status"]) for r in rows],
                              [("3-max", "BB", "BTN", None)])
+            self.assertIsNotNone(rows[0]["pot_type"])
+            unprepared = lib.ring_spots(0)  # au-delà de la limite : pas préparés pour le solveur (la page n'en montre pas)
+            self.assertEqual([(r["id"], r["status"], r["pot_type"]) for r in unprepared], [(rows[0]["id"], None, None)])
             state = lib.explorer_state(rows[0]["id"])
             meta = state["meta"]
             self.assertEqual((meta["positions"], meta["hero_oop"], meta["table_format"]), (["BB", "BTN"], True, "3-max"))

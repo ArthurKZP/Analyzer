@@ -572,6 +572,16 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/eleves", json.dumps({"name": ""}), headers)[0], 400)
         self.assertEqual(self.request("GET", "/moi/leaks")[0], 200)
 
+    def test_analysis_error_is_not_a_missing_page(self):
+        """Une KeyError pendant un calcul est une erreur d'analyse (500, le détail dans le terminal), pas « Page
+        introuvable »."""
+        import io
+        with mock.patch.object(Library, "self_page", side_effect=KeyError("bug")), \
+                mock.patch("sys.stderr", io.StringIO()) as err:
+            self.assertEqual(self.request("GET", "/moi/bilan")[0], 500)
+        self.assertIn("KeyError: 'bug'", err.getvalue())
+        self.assertEqual(self.request("GET", "/moi/inconnue")[0], 404)
+
     def test_not_found(self):
         for path in ("/p/Personne/plan", "/p/Villain/autre", "/static/server.py",
                      "/static/..%2Fserver.py", "/rien"):

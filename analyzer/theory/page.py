@@ -66,6 +66,12 @@ PAGE_STYLE = """
 .dev-group table { margin-top: 6px; }
 .bullets { margin: 0; padding-left: 18px; }
 .bullets li { margin-bottom: 6px; }
+.brief { list-style: none; margin: 0; padding: 0; }
+.brief > li { margin: 0 0 12px; }
+.brief-row { display: flex; gap: 8px; align-items: baseline; margin-top: 4px; }
+.brief-tag { flex: 0 0 100px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.brief-tag.leak { color: var(--alert); }
+.brief-tag.fix { color: var(--good); }
 details.brief-more { margin: 6px 0 0; border: none; background: none; font-size: 13px; }
 details.brief-more summary { padding: 0; color: var(--muted); border: none; }
 details.brief-more .note { margin: 6px 0 0; }
@@ -181,10 +187,24 @@ def _replay(spots_href: str, hand: Hand) -> str:
 MAX_BRIEF = 3  # situations dans « En bref » (le détail de chacune suit, nœud par nœud)
 
 
-def brief_points(summaries: list[NodeSummary], limit: int = MAX_BRIEF) -> tuple[list[str], int]:
-    """« En bref » : une ligne (HTML) par situation qui s'écarte de la théorie, les plus importantes d'abord (mains
+def _of(word: str) -> str:
+    """« de 3bet », « d'open »."""
+    return f"d'{word}" if word[:1].lower() in "aeiouyh" else f"de {word}"
+
+
+def _cap(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def brief_points(summaries: list[NodeSummary], limit: int = MAX_BRIEF, ref: str = "solveur") -> tuple[list[str], int]:
+    """« En bref » : une entrée (HTML) par situation qui s'écarte de la théorie, les plus importantes d'abord (mains
     jouées autrement : l'écart de fréquence rapporté aux décisions, ou les écarts main par main), au plus limit ; et
-    le nombre d'autres situations qui s'en écartent."""
+    le nombre d'autres situations qui s'en écartent.
+
+    Chaque entrée sépare le leak (ce que tu joues : ta fréquence face à celle de la théorie avec les mêmes mains, et
+    l'écart main par main le plus courant) du correctif (ce qu'il faut jouer à la place, en commençant par ces
+    mains)."""
+    theory = "le solveur" if ref == "solveur" else "les charts"
     found = []
     for s in summaries:
         n = len(s.in_range)
@@ -197,21 +217,36 @@ def brief_points(summaries: list[NodeSummary], limit: int = MAX_BRIEF) -> tuple[
         groups = [(k, g) for k, g in s.deviations() if len(g) >= 3]
         if not gaps and not groups:
             continue
-        parts = []
+        leak, fix = [], []
         weight = 0.0
-        if gaps:
-            a, act, exp = max(gaps, key=lambda g: abs(g[1] - g[2]))
-            parts.append(f"{escape(node.word(a))} {'trop souvent' if act > exp else 'pas assez'} "
-                         f"({num(act, 0)}&nbsp;% au lieu de {num(exp, 0)}&nbsp;%)")
+        gap = max(gaps, key=lambda g: abs(g[1] - g[2])) if gaps else None
+        if gap:
+            a, act, exp = gap
+            word = escape(node.word(a))
+            leak.append(f"{'Trop' if act > exp else 'Pas assez'} {_of(word)} : {num(act, 0)}&nbsp;% de tes décisions "
+                        f"ici, contre {num(exp, 0)}&nbsp;% pour {theory} avec les mêmes mains.")
+            fix.append(f"{'Plus' if act < exp else 'Moins'} {_of(word)}, vers {num(exp, 0)}&nbsp;% ici")
             weight = abs(act - exp) * n / 100
         if groups:
             (action, best), items = groups[0]
             combos = _sort_combos([d.combo for d in items])
-            shown = ", ".join(combos[:3]) + ("…" if len(combos) > 3 else "")
-            parts.append(f"{escape(node.word(action))} au lieu de {escape(node.word(best))} avec {escape(shown)} "
-                         f"({len(items)} fois)")
+            shown = escape(", ".join(combos[:3]) + ("…" if len(combos) > 3 else ""))
+            played, wanted = escape(node.word(action)), escape(node.word(best))
+            leak.append(f"{'Surtout : ' if gap else ''}{played if gap else _cap(played)} au lieu de {wanted} avec "
+                        f"{shown} ({len(items)} fois).")
+            same_way = gap and ((gap[1] < gap[2] and best == gap[0]) or (gap[1] > gap[2] and action == gap[0]))
+            if same_way:  # ces mains sont le premier pas du correctif
+                fix[0] += f" : commence par {shown} ({wanted} plutôt que {played})"
+            else:
+                fix.append(f"avec {shown} : {wanted} plutôt que {played}")
             weight = max(weight, len(items))
-        found.append((weight, f"<b>{escape(node.label)}</b> : " + " ; ".join(parts)))
+        elif gap:
+            fix[0] += " (la grille de la situation, plus bas, montre quelles mains)"
+        entry = (f'<b>{escape(node.label)}</b> <span class="muted">· {n} décision{"s" if n > 1 else ""}</span>'
+                 f'<div class="brief-row"><span class="brief-tag leak">Le leak</span><span>{" ".join(leak)}</span></div>'
+                 f'<div class="brief-row"><span class="brief-tag fix">Le correctif</span>'
+                 f'<span>{_cap(" ; ".join(fix))}.</span></div>')
+        found.append((weight, entry))
     found.sort(key=lambda x: -x[0])
     return [line for _, line in found[:limit]], max(0, len(found) - limit)
 
@@ -219,7 +254,7 @@ def brief_points(summaries: list[NodeSummary], limit: int = MAX_BRIEF) -> tuple[
 def _brief(summaries: list[NodeSummary], ref: str, facts: str, more: str) -> str:
     """La section « En bref » : les écarts principaux, une ligne de repères (facts) et le détail de la comparaison
     (more), replié."""
-    points, rest = brief_points(summaries)
+    points, rest = brief_points(summaries, ref=ref)
     if points:
         items = "".join(f"<li>{p}</li>" for p in points)
         if rest:
@@ -227,8 +262,9 @@ def _brief(summaries: list[NodeSummary], ref: str, facts: str, more: str) -> str
                       "à revoir, nœud par nœud plus bas.</li>")
     else:
         items = f"<li>Pas d'écart marqué par rapport {'au solveur' if ref == 'solveur' else 'aux charts'}.</li>"
-    return (f'<h2>En bref</h2>\n<div class="card"><ul class="bullets">{items}</ul>'
-            f'<p class="note" style="margin-bottom:0">{facts}</p>'
+    return (f'<h2>En bref</h2>\n<div class="card"><ul class="brief">{items}</ul>'
+            f'<p class="note" style="margin-bottom:0">{facts} Un écart à la théorie n\'est pas toujours une fuite : '
+            "le Leakfinding vérifie ce qu'il coûte (ou rapporte) en jeu.</p>"
             f'<details class="brief-more"><summary>Comment c\'est comparé</summary><p class="note">{more}</p></details>'
             "</div>")
 

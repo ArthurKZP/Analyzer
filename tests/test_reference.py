@@ -40,6 +40,18 @@ def write_two_heroes(folder: Path) -> None:
         (folder / f"modele_{src.name}").write_text(as_model(text), encoding="utf-8")
 
 
+class RelabelTest(unittest.TestCase):
+    def test_as_reference(self):
+        from analyzer.app.library import as_reference
+        page = ('<th class="num">Toi</th><th>Toi (médiane)</th><h2>Tes statistiques</h2><div class="label">Ton '
+                'résultat</div><h3>Ta main</h3><th>Ce que tu as</th><p>Tes mains</p>'
+                '<script>const t = "<th>Toi</th>";</script>')
+        self.assertEqual(as_reference(page, "A&B"),
+                         '<th class="num">A&amp;B</th><th>A&amp;B (médiane)</th><h2>Ses statistiques</h2>'
+                         '<div class="label">Son résultat</div><h3>Sa main</h3><th>Ce que tu as</th><p>Tes mains</p>'
+                         '<script>const t = "<th>Toi</th>";</script>')
+
+
 class AnalysisTest(unittest.TestCase):
     def setUp(self):
         self.hands = parse_text((SITES / "pokerstars.txt").read_text(encoding="utf-8"))
@@ -132,8 +144,14 @@ class LibraryReferenceTest(IsolatedHome):
             self.assertIn("Toutes les fréquences", page)
             self.assertIn("Toutes les fréquences", lib.reference_page("le-modele", "comparaison", "ring"))
             self.assertIn("Value et bluffs", lib.reference_page("le-modele", "lignes", "ring"))
-            self.assertIn("analysé comme le tien", lib.reference_page("le-modele", "bilan", "HU"))
+            bilan = lib.reference_page("le-modele", "bilan", "HU")
+            self.assertIn("analysé comme le tien", bilan)
             self.assertIn("analysé comme le tien", lib.reference_page("le-modele", "tables"))
+            # ses colonnes et ses titres le nomment (pas « Toi ») ; les scripts restent tels quels
+            self.assertIn('<th class="num">Le modèle</th>', bilan)
+            self.assertIn("<h2>Ses statistiques</h2>", bilan)
+            self.assertNotIn('<th class="num">Toi</th>', bilan)
+            self.assertNotIn('<th class="num">Toi</th>', lib.reference_page("le-modele", "preflop", "HU"))
             with self.assertRaises(KeyError):
                 lib.reference_page("le-modele", "leaks")
             with self.assertRaises(UnknownPlayer):

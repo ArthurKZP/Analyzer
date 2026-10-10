@@ -7,6 +7,7 @@ from typing import Optional
 from urllib.parse import quote
 
 from .. import NAME
+from ..errors import NotFound
 from ..report import cards_html, html_page, num
 from ..theory import postflop, sizing, studyspots
 
@@ -598,7 +599,7 @@ def build_studies_page(embed: bool = True, section: Optional[str] = None) -> str
     """Toutes les études, ou une seule section (onglets de l'application) : hu (SRP, pots 3bet et 4bet heads-up), 6max
     ou coups."""
     if section is not None and section not in SECTIONS:
-        raise KeyError(section)
+        raise NotFound(section)
     studies = postflop.list_studies()
     total = sum(s["size"] for s in studies)
     if section is None:
