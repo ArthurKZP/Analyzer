@@ -249,8 +249,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.player_page(parts[1], parts[2]))
             if parts == ["etudes"]:
                 return self._html(build_studies_page(embed=True))
-            if parts == ["etudes", "plan"]:
-                return self._html(library.plan_page())
+            if parts == ["etudes", "plan"]:  # (« ?limites=micro » : le field de ce niveau)
+                return self._html(library.plan_page(self._stakes()))
             if parts == ["api", "plan"]:
                 return self._json(library.plan_state())
             if parts == ["api", "coach"]:

@@ -487,8 +487,27 @@ class Coach:
 
         def cards(rows: list[dict], defender: bool = False) -> list[dict]:
             key = "fold_pct" if defender else "mise_pct"
-            return [{"carte": r["label"], key: pct(r["fold"] if defender else r["aggr"]),
-                     "regles": rules(r["rules"], defender)} for r in rows]
+            out = []
+            for r in rows:
+                row = {"carte": r["label"], key: pct(r["fold"] if defender else r["aggr"]),
+                       "regles": rules(r["rules"], defender)}
+                if r.get("sizes"):  # les tailles jouées à cette carte, de la plus jouée à la moins jouée
+                    row["tailles"] = {x["label"] + (f" ({'/'.join(map(str, x['pcts']))} %)" if x["pcts"] else ""):
+                                      f"{pct(x['share'])} % des mises" for x in r["sizes"]}
+                out.append(row)
+            return out
+
+        def levels(found: Optional[dict]) -> Optional[dict]:
+            """Les niveaux du plan (du plus simple au plus précis) : la règle du niveau 1, la perte de chacun."""
+            if not found:
+                return None
+            sizes = found["sizes"]
+            first = found["steps"][0]["rules"]["tous"]
+            return {"flops": found["flops"],
+                    "niveau_1": {hk: coach.class_text(r["class"], sizes) for hk, r in first.items()},
+                    "perte_pct_du_pot": {st["key"]: round(100 * st["loss"], 1) for st in found["steps"]},
+                    "actions_de_toute_la_range": ({coach.class_text(c, sizes): round(100 * x, 1)
+                                                   for c, x in found.get("options", [])} or None)}
         groups = []
         for g in plan["groups"]:
             at, d = g["attack"], g["defense"]
@@ -519,6 +538,10 @@ class Coach:
                 "attaquant": plan["who"], "defenseur": plan["other"],
                 "strategies": {st["label"]: {"definition": st["text"], "flops": st["flops"]} for st in plan["strategies"]},
                 "familles_de_mains": {label: text for _, label, _, text in coach.GROUPS},
+                "niveaux": {"definition": "plans simplifiés, du plus simple (une action pour toute la range sur tous les "
+                                          "flops) au plus précis (par type de flop et famille de mains) ; perte : en % "
+                                          "du pot par main, face au solveur",
+                            "attaque": levels(plan["levels"]["attack"]), "defense": levels(plan["levels"]["defense"])},
                 "groupes": groups}
 
     @staticmethod

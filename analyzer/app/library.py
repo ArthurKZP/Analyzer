@@ -2058,8 +2058,41 @@ class Library:
                 self.solves.cancel(view["job"])
         return self.plan_state()
 
-    def plan_page(self) -> str:
-        return build_coach_page(self.plan_state(), villains=tuple(o["name"] for o in self.opponents()))
+    def plan_field(self, band: Optional[str] = None) -> dict:
+        """Les populations de l'Étude du field, pour ajuster le plan de jeu (field_plan) : par format de tes mains, à
+        un niveau de limites (celui demandé, sinon celui où tu as le plus de mains), les réguliers, les récréatifs et
+        chaque style de récréatifs (ceux qui ont assez de mains pour en avoir un), avec leur étude."""
+        out = {}
+        min_hands = settings.load()["min_hands"]
+        for fmt, _ in self.leak_formats():
+            found = self.field_bands(fmt)
+            chosen = stakes.choose(band, found)
+            if chosen is None:
+                continue
+            rows = self._field_rows(fmt, chosen)
+            populations = []
+            for kind, label in (("reg", "Les réguliers"), ("rec", "Les récréatifs")):
+                names = tuple(r["name"] for r in rows if r["info"]["kind"] == kind)
+                if names:
+                    populations.append({"key": kind, "label": label, "players": len(names),
+                                        "study": self.field_study(fmt, names, chosen)})
+            styles: dict[str, list[str]] = {}
+            for r in rows:
+                if r["info"]["kind"] == "rec" and r["hands"] >= min_hands:
+                    style = self.field_study(fmt, (r["name"],), chosen).style[0]
+                    if style != "autre":
+                        styles.setdefault(style, []).append(r["name"])
+            for style in field.STYLE_ORDER:
+                if style in styles:
+                    label = "Récréatifs " + field.STYLES[style].name.lower()
+                    populations.append({"key": f"rec-{style}", "label": label, "players": len(styles[style]),
+                                        "study": self.field_study(fmt, tuple(styles[style]), chosen)})
+            out[fmt] = {"band": chosen, "bands": found, "populations": populations}
+        return out
+
+    def plan_page(self, band: Optional[str] = None) -> str:
+        return build_coach_page(self.plan_state(), villains=tuple(o["name"] for o in self.opponents()),
+                                field=self.plan_field(band))
 
     # --- analyse des mains jouées ---------------------------------------------------
     def review_state(self, villain: Optional[str] = None, start: bool = False) -> dict:

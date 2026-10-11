@@ -1,9 +1,11 @@
 """Page « Plan de jeu suggéré » : les études résolues réduites à des règles simples (voir theory/coach.py), en
 heads-up et aux tables à plusieurs (6-max, une famille par paire de positions et type de pot).
 
-Pour chaque famille : en attaque, les flops regroupés en trois stratégies de c-bet (miser range, stratégie mixte,
-checker range) et par taille, avec des flops en exemple (ouverts dans l'explorateur) ; en défense, la réponse de
-l'autre joueur à chacun de ces groupes."""
+Pour chaque famille : en attaque, les niveaux du plan (du plus simple au plus précis, chacun avec ce qu'il coûte),
+puis les flops regroupés en trois stratégies de c-bet (miser range, stratégie mixte, checker range) et par taille,
+avec des flops en exemple (ouverts dans l'explorateur), et la suite à la turn et à la river selon la carte (la taille
+préférée comprise) ; en défense, la réponse de l'autre joueur ; contre le field, le plan ajusté aux leaks d'une
+population de l'Étude du field (field_plan)."""
 from __future__ import annotations
 
 import json
@@ -11,7 +13,9 @@ from html import escape
 from typing import Optional
 from urllib.parse import quote
 
-from ..report import cards_html, html_page
+from .. import field_plan, stakes
+from ..field import STYLES
+from ..report import cards_html, html_page, num
 from ..theory import coach, postflop, ring_ranges, studyspots
 
 STYLE = """
@@ -81,6 +85,30 @@ a.st-size:hover { outline: 1px solid var(--series-1); }
 .pl-chip.mix { border-style: dashed; }
 table.pl-matrix td { vertical-align: middle; }
 table.pl-matrix .pl-chip { font-size: 12px; padding: 2px 8px; }
+.pl-size b { font-weight: 600; white-space: nowrap; }
+.pl-size div { font-size: 12px; color: var(--ink-2); }
+.pl-ladder { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; margin: 4px 0 6px; }
+.pl-ladder a { display: block; text-decoration: none; color: var(--ink); border: 1px solid var(--border);
+  border-radius: 10px; padding: 8px 10px; background: var(--surface); }
+.pl-ladder a:hover { border-color: var(--series-1); }
+.pl-ladder .n { font-size: 12px; color: var(--ink-2); }
+.pl-ladder .v { font-size: 18px; font-weight: 600; margin-top: 2px; }
+.pl-ladder .v small { font-size: 12px; font-weight: 400; color: var(--ink-2); }
+.pl-rule { font-size: 16px; font-weight: 600; margin: 4px 0 6px; }
+.pl-level h3 { margin-top: 16px; }
+table.pl-lv td { vertical-align: middle; font-size: 13px; }
+.pl-pops { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }
+.pl-pops button { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
+.pl-pops button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.pl-bands { font-size: 13px; margin: 0 0 8px; }
+.pl-bands a[aria-current="page"] { font-weight: 600; color: var(--ink); text-decoration: none; }
+ul.pl-tweaks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+ul.pl-tweaks li { border-left: 3px solid var(--axis); padding: 1px 0 1px 10px; font-size: 13px; }
+ul.pl-tweaks li.strong { border-left-color: var(--series-1); }
+ul.pl-tweaks .t { font-weight: 600; font-size: 14px; }
+ul.pl-tweaks .n { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.pl-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 12px; }
 """
 
 SCRIPT = """
@@ -103,14 +131,32 @@ SCRIPT = """
   var known = function (f) { return f && document.querySelector('.pl-fams button[data-fam="' + f + '"]'); };
   show(known(wanted) ? wanted : known(saved) ? saved : first.dataset.fam);
 
-  // Attaque ou défense, dans chaque famille
+  // Attaque, défense ou contre le field, dans chaque famille (« #…&cote=field » : celui-là d'emblée)
+  function side(b) {
+    var fam = b.closest('section.pl-fam');
+    fam.querySelectorAll('.pl-sides button').forEach(function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
+    fam.querySelectorAll('.pl-side').forEach(function (s) { s.hidden = s.dataset.side !== b.dataset.side; });
+  }
   document.querySelectorAll('.pl-sides button').forEach(function (b) {
-    b.addEventListener('click', function () {
-      var fam = b.closest('section.pl-fam');
-      fam.querySelectorAll('.pl-sides button').forEach(function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
-      fam.querySelectorAll('.pl-side').forEach(function (s) { s.hidden = s.dataset.side !== b.dataset.side; });
-    });
+    b.addEventListener('click', function () { side(b); });
   });
+  var cote = (location.hash.match(/cote=(\w+)/) || [])[1];
+  if (cote) document.querySelectorAll('.pl-sides button[data-side="' + cote + '"]').forEach(side);
+  // La population du field (réguliers, récréatifs, un style), retenue
+  function pop(key) {
+    document.querySelectorAll('.pl-pops').forEach(function (bar) {
+      var known = bar.querySelector('button[data-pop="' + key + '"]') ? key : bar.querySelector('button').dataset.pop;
+      bar.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', x.dataset.pop === known ? 'true' : 'false'); });
+      bar.parentNode.querySelectorAll('.pl-pop').forEach(function (s) { s.hidden = s.dataset.pop !== known; });
+    });
+    try { localStorage.setItem('analyzer-plan-pop', key); } catch (e) { /* choix non retenu */ }
+  }
+  document.querySelectorAll('.pl-pops button').forEach(function (b) {
+    b.addEventListener('click', function () { pop(b.dataset.pop); });
+  });
+  var savedPop = null;
+  try { savedPop = localStorage.getItem('analyzer-plan-pop'); } catch (e) { savedPop = null; }
+  if (document.querySelector('.pl-pops')) pop(savedPop || 'reg');
   // Un clic sur un groupe ouvre son détail et y descend
   document.querySelectorAll('a.pl-jump').forEach(function (a) {
     a.addEventListener('click', function () {
@@ -170,6 +216,8 @@ def _chip(rule: dict, defender: bool = False, label: bool = True) -> str:
             text = f"checke (mise {pct})"
         else:
             text = f"mélange (mise {pct})"
+        if kind != "check" and rule.get("size") in coach.SIZE_SHORT:
+            text += " · " + coach.SIZE_SHORT[rule["size"]]
         cls = {"bet": "up", "check": "down"}.get(kind, "mix")
     name = f'<b>{escape(rule["label"])}</b> ' if label else ""
     return (f'<span class="pl-chip {cls}" title="{escape(rule["label"])} : {_pct(rule["share"])} de la range">'
@@ -182,21 +230,41 @@ def _chips(rules: list[dict], defender: bool = False) -> str:
     return '<div class="pl-chips">' + "".join(_chip(r, defender) for r in rules) + "</div>"
 
 
+def _size_text(size: dict) -> str:
+    """« grosse (75 %) »."""
+    pcts = " / ".join(str(x) for x in size["pcts"])
+    return size["label"] + (f" ({pcts} %)" if pcts else "")
+
+
+def _sizes_cell(row: dict) -> str:
+    """La taille préférée à cette carte (sa part des mises), puis les autres."""
+    if not row["sizes"]:
+        return '<span class="muted">–</span>'
+    first, rest = row["sizes"][0], row["sizes"][1:]
+    others = " · ".join(f"{_size_text(x)} {_pct(x['share'])}" for x in rest if x["share"] >= 0.05)
+    return (f'<div class="pl-size"><b>{escape(_size_text(first))}</b> · {_pct(first["share"])} des mises'
+            + (f"<div>{escape(others)}</div>" if others else "") + "</div>")
+
+
 def _matrix(rows: list[dict], street: str, measure: str, defender: bool = False) -> str:
-    """Selon la carte de turn ou de river : la fréquence de mise (ou de fold) et ce que fait chaque famille."""
+    """Selon la carte de turn ou de river : la fréquence de mise (ou de fold), la taille préférée (mises) et ce que
+    fait chaque famille."""
     if not rows:
         return '<p class="muted">Pas encore de données.</p>'
     groups = [(k, label) for k, label, _, _ in coach.GROUPS if any(r["key"] == k for row in rows for r in row["rules"])]
     head = "".join(f"<th>{escape(label)}</th>" for _, label in groups)
+    size_head = "" if defender else "<th>Taille préférée</th>"
     body = []
     for row in rows:
         by = {r["key"]: r for r in row["rules"]}
         cells = "".join(f"<td>{_chip(by[k], defender, label=False) if k in by else ''}</td>" for k, _ in groups)
         value = row["fold"] if defender else row["aggr"]
+        size = "" if defender else f"<td>{_sizes_cell(row)}</td>"
         body.append(f'<tr><td><b>{escape(row["label"])}</b><div class="small muted">{escape(row["text"])}</div></td>'
-                    f'<td class="num">{_pct(value)}</td>{cells}</tr>')
+                    f'<td class="num">{_pct(value)}</td>{size}{cells}</tr>')
     return (f'<div class="scroll"><table class="stats pl-matrix"><thead><tr><th>{escape(street)}</th>'
-            f'<th class="num">{escape(measure)}</th>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>')
+            f'<th class="num">{escape(measure)}</th>{size_head}{head}</tr></thead><tbody>{"".join(body)}</tbody>'
+            "</table></div>")
 
 
 def _details_rules(rules: list[tuple[str, str]]) -> str:
@@ -278,9 +346,9 @@ def _attack(plan: dict, g: dict) -> str:
 <div class="pl-why">{escape(g["why"])}</div>
 <h3>Au flop, {escape(who)} mise {_pct(g["cbet"])} en {escape(g["size_text"])}</h3>
 {_chips(at["flop"])}
-<h3>À la turn, si la c-bet est payée</h3>
+<h3>À la turn, si la c-bet est payée : selon la carte, combien et quelle taille</h3>
 {_matrix(at["turn"], "Turn", "Continue")}
-<h3>À la river, après deux mises payées</h3>
+<h3>À la river, après deux mises payées : selon la carte, combien et quelle taille</h3>
 {_matrix(at["river"], "River", "Mise")}
 {_sub(f"Quand {who} checke le flop : c-bet retardée à la turn", delayed) if delayed else ""}
 {_sub(_cap(facing_raise), vs_xr) if vs_xr else ""}
@@ -335,14 +403,190 @@ def _table(plan: dict) -> str:
             f'<th class="num">Nuts</th></tr></thead><tbody>{rows}</tbody></table></div>')
 
 
+# --- Niveaux : du plus simple au plus précis -----------------------------------------------------------------------
+
+LEVEL_TITLES = {"une": "Une seule règle", "flop": "Selon le type de flop", "mains": "Selon le flop et tes mains",
+                "detail": "Selon le flop, en onze familles de mains"}
+DEFENSE_TITLES = {"une": "Une règle par famille de mains", "flop": "Selon le type de flop",
+                  "detail": "Selon le flop, en onze familles de mains"}
+ACTION_SHORT = {"fold": "folde", "check": "checke", "call": "paie", "small": "petite", "medium": "moyenne",
+                "big": "grosse", "overbet": "overbet", "raise": "relance", "allin": "tapis"}
+
+
+def _loss(x: float) -> str:
+    """Une perte en part du pot : « 1,8 % du pot »."""
+    return "moins de 0,1 % du pot" if x < 0.0005 else f"{num(100 * x, 1)} % du pot"
+
+
+def _action(cls: str, sizes: dict) -> str:
+    """« petite (33 %) », « checke », « paie »…"""
+    return ACTION_SHORT[cls] + (f" ({sizes[cls]} %)" if cls in sizes else "")
+
+
+def _action_chip(cls: str, sizes: dict, label: str = "") -> str:
+    kind = "down" if cls in ("check", "fold") else "flat" if cls == "call" else "up"
+    name = f"<b>{escape(label)}</b> " if label else ""
+    return f'<span class="pl-chip {kind}">{name}{escape(_action(cls, sizes))}</span>'
+
+
+def _range_rule(who: str, cls: str, sizes: dict) -> str:
+    """« Le bouton mise toute sa range en petite mise (33 %) » / « La SB checke toute sa range »."""
+    if cls == "check":
+        return f"{_cap(who)} checke toute sa range"
+    return f"{_cap(who)} mise toute sa range en {coach.class_text(cls, sizes)}"
+
+
+def _level_table(step: dict, sizes: dict, hands: list[tuple[str, str]]) -> str:
+    """Une règle par type de flop (et par famille de mains) : le tableau, avec la perte de chaque type."""
+    head = "".join(f"<th>{escape(label)}</th>" for _, label in hands)
+    rows = []
+    for cat in (c for c, _ in coach.CATEGORIES if c in step["rules"]):
+        rules = step["rules"][cat]
+        cells = "".join(f"<td>{_action_chip(rules[k]['class'], sizes) if k in rules else ''}</td>" for k, _ in hands)
+        flops = f'<span class="muted">({step["flops"][cat]})</span>'
+        rows.append(f'<tr><td>{escape(coach.CATEGORY_LABEL[cat])} {flops}</td>{cells}'
+                    f'<td class="num">{escape(_loss(step["by"][cat]))}</td></tr>')
+    return (f'<div class="scroll"><table class="stats pl-lv"><thead><tr><th>Flop (flops résolus)</th>{head}'
+            f'<th class="num">Perte</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>')
+
+
+def _ladder(levels: dict, titles: dict, anchor: str) -> str:
+    """Les niveaux côte à côte, avec ce que chacun coûte : un clic descend à son détail."""
+    tiles = "".join(
+        f'<a href="#{anchor}-{st["key"]}"><div class="n">Niveau {k} · {escape(titles[st["key"]])}</div>'
+        f'<div class="v">{escape(_loss(st["loss"]).replace(" du pot", ""))} <small>du pot perdu</small></div></a>'
+        for k, st in enumerate(levels["steps"], 1))
+    return f'<div class="pl-ladder">{tiles}</div>'
+
+
+def _levels_note(plan: dict, levels: dict) -> str:
+    older = plan["levels"]["older"]
+    more = (f" {older} flop(s) lu(s) par une version d'avant n'y sont pas encore : <b>Préparer le plan</b> les relit."
+            if older else "")
+    return (f'<p class="note">Perte : ce que coûte la règle face à la stratégie du solveur, en % du pot par main de la '
+            f'range, en moyenne sur les {levels["flops"]} flop(s) résolu(s) et lu(s), face à un adversaire qui joue '
+            "la stratégie du solveur sans s'adapter (un adversaire qui s'adapte ferait payer un peu plus). Commence par "
+            f"le niveau 1 et passe au suivant quand il est acquis.{more}</p>")
+
+
+def _levels_missing(plan: dict) -> str:
+    return ('<div class="card"><p class="note" style="margin:0">Pour chiffrer les niveaux du plus simple au plus '
+            f'précis, le coach doit relire tes études : {plan["levels"]["older"]} flop(s) lu(s) par une version '
+            "d'avant. Clique sur <b>Préparer le plan</b> en haut de la page.</p></div>")
+
+
+def _levels_attack(plan: dict) -> str:
+    levels = plan["levels"]["attack"]
+    if not levels:
+        return _levels_missing(plan)
+    who, sizes, fam = plan["who"], levels["sizes"], plan["family"]
+    one, by_flop, by_hands, detail = levels["steps"]
+    rule = one["rules"]["tous"]["range"]["class"]
+    options = " ".join(f'<span class="pl-chip {"down" if c == "check" else "up"}"><b>{escape(_action(c, sizes))}</b> '
+                       f'{escape(_loss(x))}</span>' for c, x in levels["options"])
+    hands = [(k, label) for k, label, _, _ in coach.GROUPS]
+    return (
+        f'<h2>Du plus simple au plus précis</h2><div class="card pl-level">{_ladder(levels, LEVEL_TITLES, "lv-" + fam)}'
+        f'<h3 id="lv-{fam}-une">Niveau 1 · {LEVEL_TITLES["une"]} : {escape(_loss(one["loss"]))}</h3>'
+        f'<p class="pl-rule">{escape(_range_rule(who, rule, sizes))}, sur tous les flops.</p>'
+        f'<p class="small" style="margin:0">Ce que coûte chaque action jouée par toute la range :</p>'
+        f'<div class="pl-chips">{options}</div>'
+        f'<h3 id="lv-{fam}-flop">Niveau 2 · {LEVEL_TITLES["flop"]} : {escape(_loss(by_flop["loss"]))}</h3>'
+        f'{_level_table(by_flop, sizes, [("range", "Toute la range")])}'
+        f'<h3 id="lv-{fam}-mains">Niveau 3 · {LEVEL_TITLES["mains"]} : {escape(_loss(by_hands["loss"]))}</h3>'
+        f'{_level_table(by_hands, sizes, hands)}'
+        f'<h3 id="lv-{fam}-detail">Niveau 4 · {LEVEL_TITLES["detail"]} : {escape(_loss(detail["loss"]))}</h3>'
+        '<p class="small">Les onze familles du détail (deux paires et mieux, overpair, top pair bon ou petit kicker…), '
+        "une action chacune par type de flop ; au-delà, le solveur mélange selon la main exacte : les stratégies "
+        "ci-dessous, puis l'explorateur.</p>"
+        f'{_levels_note(plan, levels)}</div>')
+
+
+def _levels_defense(plan: dict) -> str:
+    levels = plan["levels"]["defense"]
+    if not levels:
+        return ""
+    other, sizes, fam = plan["other"], levels["sizes"], plan["family"]
+    one, by_flop, detail = levels["steps"]
+    hands = [(k, label) for k, label, _, _ in coach.GROUPS]
+    rules = one["rules"]["tous"]
+    chips = " ".join(_action_chip(rules[k]["class"], sizes, label) for k, label in hands if k in rules)
+    return (
+        f'<h2>Face à la c-bet : du plus simple au plus précis</h2><div class="card pl-level">'
+        f'{_ladder(levels, DEFENSE_TITLES, "lvd-" + fam)}'
+        f'<h3 id="lvd-{fam}-une">Niveau 1 · {DEFENSE_TITLES["une"]} : {escape(_loss(one["loss"]))}</h3>'
+        f'<p class="small" style="margin:0">{escape(_cap(other))} face à la c-bet, sur tous les flops :</p>'
+        f'<div class="pl-chips">{chips}</div>'
+        f'<h3 id="lvd-{fam}-flop">Niveau 2 · {DEFENSE_TITLES["flop"]} : {escape(_loss(by_flop["loss"]))}</h3>'
+        f'{_level_table(by_flop, sizes, hands)}'
+        f'<h3 id="lvd-{fam}-detail">Niveau 3 · {DEFENSE_TITLES["detail"]} : {escape(_loss(detail["loss"]))}</h3>'
+        '<p class="small">Les onze familles du détail, une action chacune par type de flop ; au-delà, le solveur '
+        "mélange selon la main exacte.</p>"
+        f'{_levels_note(plan, levels)}</div>')
+
+
+# --- Contre le field ------------------------------------------------------------------------------------------------
+
+def _tweaks(items: list[dict]) -> str:
+    if not items:
+        return '<p class="muted small">Pas d\'écart net sur ces situations : joue le plan suggéré.</p>'
+    out = []
+    for it in items:
+        conf = "" if it["strong"] else ' <span class="conf c-à-confirmer">à confirmer</span>'
+        out.append(f'<li class="{"strong" if it["strong"] else ""}"><div class="t">{escape(it["title"])}{conf}</div>'
+                   f'<div>{escape(it["text"])}</div><div class="n">{escape(it["fact"])} : {escape(it["numbers"])}</div>'
+                   "</li>")
+    return f'<ul class="pl-tweaks">{"".join(out)}</ul>'
+
+
+def _field_population(plan: dict, pop: dict, band: str, words: str) -> str:
+    found = field_plan.adjustments(plan["baseline"], pop["study"], coach.aggressor_of(plan["family"]) == 1)
+    level = stakes.label(band)
+    return (
+        f'<div class="pl-pop" data-pop="{escape(pop["key"])}" hidden>'
+        f'<p class="note">{escape(pop["label"])} {words}, {escape(level[0].lower() + level[1:])} : '
+        f'{num(pop["study"].hands, 0)} mains, {pop["players"]} joueur(s) ; leurs leaks dans l\'Étude du field, face '
+        "aux repères d'un régulier solide de ces limites.</p>"
+        f'<div class="pl-cols"><div class="card"><h3 style="margin-top:0">Quand tu as l\'initiative '
+        f'({escape(plan["who"])})</h3>{_tweaks(found["attack"])}</div>'
+        f'<div class="card"><h3 style="margin-top:0">Quand tu défends ({escape(plan["other"])})</h3>'
+        f'{_tweaks(found["defense"])}</div></div></div>')
+
+
+def _field_side(plan: dict, info: Optional[dict]) -> str:
+    """Le plan ajusté aux leaks d'une population du field (au choix), en attaque et en défense."""
+    words = "aux tables à plusieurs" if plan["ring"] else "en heads-up"
+    if not info or not info["populations"]:
+        return (f'<div class="card"><p class="note" style="margin:0">Pas encore d\'adversaires {words} dans '
+                "l'Étude du field : importe des mains pour ajuster le plan à ceux que tu affrontes.</p></div>")
+    band = info["band"]
+    bands = ""
+    if len(info["bands"]) > 1:
+        links = " · ".join(
+            f'<a href="?limites={b}#famille={plan["family"]}&amp;cote=field"'
+            f'{" aria-current=page" if b == band else ""}>{escape(stakes.NAMES[b])} ({num(n, 0)} mains)</a>'
+            for b, n in info["bands"])
+        bands = f'<p class="pl-bands">Limites : {links}</p>'
+    buttons = "".join(f'<button type="button" data-pop="{escape(p["key"])}">{escape(p["label"])} '
+                      f'<span class="muted">({p["players"]})</span></button>' for p in info["populations"])
+    blocks = "".join(_field_population(plan, p, band, words) for p in info["populations"])
+    return (
+        "<h2>Contre le field : le plan suggéré, légèrement ajusté</h2>"
+        '<p class="note">Pars du plan suggéré (onglets En attaque et En défense) et applique ces ajustements contre '
+        "la population choisie : chacun vient d'un de leurs leaks, avec le chiffre du plan et celui à viser. « À "
+        "confirmer » : l'écart est net, l'échantillon encore petit.</p>"
+        f'{bands}<div class="pl-pops" role="group" aria-label="Population">{buttons}</div>{blocks}')
+
+
 def _legend() -> str:
     groups = " ; ".join(f"<b>{escape(label)}</b> : {escape(text)}" for _, label, _, text in coach.GROUPS)
     return (f'<p class="note">Les mains en quatre familles : {groups}. « Mélange » : le solveur joue les deux selon la '
-            'main exacte ; le pourcentage est sa fréquence de mise. Un flop en exemple ouvre son étude dans '
-            "l'explorateur, pour entrer dans le détail.</p>")
+            'main exacte ; le pourcentage est sa fréquence de mise, suivie de sa taille la plus jouée. Taille préférée '
+            "(turn et river) : la taille la plus jouée à cette carte et sa part des mises, puis les autres. Un flop en "
+            "exemple ouvre son étude dans l'explorateur, pour entrer dans le détail.</p>")
 
 
-def _family(plan: dict) -> str:
+def _family(plan: dict, field_info: Optional[dict] = None) -> str:
     if plan["ring"]:
         try:
             studyspots.ring_spot_ranges(plan["family"])
@@ -362,20 +606,26 @@ def _family(plan: dict) -> str:
     return f"""
 <p class="note">{escape(plan["label"])}. D'après <b>{plan["count"]}</b> flop(s) résolu(s) sur {total} dans la série ; plus
 il y en a, plus le plan est précis. {escape(_cap(who))} a l'initiative et attaque, {escape(other)} défend.</p>
-<div class="pl-sides" role="group" aria-label="Attaque ou défense">
+<div class="pl-sides" role="group" aria-label="Attaque, défense ou contre le field">
 <button type="button" data-side="attaque" aria-pressed="true">En attaque · {escape(who)}</button>
-<button type="button" data-side="defense" aria-pressed="false">En défense · {escape(other)}</button></div>
+<button type="button" data-side="defense" aria-pressed="false">En défense · {escape(other)}</button>
+<button type="button" data-side="field" aria-pressed="false">Contre le field</button></div>
 <div class="pl-side" data-side="attaque">
+{_levels_attack(plan)}
 <h2>Au flop : trois stratégies de c-bet</h2>
 <div class="card">{_overview(plan, "attaque")}{_legend()}</div>
 <h2>Stratégie par stratégie</h2>
 {attack}
 </div>
 <div class="pl-side" data-side="defense" hidden>
+{_levels_defense(plan)}
 <h2>Face à la c-bet, selon la stratégie {escape(_de(who))}</h2>
 <div class="card">{_overview(plan, "defense")}{_legend()}</div>
 <h2>Stratégie par stratégie</h2>
 {defense}
+</div>
+<div class="pl-side" data-side="field" hidden>
+{_field_side(plan, field_info)}
 </div>
 <h2>Les flops résolus</h2>
 <div class="card">{_table(plan)}
@@ -385,9 +635,10 @@ l'explorateur.</p></div>
 """
 
 
-def build_coach_page(state: dict, embed: bool = True, villains: tuple = ()) -> str:
+def build_coach_page(state: dict, embed: bool = True, villains: tuple = (), field: Optional[dict] = None) -> str:
     """state : bilan des plans (Library.plan_state) pour le bandeau de préparation ; villains : adversaires
-    proposés dans les questions d'exemple du coach."""
+    proposés dans les questions d'exemple du coach ; field : les populations de l'Étude du field par format
+    (Library.plan_field : {"HU" | "ring": {"band", "bands", "populations": [{"key", "label", "players", "study"}]}})."""
     charts = ring_ranges.solution(studyspots.RING_FORMAT) is not None
     families = coach.plan_families() if charts else tuple(studyspots.FAMILIES)
     plans = [coach.family_plan(f) for f in families]
@@ -412,13 +663,17 @@ def build_coach_page(state: dict, embed: bool = True, villains: tuple = ()) -> s
                     '<i>Mon jeu</i>) puis résous des flops dans <i>Études du solveur › 6-max</i>.</span></div>')
     tabs = "".join(rows)
     missing = state.get("missing", 0)
+    todo = (f"<b>{missing}</b> étude(s) à lire (ou à relire, pour chiffrer les niveaux du plan)" if missing
+            else "Toutes les études sont lues.")
     head = (f'<div class="card"><div class="pl-head" data-missing="{missing}">'
-            f'<span>{"<b>" + str(missing) + "</b> étude(s) pas encore lue(s) par le coach" if missing else "Toutes les études sont lues."}</span>'
+            f'<span>{todo}</span>'
             f'<button type="button" class="go pl-run"{" hidden" if not missing else ""}>Préparer le plan</button>'
             '<button type="button" class="pl-stop" hidden>Arrêter</button><span class="pl-status"></span></div>'
             '<p class="note">Chaque étude est ouverte une fois pour lire ses stratégies (quelques secondes en pot 4bet, '
             'environ une minute en SRP sur 4 cœurs) ; une étude résolue à partir de maintenant est lue tout de suite.</p></div>')
-    sections = "".join(f'<section class="pl-fam" data-fam="{p["family"]}" hidden>{_family(p)}</section>' for p in plans)
+    field = field or {}
+    sections = "".join(f'<section class="pl-fam" data-fam="{p["family"]}" hidden>'
+                       f'{_family(p, field.get("ring" if p["ring"] else "HU"))}</section>' for p in plans)
     suggestions = ["Résume-moi le plan de jeu en SRP", "Sur quels flops puis-je c-better toute ma range ?",
                    "Comment continuer à la turn après une c-bet payée ?"]
     ring = max((p for p in plans if p["ring"] and p["count"]), key=lambda p: p["count"], default=None)

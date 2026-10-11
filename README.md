@@ -1004,32 +1004,56 @@ flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de fl
   fois tes charts 6-max chargés ; une famille que tes charts ne couvrent pas dit pourquoi.
 
 - **Lecture des études** : chaque étude est ouverte une fois pour lire ses stratégies aux nœuds clés : c-bet,
-  réponse à la c-bet et au check-raise, 2e barrel à chaque turn, 3e barrel sur un échantillon de rivers (13
-  turns, toutes leurs rivers), c-bet retardée et probe après un flop checké. Les mains y sont regroupées par
-  famille (deux paires et mieux, overpair, top pair bon ou petit kicker, paire moyenne, petite paire, tirage
-  couleur, tirage quinte, gutshot ou backdoor, hauteur As ou Roi, rien), les turns et rivers par effet sur le
-  board (overcard, brique, board pairé, couleur possible, quinte possible). Une étude résolue est lue tout de
-  suite ; les anciennes, avec **Préparer le plan** (quelques secondes en pot 4bet, une minute environ en SRP).
-  Résultats dans la base (sauvegardée).
+  réponse à la c-bet et au check-raise, 2e barrel à chaque turn, 3e barrel sur un échantillon de rivers (13 turns,
+  toutes leurs rivers), c-bet retardée et probe après un flop checké. Les mains y sont regroupées par famille (deux
+  paires et mieux, overpair, top pair bon ou petit kicker, paire moyenne, petite paire, tirage couleur, tirage
+  quinte, gutshot ou backdoor, hauteur As ou Roi, rien), les turns et rivers par effet sur le board (overcard,
+  brique, board pairé, couleur possible, quinte possible). Au flop (c-bet et réponse à la c-bet), ce que vaut chaque
+  action pour chaque famille de mains : de quoi chiffrer les niveaux du plan. Une étude résolue est lue tout de
+  suite ; les anciennes, avec **Préparer le plan** (quelques secondes en pot 4bet, une minute environ en SRP) ; une
+  étude lue par une version d'avant reste affichée, et se relit de même pour avoir ses niveaux. Résultats dans la
+  base (sauvegardée).
+- **Du plus simple au plus précis** (en tête de l'attaque, et de la défense face à la c-bet) : des plans de plus en
+  plus fins, chacun avec ce qu'il coûte face à la stratégie du solveur (en % du pot par main, en moyenne sur les
+  flops lus, face à un adversaire qui ne s'adapte pas). En attaque : *niveau 1*, une seule règle, une action pour
+  toute la range sur tous les flops (« le bouton mise toute sa range en petite mise (33 %) », « la SB checke toute
+  sa range »), avec ce que coûte chaque autre action ; *niveau 2*, une action pour toute la range selon le type de
+  flop (haut, moyen ou bas ; sec, deux couleurs ou connecté ; pairé ; monotone) ; *niveau 3*, selon le type de flop
+  et les quatre familles de mains ; *niveau 4*, les onze familles ; au-delà, les stratégies du solveur (le détail
+  plus bas, puis l'explorateur). En défense face à la c-bet : une action par famille de mains, puis selon le type de
+  flop, puis en onze familles. Une règle ne prescrit qu'une action que tous ses flops ont dans leur arbre (pas de
+  « grosse mise » là où l'arbre n'a qu'une petite mise). Code : `coach.levels`.
 - **En attaque** (celui qui a l'initiative) : au flop, **trois stratégies de c-bet**, chacune précisée par sa
-  **taille** (petite, moyenne, grosse mise ou tapis, avec le % du pot de l'arbre) : *miser range* (c-bet de 70 %
-  et plus : une mise avec presque toute la range), *stratégie mixte* (de 35 à 70 % : on mise une partie des mains,
-  on checke les autres) et *checker range* (35 % et moins). Chaque groupe (stratégie et taille) montre sa
-  fréquence de c-bet, son nombre de flops et des flops résolus en exemple, de catégories différentes (haut, moyen
-  ou bas ; sec, deux couleurs ou connecté ; pairé ; monotone) : un clic ouvre l'étude dans l'explorateur pour
-  entrer dans le détail. Une stratégie sans flop dit pourquoi (par exemple : le bouton mise toujours au moins 40 %). Le
-  détail d'un groupe : tous ses flops, le pourquoi (avantage d'équité et de nuts), la règle au flop pour quatre
-  familles de mains, *fortes* (deux paires et mieux, overpair, top pair bon kicker), *moyennes* (top pair petit
-  kicker, paires moyennes et petites), *tirages* (couleur, quinte) et *rien* (hauteur, gutshots, backdoors), puis
-  à la turn et à la river selon la carte (overcard, brique, board pairé, couleur ou quinte possible), avec la
-  fréquence de mise ; repliés : la c-bet retardée, le jeu face au check-raise et le détail en onze familles.
+  **taille** (petite, moyenne, grosse mise ou tapis, avec le % du pot de l'arbre) : *miser range* (c-bet de 70 % et
+  plus : une mise avec presque toute la range), *stratégie mixte* (de 35 à 70 % : on mise une partie des mains, on
+  checke les autres) et *checker range* (35 % et moins). Chaque groupe (stratégie et taille) montre sa fréquence de
+  c-bet, son nombre de flops et des flops résolus en exemple, de catégories différentes (haut, moyen ou bas ; sec,
+  deux couleurs ou connecté ; pairé ; monotone) : un clic ouvre l'étude dans l'explorateur pour entrer dans le
+  détail. Une stratégie sans flop dit pourquoi (par exemple : le bouton mise toujours au moins 40 %). Le détail d'un
+  groupe : tous ses flops, le pourquoi (avantage d'équité et de nuts), la règle au flop pour quatre familles de
+  mains, *fortes* (deux paires et mieux, overpair, top pair bon kicker), *moyennes* (top pair petit kicker, paires
+  moyennes et petites), *tirages* (couleur, quinte) et *rien* (hauteur, gutshots, backdoors), puis à la turn et à la
+  river selon la carte (overcard, brique, board pairé, couleur ou quinte possible), avec la fréquence de mise et la
+  **taille préférée** (la plus jouée à cette carte, en % du pot de l'arbre, et sa part des mises, puis les autres ;
+  chaque famille de mains avec sa taille la plus jouée) ; repliés : la c-bet retardée, le jeu face au check-raise et
+  le détail en onze familles.
 - **En défense** (l'autre joueur), le même découpage vu d'en face : pour chaque groupe, ce que fait la défense
   face à la c-bet (fold, call, relance, et le fold au-delà duquel la mise rapporte d'elle-même : 25 % face à une
   mise de 33 % du pot), la règle par famille de mains, la défense face au 2e barrel selon la turn et au 3e barrel
   selon la river, et ce qu'elle fait quand l'attaquant checke (probe à la turn quand elle est hors de position,
   stab au flop quand elle est en position).
-- **Les flops résolus** : chacun avec sa catégorie, sa stratégie, sa c-bet et sa taille, le fold de la défense
-  face à la c-bet et les deux avantages ; un clic l'ouvre dans l'explorateur.
+- **Les flops résolus** : chacun avec sa catégorie, sa stratégie, sa c-bet et sa taille, le fold de la défense face
+  à la c-bet et les deux avantages ; un clic l'ouvre dans l'explorateur.
+- **Contre le field** (troisième onglet de chaque famille) : le plan suggéré, avec quelques ajustements légers pour
+  exploiter les leaks d'une population de l'Étude du field, au choix : les réguliers, les récréatifs ou un style de
+  récréatifs (passifs, agressifs, prudents), du format de la famille (heads-up ou tables à plusieurs) et au niveau
+  de limites où tu as le plus de mains (les autres niveaux en lien). Chaque leak qui touche le jeu après le flop
+  donne un ajustement parti du chiffre du plan : « le plan c-bet 58 % de la range ; contre eux, vers 68 %, en
+  ajoutant des mains « rien » que le plan checke » (ils foldent trop face à la c-bet), « face au 2e barrel, le plan
+  folde 40 % ; contre eux, vers 30 % » (ils barrellent trop)… ; quand tu as l'initiative, ce sont les leaks des
+  défenseurs qui comptent (folds face à la c-bet, aux barrels et à la river, check-raises, abattage, mises quand tu
+  checkes), quand tu défends ceux des attaquants (c-bet, 2e et 3e barrels, agressivité). Chaque ajustement montre
+  son leak et ses chiffres, « à confirmer » sur un petit échantillon. Code : `analyzer/field_plan.py`.
 
 ## Coach
 
@@ -1348,6 +1372,7 @@ analyzer/
   stakes.py            niveaux de limites (micro, milieu, hautes) d'après la grosse blinde, pour l'Étude du field
   field.py             étude du field : leaks à exploiter d'un adversaire, sa value et ses bluffs par ligne, style
                        des récréatifs (passif, agressif, prudent)
+  field_plan.py        le plan de jeu suggéré ajusté aux leaks d'une population du field (réguliers, récréatifs)
   reference.py         joueurs de référence : vos résultats et vos fréquences côte à côte, ses lignes de value et de
                        bluff avec toutes ses cartes connues
   settings.py          tes paramètres : tes pseudos réunis, les formats que tu joues, coach, seuil du field, tes

@@ -4,13 +4,17 @@
    principale (c-bet, réponse à la c-bet, 2e barrel à chaque turn, 3e barrel sur un échantillon de rivers,
    c-bet retardée, probe…), la stratégie de toute la range regroupée par famille de mains (deux paires et
    mieux, overpair, top pair…, tirage couleur, air) et, à la turn et à la river, par type de carte
-   (overcard, brique, board pairé, couleur ou quinte possible). Gardée dans la base (documents « plan »).
+   (overcard, brique, board pairé, couleur ou quinte possible) ; au flop (c-bet et réponse à la c-bet), ce que
+   vaut chaque action pour chaque famille de mains (ev_summary). Gardée dans la base (documents « plan »).
 2. Synthèse, à l'affichage : les flops regroupés en trois stratégies de c-bet (miser range, stratégie mixte,
    checker range) et, dans chacune, par taille de mise (petite, moyenne, grosse, tapis). Pour chaque groupe :
    ses flops (des exemples, chacun ouvrable dans l'explorateur), le pourquoi (avantage d'équité, avantage de
    nuts), des règles pour quatre familles de mains (fortes, moyennes, tirages, rien) et la suite à la turn et
    à la river selon la carte ; en attaque pour celui qui a l'initiative, en défense pour l'autre (face à la
    c-bet et aux barrels, et quand l'attaquant checke). Plus il y a de flops résolus, plus le plan est précis.
+3. Niveaux (levels) : des plans de plus en plus fins — une seule action pour toute la range sur tous les flops,
+   puis une par type de flop, puis une par type de flop et famille de mains —, chacun avec ce qu'il coûte face à
+   la stratégie du solveur.
 
 Un plan par famille de spots d'étude : heads-up (SRP, pot 3bet, pot 4bet) et tables à plusieurs (6-max, une famille
 par paire de positions et type de pot, avec tes charts). Les arbres 6-max ont la forme du heads-up de même structure
@@ -27,7 +31,10 @@ from ..db import documents
 from . import postflop, sizing, studyspots
 from .handclass import DRAW_BIT, MADE, MADE_INDEX, classify
 
-VERSION = 1  # change quand l'extraction change : les plans plus anciens sont refaits
+VERSION = 2  # change quand l'extraction change : les plans plus anciens sont relus (« Préparer le plan »)
+READABLE = (1, 2)  # versions encore affichées en attendant (la version 1 n'a pas l'EV des actions : pas de niveaux)
+EV_LINES = ("cbet", "vs_cbet")  # nœuds du flop dont on garde aussi ce que vaut chaque action (ev_summary)
+ORDER = ("fold", "check", "call", "small", "medium", "big", "overbet", "raise", "allin")
 
 BUCKETS = (
     ("nuts", "Deux paires et mieux"), ("overpair", "Overpair"), ("tp_good", "Top pair, bon kicker"),
@@ -156,6 +163,11 @@ def card_class(before: list[str], card: str) -> str:
     return "brick"
 
 
+def size_class(pct: float) -> str:
+    """La classe d'une mise d'après sa taille en % du pot (comme action_class)."""
+    return "small" if pct <= 40 else "medium" if pct <= 80 else "big" if pct <= 130 else "overbet"
+
+
 def action_class(node: dict, action: dict) -> str:
     kind = action["kind"]
     if kind in ("fold", "check", "call"):
@@ -239,6 +251,42 @@ def _normalize(acc: dict) -> dict:
     return out
 
 
+def ev_summary(node: dict) -> Optional[dict]:
+    """Ce que vaut chaque action à ce nœud jouée par chaque famille de mains (BUCKETS), et la stratégie du solveur :
+    sommes pondérées par la présence des mains, en part du pot, pour une range de poids 1 (les flops se comparent
+    ainsi entre eux). Une action par classe (action_class) : la plus jouée de sa classe. EV face à la stratégie de
+    l'adversaire telle qu'elle est. None sans EV par action."""
+    actor = node.get("player")
+    if actor is None or not node.get("pot"):
+        return None
+    na = len(node["actions"])
+    classes = [action_class(node, a) for a in node["actions"]]
+    freqs, _ = postflop.node_summary(node)
+    chosen: dict[str, int] = {}
+    for i, c in enumerate(classes):
+        if c not in chosen or freqs[i] > freqs[chosen[c]]:
+            chosen[c] = i
+    total, groups = 0.0, {}
+    for row in node["hands"][actor]:
+        reach, strategy, evs = row[1], row[4:4 + na], row[4 + na:4 + 2 * na]
+        if reach <= 0 or len(evs) < na or any(e is None for e in evs):
+            continue
+        g = groups.setdefault(bucket(row[0], node["board"]), {"r": 0.0, "s": 0.0, "e": dict.fromkeys(chosen, 0.0)})
+        g["r"] += reach
+        g["s"] += reach * sum(p * e for p, e in zip(strategy, evs))
+        for c, i in chosen.items():
+            g["e"][c] += reach * evs[i]
+        total += reach
+    if not total:
+        return None
+    scale = 1 / (total * node["pot"])
+    sizes = {c: round(100 * node["actions"][i]["amount"] / node["pot"]) for c, i in chosen.items()
+             if c in ("small", "medium", "big", "overbet")}
+    return {"classes": sorted(chosen, key=ORDER.index), "sizes": sizes,
+            "b": {k: {"r": round(g["r"] / total, 5), "s": round(g["s"] * scale, 6),
+                      "e": {c: round(v * scale, 6) for c, v in g["e"].items()}} for k, g in groups.items()}}
+
+
 def _advantages(node: dict) -> dict:
     """Équité moyenne de chaque range et part de « deux paires et mieux » (avantage de nuts)."""
     out = {"eq": [], "nuts": []}
@@ -260,15 +308,19 @@ def extract(query: Callable[[list], dict], spot: studyspots.StudySpot, key: str)
     for name, title, steps in lines(spot.family):
         acc: dict = {}
         sizes = set()
-        actor = None
+        actor, ev = None, None
         for node, dealt in _walk(query, steps, [], root, [], stride):
             _accumulate(acc, node, spot.board, dealt)
             actor = node["player"]
             for a in node["actions"]:
                 if a["kind"] == "bet" and not a.get("allin") and node["pot"]:
                     sizes.add(round(100 * a["amount"] / node["pot"]))
+            if name in EV_LINES and not dealt and ev is None:
+                ev = ev_summary(node)
         if acc:
             nodes[name] = {"title": title, "actor": actor, "sizes": sorted(sizes), "groups": _normalize(acc)}
+            if ev:
+                nodes[name]["ev"] = ev
     flop = query(_flop_path(query, spot.family))
     return {"version": VERSION, "key": key, "id": spot.ident, "family": spot.family, "board": spot.board,
             "texture": spot.texture, "pattern": studyspots.suit_pattern(spot.board),
@@ -295,7 +347,7 @@ def save_plan(data: dict) -> None:
 def load_plan(key: str) -> Optional[dict]:
     """Le plan de jeu enregistré (dans la base ; gardé en mémoire tant qu'aucun plan ne change)."""
     data = documents.get(db.current(), "plan", key)
-    return data if isinstance(data, dict) and data.get("version") == VERSION else None
+    return data if isinstance(data, dict) and data.get("version") in READABLE else None
 
 
 def extract_and_save(session: postflop.Session, spot: studyspots.StudySpot) -> dict:
@@ -306,11 +358,12 @@ def extract_and_save(session: postflop.Session, spot: studyspots.StudySpot) -> d
 
 
 def missing(family: Optional[str] = None) -> list[str]:
-    """Spots résolus (arbre actuel) sans plan extrait : ceux d'une famille, ou de toutes (heads-up et 6-max)."""
+    """Spots résolus (arbre actuel) sans plan extrait, ou lu par une version d'avant : ceux d'une famille, ou de
+    toutes (heads-up et 6-max)."""
     wanted = (family,) if family else plan_families()
     out = []
     for ident, meta in studyspots.spot_studies(wanted).items():
-        if meta.get("family") in wanted and load_plan(meta["key"]) is None:
+        if meta.get("family") in wanted and (load_plan(meta["key"]) or {}).get("version") != VERSION:
             out.append(ident)
     return sorted(out)
 
@@ -567,18 +620,37 @@ def defense_text(fold: float, raise_: float, limit: Optional[float], defender: s
             f"{round(100 * limit)} %).")
 
 
-def card_rules(node: Optional[dict], defender: bool = False, river: bool = False) -> list[dict]:
-    """Par type de carte (turn ou river) : fréquence de mise (ou de fold), règles simples et détail."""
+SIZE_SHORT = {"small": "petite", "medium": "moyenne", "big": "grosse", "overbet": "overbet", "allin": "tapis"}
+
+
+def size_mix(freqs: dict, pcts: Iterable[int] = ()) -> list[dict]:
+    """Les tailles jouées, de la plus jouée à la moins jouée : classe, part des mises, tailles en % du pot de cette
+    classe (pcts : les tailles de l'arbre à ce nœud)."""
+    bets = {c: freqs.get(c, 0.0) for c in AGGRESSIVE if c != "raise" and freqs.get(c)}
+    total = sum(bets.values())
+    if not total:
+        return []
+    return [{"class": c, "label": SIZE_SHORT[c], "share": v / total,
+             "pcts": sorted({x for x in pcts if c != "allin" and size_class(x) == c})}
+            for c, v in sorted(bets.items(), key=lambda cv: -cv[1])]
+
+
+def card_rules(node: Optional[dict], defender: bool = False, river: bool = False,
+               sizes: Iterable[int] = ()) -> list[dict]:
+    """Par type de carte (turn ou river) : fréquence de mise (ou de fold), tailles préférées (mises), règles
+    simples et détail. sizes : les tailles de l'arbre à ce nœud, en % du pot."""
     if not node:
         return []
     out = []
+    sizes = tuple(sizes)
     for key, label in CARDS:
         entries = node.get(key, [])
         if not entries:
             continue
         merged = merge(entries)
         out.append({"key": key, "label": label, "text": CARD_TEXT[key], "aggr": aggression(merged["f"]),
-                    "fold": merged["f"].get("fold", 0.0), "size": main_size(merged["f"]),
+                    "fold": merged["f"].get("fold", 0.0), "size": main_size(merged["f"]), "n": merged["flops"],
+                    "sizes": [] if defender else size_mix(merged["f"], sizes),
                     "rules": simple_rules(merged, defender, river),
                     "detail": defender_rules(merged) if defender else bettor_rules(merged, river)})
     return out
@@ -589,6 +661,178 @@ def _facing(merged: dict) -> Optional[dict]:
         return None
     return {"fold": merged["f"].get("fold", 0.0), "call": merged["f"].get("call", 0.0), "raise": aggression(merged["f"]),
             "rules": simple_rules(merged, defender=True), "detail": defender_rules(merged)}
+
+
+# --- Niveaux du plan : du plus simple au plus précis -----------------------------------------------------------
+# Un plan simplifié joue une seule action par case (tous les flops ou un type de flop ; toute la range, une des quatre
+# familles de mains ou une des onze), celle qui vaut le plus sur les flops résolus de la case. Sa perte : ce qu'il
+# coûte face à la stratégie du solveur, en % du pot par main, en moyenne sur les flops (chacun compte autant), face à
+# un adversaire qui joue la stratégie du solveur sans s'adapter (un adversaire qui s'adapte ferait payer un peu plus).
+SIZED = ("small", "medium", "big", "overbet", "allin")
+RAISES = ("raise", "allin")
+STEPS = {  # (clé, une règle par type de flop, mains : « range », « familles » (GROUPS) ou « detail » (BUCKETS))
+    "attack": (("une", False, "range"), ("flop", True, "range"), ("mains", True, "familles"),
+               ("detail", True, "detail")),
+    "defense": (("une", False, "familles"), ("flop", True, "familles"), ("detail", True, "detail")),
+}
+
+
+def _substitute(cls: Optional[str], available: Iterable[str]) -> Optional[str]:
+    """La classe jouée à la place de cls sur un flop qui ne l'a pas : la taille (ou la relance) la plus proche."""
+    available = list(available)
+    if cls is None or cls in available:
+        return cls
+    for family in (SIZED, RAISES):
+        near = [c for c in available if c in family]
+        if cls in family and near:
+            return min(near, key=lambda c: abs(family.index(c) - family.index(cls)))
+    return None
+
+
+def _hand_key(key: str, hands: str) -> str:
+    if hands == "range":
+        return "range"
+    if hands == "familles":
+        return next(g for g, _, members, _ in GROUPS if key in members)
+    return key
+
+
+def _grouped(ev: dict, hands: str) -> dict:
+    out: dict = {}
+    for key, g in ev["b"].items():
+        acc = out.setdefault(_hand_key(key, hands), {"r": 0.0, "s": 0.0, "e": {}})
+        acc["r"] += g["r"]
+        acc["s"] += g["s"]
+        for c, v in g["e"].items():
+            acc["e"][c] = acc["e"].get(c, 0.0) + v
+    return out
+
+
+def _eligible(available: list[list[str]]) -> list[str]:
+    """Les actions qu'une règle peut prescrire sur ces flops : celles qu'ils ont tous (« miser grosse » ne veut rien
+    dire sur un flop où l'arbre n'a qu'une petite mise) ; si aucune mise n'est commune, chaque taille, jouée à la
+    taille la plus proche sur chaque flop (_substitute)."""
+    union = sorted({c for classes in available for c in classes}, key=ORDER.index)
+    common = [c for c in union if all(c in classes for classes in available)]
+    if any(c in SIZED for c in common) or not any(c in SIZED for c in union):
+        return common
+    return [c for c in union if all(_substitute(c, classes) for classes in available)]
+
+
+def simplify(entries: list[tuple[str, dict]], by_flop: bool, hands: str) -> Optional[dict]:
+    """Le meilleur plan simplifié. entries : [(catégorie du flop, ev_summary du nœud)] ; by_flop : une règle par
+    catégorie de flop (sinon une pour tous, « tous ») ; hands : « range », « familles » ou « detail ». Renvoie sa perte
+    moyenne (part du pot), celle de chaque catégorie, et la règle de chaque case
+    {catégorie: {mains: {class, share}}}."""
+    if not entries:
+        return None
+    available: dict[str, list[list[str]]] = {}
+    for category, ev in entries:
+        available.setdefault(category if by_flop else "tous", []).append(ev["classes"])
+    allowed = {where: _eligible(classes) for where, classes in available.items()}
+    flops, cells = [], {}
+    for category, ev in entries:
+        where = category if by_flop else "tous"
+        groups = _grouped(ev, hands)
+        flops.append((where, groups, ev["classes"]))
+        for hk, g in groups.items():
+            cell = cells.setdefault((where, hk), {"v": dict.fromkeys(allowed[where], 0.0), "ok": set(allowed[where]),
+                                                  "r": 0.0, "n": 0})
+            cell["r"] += g["r"]
+            cell["n"] += 1
+            for c in allowed[where]:
+                cell["v"][c] += g["e"].get(_substitute(c, ev["classes"]), 0.0)
+    # à valeur égale, l'action la plus simple (check avant mise, petite mise avant grosse)
+    choice = {key: max(sorted(cell["ok"], key=ORDER.index), key=lambda c: round(cell["v"][c], 6))
+              for key, cell in cells.items() if cell["ok"]}
+    losses: dict[str, list[float]] = {}
+    for where, groups, available in flops:
+        loss = 0.0
+        for hk, g in groups.items():
+            sub = _substitute(choice.get((where, hk)), available)
+            loss += g["s"] - g["e"].get(sub, g["s"]) if sub else 0.0
+        losses.setdefault(where, []).append(max(loss, 0.0))
+    every = [x for xs in losses.values() for x in xs]
+    rules: dict = {}
+    for (where, hk), c in choice.items():
+        cell = cells[(where, hk)]
+        rules.setdefault(where, {})[hk] = {"class": c, "share": cell["r"] / cell["n"]}
+    return {"loss": sum(every) / len(every), "by": {w: sum(xs) / len(xs) for w, xs in losses.items()},
+            "flops": {w: len(xs) for w, xs in losses.items()}, "rules": rules}
+
+
+def pure_options(entries: list[tuple[str, dict]]) -> list[tuple[str, float]]:
+    """Chaque action jouée par toute la range sur tous les flops, et ce qu'elle coûte : de la moins chère à la plus
+    chère (« miser toute la range petit », « checker toute la range »…)."""
+    out = []
+    for c in _eligible([ev["classes"] for _, ev in entries]):
+        losses = [max(sum(g["s"] - g["e"].get(_substitute(c, ev["classes"]), 0.0) for g in ev["b"].values()), 0.0)
+                  for _, ev in entries]
+        out.append((c, sum(losses) / len(losses)))
+    return sorted(out, key=lambda cl: (round(cl[1], 6), ORDER.index(cl[0])))
+
+
+def class_sizes(entries: list[tuple[str, dict]]) -> dict[str, int]:
+    """La taille de chaque classe de mise (% du pot), la médiane sur les flops."""
+    found: dict[str, list[int]] = {}
+    for _, ev in entries:
+        for c, pct in ev.get("sizes", {}).items():
+            found.setdefault(c, []).append(pct)
+    return {c: sorted(v)[len(v) // 2] for c, v in found.items()}
+
+
+def levels(entries: list[tuple[str, dict]], side: str) -> Optional[dict]:
+    """Les niveaux d'un nœud du flop (side : « attack », la c-bet ; « defense », la réponse à la c-bet), du plus
+    simple au plus précis, chacun avec sa règle et sa perte ; en attaque, toutes les actions jouées par toute la
+    range (options)."""
+    if not entries:
+        return None
+    out = {"flops": len(entries), "sizes": class_sizes(entries),
+           "steps": [dict(simplify(entries, by_flop, hands), key=key, by_flop=by_flop, hands=hands)
+                     for key, by_flop, hands in STEPS[side]]}
+    if side == "attack":
+        out["options"] = pure_options(entries)
+    return out
+
+
+def class_text(cls: str, sizes: dict[str, int]) -> str:
+    """« petite mise (33 %) », « check », « relance »…"""
+    return CLASS_LABEL[cls] + (f" ({sizes[cls]} %)" if cls in sizes else "")
+
+
+def _mean(pairs: list[tuple[float, float]]) -> Optional[float]:
+    """Moyenne pondérée de (valeur, poids) ; None sans poids."""
+    weight = sum(w for _, w in pairs)
+    return sum(v * w for v, w in pairs) / weight if weight else None
+
+
+def baseline(plan: dict) -> dict:
+    """Les grands chiffres du plan, tous flops ensemble : c-bet, défense face à la c-bet, au check-raise, aux
+    barrels de la turn et de la river, 2e barrel, bluffs de la river (la famille « rien »), mises quand celui qui a
+    l'initiative checke. Pour ajuster le plan à un adversaire (field_plan)."""
+    groups = plan["groups"]
+
+    def over(get) -> Optional[float]:
+        return _mean([(v, len(g["flops"])) for g in groups for v in [get(g)] if v is not None])
+
+    def cards(get_rows, value) -> Optional[float]:
+        return _mean([(value(r), r["n"]) for g in groups for r in get_rows(g) if value(r) is not None])
+
+    def rien(r: dict) -> Optional[float]:
+        return next((x["pct"] for x in r["rules"] if x["key"] == "rien"), None)
+    return {
+        "cbet": _mean([(r["cbet"], 1) for r in plan["flops"]]),
+        "fold_cbet": over(lambda g: (g["defense"]["vs_cbet"] or {}).get("fold")),
+        "raise_cbet": over(lambda g: (g["defense"]["vs_cbet"] or {}).get("raise")),
+        "fold_xr": over(lambda g: (g["attack"]["vs_xr"] or {}).get("fold")),
+        "barrel": cards(lambda g: g["attack"]["turn"], lambda r: r["aggr"]),
+        "river_bluff": cards(lambda g: g["attack"]["river"], rien),
+        "river_value": cards(lambda g: g["attack"]["river"], lambda r: r["aggr"]),
+        "fold_turn": cards(lambda g: g["defense"]["vs_barrel"], lambda r: r["fold"]),
+        "fold_river": cards(lambda g: g["defense"]["vs_barrel3"], lambda r: r["fold"]),
+        "stab": over(lambda g: (g["defense"]["stab"] or {}).get("aggr")),
+        "probe": cards(lambda g: g["defense"]["probe"], lambda r: r["aggr"]),
+    }
 
 
 def family_plan(family: str) -> dict:
@@ -618,6 +862,13 @@ def family_plan(family: str) -> dict:
                                   "flops": sum(1 for r in rows if r["strategy"] == strategy)})
     for group in out["groups"]:
         group["flops"].sort(key=lambda r: (order.index(r["category"]), -r["cbet"]))
+    attack = [(board_category(d["board"]), d["nodes"]["cbet"]["ev"]) for d in data
+              if d["nodes"].get("cbet", {}).get("ev")]
+    defense = [(board_category(d["board"]), d["nodes"]["vs_cbet"]["ev"]) for d in data
+               if d["nodes"].get("vs_cbet", {}).get("ev")]
+    out["levels"] = {"attack": levels(attack, "attack"), "defense": levels(defense, "defense"),
+                     "read": len(attack), "older": sum(1 for d in data if d.get("version") != VERSION)}
+    out["baseline"] = baseline(out)
     return out
 
 
@@ -630,6 +881,10 @@ def _group(members: list[tuple[dict, dict]], strategy: str, size: str, who: str,
             for card, g in d["nodes"].get(name, {}).get("groups", {}).items():
                 by_card.setdefault(card, []).append(g)
         return by_card
+
+    def sizes_of(name: str) -> set[int]:
+        """Les tailles de mise de l'arbre à ce nœud (% du pot), sur les flops du groupe."""
+        return {x for d, _ in members for x in d["nodes"].get(name, {}).get("sizes", [])}
 
     rows = [r for _, r in members]
     cbet = merge(gather("cbet").get("flop", []))
@@ -651,15 +906,17 @@ def _group(members: list[tuple[dict, dict]], strategy: str, size: str, who: str,
         "why": why(strategy, eq_adv, nut_adv, who, other),
         "attack": {
             "flop": simple_rules(cbet), "flop_detail": bettor_rules(cbet),
-            "turn": card_rules(gather("barrel")), "river": card_rules(gather("barrel3"), river=True),
-            "delayed": card_rules(gather("delayed")), "vs_xr": _facing(merge(gather("vs_xr").get("flop", []))),
+            "turn": card_rules(gather("barrel"), sizes=sizes_of("barrel")),
+            "river": card_rules(gather("barrel3"), river=True, sizes=sizes_of("barrel3")),
+            "delayed": card_rules(gather("delayed"), sizes=sizes_of("delayed")),
+            "vs_xr": _facing(merge(gather("vs_xr").get("flop", []))),
         },
         "defense": {
             "vs_cbet": facing, "max_fold": limit,
             "text": defense_text(facing["fold"], facing["raise"], limit, other, SIZE_LABEL[size]) if facing else None,
             "vs_barrel": card_rules(gather("vs_barrel"), defender=True),
             "vs_barrel3": card_rules(gather("vs_barrel3"), defender=True, river=True),
-            "probe": card_rules(gather("probe")),
+            "probe": card_rules(gather("probe"), sizes=sizes_of("probe")),
             "stab": {"aggr": aggression(stab["f"]), "rules": simple_rules(stab), "detail": bettor_rules(stab)}
             if stab["flops"] else None,
         },
