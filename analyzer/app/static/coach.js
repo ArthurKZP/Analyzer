@@ -74,7 +74,7 @@
     const input = el('textarea', { rows: '2', placeholder: 'Pose ta question au coach…', 'aria-label': 'Question au coach' });
     const send = el('button', { type: 'submit', class: 'cc-send' }, 'Envoyer');
     const foot = el('div', { class: 'cc-foot' });
-    // Sans crédit API : la même question (avec ce que tu regardes) se pose dans Claude, où Analyzer est branché par MCP.
+    // Sans crédit API : la même question (avec ce que tu regardes) se pose dans Claude, où Merlin est branché par MCP.
     const note = el('span', { class: 'cc-hint', 'aria-live': 'polite' });
     const alt = el('div', { class: 'cc-alt' }, el('button', {
       type: 'button', class: 'cc-new', title: 'À coller dans l\'application Claude ou Claude Code, où le coach est branché sur ton abonnement (MCP)',
@@ -142,7 +142,7 @@
       try {
         const out = await api('/api/coach/texte', { text, context });
         if (await copyText(out.text)) {
-          note.textContent = 'Copié : colle-la dans Claude (application ou Claude Code), où Analyzer est branché.';
+          note.textContent = 'Copié : colle-la dans Claude (application ou Claude Code), où Merlin est branché.';
         } else {
           note.textContent = '';
           note.append('Copie impossible : sélectionne le texte ci-dessous.', el('textarea', { class: 'cc-manual', readonly: true, rows: '3' }, out.text));

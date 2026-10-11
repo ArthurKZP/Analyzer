@@ -9,9 +9,11 @@ import http.client
 from pathlib import Path
 from unittest import mock
 
+from analyzer import db
 from analyzer.app import trainer
 from analyzer.app.library import Library
 from analyzer.app.server import STATIC, start
+from analyzer.db import training
 
 FIXTURE = Path(__file__).parent / "fixtures" / "betclic_sample.txt"
 
@@ -24,7 +26,7 @@ def entry(key="bet:fi:", loss=0.0, family="srp", **extra):
 class TrainerTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": self.tmp.name})
+        self.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name})
         self.env.start()
 
     def tearDown(self):
@@ -64,15 +66,15 @@ class TrainerTest(unittest.TestCase):
         first = progress["situations"][0]  # celle qui coûte le plus en tête
         self.assertEqual((first["key"], first["label"], first["n"], first["errors"]), ("bet:fi:", "C-bet", 2, 1))
         self.assertAlmostEqual(first["good"], 0.5)
-        lines = trainer.journal_path().read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(lines), 3)
-        self.assertEqual(set(json.loads(lines[0])), {"family", "spot", "key", "combo", "played", "best", "loss",
-                                                     "freq", "t"})
-        with trainer.journal_path().open("a", encoding="utf-8") as f:
-            f.write("pas du json\n" + json.dumps({"family": "srp"}) + "\n")
+        base = db.current()
+        rows = training.every(base)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(set(rows[0]), {"family", "spot", "key", "combo", "played", "best", "loss", "freq", "t"})
+        base.execute("INSERT INTO entrainement (compte_id, le, donnees) VALUES (?, 0, 'pas du json')", (base.account(),))
+        training.add(base, [{"family": "srp"}])
         self.assertEqual(trainer.progress()["all"]["n"], 3)  # lignes abîmées ignorées
         self.assertEqual(trainer.clear()["all"]["n"], 0)
-        self.assertFalse(trainer.journal_path().exists())
+        self.assertEqual(training.every(base), [])
 
     def test_overview_without_studies(self):
         data = trainer.overview()
@@ -86,7 +88,7 @@ class TrainerServerTest(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         shutil.copy(FIXTURE, Path(cls.tmp.name) / "sample.txt")
-        cls.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": str(Path(cls.tmp.name) / "home"),
+        cls.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(Path(cls.tmp.name) / "home"),
                                                "ANALYZER_SOLVER": str(Path(cls.tmp.name) / "absent")})
         cls.env.start()
         cls.server = start(Library(cls.tmp.name), port=0)

@@ -1,0 +1,47 @@
+PokerMaster Hand #300000001: Hold'em No Limit ($5/$10 USD) - 2026/11/07 23:17:49 UTC
+Table 'Exemple HH' 7-max Seat #2 is the button
+Seat 1: Hero ($2135.92 in chips)
+Seat 2: Parti ($0 in chips)
+Seat 3: Joueur3 ($2003.92 in chips)
+Seat 4: Joueur4 ($1751.53 in chips)
+Seat 5: Joueur5 ($2240.28 in chips)
+Seat 6: Villain ($1858 in chips)
+Seat 7: Joueur7 ($2001.04 in chips)
+Joueur3: posts the ante $1
+Joueur4: posts the ante $1
+Joueur5: posts the ante $1
+Villain: posts the ante $1
+Joueur7: posts the ante $1
+Hero: posts the ante $1
+Joueur3: posts small blind $5
+Joueur4: posts big blind $10
+*** HOLE CARDS ***
+Dealt to Hero [3d 5c]
+Joueur5: folds
+Villain: raises $20 to $30
+Joueur7: folds
+Hero: folds
+Joueur3: folds
+Joueur4: calls $20
+*** FLOP *** [Jd 9h 7h]
+Joueur4: checks
+Villain: checks
+*** TURN *** [Jd 9h 7h] [3s]
+Joueur4: bets $23.43
+Villain: calls $23.43
+*** RIVER *** [Jd 9h 7h 3s] [Td]
+Joueur4: checks
+Villain: checks
+*** SHOW DOWN ***
+Joueur4: shows [7s 5h]
+Villain: shows [6c 6h]
+Joueur4 collected $113.15 from pot
+*** SUMMARY ***
+Total pot $117.86 | Rake $4.71
+Board [Jd 9h 7h 3s Td]
+Seat 1: Hero folded before Flop (didn't bet)
+Seat 3: Joueur3 (small blind) folded before Flop
+Seat 4: Joueur4 (big blind) showed [7s 5h] and won ($113.15)
+Seat 5: Joueur5 folded before Flop (didn't bet)
+Seat 6: Villain showed [6c 6h] and lost
+Seat 7: Joueur7 folded before Flop (didn't bet)

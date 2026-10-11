@@ -3,6 +3,21 @@
 
   const HAND = document.body.dataset.hand;
   const PRE = HAND === 'preflop';  // arbre préflop de la solution, jusqu'au choix du flop d'un spot d'étude
+  const TABLES = [['HU', 'Heads-up'], ['6-max', 'À plusieurs (6-max)']];
+  // Petites préférences gardées dans le navigateur (le format du préflop).
+  function store(key, value) {
+    try {
+      if (value === undefined) return localStorage.getItem('analyzer-' + key);
+      localStorage.setItem('analyzer-' + key, value);
+    } catch (e) { /* stockage indisponible : on fait sans */ }
+    return null;
+  }
+  // PRE : la solution heads-up, ou (#table=6-max) l'arbre des charts 6-max ; sans ligne donnée, le dernier choisi.
+  let TABLE = (() => {
+    const hash = new URLSearchParams(location.hash.slice(1));
+    const wanted = hash.get('table') || (hash.has('ligne') ? 'HU' : store('explorer-table'));
+    return TABLES.some(([id]) => id === wanted) ? wanted : 'HU';
+  })();
   const SPOT = HAND.startsWith('spot:');  // spot d'étude : pas de main jouée, les joueurs sont nommés par leur position
   const FAMILY = SPOT ? HAND.split(':')[1] : null;
   const $ = (id) => document.getElementById(id);
@@ -29,6 +44,7 @@
   let pollTimer = null;
   let rightTab = 'combos';
   let preLine = [];   // PRE : actions préflop depuis l'open du bouton
+  let noCharts = false;  // PRE à plusieurs : pas encore de charts 6-max
   let picked = [];    // PRE : cartes choisies pour le flop
   let flopInfo = null;  // PRE : le flop choisi et les flops résolus proches (/api/explorateur/flop)
   let prefix = null;  // SPOT : la ligne préflop de la famille (nœud « flop »), en tête du déroulé
@@ -65,7 +81,8 @@
   const playerOf = (role) => (roleOf(0) === role ? 0 : 1);
   const who = (p) => (SPOT || PRE ? POS[p] : POS[p] + ' · ' + NAME[roleOf(p)]);
   const streetName = (s) => (s < 0 ? 'Préflop' : STREET[s]);
-  const preHref = (line) => '/explorateur/preflop#ligne=' + line.join('.');
+  const tableHash = (table) => (table && table !== 'HU' ? 'table=' + encodeURIComponent(table) + '&' : '');
+  const preHref = (line, table) => '/explorateur/preflop#' + tableHash(table) + 'ligne=' + line.join('.');
 
   // Libellés des actions d'un nœud. Mise : % du pot ; relance : montant ajouté en % du pot après le
   // call (convention des solveurs : relancer à 4,5 sur une mise de 1,7 dans un pot de 5 = 33 %).
@@ -81,6 +98,19 @@
     });
   }
   const nodeLabels = () => actLabels(node.actions, node.pot, node.put, node.player);
+
+  // Taille jouée dans la main, ajoutée à l'arbre (ou à la place d'une taille théorique proche) : signalée.
+  function sizeTag(a) {
+    const info = a.played_size;
+    if (!info) return '';
+    return el('span', {
+      class: 'sz-tag',
+      title: info.how === 'added'
+        ? 'Taille jouée dans la main (' + info.size + '), ajoutée à l\'arbre à côté de la théorie (' + info.theory + ') pour juger la décision. '
+          + 'La part de la range sur chaque taille compare ces options : ce n\'est pas un mélange à reproduire.'
+        : 'Taille jouée dans la main (' + info.size + '), à la place de la taille théorique proche (' + info.theory + ') pour suivre le coup exactement.',
+    }, info.how === 'added' ? 'jouée' : 'jouée ≈');
+  }
 
   function colors(actions) {
     const sized = actions.map((a, k) => k).filter((k) => (actions[k].kind === 'bet' || actions[k].kind === 'raise') && !actions[k].allin);
@@ -191,10 +221,10 @@
     const p = path.slice();
     for (;;) {
       while (p.length && p[p.length - 1].type === 'card') p.pop();
-      if (!p.length) { if (prefix) location.href = preHref(prefix.preflop.line); return; }  // retour au préflop
+      if (!p.length) { if (prefix) location.href = preHref(prefix.preflop.line, prefix.preflop.table); return; }  // retour au préflop
       p.pop();
       // au début d'un spot, un check forcé (la BB ne mène pas) ramène directement au préflop
-      if (SPOT && !p.length && prefix && nodes.has('[]') && forced(nodes.get('[]'))) { location.href = preHref(prefix.preflop.line); return; }
+      if (SPOT && !p.length && prefix && nodes.has('[]') && forced(nodes.get('[]'))) { location.href = preHref(prefix.preflop.line, prefix.preflop.table); return; }
       if (!SPOT || !p.length) break;
       // dans un spot, on remonte aussi au-delà d'un nœud forcé (sauf la racine)
       const n = nodes.get(JSON.stringify(p));
@@ -206,19 +236,38 @@
   async function goLine(line) {
     document.body.classList.add('busy');
     try {
-      node = await api('/api/explorateur/preflop', { line });
+      node = await api('/api/explorateur/preflop', TABLE === 'HU' ? { line } : { table: TABLE, line });
+      noCharts = false;
       if (preLine.join('.') !== line.join('.')) { picked = []; flopInfo = null; }
       preLine = line.slice();
-      history.replaceState(null, '', '#ligne=' + preLine.join('.'));
+      history.replaceState(null, '', '#' + tableHash(TABLE) + 'ligne=' + preLine.join('.'));
+      POS = node.positions || ['BB', 'BTN'];  // à plusieurs : les deux joueurs du nœud
       if (node.player !== null && node.player !== undefined) viewPlayer = node.player;
+      if (!node.hands[viewPlayer].length) viewPlayer = 0;
       selected = null;
       notice = '';
     } catch (e) {
       notice = e.message;
+      noCharts = TABLE !== 'HU' && e.status === 404 && /charts/.test(e.message);
     } finally {
       document.body.classList.remove('busy');
     }
     render();
+  }
+
+  // Les charts 6-max gratuits de Hand2Note Guide, téléchargés sur ta machine (comme dans Tables à plusieurs).
+  async function loadCharts(button) {
+    button.disabled = true;
+    button.textContent = 'Téléchargement…';
+    try {
+      await api('/api/ranges/hand2note', {});
+      notice = '';
+      await goLine([]);
+    } catch (e) {
+      notice = e.message;
+      button.disabled = false;
+      render();
+    }
   }
 
   async function loadState() {
@@ -231,9 +280,48 @@
     played = last ? last.path.concat(last.chosen === null ? [] : [{ type: 'action', index: last.chosen }]) : [];
   }
 
-  async function solve() {
+  // Précision visée (exploitabilité en % du pot) et durée estimée de la résolution, selon cet ordinateur.
+  const PRECISIONS = [3, 2, 1.5, 1, 0.5];
+  let estim = null;  // /api/estimation : durée estimée de ce spot pour chaque précision
+  const dur = (sec) => (sec < 60 ? Math.max(5, Math.round(sec / 5) * 5) + ' s'
+    : sec < 3600 ? Math.round(sec / 60) + ' min'
+      : Math.floor(sec / 3600) + ' h ' + String(Math.round((sec % 3600) / 60)).padStart(2, '0'));
+  const estimateOf = (t) => { const o = estim && estim.options.find((x) => x.target === t); return o ? o.seconds : null; };
+  const withTime = (t) => (estimateOf(t) !== null ? ' (≈ ' + dur(estimateOf(t)) + ')' : '');
+
+  async function loadEstimate() {
+    if (PRE || estim) return;
     try {
-      const v = await api('/api/resoudre', { hand: HAND, start: true, force: true });
+      estim = await api('/api/estimation', { hand: HAND });
+      renderStatus();
+    } catch (e) { /* solveur absent, coup non couvert : pas d'estimation */ }
+  }
+
+  function precisionPicker() {
+    const sel = el('select', { 'aria-label': 'Précision visée', title: 'Exploitabilité visée, en % du pot : plus elle est basse, '
+      + 'plus la solution est proche de l\'équilibre, et plus la résolution est longue. Réglage gardé pour les prochaines résolutions.' });
+    PRECISIONS.forEach((t) => sel.append(el('option', { value: t, selected: t === state.precision },
+      num(t, 1) + ' % du pot' + (estimateOf(t) !== null ? ' · ≈ ' + dur(estimateOf(t)) : ''))));
+    sel.onchange = async () => {
+      try {
+        state.precision = (await api('/api/precision', { precision: Number(sel.value) })).precision;
+      } catch (e) {
+        notice = e.message;
+      }
+      renderStatus();
+    };
+    return el('label', { class: 'prec' }, 'Précision ', sel);
+  }
+
+  // Résultat moins précis que le réglage : on propose de l'affiner (nouvelle résolution).
+  function refineButton() {
+    if (!state.precision || !state.target || state.target <= state.precision + 1e-9) return '';
+    return el('button', { type: 'button', onclick: () => solve(true) }, 'Affiner à ' + num(state.precision, 1) + ' %' + withTime(state.precision));
+  }
+
+  async function solve(fresh) {
+    try {
+      const v = await api('/api/resoudre', { hand: HAND, start: true, force: true, fresh: fresh === true });
       Object.assign(state, v);
       renderStatus();
       poll();
@@ -278,8 +366,9 @@
       const box = $('meta');
       box.textContent = '';
       box.title = meta.family_label + (meta.sizes ? '\nTailles : ' + meta.sizes : '');
-      box.append('Spot d\'étude · ' + meta.pot_type + ' · BTN contre BB · flop ', cards(meta.board), ' · ' + meta.texture
-        + ' · pot ' + num(meta.pot) + ' bb, tapis ' + num(meta.stack) + ' bb');
+      box.append('Spot d\'étude · ' + (meta.format && meta.format !== 'HU' ? meta.format + ' · ' : '') + meta.pot_type
+        + ' · ' + (meta.pair || 'BTN contre BB') + ' · flop ', cards(meta.board),
+        meta.texture ? ' · ' + meta.texture + ' · pot ' + num(meta.pot) + ' bb, tapis ' + num(meta.stack) + ' bb' : '');
       box.append(adjustedBadge());
       return;
     }
@@ -293,24 +382,106 @@
       revealed() && meta.villain_cards.length ? cards(meta.villain_cards) : '??',
       ' · ' + meta.villain + (meta.stack ? ' · tapis effectif ' + num(meta.stack) + ' bb' : '')
       + ' · résultat ' + (meta.net > 0 ? '+' : '') + num(meta.net) + ' bb', adjustedBadge());
+    renderSizes();
+  }
+
+  // Tailles de l'arbre d'un coup joué : d'où elles viennent, et les tailles jouées ajoutées pour juger la décision.
+  function renderSizes() {
+    const box = $('sizes');
+    box.textContent = '';
+    const info = !PRE && !SPOT && meta ? meta.sizes : null;
+    box.hidden = !info;
+    if (!info) return;
+    const head = el('div', { title: 'Tailles de l\'arbre : ' + info.plan });
+    if (info.source === 'flop') head.append(el('b', {}, 'Tailles théoriques de ce flop'), ' (' + info.family_title
+      + ') : choisies comme pour les spots d\'étude.');
+    else if (info.source === 'proche') head.append(el('b', {}, 'Tailles théoriques empruntées à '), cards(info.board),
+      ' (' + info.family_title + (info.same_texture ? ', même texture' : ', autre texture') + ') : '
+      + 'celles de ce flop ne sont pas encore choisies.');
+    else head.append(el('b', {}, 'Tailles par défaut'), ' (33 % au flop, 75 % à la turn et à la river, relance 60 %) : '
+      + 'pas encore de tailles théoriques pour ce type de pot.');
+    if (info.choose) head.append(el('button', { type: 'button', onclick: chooseSizes, disabled: ['waiting', 'running'].includes(state.state),
+      title: 'Le choix se fait dans la série ' + info.choose_title + ' (même jeu que ce coup)' },
+      'Choisir les tailles de ce flop (' + info.choose_time + ')'));
+    box.append(head);
+    const played = info.played.filter((q) => q.how !== 'same');
+    played.forEach((q) => box.append(el('div', { class: 'played' },
+      (q.who === 'H' ? 'Toi' : 'Lui') + ' · ' + q.label + ' ' + q.size_text + ' : ' + (q.how === 'added'
+        ? 'taille jouée, ajoutée à l\'arbre à côté de la théorie (' + q.theory_text + ').'
+        : 'taille jouée, à la place de la théorie proche (' + q.theory_text + ').'))));
+    if (played.some((q) => q.how === 'added')) box.append(el('div', { class: 'small' },
+      'Une taille ajoutée sert à juger la décision (l\'EV de chaque taille) : la part de la range sur chaque taille compare ces options, '
+      + 'ce n\'est pas un mélange à reproduire. Repère « jouée » sur l\'action.'));
+  }
+
+  async function chooseSizes() {
+    const info = meta.sizes;
+    if (!window.confirm('Choisir les tailles théoriques de ce flop, comme pour un spot d\'étude : ' + info.choose_time
+      + ' de calcul sur 4 cœurs, puis la résolution du coup avec elles. Le flop rejoindra ensuite les spots d\'étude. Lancer ?')) return;
+    try {
+      const v = await api('/api/explorateur/tailles', { hand: HAND });
+      Object.assign(state, v);
+      renderStatus();
+      renderSizes();
+      poll();
+    } catch (e) {
+      notice = e.message;
+      renderStatus();
+    }
   }
 
   // Ranges préflop ajustées en jeu : un rappel, qui ouvre l'onglet Ranges.
   function adjustedBadge() {
-    if (!state || !state.adjusted) return '';
-    return el('button', {
+    const out = [];
+    if (state && state.adjusted) out.push(el('button', {
       type: 'button', class: 'rg-badge', title: 'Le solveur joue avec tes ranges préflop, pas celles de la référence',
       onclick: () => { rightTab = 'ranges'; renderTabs(); },
-    }, 'tes ranges' + (state.adjusted === 'ligne' ? ' (ligne)' : ''));
+    }, 'tes ranges' + (state.adjusted === 'ligne' ? ' (ligne)' : '')));
+    if (state && state.edits) out.push(el('button', {
+      type: 'button', class: 'rg-badge', title: 'Le solveur joue ton arbre : tes tailles de mise ou tes nœuds verrouillés',
+      onclick: () => { rightTab = 'tree'; renderTabs(); },
+    }, 'ton arbre' + (state.edits.locks ? ' 🔒' + state.edits.locks : '')));
+    return out.length ? el('span', {}, out) : '';
+  }
+
+  // Heads-up ou coup à plusieurs : l'arbre préflop change, la ligne repart de zéro.
+  function tableSwitch() {
+    const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Format du coup' });
+    TABLES.forEach(([id, label]) => seg.append(el('button', {
+      type: 'button', 'aria-pressed': TABLE === id ? 'true' : 'false', onclick: () => setTable(id),
+    }, label)));
+    return seg;
+  }
+
+  function setTable(table) {
+    if (table === TABLE) return;
+    TABLE = table;
+    store('explorer-table', table);
+    node = null;
+    preLine = [];
+    picked = [];
+    flopInfo = null;
+    selected = null;
+    ['ribbon', 'grid', 'legend', 'overview', 'combos', 'players'].forEach((id) => { $(id).textContent = ''; });
+    document.title = 'Explorateur — préflop' + (TABLE !== 'HU' ? ' ' + TABLE : '');
+    goLine([]);
   }
 
   function renderStatus() {
     const box = $('status');
     box.textContent = '';
     if (PRE) {
+      box.append(tableSwitch());
+      if (noCharts) {
+        box.append(el('button', { type: 'button', class: 'go', onclick: (e) => loadCharts(e.currentTarget) },
+          'Charger les charts 100 bb de Hand2Note Guide'),
+        el('span', { class: 'muted' }, 'téléchargés sur ta machine, pour ton usage personnel (conditions du site)'));
+      }
       if (node) box.append(el('span', {}, node.type === 'flop' ? 'Choisis le flop : les flops résolus s\'ouvrent en quelques secondes.'
         : node.type === 'allin' ? 'Tapis préflop : pas de jeu après le flop à étudier.'
-          : 'Solution préflop : choisis les actions dans le déroulé ; au call, tu choisis le flop et le coup continue au postflop.'));
+          : TABLE !== 'HU' ? 'Charts ' + TABLE + ' : choisis l\'action de chaque position dans le déroulé ; le premier qui paie '
+            + 'ou relance l\'open reste seul face à l\'ouvreur (les charts couvrent les pots à deux) ; au call, tu choisis le flop.'
+            : 'Solution préflop : choisis les actions dans le déroulé ; au call, tu choisis le flop et le coup continue au postflop.'));
       if (notice) box.append(el('span', { class: 'err' }, notice));
       return;
     }
@@ -326,7 +497,9 @@
       const elapsed = state.elapsed ? ' · ' + (state.elapsed >= 60 ? Math.floor(state.elapsed / 60) + ' min ' : '') + Math.round(state.elapsed % 60) + ' s' : '';
       box.append(el('span', {}, s === 'waiting' ? 'En attente d\'une autre résolution…'
         : state.mode === 'load' ? 'Ouverture de l\'étude enregistrée…' + elapsed
-        : state.mode === 'choose' ? 'Flop de la série : choix des tailles de mise, puis résolution. ' + (p.stage || '') + elapsed
+        : state.mode === 'choose' ? (state.edits && state.edits.pending ? 'Ton arbre : le solveur choisit les tailles que tu lui as '
+          + 'laissées, puis résout. ' : SPOT ? 'Flop de la série : choix des tailles de mise, puis résolution. '
+          : 'Choix des tailles théoriques de ce flop, puis résolution du coup avec elles. ') + (p.stage || '') + elapsed
         : (p.iteration ? 'Résolution : itération ' + p.iteration + ' / ' + state.max_iterations + ' · exploitabilité ' + num(p.exploit_pct) + ' % du pot (objectif ' + num(state.target) + ' %)'
           : p.tree_nodes ? 'Résolution lancée : arbre de ' + p.tree_nodes.toLocaleString('fr-FR') + ' nœuds, première mesure après 10 itérations'
             : 'Construction de l\'arbre…') + elapsed),
@@ -335,24 +508,33 @@
     } else if (s === 'done' && live) {
       const r = state.result;
       box.append(el('span', {}, 'Session active : toutes les branches et toutes les cartes sont explorables (fermée après 30 min sans activité). '
-        + r.iterations + ' itérations, exploitabilité ' + num(r.exploit_pct, 2) + ' % du pot.'));
+        + r.iterations + ' itérations, exploitabilité ' + num(r.exploit_pct, 2) + ' % du pot.'), precisionPicker(), refineButton());
     } else if (s === 'done' && state.study && SPOT) {
       box.append(el('span', {}, 'Étude enregistrée.'),
-        el('button', { type: 'button', class: 'go', onclick: solve }, 'Ouvrir l\'étude (quelques secondes)'));
+        el('button', { type: 'button', class: 'go', onclick: () => solve() }, 'Ouvrir l\'étude (quelques secondes)'));
     } else if (s === 'done' && SPOT) {
-      box.append(el('span', {}, 'L\'étude de ce spot a été supprimée : recalcule-le pour l\'explorer.'),
-        el('button', { type: 'button', class: 'go', onclick: solve }, 'Recalculer (quelques minutes)'));
+      box.append(el('span', {}, 'L\'étude de ce spot a été supprimée : recalcule-le pour l\'explorer.'), precisionPicker(),
+        el('button', { type: 'button', class: 'go', onclick: () => solve(true) }, 'Recalculer' + withTime(state.precision)));
     } else if (s === 'done' && state.study) {
       box.append(el('span', {}, 'Étude enregistrée : ligne jouée affichée.'),
-        el('button', { type: 'button', class: 'go', onclick: solve }, 'Ouvrir l\'étude complète (quelques secondes)'));
+        el('button', { type: 'button', class: 'go', onclick: () => solve() }, 'Ouvrir l\'étude complète (quelques secondes)'));
     } else if (s === 'done') {
       box.append(el('span', {}, 'Ligne jouée seulement (résultat enregistré). Pour explorer les autres branches et changer les cartes :'),
-        el('button', { type: 'button', class: 'go', onclick: solve }, 'Recalculer (quelques minutes)'));
+        precisionPicker(),
+        el('button', { type: 'button', class: 'go', onclick: () => solve(true) }, 'Recalculer' + withTime(state.precision)));
     } else {
       if (state.error) box.append(el('span', { class: 'err' }, state.error));
-      box.append(el('span', {}, SPOT ? 'Ce spot n\'est pas encore résolu (quelques minutes ; il sera gardé dans les études).'
-        : 'Ce coup n\'est pas encore résolu.'),
-        el('button', { type: 'button', class: 'go', onclick: solve }, SPOT ? 'Résoudre ce spot' : 'Résoudre ce coup'));
+      box.append(el('span', {}, SPOT ? 'Ce spot n\'est pas encore résolu (il sera gardé dans les études).'
+        : 'Ce coup n\'est pas encore résolu.'), precisionPicker(),
+        el('button', { type: 'button', class: 'go', onclick: () => solve() }, (SPOT ? 'Résoudre ce spot' : 'Résoudre ce coup')
+          + withTime(state.precision)));
+      loadEstimate();
+    }
+    if (s === 'done') loadEstimate();
+    if (!['waiting', 'running', 'unsupported', 'unavailable'].includes(s)) {
+      box.append(el('button', { type: 'button', 'aria-expanded': String(cb.open), title: 'Les actions et les tailles de chaque '
+        + 'situation, street par street, avant la résolution', onclick: () => (cb.open ? closeBuilder() : openBuilder()) },
+      cb.open ? 'Fermer ton arbre' : 'Construire l\'arbre'));
     }
     if (notice) box.append(el('span', { class: 'err' }, notice));
   }
@@ -388,7 +570,7 @@
         type: 'button', class: 'act' + (h.chosen === j ? ' on' : ''), disabled: !allowed,
         title: allowed ? null : 'Hors de la ligne jouée : recalcule pour explorer cette branche',
         onclick: () => goTo(prefix.concat([{ type: 'action', index: j }]), true),
-      }, el('span', {}, labels[j]), isPlayed ? el('span', { class: 'dot', title: 'Joué dans la main' }, '●') : ''));
+      }, el('span', {}, labels[j]), sizeTag(a), isPlayed ? el('span', { class: 'dot', title: 'Joué dans la main' }, '●') : ''));
     });
     return step;
   }
@@ -405,7 +587,7 @@
   // Étape préflop : chaque action mène à son nœud (navigate reçoit la ligne jusqu'à cette action).
   function preStep(h, k, line, current, navigate) {
     const step = el('div', { class: 'step pre' + (current ? ' current' : ''), title: 'Préflop · pot ' + num(h.pot) + ' bb' },
-      el('div', { class: 'head' }, el('span', {}, POS[h.player]), stackOf(h.stack)));
+      el('div', { class: 'head' }, el('span', {}, h.position || POS[h.player]), stackOf(h.stack)));
     h.actions.forEach((a, j) => step.append(el('button', {
       type: 'button', class: 'act' + (h.chosen === j ? ' on' : ''), onclick: () => navigate(line.slice(0, k).concat([h.keys[j]])),
     }, el('span', {}, a.name))));
@@ -442,13 +624,13 @@
     }
     if (prefix) {
       prefix.history.forEach((h, k) => {
-        if (h.kind === 'action') box.append(preStep(h, k, prefix.preflop.line, false, (line) => { location.href = preHref(line); }));
+        if (h.kind === 'action') box.append(preStep(h, k, prefix.preflop.line, false, (line) => { location.href = preHref(line, prefix.preflop.table); }));
       });
     }
     (meta.preflop || []).forEach((s) => box.append(playedPreStep(s)));
     box.append(navStep(el('div', { class: 'step cards' },
       streetHead('Flop', state.result.pot), cards(meta.board.slice(0, 3)),
-      prefix ? el('a', { class: 'change', href: preHref(prefix.preflop.line), title: 'Choisir un autre flop' }, 'changer') : ''),
+      prefix ? el('a', { class: 'change', href: preHref(prefix.preflop.line, prefix.preflop.table), title: 'Choisir un autre flop' }, 'changer') : ''),
     [], path.length === 0));
     node.history.forEach((h, k) => {
       const current = k === node.history.length - 1;
@@ -544,10 +726,13 @@
     }, label)));
     const players = $('players');
     players.textContent = '';
-    [0, 1].forEach((p) => players.append(el('button', {
-      type: 'button', 'aria-pressed': viewPlayer === p ? 'true' : 'false',
-      onclick: () => { viewPlayer = p; viewAuto = actor && p === node.player; selected = null; render(); },
-    }, who(p) + (actor && node.player === p ? ' (agit)' : ''))));
+    [0, 1].forEach((p) => {
+      if (PRE && !node.hands[p].length && node.player !== p) return;  // à plusieurs : personne n'a encore ouvert
+      players.append(el('button', {
+        type: 'button', 'aria-pressed': viewPlayer === p ? 'true' : 'false',
+        onclick: () => { viewPlayer = p; viewAuto = actor && p === node.player; selected = null; render(); },
+      }, who(p) + (actor && node.player === p ? ' (agit)' : '')));
+    });
   }
 
   function renderGrid() {
@@ -561,6 +746,7 @@
     const values = Object.values(agg).map((a) => a[key]).filter((x) => x !== null);
     const lo = Math.min(...values), hi = Math.max(...values);
     const heroCls = viewPlayer === playerOf('H') && meta.hero_cards.length === 2 ? classOf(meta.hero_cards.join('')) : null;
+    const lockedSet = strat && node.lock ? new Set(node.lock.edited) : null;
     let anyRare = false;
     const villainCls = revealed() && viewPlayer === playerOf('V') && meta.villain_cards.length === 2 ? classOf(meta.villain_cards.join('')) : null;
     for (let i = 0; i < 13; i++) for (let j = 0; j < 13; j++) {
@@ -568,7 +754,8 @@
       const a = agg[hand];
       const settledCell = strat && a && a.rows.every((r) => rare(r[0]));
       if (settledCell) anyRare = true;
-      const cls = 'cell' + (a ? '' : ' out') + (settledCell ? ' rare' : '') + (hand === heroCls ? ' me' : '') + (hand === villainCls ? ' him' : '') + (hand === selected ? ' sel' : '');
+      const lockedCell = lockedSet && a && a.rows.some((r) => lockedSet.has(r[0]));
+      const cls = 'cell' + (a ? '' : ' out') + (settledCell ? ' rare' : '') + (hand === heroCls ? ' me' : '') + (hand === villainCls ? ' him' : '') + (hand === selected ? ' sel' : '') + (lockedCell ? ' lk' : '');
       const cell = el('div', { class: cls, 'data-hand': hand, title: settledCell ? 'Presque jamais jouée ici : meilleure action selon l\'EV' : null },
         el('span', { class: 'h' }, hand));
       if (a) {
@@ -591,7 +778,12 @@
           if (mode === 'strategy_ev' && a.ev !== null) cell.append(el('span', { class: 'v' }, num(a.ev, 2)));
         }
         cell.addEventListener('mouseenter', () => { hovered = hand; renderCombos(); });
-        cell.addEventListener('click', () => { selected = selected === hand ? null : hand; renderGridSelection(); renderCombos(); });
+        cell.addEventListener('click', () => {
+          selected = selected === hand ? null : hand;
+          renderGridSelection();
+          renderCombos();
+          if (rightTab === 'tree') { if (selected) tr.target = 'cell'; renderTree(); }
+        });
       }
       grid.append(cell);
     }
@@ -633,12 +825,15 @@
         el('span', { class: 'muted small' }, 'pot ' + num(node.pot) + ' bb · tapis ' + num(node.stacks[p]) + ' bb')));
       const tiles = el('div', { class: 'tiles' });
       node.actions.forEach((a, k) => tiles.append(el('div', { class: 'tile', style: 'background:' + cols[k] },
-        el('div', { class: 'l' }, nodeLabels()[k]), el('div', { class: 'p' }, total ? pct(freqs[k] / total) : '—'),
+        el('div', { class: 'l' }, nodeLabels()[k], sizeTag(a)), el('div', { class: 'p' }, total ? pct(freqs[k] / total) : '—'),
         el('div', { class: 'c' }, num(freqs[k], 1) + ' combos'))));
       panel.append(tiles);
       const stack = el('div', { class: 'stack' });
       freqs.forEach((f, k) => stack.append(el('span', { style: 'width:' + (total ? 100 * f / total : 0).toFixed(2) + '%;background:' + cols[k] })));
       panel.append(stack);
+      if (node.locked) panel.append(el('div', { class: 'tr-locked' }, '🔒 Nœud verrouillé' + (node.lock
+        ? ' : ' + node.lock.edits.map((e) => e.label + ' ' + mixText(e.freqs, nodeLabels())).join(' ; ') + ' ; les autres mains gardent la stratégie d\'origine.'
+        : ' (stratégie imposée).')));
       if (full) panel.append(el('div', { class: 'muted small', style: 'margin-top:6px' },
         'Filtre actif : ' + pct(total / full) + ' de la range (' + num(total, 1) + ' combos) ; fréquences de ces mains seulement.'));
       if (node.rare && node.rare.length) panel.append(el('div', { class: 'warn' }, 'Ligne que le solveur ne prend presque jamais : '
@@ -695,8 +890,9 @@
       box.append(el('ul', { class: 'fl-sugg' }, f.suggestions.map((x) => el('li', {},
         el('a', { class: 'fl solved', href: spotHref(x.id) }, cards(x.board)), el('span', { class: 'muted small' }, ' ' + x.relation)))));
     }
-    box.append(el('a', { class: 'fl-go', href: spotHref(f.id) + '#resoudre', title: 'Tailles : ' + f.sizes },
-      'Résoudre ce flop (' + f.cost + ')'));
+    box.append(el('div', { class: 'rg-row' }, el('a', { class: 'fl-go', href: spotHref(f.id) + '#resoudre', title: 'Tailles : ' + f.sizes },
+      'Résoudre ce flop (' + f.cost + ')'), el('a', { class: 'fl-tree', href: spotHref(f.id) + '#arbre',
+      title: 'Choisir les actions et les tailles de chaque street avant la résolution' }, 'Construire l\'arbre d\'abord')));
     box.append(el('div', { class: 'muted small' }, f.sizes_from
       ? 'Tailles du flop le plus proche dont les tailles sont choisies (' + f.sizes_from.match(/../g).map((c) => c[0] + SUITS[c[1]]).join('') + '). L\'étude est gardée.'
       : 'L\'étude est gardée ensuite.'));
@@ -723,7 +919,8 @@
       picked.length ? el('button', { type: 'button', class: 'linkish', onclick: () => { picked = []; flopInfo = null; renderOverview(); } }, 'Effacer') : ''),
     deck);
     if (picked.length === 3 && flopInfo) panel.append(flopResult());
-    panel.append(el('div', { class: 'fl-head' }, el('b', {}, 'Flops de la série et flops déjà résolus'),
+    panel.append(el('div', { class: 'fl-head' }, el('b', {}, info.series === false ? 'Flops types et flops déjà résolus'
+      : 'Flops de la série et flops déjà résolus'),
       el('span', { class: 'muted small' }, ' surlignés quand ils sont résolus')));
     const groups = el('div', { class: 'flops' });
     for (const t of info.textures) {
@@ -746,7 +943,11 @@
     const head = el('div', { class: 'ch' }, el('span', {}, title ? title + ' ' : '', cards([row[0].slice(0, 2), row[0].slice(2)])),
       el('span', { class: 'muted' }, (row[1] < 0.995 ? 'présence ' + pct(row[1]) + ' · ' : '') + (row[2] === null ? '' : 'éq. ' + pct(row[2]))));
     const settled = strat && rare(row[0]);
-    const box = el('div', { class: 'combo' + (settled ? ' settled' : '') }, head);
+    if (strat && live && !PRE && node.type === 'action' && na > 1) {
+      head.append(el('button', { type: 'button', class: 'lock-btn', title: 'Verrouiller ce combo (onglet Arbre)',
+        'aria-label': 'Verrouiller ' + row[0], onclick: () => { tr.combo = row[0]; tr.target = 'combo'; tr.mix = null; rightTab = 'tree'; renderTabs(); } }, '🔒'));
+    }
+    const box = el('div', { class: 'combo' + (settled ? ' settled' : '') + (node.lock && node.lock.edited.includes(row[0]) && strat ? ' locked' : '') }, head);
     if (strat) {
       const s = row.slice(4, 4 + na);
       const evs = row.slice(4 + na, 4 + 2 * na);
@@ -890,51 +1091,8 @@
   // ---------- ranges préflop ajustées (onglet Ranges) ----------
   // Tes ranges à la place de celles de la référence, pour ce coup ou par défaut pour toute sa ligne : le coup
   // se résout à nouveau, dans une étude à part (celle de la référence reste et se rouvre en quelques secondes).
-  const BRUSHES = [[1, '100 %'], [0.75, '75 %'], [0.5, '50 %'], [0.25, '25 %'], [0, 'Retirer']];
-  const HAND_RE = /^(?:([2-9TJQKA])\1|[2-9TJQKA]{2}[so])$/;
-  const RESIZE = 0.10;  // « plus serré » / « plus large » : environ 10 % des combos de la range
-  const ALL_HANDS = [];
-  for (let i = 0; i < 13; i++) for (let j = 0; j < 13; j++) ALL_HANDS.push(handAt(i, j));
-  const rg = { data: null, edit: null, player: 0, brush: 1, scope: 'coup', painting: false, busy: false, msg: '', ui: null };
-
-  const comboCount = (h) => (h.length === 2 ? 6 : h[2] === 's' ? 4 : 12);
-  const combosOf = (w) => Object.entries(w).reduce((t, [h, x]) => t + x * comboCount(h), 0);
-  const validHand = (h) => HAND_RE.test(h) && (h.length === 2 || RANKS.indexOf(h[0]) < RANKS.indexOf(h[1]));
-  const sameRange = (a, b) => [...new Set(Object.keys(a).concat(Object.keys(b)))].every((h) => Math.abs((a[h] || 0) - (b[h] || 0)) <= 0.002);
-  const rangeText = (w) => ALL_HANDS.filter((h) => (w[h] || 0) >= 0.001)
-    .map((h) => (w[h] >= 0.999 ? h : h + ':' + Math.round(w[h] * 1000) / 1000)).join(',');
-
-  function parseRange(text) {
-    const out = {};
-    for (const item of text.replace(/\s+/g, '').split(',')) {
-      if (!item) continue;
-      const [h, weight] = item.split(':');
-      const v = weight === undefined || weight === '' ? 1 : Number(weight);
-      if (!validHand(h) || !Number.isFinite(v) || v < 0) throw new Error('Illisible : « ' + item + ' ». Écris AA, AKs, AKo…, avec un poids éventuel (AKo:0.5).');
-      if (v > 0) out[h] = Math.min(1, v);
-    }
-    if (!Object.keys(out).length) throw new Error('Range vide : garde au moins une main.');
-    return out;
-  }
-
-  // Plus serré : retire environ 10 % des combos, en partant des mains les plus faibles de la range (équité contre
-  // une main au hasard) ; plus large : en ajoute autant, en partant des plus fortes qui n'y sont pas en entier.
-  function resize(w, sign) {
-    const out = { ...w };
-    let left = RESIZE * combosOf(w);
-    if (sign > 0) left = Math.max(left, 0.01 * 1326);
-    for (const h of sign < 0 ? rg.data.order.slice().reverse() : rg.data.order) {
-      if (left <= 0.01) break;
-      const x = out[h] || 0;
-      const room = sign < 0 ? x : 1 - x;
-      if (room <= 0) continue;
-      const d = Math.min(room, left / comboCount(h));
-      const v = Math.round((x + sign * d) * 1000) / 1000;
-      if (v >= 0.001) out[h] = v; else delete out[h];
-      left -= d * comboCount(h);
-    }
-    return Object.keys(out).length ? out : w;
-  }
+  const { BRUSHES, combosOf, sameRange, rangeText, parseRange, resize } = window.AnalyzerRanges;  // rangekit.js
+  const rg = { data: null, edit: null, player: 0, brush: 1, scope: 'coup', busy: false, msg: '', ui: null };
 
   function setRanges(data) {
     rg.data = data;
@@ -957,8 +1115,7 @@
   }
 
   const cellTitle = (h, x, r) => h + ' · ' + pct(x) + (Math.abs(x - r) > 0.002 ? ' (référence ' + pct(r) + ')' : '');
-  function paintCell(cell) {
-    const h = cell.dataset.h;
+  function paintCell(h) {
     const w = rg.edit[rg.player];
     if ((w[h] || 0) === rg.brush) return;
     if (rg.brush > 0) w[h] = rg.brush; else delete w[h];
@@ -966,23 +1123,9 @@
   }
 
   function rangeGrid() {
-    const grid = el('div', { class: 'rgrid', 'aria-label': 'Range : clique ou glisse sur les mains pour les peindre' });
-    rg.ui.cells = ALL_HANDS.map((h) => grid.appendChild(el('div', { class: 'rcell', 'data-h': h }, el('span', { class: 'h' }, h))));
-    // souris et doigt : on peint les cases survolées tant que le bouton (ou le doigt) reste appuyé
-    grid.addEventListener('pointerdown', (e) => {
-      const cell = e.target.closest('.rcell');
-      if (!cell || rg.busy) return;
-      rg.painting = true;
-      paintCell(cell);
-      e.preventDefault();
-    });
-    grid.addEventListener('pointermove', (e) => {
-      if (!rg.painting) return;
-      const target = document.elementFromPoint(e.clientX, e.clientY);
-      const cell = target && target.closest('.rcell');
-      if (cell && grid.contains(cell)) paintCell(cell);
-    });
-    return grid;
+    const grid = window.AnalyzerRanges.grid(paintCell, () => rg.busy);
+    rg.ui.cells = grid.cells;
+    return grid.box;
   }
 
   const playerLabel = (q) => q.position + (q.role ? ' · ' + NAME[q.role] : '');
@@ -1020,8 +1163,8 @@
     const change = (next) => { rg.edit[rg.player] = next; rg.msg = ''; refreshRanges(); };
     const current = () => rg.edit[rg.player];
     wrap.append(el('div', { class: 'rg-row' }, brushes,
-      el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, title: 'Retire environ 10 % des combos, en commençant par les mains les plus faibles', onclick: () => change(resize(current(), -1)) }, 'Plus serré'),
-      el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, title: 'Ajoute environ 10 % de combos, en commençant par les mains les plus fortes', onclick: () => change(resize(current(), 1)) }, 'Plus large')));
+      el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, title: 'Retire environ 10 % des combos, en commençant par les mains les plus faibles', onclick: () => change(resize(current(), -1, d.order)) }, 'Plus serré'),
+      el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, title: 'Ajoute environ 10 % de combos, en commençant par les mains les plus fortes', onclick: () => change(resize(current(), 1, d.order)) }, 'Plus large')));
 
     wrap.append(rangeGrid());
     wrap.append(el('div', { class: 'small muted' }, 'Clique ou glisse sur les mains avec le pinceau choisi. Contour orange : différent de la référence.'));
@@ -1044,8 +1187,9 @@
 
     if (d.can_line) {
       const scope = el('div', { class: 'rg-scope', role: 'radiogroup', 'aria-label': 'Portée' });
-      [['coup', 'Pour ce coup seulement'],
-        ['ligne', 'Par défaut pour « ' + d.line + ' » en ' + d.format + ' : tes autres coups de cette ligne, leur analyse et le leakfinding']]
+      [['coup', 'Pour ' + what + ' seulement'],
+        ['ligne', 'Par défaut pour « ' + d.line + ' » en ' + d.format + ' : tes ' + (SPOT ? '' : 'autres ')
+          + 'coups de cette ligne, leur analyse et le leakfinding' + (d.for_spots ? ', et les spots d\'étude ouverts ici' : '')]]
         .forEach(([v, label]) => {
           const input = el('input', { type: 'radio', name: 'rg-scope', value: v, checked: rg.scope === v, onchange: () => { rg.scope = v; refreshRanges(); } });
           scope.append(el('label', {}, input, el('span', {}, label)));
@@ -1059,7 +1203,8 @@
     wrap.append(actions);
     ui.msg = wrap.appendChild(el('p', { class: 'err', role: 'alert' }));
     wrap.append(el('p', { class: 'small muted' }, 'Une autre range change la solution : ' + what + ' se résout à nouveau, dans une étude à part. '
-      + 'Celle de la référence reste : « Revenir à la référence » la rouvre en quelques secondes.'));
+      + 'Celle de la référence reste : « Revenir à la référence » la rouvre en quelques secondes. Toutes tes ranges par défaut, ligne par ligne : ',
+      el('a', { href: '/#/parametres/ranges', target: '_blank', rel: 'noopener' }, 'Paramètres › Ranges préflop'), '.'));
     refreshRanges();
   }
 
@@ -1120,8 +1265,10 @@
     renderRanges();
   }
 
-  // Les ranges ont changé : un autre coup pour le solveur (ou celui de la référence, souvent déjà résolu).
-  async function reopen(solveNow) {
+  // Les ranges ou l'arbre ont changé : un autre coup pour le solveur (ou celui d'origine, souvent déjà résolu).
+  // keepPath : on revient ensuite au nœud affiché (s'il existe encore dans le nouvel arbre).
+  async function reopen(solveNow, keepPath) {
+    resume = keepPath && path.length ? path.slice() : null;
     clearTimeout(pollTimer);
     nodes.clear();
     node = null;
@@ -1133,16 +1280,534 @@
     await showSpot(solveNow);
   }
 
+  // ---------- arbre : tes tailles de mise et tes nœuds verrouillés ----------
+  // Les tailles changées attendent ici « Résoudre avec cet arbre » ; un verrou se compose main par main (case, combo
+  // ou mains filtrées), puis « Verrouiller et résoudre ». Chaque version de l'arbre se résout dans une étude à part.
+  const tr = { data: null, key: null, pending: {}, focus: null, edits: [], editsKey: null, combo: null, target: null,
+    mix: null, mixFor: null, busy: false, msg: '' };
+  let resume = null;  // le nœud à rouvrir quand la résolution de l'arbre modifié est prête
+  const STREET_WORDS = ['Flop', 'Turn', 'River'];
+
+  function sizeText(x) {
+    if (x === 'a') return 'tapis';
+    if (x === 'geo') return 'géo';
+    if (typeof x === 'string' && x.startsWith('geo')) return 'géo ' + x.slice(3) + ' streets';
+    if (typeof x === 'string' && x.startsWith('x')) return 'x' + num(Number(x.slice(1)), 2);
+    return x === 100 ? 'pot' : num(x, 1) + ' %';
+  }
+  const sizesText = (list) => (list.length ? list.map(sizeText).join(' · ') : 'aucune');
+  const comboLabel = (c) => c[0] + SUITS[c[1]] + c[2] + SUITS[c[3]];
+  const mixText = (freqs, labels) => freqs.map((f, k) => (f > 0.0005 ? Math.round(100 * f) + ' % ' + String(labels[k] || '').toLowerCase() : null))
+    .filter(Boolean).join(', ');
+
+  async function mountTree(force) {
+    const key = JSON.stringify(path);
+    if (tr.editsKey !== key) { tr.edits = []; tr.mix = null; tr.editsKey = key; }
+    if (!force && tr.data && tr.key === key) { renderTree(); return; }
+    tr.key = key;
+    if (!tr.data) $('tree-box').textContent = 'Chargement…';
+    try {
+      tr.data = await api('/api/explorateur/arbre', { hand: HAND, path });
+      tr.msg = '';
+    } catch (e) {
+      tr.msg = e.message;
+    }
+    if (tr.focus && tr.data && !tr.data.situations.some((x) => x.key === tr.focus)) tr.focus = null;
+    renderTree();
+  }
+
+  function renderTree() {
+    const box = $('tree-box');
+    box.textContent = '';
+    const d = tr.data;
+    if (!d) { box.append(el('p', { class: 'empty' }, tr.msg || 'Chargement…')); return; }
+    const wrap = el('div', { class: 'rg tr' });
+    box.append(wrap);
+    const changed = d.situations.filter((x) => x.changed).length;
+    const what = [changed ? changed + ' situation(s) modifiée(s)' : '', d.locks.length ? d.locks.length + ' nœud(s) verrouillé(s)' : '']
+      .filter(Boolean).join(' · ');
+    wrap.append(el('div', { class: 'rg-row' }, el('b', {}, d.edited ? 'Ton arbre' : 'Arbre d\'origine'),
+      el('span', { class: 'small muted' }, d.edited ? what : 'les tailles de la série, ou celles par défaut'),
+      d.edited ? el('button', { type: 'button', class: 'rg-btn', disabled: tr.busy, onclick: resetTree }, 'Revenir à l\'arbre d\'origine') : ''));
+    wrap.append(sizesPanel(d), lockPanel());
+    if (d.locks.length) wrap.append(locksList(d));
+    if (tr.msg) wrap.append(el('p', { class: 'err', role: 'alert' }, tr.msg));
+  }
+
+  // --- tailles ---
+  const situationOf = (d, key) => d.situations.find((x) => x.key === key) || (d.here && d.here.key === key ? d.here : null);
+  const sizesOf = (s) => (s.key in tr.pending ? tr.pending[s.key] : s.sizes);
+  const sameSizes = (a, b) => JSON.stringify(a.map(String).sort()) === JSON.stringify(b.map(String).sort());
+
+  function setPending(s, list) {
+    if (sameSizes(list, s.sizes)) delete tr.pending[s.key]; else tr.pending[s.key] = list;
+    renderTree();
+  }
+
+  function sizeEditor(s, here) {
+    const box = el('div', { class: 'tr-sizes' });
+    const list = sizesOf(s);
+    box.append(el('div', { class: 'rg-row' }, el('b', {}, s.title), here ? el('span', { class: 'small muted' }, 'situation de ce nœud') : ''));
+    const chips = el('div', { class: 'tr-chips' });
+    list.forEach((x, k) => chips.append(el('span', { class: 'tr-chip' }, sizeText(x), el('button', {
+      type: 'button', title: 'Retirer cette taille', 'aria-label': 'Retirer ' + sizeText(x),
+      onclick: () => setPending(s, list.filter((_, j) => j !== k)),
+    }, '×'))));
+    if (!list.length) chips.append(el('span', { class: 'small muted' }, s.raise ? 'Pas de relance : fold ou call seulement.' : 'Pas de mise : check seulement.'));
+    box.append(chips);
+    const push = (size) => { if (!list.some((x) => String(x) === String(size))) setPending(s, list.concat([size])); };
+    const input = el('input', { type: 'number', min: '1', max: '1000', step: 'any', class: 'tr-in', placeholder: s.raise ? '60' : '50',
+      'aria-label': 'Nouvelle taille' });
+    const unit = s.raise ? el('select', { 'aria-label': 'Unité de la relance' }, el('option', { value: 'pct' }, '% du pot'), el('option', { value: 'x' }, '× la mise'))
+      : el('span', { class: 'small' }, '% du pot');
+    const add = () => {
+      const v = Number(String(input.value).replace(',', '.'));
+      if (!(v > 0)) { input.focus(); return; }
+      push(s.raise && unit.value === 'x' ? 'x' + v : v);
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+    box.append(el('div', { class: 'rg-row' }, input, unit, el('button', { type: 'button', class: 'rg-btn', onclick: add }, 'Ajouter'),
+      el('button', { type: 'button', class: 'rg-btn', title: 'La même fraction du pot à chaque street, pour finir à tapis à la river', onclick: () => push('geo') }, '+ géo'),
+      el('button', { type: 'button', class: 'rg-btn', onclick: () => push('a') }, '+ tapis')));
+    if (s.raise) box.append(el('div', { class: 'small muted' }, 'Relance : en % du pot après le call (comme les libellés des actions), ou en multiple de la mise (x3).'));
+    if (s.changed || s.key in tr.pending) {
+      box.append(el('div', { class: 'small muted' }, 'D\'origine : ' + sizesText(s.base) + ' ',
+        el('button', { type: 'button', class: 'link', onclick: () => setPending(s, s.base.slice()) }, 'remettre')));
+    }
+    return box;
+  }
+
+  function sizesPanel(d) {
+    const box = el('div', { class: 'tr-box' }, el('h3', {}, 'Tailles de mise'));
+    const key = tr.focus || (d.here && d.here.key);
+    const s = key ? situationOf(d, key) : null;
+    if (s) box.append(sizeEditor(s, !!(d.here && d.here.key === key)));
+    else box.append(el('p', { class: 'small muted' }, node && node.type === 'action'
+      ? 'Ici, personne ne peut miser ni relancer : choisis une situation dans la liste.' : 'Choisis une situation dans la liste.'));
+    if (tr.focus && d.here && tr.focus !== d.here.key) box.append(el('button', { type: 'button', class: 'link', onclick: () => { tr.focus = null; renderTree(); } }, 'Revenir à la situation de ce nœud'));
+    const all = el('details', { class: 'tr-all' }, el('summary', {}, 'Toutes les situations de l\'arbre (' + d.situations.length + ')'));
+    [0, 1, 2].forEach((st) => {
+      const rows = d.situations.filter((x) => x.street === st);
+      if (!rows.length) return;
+      all.append(el('h4', {}, STREET_WORDS[st]));
+      rows.forEach((x) => all.append(el('button', {
+        type: 'button', class: 'tr-sit' + (x.key === key ? ' on' : '') + (x.changed || x.key in tr.pending ? ' mod' : ''),
+        onclick: () => { tr.focus = x.key; renderTree(); },
+      }, el('span', {}, x.title), el('span', { class: 'muted' }, sizesText(sizesOf(x))))));
+    });
+    if (!d.situations.length) all.append(el('p', { class: 'small muted' }, 'Arbre par défaut : chaque street a ses tailles. Une situation que tu modifies s\'ajoute ici.'));
+    box.append(all);
+    const n = Object.keys(tr.pending).length;
+    box.append(el('div', { class: 'rg-row' },
+      el('button', { type: 'button', class: 'rg-btn go', disabled: !n || tr.busy, onclick: saveSizes }, 'Résoudre avec cet arbre' + (n ? ' (' + n + ')' : '')),
+      n ? el('button', { type: 'button', class: 'rg-btn', onclick: () => { tr.pending = {}; renderTree(); } }, 'Annuler') : ''));
+    box.append(el('p', { class: 'small muted' }, 'Une situation (c-bet, 2e barrel, check-raise…) garde les mêmes tailles sur toutes les cartes. '
+      + 'L\'arbre modifié se résout dans une étude à part ; celle d\'origine reste.'));
+    return box;
+  }
+
+  async function treeCall(url, body, solveNow, after) {
+    tr.busy = true;
+    tr.msg = '';
+    renderTree();
+    try {
+      tr.data = await api(url, body);
+      if (after) after();
+      tr.key = null;
+      await reopen(solveNow, true);
+    } catch (e) {
+      tr.msg = e.message;
+    }
+    tr.busy = false;
+    if (rightTab === 'tree') mountTree(true); else renderTree();
+  }
+
+  async function saveSizes() {
+    const n = tr.data.locks.length;
+    if (n && !window.confirm('Changer les tailles retire tes ' + n + ' verrou(s) : leurs chemins ne mènent plus aux mêmes nœuds. Continuer ?')) return;
+    await treeCall('/api/explorateur/arbre/tailles', { hand: HAND, plan: tr.pending }, true, () => { tr.pending = {}; });
+  }
+
+  async function resetTree() {
+    if (!window.confirm('Revenir à l\'arbre d\'origine ? Tes tailles et tes verrous de ce coup sont effacés '
+      + '(les résolutions déjà faites restent dans Études du solveur).')) return;
+    await treeCall('/api/explorateur/arbre/origine', { hand: HAND }, false, () => { tr.pending = {}; tr.edits = []; tr.focus = null; });
+  }
+
+  // ---------- ton arbre, avant la résolution : street par street ----------
+  // Chaque situation (c-bet, 2e barrel, check-raise…) garde ses tailles d'origine, prend les tiennes, n'a plus de mise
+  // (sa branche disparaît : le solveur ne l'explore pas), ou est laissée au solveur, qui choisit lui-même sa taille
+  // parmi celles que tu lui donnes, avant la résolution. Une street entière se règle d'un coup.
+  const cb = { data: null, draft: {}, open: false, busy: false, msg: '', street: 0, raises: [true, false, false], quick: {} };
+  const CB_MODES = [['default', 'Origine'], ['fixed', 'Fixées'], ['none', 'Aucune'], ['auto', 'Le solveur choisit']];
+
+  async function openBuilder() {
+    cb.open = true;
+    cb.msg = '';
+    renderBuilder();
+    renderStatus();
+    try {
+      cb.data = await api('/api/explorateur/construction', { hand: HAND });
+      cb.draft = draftOf(cb.data);
+    } catch (e) {
+      cb.msg = e.message;
+    }
+    renderBuilder();
+  }
+
+  function closeBuilder() {
+    cb.open = false;
+    renderBuilder();
+    renderStatus();
+  }
+
+  function draftOf(d) {
+    const out = {};
+    (d.rows || []).forEach((r) => {
+      if (r.mode !== 'default') out[r.key] = { mode: r.mode, sizes: (r.mode === 'auto' ? r.candidates : r.sizes).slice() };
+    });
+    return out;
+  }
+
+  const choiceOf = (r) => cb.draft[r.key] || { mode: 'default', sizes: r.base.slice() };
+
+  function setChoice(r, mode, sizes) {
+    const c = choiceOf(r);
+    if (mode === 'default') delete cb.draft[r.key];
+    else if (mode === 'none') cb.draft[r.key] = { mode, sizes: [] };
+    else cb.draft[r.key] = { mode, sizes: (sizes || (mode === 'auto' ? r.candidates : c.sizes.length ? c.sizes : r.base)).slice() };
+  }
+
+  // Une situation peut-elle encore arriver avec ces choix ? (comme sizing.reachable)
+  function reachableNow() {
+    const rows = cb.data.rows;
+    const keys = new Set(rows.map((r) => r.key));
+    const eff = {};
+    rows.forEach((r) => { const c = choiceOf(r); eff[r.key] = c.mode === 'default' ? r.base : c.sizes; });
+    const can = (k) => !keys.has(k) || eff[k].length > 0;
+    const memo = {};
+    const reach = (k) => {
+      if (k in memo) return memo[k];
+      memo[k] = true;
+      const [kind, where, past, level] = k.split(':');
+      let ok = true;
+      for (let i = 0; ok && i < past.length; i += 1) {
+        if (past[i] === 'x') continue;
+        const before = past.slice(0, i);
+        const opts = rows.filter((r) => r.key.split(':')[1] === 'ftr'[i] + past[i] && r.key.split(':')[2] === before);
+        if (opts.length && !opts.some((r) => can(r.key) && reach(r.key))) ok = false;
+      }
+      if (ok && kind === 'raise') {
+        const other = where[1] === 'o' ? 'i' : 'o';
+        const n = Number(level);
+        const parent = n === 0 ? 'bet:' + where[0] + other + ':' + past : 'raise:' + where[0] + other + ':' + past + ':' + (n - 1);
+        ok = can(parent) && (!keys.has(parent) || reach(parent));
+      }
+      memo[k] = ok;
+      return ok;
+    };
+    const out = {};
+    rows.forEach((r) => { out[r.key] = reach(r.key); });
+    return out;
+  }
+
+  function chipsEditor(r, list, onChange, raise) {
+    const box = el('div', { class: 'cb-sizes' });
+    const chips = el('div', { class: 'tr-chips' });
+    list.forEach((x, k) => chips.append(el('span', { class: 'tr-chip' }, sizeText(x), el('button', {
+      type: 'button', title: 'Retirer cette taille', 'aria-label': 'Retirer ' + sizeText(x),
+      onclick: () => onChange(list.filter((_, j) => j !== k)),
+    }, '×'))));
+    if (!list.length) chips.append(el('span', { class: 'small muted' }, 'Ajoute une taille.'));
+    const push = (size) => { if (!list.some((x) => String(x) === String(size))) onChange(list.concat([size])); };
+    const input = el('input', { type: 'number', min: '1', max: '1000', step: 'any', class: 'tr-in', placeholder: raise ? '60' : '50',
+      'aria-label': 'Nouvelle taille' + (r ? ' : ' + r.title : '') });
+    const unit = raise ? el('select', { 'aria-label': 'Unité de la relance' }, el('option', { value: 'pct' }, '% du pot'),
+      el('option', { value: 'x' }, '× la mise')) : el('span', { class: 'small' }, '% du pot');
+    const add = () => {
+      const v = Number(String(input.value).replace(',', '.'));
+      if (!(v > 0)) { input.focus(); return; }
+      push(raise && unit.value === 'x' ? 'x' + v : v);
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+    chips.append(input, unit, el('button', { type: 'button', class: 'rg-btn', onclick: add }, 'Ajouter'),
+      el('button', { type: 'button', class: 'rg-btn', title: 'La même fraction du pot à chaque street, pour finir à tapis à la river',
+        onclick: () => push('geo') }, '+ géo'),
+      el('button', { type: 'button', class: 'rg-btn', onclick: () => push('a') }, '+ tapis'));
+    box.append(chips);
+    return box;
+  }
+
+  function builderRow(r, reach) {
+    const c = choiceOf(r);
+    const seg = el('div', { class: 'seg cb-modes', role: 'group', 'aria-label': 'Choix : ' + r.title });
+    CB_MODES.forEach(([m, label]) => {
+      const blocked = m === 'none' && r.played;
+      seg.append(el('button', {
+        type: 'button', 'aria-pressed': String(c.mode === m), disabled: blocked,
+        title: blocked ? 'La ligne jouée passe par là : elle garde une mise' : m === 'none' ? (r.raise ? 'Pas de relance : fold ou call seulement'
+          : 'Pas de mise : check seulement ; la branche disparaît de l\'arbre') : m === 'auto' ? 'Le solveur compare ces tailles et garde la meilleure, avant la résolution' : '',
+        onclick: () => { setChoice(r, m); renderBuilder(); },
+      }, m === 'default' ? 'Origine : ' + (r.base.length ? sizesText(r.base) : 'aucune') : label));
+    });
+    const tags = [r.player];
+    if (r.played) tags.push('ligne jouée');
+    if (!reach) tags.push('ne peut plus arriver');
+    const row = el('div', { class: 'cb-row' + (reach ? '' : ' off') + (c.mode !== 'default' ? ' mod' : '') },
+      el('div', { class: 'cb-title' }, el('b', {}, r.title), el('span', { class: 'muted small' }, ' · ' + tags.join(' · '))), seg);
+    if (c.mode === 'fixed' || c.mode === 'auto') {
+      row.append(chipsEditor(r, c.sizes, (list) => { cb.draft[r.key] = { mode: c.mode, sizes: list }; renderBuilder(); }, r.raise));
+    }
+    if (c.mode === 'auto') {
+      row.append(el('div', { class: 'small muted' }, 'Il en garde ' + r.choose + (r.choose > 1 ? ' (river)' : '')
+        + (r.chosen && cb.data.rows.find((x) => x.key === r.key).mode === 'auto' ? ' · déjà choisi : ' + sizesText(r.chosen) : '')));
+    }
+    return row;
+  }
+
+  // Toute une street d'un coup (mises, ou relances) : un choix et ses tailles, appliqués à chaque situation.
+  function quickRow(street, raise) {
+    const rows = cb.data.rows.filter((r) => r.street === street && r.raise === raise);
+    if (!rows.length) return '';
+    const id = street + (raise ? 'r' : 'b');
+    const q = cb.quick[id] || (cb.quick[id] = { mode: 'auto', sizes: [] });
+    const select = el('select', { 'aria-label': 'Choix pour toutes les ' + (raise ? 'relances' : 'mises') + ' de la street',
+      onchange: (e) => { q.mode = e.target.value; renderBuilder(); } },
+    CB_MODES.map(([m, label]) => el('option', { value: m, selected: q.mode === m }, label)));
+    const apply = () => {
+      if (q.mode === 'fixed' && !q.sizes.length) { cb.msg = 'Ajoute au moins une taille à appliquer.'; renderBuilder(); return; }
+      const reach = reachableNow();
+      rows.forEach((r) => {
+        if (q.mode === 'none' && r.played) return;  // la ligne jouée garde sa mise
+        if (q.mode !== 'default' && !reach[r.key]) return;  // une situation qui ne peut plus arriver reste telle quelle
+        setChoice(r, q.mode, q.mode === 'auto' ? (q.sizes.length ? q.sizes : r.candidates) : q.sizes);
+      });
+      cb.msg = '';
+      renderBuilder();
+    };
+    const box = el('div', { class: 'cb-quick' }, el('div', { class: 'rg-row' },
+      el('b', {}, (raise ? 'Toutes les relances' : 'Toutes les mises') + ' (' + rows.length + ')'), select,
+      el('button', { type: 'button', class: 'rg-btn', onclick: apply }, 'Appliquer')));
+    if (q.mode === 'fixed' || q.mode === 'auto') {
+      box.append(chipsEditor(null, q.sizes, (list) => { q.sizes = list; renderBuilder(); }, raise));
+      if (q.mode === 'auto' && !q.sizes.length) box.append(el('div', { class: 'small muted' }, 'Sans taille ajoutée : celles que le solveur compare d\'habitude dans chaque situation.'));
+    }
+    return box;
+  }
+
+  function renderBuilder() {
+    const box = $('builder');
+    const layout = document.querySelector('main.layout');
+    box.hidden = !cb.open;
+    if (layout) layout.hidden = cb.open;
+    box.textContent = '';
+    if (!cb.open) return;
+    const d = cb.data;
+    box.append(el('div', { class: 'cb-head' }, el('h2', {}, 'Ton arbre'),
+      d && d.available ? el('span', { class: 'muted small' }, d.family_title + ' · ' + d.positions.join(' contre ')) : '',
+      el('button', { type: 'button', class: 'rg-btn', onclick: closeBuilder }, 'Fermer')));
+    if (!d) { box.append(el('p', { class: 'muted' }, cb.msg || 'Chargement…')); return; }
+    if (!d.available) { box.append(el('p', {}, d.message)); return; }
+    box.append(el('p', { class: 'small muted cb-intro' }, 'Avant la résolution, pour chaque situation : ses tailles d\'origine, '
+      + 'les tiennes (« Fixées »), aucune mise ou relance (« Aucune » : sa branche disparaît, le solveur ne l\'explore pas), ou '
+      + '« Le solveur choisit » : il compare les tailles que tu lui donnes et garde la meilleure (une à la river : deux), avant '
+      + 'de résoudre. Plus il a de tailles à comparer, plus c\'est long : quelques minutes par situation au flop.'));
+    const reach = reachableNow();
+    const tabs = el('div', { class: 'seg', role: 'group', 'aria-label': 'Street' });
+    STREET_WORDS.forEach((w, st) => {
+      const n = d.rows.filter((r) => r.street === st && cb.draft[r.key]).length;
+      tabs.append(el('button', { type: 'button', 'aria-pressed': String(cb.street === st), onclick: () => { cb.street = st; renderBuilder(); } },
+        w + (n ? ' · ' + n : '')));
+    });
+    const counts = { fixed: 0, none: 0, auto: 0 };
+    Object.values(cb.draft).forEach((c) => { counts[c.mode] += 1; });
+    const summary = [counts.fixed ? counts.fixed + ' fixée(s)' : '', counts.none ? counts.none + ' sans mise ni relance' : '',
+      counts.auto ? counts.auto + ' au choix du solveur' : ''].filter(Boolean).join(' · ') || 'l\'arbre d\'origine';
+    box.append(el('div', { class: 'rg-row' }, tabs, el('span', { class: 'small muted' }, summary)));
+    const st = cb.street;
+    const panel = el('div', { class: 'cb-street' });
+    panel.append(el('div', { class: 'cb-quicks' }, quickRow(st, false), quickRow(st, true)));
+    const rows = d.rows.filter((r) => r.street === st);
+    const raises = rows.filter((r) => r.raise).length;
+    if (raises) {
+      panel.append(el('label', { class: 'small cb-toggle' }, el('input', { type: 'checkbox', checked: cb.raises[st],
+        onchange: (e) => { cb.raises[st] = e.target.checked; renderBuilder(); } }), ' Montrer les relances, une par une (' + raises + ')'));
+    }
+    const lines = [...new Set(rows.map((r) => r.line))];
+    lines.forEach((line) => {
+      const shown = rows.filter((r) => r.line === line && (!r.raise || cb.raises[st]));
+      if (!shown.length) return;
+      if (line) panel.append(el('h4', {}, 'Après : ' + (d.lines[line] || line)));
+      shown.forEach((r) => panel.append(builderRow(r, reach[r.key])));
+    });
+    box.append(panel);
+    const sorted = (x) => JSON.stringify(Object.keys(x).sort().map((k) => [k, x[k]]));
+    const toChoose = counts.auto && (d.pending || sorted(cb.draft) !== sorted(draftOf(d)));
+    const actions = el('div', { class: 'rg-row cb-actions' },
+      el('button', { type: 'button', class: 'rg-btn go', disabled: cb.busy, onclick: () => saveBuilder(true) },
+        toChoose ? 'Choisir les tailles, puis résoudre' : 'Résoudre avec cet arbre'),
+      el('button', { type: 'button', class: 'rg-btn', disabled: cb.busy, onclick: () => saveBuilder(false) }, 'Enregistrer'),
+      Object.keys(cb.draft).length ? el('button', { type: 'button', class: 'rg-btn', disabled: cb.busy,
+        onclick: () => { cb.draft = {}; renderBuilder(); } }, 'Tout remettre à l\'origine') : '');
+    box.append(actions);
+    if (cb.msg) box.append(el('p', { class: 'small' + (cb.msg.endsWith('.') && !/^Arbre|^Rien/.test(cb.msg) ? ' err' : '') }, cb.msg));
+    box.append(el('p', { class: 'small muted' }, 'Tailles comparées d\'habitude : ' + d.compared + '. Ton arbre se résout '
+      + 'dans une étude à part : celle d\'origine reste. Après la résolution, l\'onglet Arbre change encore une situation ou '
+      + 'verrouille un nœud.'));
+  }
+
+  async function saveBuilder(solveAfter) {
+    if (cb.data.locks && !window.confirm('Changer l\'arbre retire tes ' + cb.data.locks + ' verrou(s) : leurs chemins ne mènent '
+      + 'plus aux mêmes nœuds. Continuer ?')) return;
+    cb.busy = true;
+    cb.msg = '';
+    renderBuilder();
+    try {
+      cb.data = await api('/api/explorateur/construction/enregistrer', { hand: HAND, choices: cb.draft });
+      cb.draft = draftOf(cb.data);
+      cb.busy = false;
+      tr.data = null;
+      if (solveAfter) {
+        cb.open = false;
+        renderBuilder();
+        await reopen(true, false);
+        return;
+      }
+      cb.msg = cb.data.changed ? 'Arbre enregistré : « Résoudre » le calcule.' : 'Rien n\'a changé.';
+      await loadState();
+      renderStatus();
+    } catch (e) {
+      cb.msg = e.message;
+    }
+    cb.busy = false;
+    renderBuilder();
+  }
+
+  // --- verrou ---
+  function lockTargets() {
+    const p = node.player;
+    const rows = node.hands[p];
+    const out = [];
+    if (selected) {
+      const cell = rows.filter((r) => classOf(r[0]) === selected);
+      if (cell.length) out.push({ id: 'cell', label: selected, combos: cell.map((r) => r[0]), rows: cell });
+    }
+    if (tr.combo) {
+      const row = rows.find((r) => r[0] === tr.combo);
+      if (row) out.push({ id: 'combo', label: comboLabel(row[0]), combos: [row[0]], rows: [row] });
+    }
+    if (filterActive() && viewPlayer === p) {
+      const kept = rows.filter((r, i) => passes(p, i, r));
+      if (kept.length) out.push({ id: 'filter', label: 'Mains filtrées', combos: kept.map((r) => r[0]), rows: kept });
+    }
+    return out;
+  }
+
+  function currentMix(t) {
+    const na = node.actions.length;
+    const w = t.rows.reduce((x, r) => x + r[1], 0) || 1;
+    return node.actions.map((_, k) => Math.round(100 * t.rows.reduce((x, r) => x + r[1] * r[4 + k], 0) / w));
+  }
+
+  function addEdit(t, freqs) {
+    tr.edits.push({ label: t.label, combos: t.combos, freqs });
+    tr.mix = null;
+    renderTree();
+  }
+
+  function lockPanel() {
+    const box = el('div', { class: 'tr-box' }, el('h3', {}, 'Verrou (nodelock)'));
+    if (!node || node.type !== 'action' || node.actions.length < 2) {
+      box.append(el('p', { class: 'small muted' }, 'Va à un nœud où le joueur a le choix pour verrouiller sa stratégie.'));
+      return box;
+    }
+    if (!live) {
+      box.append(el('p', { class: 'small muted' }, 'Ouvre la résolution complète (session active) pour verrouiller ce nœud.'));
+      return box;
+    }
+    const p = node.player;
+    const labels = nodeLabels();
+    const cols = colors(node.actions);
+    box.append(el('p', { class: 'small' }, who(p) + ' agit : choisis des mains et leur façon de jouer ici, puis relance la résolution.'));
+    if (viewPlayer !== p) box.append(el('p', { class: 'small muted' }, 'La grille montre la range de ' + who(viewPlayer) + ' : affiche celle de '
+      + who(p) + ' pour choisir ses mains.'));
+    const targets = lockTargets();
+    if (!targets.some((t) => t.id === tr.target)) tr.target = targets.length ? targets[0].id : null;
+    if (!targets.length) {
+      box.append(el('p', { class: 'small muted' }, 'Mains : clique une case de la grille, le cadenas d\'un combo (onglet Mains), '
+        + 'ou choisis des mains dans les Filtres (main faite, tirage, équité…).'));
+    } else {
+      const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Mains à verrouiller' });
+      targets.forEach((t) => seg.append(el('button', {
+        type: 'button', 'aria-pressed': String(t.id === tr.target), onclick: () => { tr.target = t.id; tr.mix = null; renderTree(); },
+      }, t.label + ' (' + t.combos.length + ')')));
+      box.append(el('div', { class: 'rg-row' }, el('span', { class: 'small' }, 'Mains'), seg));
+      const t = targets.find((x) => x.id === tr.target);
+      const acts = el('div', { class: 'tr-acts' });
+      labels.forEach((label, k) => acts.append(el('button', {
+        type: 'button', class: 'rg-btn', onclick: () => addEdit(t, node.actions.map((_, j) => (j === k ? 1 : 0))),
+      }, el('i', { class: 'sw', style: 'background:' + cols[k] }), 'Toujours ' + label.toLowerCase())));
+      box.append(el('div', { class: 'small' }, 'Stratégie : une action à 100 %…'), acts);
+      if (!tr.mix || tr.mixFor !== t.id + ':' + t.label) { tr.mix = currentMix(t); tr.mixFor = t.id + ':' + t.label; }
+      const mix = tr.mix;
+      const inputs = el('div', { class: 'tr-mix' });
+      labels.forEach((label, k) => inputs.append(el('label', {}, el('i', { class: 'sw', style: 'background:' + cols[k] }), label + ' ',
+        el('input', { type: 'number', min: '0', max: '100', step: '1', value: String(mix[k]), class: 'tr-in',
+          oninput: (e) => { mix[k] = Math.max(0, Number(e.target.value) || 0); } }), ' %')));
+      box.append(el('div', { class: 'small' }, '… ou un mélange (en %, ramené à 100 ; au départ, celui du solveur pour ces mains) :'), inputs,
+        el('button', { type: 'button', class: 'rg-btn', onclick: () => {
+          const total = mix.reduce((x, y) => x + y, 0);
+          if (total > 0) addEdit(t, mix.map((x) => x / total));
+        } }, 'Ajouter ce mélange'));
+    }
+    if (tr.edits.length) {
+      const list = el('ul', { class: 'tr-edits' });
+      tr.edits.forEach((e, k) => list.append(el('li', {}, el('b', {}, e.label), ' (' + e.combos.length + ') : ' + mixText(e.freqs, labels) + ' ',
+        el('button', { type: 'button', class: 'link', onclick: () => { tr.edits.splice(k, 1); renderTree(); } }, 'retirer'))));
+      box.append(el('div', { class: 'small' }, 'À verrouiller à ce nœud :'), list,
+        el('div', { class: 'rg-row' }, el('button', { type: 'button', class: 'rg-btn go', disabled: tr.busy, onclick: saveLock }, 'Verrouiller et résoudre')));
+    }
+    box.append(el('p', { class: 'small muted' }, 'Le solveur verrouille le nœud entier (comme PioSolver) : les autres mains de '
+      + who(p) + ' gardent la stratégie affichée, et tout le reste de l\'arbre s\'adapte à la nouvelle résolution. '
+      + 'Une main et ses équivalents de couleur sur ce board sont verrouillés ensemble.'));
+    return box;
+  }
+
+  async function saveLock() {
+    const edits = tr.edits.map(({ label, combos, freqs }) => ({ label, combos, freqs }));
+    await treeCall('/api/explorateur/arbre/verrou', { hand: HAND, path, edits, labels: nodeLabels() }, true,
+      () => { tr.edits = []; tr.combo = null; });
+  }
+
+  function locksList(d) {
+    const box = el('div', { class: 'tr-box' }, el('h3', {}, 'Tes verrous (' + d.locks.length + ')'));
+    d.locks.forEach((x) => {
+      const here = same(x.path, path);
+      box.append(el('div', { class: 'tr-lock' + (here ? ' on' : '') }, el('div', {}, el('b', {}, x.title)),
+        el('div', { class: 'small' }, x.edits.map((e) => e.label + ' (' + e.combos + ') : ' + mixText(e.freqs, x.actions)).join(' ; ')),
+        el('div', { class: 'rg-row' }, here ? el('span', { class: 'small muted' }, 'nœud affiché')
+          : el('button', { type: 'button', class: 'rg-btn', disabled: !live, onclick: () => goTo(x.path) }, 'Y aller'),
+        el('button', { type: 'button', class: 'rg-btn', disabled: tr.busy, onclick: () => treeCall('/api/explorateur/arbre/deverrouiller',
+          { hand: HAND, index: x.index }, true) }, 'Retirer'))));
+    });
+    if (d.locks.length > 1) box.append(el('button', { type: 'button', class: 'rg-btn', disabled: tr.busy,
+      onclick: () => treeCall('/api/explorateur/arbre/deverrouiller', { hand: HAND, index: null }, true) }, 'Retirer tous les verrous'));
+    return box;
+  }
+
   function renderTabs() {
     const n = filters.keys.size;
     $('tab-combos').setAttribute('aria-selected', rightTab === 'combos' ? 'true' : 'false');
     $('tab-filters').setAttribute('aria-selected', rightTab === 'filters' ? 'true' : 'false');
     $('tab-coach').setAttribute('aria-selected', rightTab === 'coach' ? 'true' : 'false');
     $('tab-ranges').setAttribute('aria-selected', rightTab === 'ranges' ? 'true' : 'false');
+    $('tab-tree').setAttribute('aria-selected', rightTab === 'tree' ? 'true' : 'false');
     $('pane-coach').hidden = rightTab !== 'coach';
     $('pane-ranges').hidden = rightTab !== 'ranges';
+    $('pane-tree').hidden = rightTab !== 'tree';
     if (rightTab === 'coach') mountCoach();
     if (rightTab === 'ranges') mountRanges();
+    if (rightTab === 'tree' && node) mountTree();
     $('tab-filters').textContent = 'Filtres';
     if (n) $('tab-filters').append(el('span', { class: 'count' }, n));
     $('pane-combos').hidden = rightTab !== 'combos';
@@ -1170,7 +1835,9 @@
     renderTabs();
     $('b-back').disabled = PRE ? !preLine.length : !path.some((s) => s.type === 'action') && !prefix;
     // L'entraîneur rejoue depuis ce nœud : il faut l'étude ouverte et une vraie décision.
-    $('b-train').disabled = PRE || !live || node.type !== 'action' || node.actions.length < 2;
+    $('b-train').disabled = PRE || !live || node.type !== 'action' || node.actions.length < 2 || !!(state && state.edits);
+    $('b-train').title = state && state.edits ? 'L\'entraîneur joue l\'arbre d\'origine : reviens-y pour t\'entraîner ici'
+      : 'Jouer des mains à partir de ce moment du coup, face au solveur';
   }
 
   function initialPath() {
@@ -1187,8 +1854,17 @@
     return (decisions[k] || decisions[0] || { path: [] }).path;
   }
 
-  // Premier nœud affiché ; dans un spot d'étude, on passe le check forcé de la BB (qui ne mène pas).
-  const goStart = () => goTo(initialPath(), true);
+  // Premier nœud affiché ; dans un spot d'étude, on passe le check forcé de la BB (qui ne mène pas). Après une
+  // nouvelle résolution de ton arbre, le nœud où tu étais, s'il existe encore.
+  async function goStart() {
+    if (resume) {
+      const target = resume;
+      resume = null;
+      await goTo(target);
+      if (node) return;
+    }
+    await goTo(initialPath(), true);
+  }
 
   // Le coup tel que l'état le donne ; solveNow : le résoudre s'il ne l'est pas encore (nouvelles ranges).
   async function showSpot(solveNow) {
@@ -1214,7 +1890,7 @@
   $('tab-filters').onclick = () => { rightTab = 'filters'; renderTabs(); };
   $('tab-coach').onclick = () => { rightTab = 'coach'; renderTabs(); };
   $('tab-ranges').onclick = () => { rightTab = 'ranges'; renderTabs(); };
-  document.addEventListener('pointerup', () => { rg.painting = false; });
+  $('tab-tree').onclick = () => { rightTab = 'tree'; renderTabs(); };
   $('b-line').onclick = () => state && state.result && goTo(state.result.decisions[0].path);
   $('b-train').onclick = () => window.open('/entraineur?spot=' + encodeURIComponent(HAND) + '&chemin='
     + encodeURIComponent(JSON.stringify(path)), '_blank', 'noopener');
@@ -1222,7 +1898,7 @@
     $('b-line').hidden = true;
     $('reveal').closest('label').hidden = true;
     const ident = HAND.split(':');
-    document.title = 'Explorateur — ' + ident[1].toUpperCase() + ' ' + ident[2];
+    document.title = 'Explorateur — ' + ident[1].replace(/^6max_/, '6-max ').replace(/_/g, ' ').toUpperCase() + ' ' + ident[2];
   }
   $('reveal').onchange = render;
   document.addEventListener('keydown', (e) => {
@@ -1244,10 +1920,12 @@
     $('b-train').hidden = true;
     $('tab-filters').hidden = true;  // les filtres (mains faites, tirages, équité) n'ont de sens qu'au postflop
     $('tab-ranges').hidden = true;
-    document.title = 'Explorateur — préflop';
+    $('tab-tree').hidden = true;
+    document.title = 'Explorateur — préflop' + (TABLE !== 'HU' ? ' ' + TABLE : '');
   }
-  if (SPOT) {  // ligne préflop du spot, en tête du déroulé
-    api('/api/explorateur/preflop', { family: FAMILY }).then((n) => { prefix = n; if (node) render(); }).catch(() => {});
+  if (SPOT) {  // ligne préflop du spot (solution heads-up, ou charts 6-max), en tête du déroulé
+    api('/api/explorateur/preflop', FAMILY.startsWith('6max_') ? { table: '6-max', family: FAMILY } : { family: FAMILY })
+      .then((n) => { prefix = n; if (node) render(); }).catch(() => {});
   }
 
   (async () => {
@@ -1261,6 +1939,12 @@
       await loadState();
     } catch (e) {
       $('status').textContent = e.message;
+      return;
+    }
+    if (/arbre/.test(location.hash)) {  // « Construire l'arbre d'abord » : pas de résolution tout de suite
+      history.replaceState(null, '', location.pathname);
+      await showSpot(false);
+      openBuilder();
       return;
     }
     await showSpot(false);

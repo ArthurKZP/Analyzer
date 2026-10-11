@@ -1,4 +1,3 @@
-import json
 import os
 import shutil
 import tempfile
@@ -7,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from analyzer import settings
+from analyzer.errors import NotFound
 from analyzer.parsers import parse_text
 from analyzer.theory import custom_ranges, postflop, ring_ranges, studyspots
 
@@ -23,7 +24,7 @@ class HomeTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        env = mock.patch.dict(os.environ, {"ANALYZER_HOME": tmp.name})
+        env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": tmp.name})
         env.start()
         self.addCleanup(env.stop)
         self.home = Path(tmp.name)
@@ -51,10 +52,68 @@ class StoreTest(HomeTest):
         self.assertTrue(custom_ranges.clear("coup", "H1"))
         self.assertFalse(custom_ranges.clear("coup", "H1"))
         self.assertEqual(custom_ranges.lookup("H1", "HU|BTN:raise BB:call")[0], "ligne")
-        self.assertEqual(custom_ranges.path(), self.home / "ranges" / "perso.json")
-        self.assertEqual(ring_ranges.available(), {})  # le fichier n'est pas une solution de format
+        self.assertEqual(ring_ranges.available(), {})  # tes ranges ajustées ne sont pas une solution de format
         with self.assertRaises(ValueError):
             custom_ranges.save("tout", "H1", {"BB": "AA"})
+
+
+class LinesTest(HomeTest):
+    """Les lignes de chaque format et leurs ranges de référence (Paramètres › Ranges préflop)."""
+
+    def charts(self):
+        ring_ranges.save_solution("6-max", {"format": "6-max", "source": "Mes charts — test", "lines": {
+            "CO:raise BB:call": {"pot_type": "SRP", "ranges": {"CO": "AA,KK,AQs", "BB": "QQ,AJs"}},
+            "UTG:raise BB:call": {"ranges": {"UTG": "AA", "BB": "KK"}},
+            "CO:raise BB:raise CO:call": {"ranges": {"CO": "KK", "BB": "AA"}},
+            "BTN:raise SB:raise BTN:call": {"ranges": {"BTN": "QQ", "SB": "AA,KK"}},
+            "CO:raise BTN:call BB:call": {"ranges": {"CO": "AA", "BTN": "KK", "BB": "QQ"}},  # à trois : pas réglable
+            "illisible": {"ranges": {"CO": "AA"}}}})
+
+    def test_heads_up(self):
+        lines = custom_ranges.reference_lines("HU")
+        self.assertEqual([(line["key"], line["pot_type"], list(line["ranges"])) for line in lines],
+                         [("BTN:raise BB:call", "SRP", ["BTN", "BB"]),
+                          ("BTN:raise BB:raise BTN:call", "pot 3bet", ["BTN", "BB"]),
+                          ("BTN:raise BB:raise BTN:raise BB:call", "pot 4bet", ["BTN", "BB"])])
+        spot = studyspots.parse_ident("spot:3bet:KsKd4c")  # les ranges des spots d'étude de la même ligne
+        self.assertEqual(lines[1]["ranges"], {"BTN": spot.ranges["BTN"], "BB": spot.ranges["BB"]})
+        self.assertEqual(custom_ranges.formats(), ["HU"])  # sans charts : le heads-up seulement
+        self.assertEqual(custom_ranges.formats(["6-max"], heads_up=False), [])
+        self.assertEqual(custom_ranges.reference_name("HU"), "solution préflop heads-up")
+        self.assertIsNone(custom_ranges.reference_line("HU|BTN:call BB:check"))  # pot limpé : pas de référence
+        self.assertEqual(custom_ranges.reference_line("HU|BTN:raise BB:call")["pot_type"], "SRP")
+
+    def test_ring_formats(self):
+        self.charts()
+        self.assertEqual(custom_ranges.formats(["8 joueurs", "3-max", "4-max", "HU"]),
+                         ["HU", "3-max", "6-max", "8 joueurs"])  # « 4-max » : un format que tes mains n'ont pas
+        self.assertEqual(custom_ranges.formats(["8 joueurs"], heads_up=False, ring=True), ["6-max", "8 joueurs"])
+        six = custom_ranges.reference_lines("6-max")
+        self.assertEqual([line["key"] for line in six],  # pots simples d'abord, puis dans l'ordre de parole
+                         ["UTG:raise BB:call", "CO:raise BB:call", "CO:raise BB:raise CO:call",
+                          "BTN:raise SB:raise BTN:call"])
+        self.assertEqual(six[1]["ranges"], {"CO": {"AA": 1.0, "KK": 1.0, "AQs": 1.0}, "BB": {"QQ": 1.0, "AJs": 1.0}})
+        self.assertEqual(custom_ranges.reference_name("6-max"), "Mes charts (6-max)")
+        # 8 joueurs : les charts 6-max à même nombre de joueurs derrière (le LJ ouvre comme l'UTG de 6-max)
+        eight = custom_ranges.reference_lines("8 joueurs")
+        self.assertEqual([line["key"] for line in eight][:2], ["LJ:raise BB:call", "CO:raise BB:call"])
+        self.assertEqual(eight[0]["ranges"], {"LJ": {"AA": 1.0}, "BB": {"KK": 1.0}})
+        self.assertEqual(custom_ranges.reference_name("8 joueurs"), "Mes charts (6-max), position pour position")
+        # 3-max sans charts à lui : seules les lignes entre le bouton et les blindes
+        self.assertEqual([line["key"] for line in custom_ranges.reference_lines("3-max")],
+                         ["BTN:raise SB:raise BTN:call"])
+        self.assertEqual(custom_ranges.reference_lines("4-max"), [])
+        self.assertIsNone(custom_ranges.reference_line("6-max|HJ:raise BB:call"))
+        self.assertEqual(custom_ranges.table_seats("7 joueurs"), ("UTG", "LJ", "HJ", "CO", "BTN", "SB", "BB"))
+
+    def test_spots_option(self):
+        self.assertFalse(custom_ranges.for_spots())
+        self.assertTrue(custom_ranges.set_for_spots(True))
+        custom_ranges.save("ligne", "HU|BTN:raise BB:call", {"BB": "AA"})  # l'option reste
+        self.assertTrue(custom_ranges.for_spots())
+        custom_ranges.clear("ligne", "HU|BTN:raise BB:call")
+        self.assertTrue(custom_ranges.load()["spots"])
+        self.assertFalse(custom_ranges.set_for_spots(False))
 
 
 class SpotTest(HomeTest):
@@ -84,11 +143,8 @@ class SpotTest(HomeTest):
         self.assertIn("ajustées pour ce coup", postflop.result_text(result, "Hero"))
 
     def test_ring_hand(self):
-        folder = ring_ranges.folder()
-        folder.mkdir(parents=True)
-        (folder / "3-max.json").write_text(json.dumps({"format": "3-max", "lines": {
-            "BTN:raise BB:raise BTN:call": {"ranges": {"BTN": "AA,KK:0.5,AQs,A9s", "BB": "AA,KK,QQ,AKs"}}}}),
-            encoding="utf-8")
+        ring_ranges.save_solution("3-max", {"format": "3-max", "lines": {
+            "BTN:raise BB:raise BTN:call": {"ranges": {"BTN": "AA,KK:0.5,AQs,A9s", "BB": "AA,KK,QQ,AKs"}}}})
         hand = parse_text((SITES / "winamax.txt").read_text(encoding="utf-8"))[0]
         spot = postflop.build_spot(hand, "Hero")
         self.assertEqual(spot.context, "3-max|BTN:raise BB:raise BTN:call")  # le fold de la SB ne compte pas
@@ -114,7 +170,7 @@ class SpotTest(HomeTest):
         study.parent.mkdir(parents=True, exist_ok=True)
         study.write_bytes(b"x")
         spot.write_meta(request, {"iterations": 10, "exploit_pct": 0.5, "seconds": 3})
-        meta = json.loads(study.with_suffix(".json").read_text(encoding="utf-8"))
+        meta = postflop.study_meta(request)
         self.assertEqual((meta["kind"], meta["hand"], meta["adjusted"]), ("spot-ajuste", ident, "coup"))
         self.assertEqual(studyspots.spot_studies(), {})  # ni dans la série…
         self.assertEqual(studyspots.stale_spot_studies(), [])  # …ni parmi les études à refaire
@@ -125,6 +181,19 @@ class SpotTest(HomeTest):
         with mock.patch("analyzer.theory.coach.extract_and_save") as extract:
             spot.after_solve(None)  # pas de plan de jeu tiré de tes ranges
             extract.assert_not_called()
+
+    def test_study_spot_with_line_defaults(self):
+        ident = "spot:srp:KsKd4c"
+        custom_ranges.save("ligne", "HU|BTN:raise BB:call", {"BB": "AA", "BTN": "KK"})
+        custom_ranges.set_for_spots(True)  # option des Paramètres : la ligne vaut aussi pour les spots d'étude
+        self.assertIsNone(studyspots.parse_ident(ident).adjusted)  # séries, plans et références : toujours la théorie
+        spot = studyspots.parse_ident(ident, custom=True)
+        self.assertEqual((spot.adjusted, spot.ranges["BB"], spot.ranges["BTN"]), ("ligne", {"AA": 1.0}, {"KK": 1.0}))
+        custom_ranges.save("coup", ident, {"BB": "QQ"})  # le réglage du spot passe avant
+        spot = studyspots.parse_ident(ident, custom=True)
+        self.assertEqual((spot.adjusted, spot.ranges["BB"], spot.ranges["BTN"]), ("coup", {"QQ": 1.0}, {"KK": 1.0}))
+        custom_ranges.set_for_spots(False)
+        self.assertEqual(studyspots.parse_ident(ident, custom=True).ranges["BTN"], spot.reference["BTN"])
 
 
 class LiveSessionTest(unittest.TestCase):
@@ -186,6 +255,63 @@ class LibraryTest(HomeTest):
             with self.assertRaises(ValueError):
                 lib.save_ranges("HAND01", scope, ranges)
         self.assertFalse(lib.ranges_state("HAND03")["supported"])  # tapis préflop
+
+    def test_default_ranges(self):
+        lib = self.lib
+        view = lib.default_ranges_view()
+        self.assertEqual([(g["format"], g["hands"], len(g["lines"])) for g in view["formats"]], [("HU", 4, 3)])
+        self.assertEqual((view["orphans"], view["for_spots"], view["charts"]), ([], False, False))
+        first = view["formats"][0]["lines"][0]
+        self.assertEqual(first, {"context": "HU|BTN:raise BB:call", "line": "BTN open, BB call", "pot_type": "SRP",
+                                 "positions": ["BTN", "BB"], "adjusted": []})
+        line = lib.default_range_line("HU|BTN:raise BB:call")
+        self.assertEqual((line["line"], line["format"], line["adjusted"], len(line["order"])),
+                         ("BTN open, BB call", "HU", None, 169))
+        self.assertEqual([(p["position"], p["source"]) for p in line["players"]], [("BTN", "reference"), ("BB", "reference")])
+        btn_ref = postflop.range_text(line["players"][0]["reference"])
+
+        line = lib.save_default_ranges("HU|BTN:raise BB:call", {"BTN": btn_ref, "BB": "AA,KK"})
+        self.assertEqual([p["source"] for p in line["players"]], ["reference", "ligne"])  # BTN inchangé : pas gardé
+        self.assertEqual(custom_ranges.load()["lignes"], {"HU|BTN:raise BB:call": {"BB": "AA,KK"}})
+        self.assertEqual(lib.ranges_state("HAND01")["adjusted"], "ligne")  # tes coups de la ligne la prennent
+        self.assertEqual(lib.solve("HAND01")["adjusted"], "ligne")
+        lib.save_default_ranges("HU|BTN:raise BB:call", {"BTN": "AA,AKs"})  # BB garde son réglage
+        self.assertEqual(custom_ranges.load()["lignes"]["HU|BTN:raise BB:call"], {"BB": "AA,KK", "BTN": "AA,AKs"})
+        self.assertEqual(lib.default_ranges_view()["formats"][0]["lines"][0]["adjusted"], ["BTN", "BB"])
+        lib.save_default_ranges("HU|BTN:raise BB:call", {"BTN": btn_ref})
+        self.assertEqual(custom_ranges.load()["lignes"]["HU|BTN:raise BB:call"], {"BB": "AA,KK"})
+
+        for context, ranges in (("HU|BTN:raise BB:call", {"SB": "AA"}), ("HU|BTN:raise BB:call", {}),
+                                ("HU|BTN:raise BB:call", {"BB": "AXs"}), ("HU|BTN:raise BB:call", "AA")):
+            with self.assertRaises(ValueError):
+                lib.save_default_ranges(context, ranges)
+        with self.assertRaises(NotFound):
+            lib.save_default_ranges("HU|BTN:call BB:check", {"BB": "AA"})
+        with self.assertRaises(NotFound):
+            lib.default_range_line("6-max|CO:raise BB:call")  # sans charts 6-max
+
+        custom_ranges.save("ligne", "6-max|CO:raise BB:call", {"BB": "AA"})  # une ligne sans référence
+        view = lib.default_ranges_view()
+        self.assertEqual(view["orphans"], [{"context": "6-max|CO:raise BB:call", "format": "6-max",
+                                            "line": "CO open, BB call", "positions": ["BB"]}])
+        self.assertEqual(lib.clear_default_ranges("6-max|CO:raise BB:call"), {"context": "6-max|CO:raise BB:call",
+                                                                             "cleared": True})
+        self.assertEqual(lib.clear_default_ranges("HU|BTN:raise BB:call")["cleared"], True)
+        self.assertEqual((custom_ranges.load()["lignes"], lib.ranges_state("HAND01")["adjusted"]), ({}, None))
+        settings.save({"formats": ["ring"]})  # le heads-up que tu ne joues pas : pas listé
+        self.assertEqual(lib.default_ranges_view()["formats"], [])
+
+    def test_study_spot_with_option(self):
+        ident = "spot:srp:KsKd4c"
+        self.assertEqual(self.lib.set_ranges_for_spots(True), {"for_spots": True})
+        state = self.lib.ranges_state(ident)
+        self.assertEqual((state["can_line"], state["for_spots"]), (True, True))
+        state = self.lib.save_ranges(ident, "ligne", {"BB": "AA,KK"})
+        self.assertEqual((state["adjusted"], [p["source"] for p in state["players"]]), ("ligne", ["ligne", "reference"]))
+        self.assertEqual(custom_ranges.load()["lignes"], {"HU|BTN:raise BB:call": {"BB": "AA,KK"}})
+        self.assertEqual(self.lib.ranges_state("HAND01")["adjusted"], "ligne")  # la même ligne que tes coups
+        self.lib.set_ranges_for_spots(False)
+        self.assertEqual(self.lib.ranges_state(ident)["adjusted"], None)
 
     def test_study_spot(self):
         state = self.lib.ranges_state("spot:3bet:KsKd4c")

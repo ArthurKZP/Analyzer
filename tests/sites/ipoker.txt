@@ -1,0 +1,67 @@
+GAME #500000001 Version:23.5.1.14 Uncalled:Y Texas Hold'em NL €10/€20 2026-10-05 16:37:43/GMT
+Table Size 6
+Table [FR] Exemple
+Seat 5: Villain (€2,122.97 in chips)
+Seat 10: Hero (€2,759.03 in chips)  DEALER
+Hero: Post SB €10.00
+Villain: Post BB €20.00
+*** HOLE CARDS ***
+Dealt to Hero [DJ C10]
+Hero: Raise (NF) €50.00
+Villain: Raise (NF) €200.00
+Hero: Call €150.00
+*** FLOP *** [D6 D9 S6]
+Villain: Bet €180.00
+Hero: Call €180.00
+*** TURN *** [C5]
+Villain: Check
+Hero: Bet €380.00
+Villain: Call €380.00
+*** RIVER *** [D3]
+Villain: Check
+Hero: Bet €1,999.03
+Villain: Allin €1,362.97
+*** SUMMARY ***
+Total pot €4,244.44 Rake €1.50
+Hero: Mucks [DJ C10] One Pair, Sixes
+Villain: Shows [SA HA] Two Pair, Aces and Sixes
+Villain: wins €4,244.44
+
+GAME #500000002 Version:23.9.1.5 Uncalled:Y Texas Hold'em NL €5/€10 2026-10-27 22:11:50/CEST
+Table Size 6
+Table Exemple
+Seat 1: Player 1 (€1,015.00 in chips)  DEALER
+Seat 5: Player 5 (€1,139.35 in chips)
+Seat 8: Player 8 (€385.00 in chips)
+Player 5: Post SB €5.00
+Player 8: Post BB €10.00
+*** HOLE CARDS ***
+Player 1: Raise (NF) €30.00
+Player 5: Fold
+Player 8: Fold
+*** SUMMARY ***
+Total pot €25.00 Rake €0.00
+Player 1: wins €25.00
+
+GAME #500000003 Version:23.5.1.14 Uncalled:Y Texas Hold'em NL €1/€2 2026-10-06 10:00:00/GMT
+Table Size 6
+Table Exemple
+Seat 1: Joueur1 (€200.00 in chips)  DEALER
+Seat 2: Hero (€150.00 in chips)
+Seat 3: Villain (€250.00 in chips)
+Hero: Post SB €1.00
+Villain: Post BB €2.00
+*** HOLE CARDS ***
+Dealt to Hero [HA HK]
+Joueur1: Raise (NF) €6.00
+Hero: Allin €149.00
+Villain: Fold
+Joueur1: Call €144.00
+*** FLOP *** [S2 D7 CJ]
+*** TURN *** [H9]
+*** RIVER *** [S4]
+*** SUMMARY ***
+Total pot €299.00 Rake €3.00
+Hero: Shows [HA HK] High Card, Ace
+Joueur1: Shows [CQ DQ] One Pair, Queens
+Joueur1: wins €299.00

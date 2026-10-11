@@ -14,6 +14,19 @@ from analyzer.parsers import load_hands
 from analyzer.theory import coach, postflop
 from analyzer.theory.preflop import load_solution
 
+try:
+    from .base import isolate_module, release_module
+except ImportError:  # lancé par « unittest discover -s tests »
+    from base import isolate_module, release_module
+
+
+def setUpModule():
+    isolate_module()
+
+
+def tearDownModule():
+    release_module()
+
 FIXTURES = Path(__file__).parent / "fixtures"
 FAKE_SOLVER = FIXTURES / "fake_solver.py"
 POSIX = os.name != "nt"  # le faux solveur est un script exécutable
@@ -25,7 +38,7 @@ class SpotTest(unittest.TestCase):
         cls.hands = {h.hand_id: h for h in load_hands([FIXTURES])}
 
     def test_srp(self):
-        spot = postflop.build_spot(self.hands["HAND01"], "Hero")
+        spot = postflop.build_spot(self.hands["HAND01"], "Hero", theory=False)  # tailles fixes (voir test_sizes)
         self.assertEqual((spot.pot_type, spot.oop, spot.ip), ("SRP", "Villain", "Hero"))
         self.assertEqual((spot.pot_bb, spot.stack_bb, spot.board), (5.0, 97.5, ["Kc", "7h", "2s"]))
         self.assertEqual(spot.line, [{"action": "check"}, {"action": "bet", "to": 1.6},
@@ -176,7 +189,7 @@ class InstallTest(unittest.TestCase):
 class SolveTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        env = {"ANALYZER_HOME": self.tmp.name, "ANALYZER_SOLVER": str(FAKE_SOLVER)}
+        env = {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name, "ANALYZER_SOLVER": str(FAKE_SOLVER)}
         self.env = mock.patch.dict(os.environ, env)
         self.env.start()
         self.hand = {h.hand_id: h for h in load_hands([FIXTURES])}["HAND02"]
@@ -206,8 +219,7 @@ class SolveTest(unittest.TestCase):
         self.assertIn("Flop · Toi (QhJh) — mise 4 bb (25 %)", text)
         self.assertIn("pot 3bet, toi en BB (hors position)", text)
 
-        cached = postflop.cache_path(self.spot.request())
-        self.assertTrue(cached.is_file())
+        self.assertEqual(postflop.cached(self.spot.request()), raw)
         with mock.patch.dict(os.environ, {"ANALYZER_SOLVER": "/introuvable"}):
             self.assertEqual(postflop.solve(self.spot.request()), raw)  # servi par le cache
             with self.assertRaises(postflop.SolverError):
@@ -229,7 +241,7 @@ class SolveTest(unittest.TestCase):
         session = postflop.Session(self.spot.request())
         raw = session.start()
         self.assertTrue(session.alive)
-        self.assertTrue(postflop.cache_path(self.spot.request()).is_file())  # ligne jouée mise en cache
+        self.assertIsNotNone(postflop.cached(self.spot.request()))  # ligne jouée mise en cache
         node = session.node([{"type": "action", "index": 0}])
         self.assertEqual((node["type"], node["player"]), ("action", 1))
         with self.assertRaisesRegex(postflop.SolverError, "out of range"):
@@ -349,6 +361,39 @@ class GTOpenIntegrationTest(unittest.TestCase):
             facing = session.exploit([{"type": "action", "index": 1}], profile, 0)["node"]
             self.assertEqual(facing["player"], 1)
             self.assertEqual(session.node([])["hands"], before["hands"])  # profil retiré : l'arbre du solveur
+        finally:
+            session.close()
+
+    def test_custom_tree(self):
+        # Tes tailles (dont une relance « x3 ») puis un nœud verrouillé (custom_tree) : le solveur les respecte.
+        from analyzer.theory import custom_tree
+        hand = {h.hand_id: h for h in load_hands([FIXTURES])}["HAND02"]
+        spot = postflop.build_spot(hand, "Hero")
+        spot.edits = {"plan": {"bet:fo:": [25, 75], "raise:fi::0": ["x3"]}, "locks": []}
+        session = postflop.Session(spot.request(iterations=3, target=50.0), save=False)
+        session.start()
+        try:
+            root = session.node([])
+            self.assertEqual([a["kind"] for a in root["actions"]], ["check", "bet", "bet"])
+            self.assertAlmostEqual(root["actions"][1]["amount"], 0.25 * root["pot"], delta=0.05)
+            facing = session.node([{"type": "action", "index": 1}])
+            self.assertEqual([a["kind"] for a in facing["actions"]], ["fold", "call", "raise"])
+            self.assertAlmostEqual(facing["actions"][2]["amount"], 3 * root["actions"][1]["amount"], delta=0.05)
+            reply = session.ask({"path": [], "strategy": True})
+            combo = reply["strategy"][0][0]
+            lock = custom_tree.lock_from(dict(reply["node"], path=[]), reply["strategy"],
+                                         [{"label": combo, "combos": [combo], "freqs": [0, 0, 1]}])
+        finally:
+            session.close()
+        spot.edits["locks"] = [lock]
+        session = postflop.Session(spot.request(iterations=3, target=50.0), save=False)
+        session.start()
+        try:
+            root = session.node([])
+            self.assertTrue(root["locked"])
+            rows = {r[0]: r[4:7] for r in root["hands"][0]}
+            for c in lock["edited"]:
+                self.assertEqual([round(x, 3) for x in rows[c]], [0.0, 0.0, 1.0])
         finally:
             session.close()
 

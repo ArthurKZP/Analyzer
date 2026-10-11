@@ -4,6 +4,19 @@ from pathlib import Path
 from analyzer.models import CALL, RAISE
 from analyzer.parsers import load_hands, parse_text
 
+try:
+    from .base import isolate_module, release_module
+except ImportError:  # lancé par « unittest discover -s tests »
+    from base import isolate_module, release_module
+
+
+def setUpModule():
+    isolate_module()
+
+
+def tearDownModule():
+    release_module()
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -50,13 +63,28 @@ class BetclicParserTest(unittest.TestCase):
         self.assertEqual(h.board, ["Qc", "8s", "2s", "3d", "4h"])
         self.assertEqual(h.shown_hand["Villain"], "High Card")
 
+    def test_showdown_from_actions(self):
+        """L'abattage, comme dans PokerTracker : au moins deux joueurs vont au bout sans se coucher ; la ligne
+        « Showdown » de l'historique ne compte pas (absente d'un format, ou écrite quand un joueur montre ses cartes
+        après le fold de l'autre)."""
+        text = (FIXTURES / "betclic_sample.txt").read_text(encoding="utf-8")
+        hands = {h.hand_id: h for h in parse_text(text.replace("*** SHOWDOWN ***\n", ""))}
+        self.assertTrue(hands["HAND02"].showdown)  # rivière jouée jusqu'au bout, sans la ligne
+        self.assertTrue(hands["HAND03"].showdown)  # tapis payé
+        self.assertFalse(hands["HAND04"].showdown)
+        shown = text.replace("*** SUMMARY ***\nHero wins main pot of €25.00",
+                             "*** SHOWDOWN ***\nHero shows [7c 2d] (High Card)\n*** SUMMARY ***\nHero wins main pot of €25.00")
+        self.assertNotEqual(shown, text)
+        self.assertFalse({h.hand_id: h for h in parse_text(shown)}["HAND04"].showdown)  # il a foldé : pas d'abattage
+
     def test_non_actions_are_ignored(self):
         h = self.hands["HAND01"]
         self.assertEqual([a.kind for a in h.actions][-1], "fold")
 
     def test_unknown_format_is_rejected(self):
         with self.assertRaises(ValueError):
-            parse_text("PokerStars Hand #1: Hold'em No Limit")
+            parse_text("Partie n° 1 : Hold'em No Limit")
+        self.assertEqual(parse_text("PokerStars Hand #1: Hold'em No Limit"), [])  # un format connu, sans main lisible
 
     def test_duplicates_are_removed(self):
         hands = load_hands([FIXTURES, FIXTURES / "betclic_sample.txt"])

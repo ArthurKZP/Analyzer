@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from analyzer.app import coach_chat
-from analyzer.app.coach_chat import Coach, CoachError
+from analyzer.app.coach_chat import TOOLS, Coach, CoachError
 from analyzer.theory import coach, exploit, postflop
 from analyzer.theory.studyspots import StudySpot
 from tests.test_coach import BOARD, make_query
@@ -116,9 +116,11 @@ class FakeLibrary:
         return {"Villain": {"kind": "reg"}, "Fish": {"kind": "rec"}}
 
     def _spot(self, ident):
+        if ident.startswith("spot:6max_bb_co_4bet:"):  # 6-max : le CO à l'initiative, comme le bouton en heads-up
+            return SimpleNamespace(ident=ident, family="6max_bb_co_4bet", board=list(BOARD), oop="BB", ip="CO")
         if not ident.startswith("spot:srp:"):
             raise KeyError(ident)
-        return SimpleNamespace(ident=ident, family="srp", board=list(BOARD))
+        return SimpleNamespace(ident=ident, family="srp", board=list(BOARD), oop="BB", ip="BTN")
 
 
 def wait(c, conv_id):
@@ -131,13 +133,13 @@ def wait(c, conv_id):
 class CoachChatTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": self.tmp.name})
+        self.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name})
         self.env.start()
         spot = StudySpot("srp", list(BOARD), plan={})
         key = postflop.study_key(spot.request())
         coach.save_plan(coach.extract(make_query(), spot, key))
         studies = {spot.ident: {"id": spot.ident, "key": key, "family": "srp", "board": BOARD, "texture": "King high"}}
-        self.studies = mock.patch.object(coach.studyspots, "spot_studies", lambda: studies)
+        self.studies = mock.patch.object(coach.studyspots, "spot_studies", lambda families=None: studies)
         self.studies.start()
 
     def tearDown(self):
@@ -163,7 +165,10 @@ class CoachChatTest(unittest.TestCase):
         self.assertEqual(second[1]["content"][0]["type"], "thinking")  # réflexion renvoyée telle quelle
         result = second[2]["content"][0]
         self.assertEqual(result["tool_use_id"], "t1")
-        self.assertIn("categories", json.loads(result["content"]))
+        plan = json.loads(result["content"])
+        self.assertEqual((plan["attaquant"], plan["defenseur"]), ("le bouton", "la BB"))
+        self.assertEqual(plan["groupes"][0]["strategie"], "Checker range")
+        self.assertIn("fold_au_dela_duquel_la_mise_rapporte_pct", plan["groupes"][0]["defense"]["face_cbet"])
         self.assertGreater(view["cost"], 0)
 
     def test_node_and_hand_tools(self):
@@ -188,6 +193,30 @@ class CoachChatTest(unittest.TestCase):
         error = client.calls[3]["messages"][-1]["content"][0]
         self.assertTrue(error["is_error"])
         self.assertIn("BTN a le choix entre check, mise 33 %", error["content"])
+
+    def test_six_max(self):
+        c = Coach(FakeLibrary())
+        enum = next(t for t in TOOLS if t["name"] == "plan_de_jeu")["input_schema"]["properties"]["famille"]["enum"]
+        self.assertIn("6max_bb_co_4bet", enum)
+        text, error = c._run_tool("plan_de_jeu", {"famille": "6max_bb_co_4bet"})
+        self.assertTrue(error)
+        self.assertIn("Pas encore de plan pour : 6-max, BB contre CO, pot 4bet", text)
+        text, error = c._run_tool("plan_de_jeu", {"famille": "6max"})
+        self.assertTrue(error)
+        self.assertIn("6max_bb_btn_srp", text)
+        text, error = c._run_tool("strategie_noeud", {"spot": "spot:6max_bb_co_4bet:Ks7d2c", "ligne": ["bet"]})
+        self.assertFalse(error, text)
+        self.assertEqual(json.loads(text)["joueur"], "BB")  # la BB face à la c-bet du CO
+        self.assertIn('"CO"', text)
+        text, error = c._run_tool("strategie_main", {"spot": "spot:6max_bb_co_4bet:Ks7d2c", "ligne": [],
+                                                     "main": "AhAd", "joueur": "CO"})
+        self.assertEqual((error, json.loads(text)["joueur"]), (False, "CO"))
+        text, error = c._run_tool("strategie_noeud", {"spot": "spot:6max_bb_co_4bet:Ks7d2c", "ligne": ["fold"]})
+        self.assertTrue(error)
+        self.assertIn("CO a le choix entre", text)  # les vraies positions, jusque dans les erreurs
+        text, error = c._run_tool("exploiter", {"spot": "spot:6max_bb_co_4bet:Ks7d2c"})
+        self.assertTrue(error)
+        self.assertIn("ne couvre que les spots heads-up", text)
 
     def test_exploit_tool(self):
         profile = {"family": "srp", "role": "defenseur", "hands": 120, "bridge": {"villain": 0, "aggressor": 1,
@@ -242,7 +271,8 @@ class CoachChatTest(unittest.TestCase):
         with mock.patch.object(bluffs, "analyze", return_value=report) as built:
             text, error = Coach(lib)._run_tool("bluffs_adversaire", {"adversaire": "réguliers"})
         self.assertFalse(error, text)
-        self.assertEqual(built.call_args.args[1:], (["Villain"], "Hero"))  # le groupe des réguliers
+        self.assertEqual(built.call_args.args[1:3], (["Villain"], "Hero"))  # le groupe des réguliers
+        self.assertEqual(built.call_args.args[3], bluffs.Voice("les réguliers", plural=True))  # nommés au pluriel
         data = json.loads(text)
         self.assertEqual((data["adversaire"], data["patterns"][0]["conseil"]), ("les réguliers", "Paie plus large."))
         self.assertEqual(data["frequences_par_carte"][0], {"situation": "2e barrel", "pot": "SRP", "carte": "Overcard",
@@ -322,7 +352,7 @@ class CoachRoutesTest(unittest.TestCase):
         from analyzer.app.server import start
         tmp = tempfile.TemporaryDirectory()
         shutil.copy(Path(__file__).parent / "fixtures" / "betclic_sample.txt", Path(tmp.name) / "s.txt")
-        with mock.patch.dict(os.environ, {"ANALYZER_HOME": str(Path(tmp.name) / "home"), "ANTHROPIC_API_KEY": ""}):
+        with mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(Path(tmp.name) / "home"), "ANTHROPIC_API_KEY": ""}):
             lib = Library(tmp.name)
             server = start(lib, port=0)
             threading.Thread(target=server.serve_forever, daemon=True).start()

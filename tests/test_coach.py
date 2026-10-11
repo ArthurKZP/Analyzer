@@ -1,4 +1,3 @@
-import json
 import os
 import tempfile
 import unittest
@@ -93,7 +92,7 @@ class BucketTest(unittest.TestCase):
 class ExtractTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": self.tmp.name})
+        self.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name})
         self.env.start()
 
     def tearDown(self):
@@ -121,13 +120,21 @@ class ExtractTest(unittest.TestCase):
 
         coach.save_plan(data)
         self.assertEqual(coach.load_plan("cle")["id"], "spot:srp:Ks7d2c")
-        coach.plan_path("cle").write_text(json.dumps(dict(data, version=0)), encoding="utf-8")
+        coach.save_plan(dict(data, version=0))
         self.assertIsNone(coach.load_plan("cle"))  # extraction d'une autre version : à refaire
 
 
 class SynthesisTest(unittest.TestCase):
     def test_rules_and_patterns(self):
-        self.assertEqual([coach.pattern_of(x) for x in (0.9, 0.6, 0.4, 0.1)], ["range", "often", "check", "check"])
+        self.assertEqual([coach.strategy_of(x) for x in (0.9, 0.6, 0.4, 0.1, 0.698, 0.354)],
+                         ["range", "mixte", "mixte", "check", "range", "check"])  # lue comme elle s'affiche
+        self.assertEqual([coach.size_group(c) for c in ("small", "medium", "overbet", "allin", None)],
+                         ["petite", "moyenne", "grosse", "tapis", "petite"])
+        self.assertAlmostEqual(coach.max_fold([33]), 0.33 / 1.33)
+        self.assertIsNone(coach.max_fold([]))
+        self.assertIn("défense large", coach.defense_text(0.15, 0.1, 0.25, "la BB", "petite mise"))
+        self.assertIn("défense serrée", coach.defense_text(0.40, 0.1, 0.25, "la BB", "petite mise"))
+        self.assertEqual(coach.defense_text(0.5, 0.0, None, "la BB", "tapis"), "La BB folde 50 % et relance 0 %.")
         cases = {"KsKd4c": "paire", "As8s3s": "monotone", "Ks8d3h": "haut-sec", "Kd7d5c": "haut-couleur",
                  "KhQc9d": "haut-connecte", "Qs7d2h": "moyen-sec", "JhTc8d": "moyen-connecte", "9s5d2h": "bas-sec",
                  "6c4c2d": "bas-connecte", "Ah4c2d": "haut-connecte"}  # A42 : roue possible
@@ -157,7 +164,7 @@ class SynthesisTest(unittest.TestCase):
                          [("Relance", "Deux paires et mieux"), ("Paie", "Top pair, bon kicker"), ("Folde", "Rien")])
         self.assertEqual([(r["label"], r["verdict"]) for r in coach.simple_rules(facing, defender=True)],
                          [("Fortes", "Paie"), ("Rien", "Folde")])  # relance 40 %, paie 55 %
-        text = coach.why("mixed", 0.16, -0.06, "le bouton", "la BB")
+        text = coach.why("mixte", 0.16, -0.06, "le bouton", "la BB")
         self.assertIn("La BB a plus de mains très fortes", text)
         self.assertIn("+16 pts", coach.why("range", 0.16, 0.02, "le bouton", "la BB"))
 
@@ -165,7 +172,7 @@ class SynthesisTest(unittest.TestCase):
 class PlanPageTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.env = mock.patch.dict(os.environ, {"ANALYZER_HOME": self.tmp.name})
+        self.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name})
         self.env.start()
 
     def tearDown(self):
@@ -179,19 +186,105 @@ class PlanPageTest(unittest.TestCase):
         data = coach.extract(make_query(), spot, key)
         coach.save_plan(data)
         studies = {spot.ident: {"id": spot.ident, "key": key, "family": "srp", "board": BOARD}}
-        with mock.patch.object(coach.studyspots, "spot_studies", lambda: studies):
+        with mock.patch.object(coach.studyspots, "spot_studies", lambda families=None: studies):
             plan = coach.family_plan("srp")
-            self.assertEqual((plan["count"], plan["missing"], plan["who"]), (1, 0, "le bouton"))
+            self.assertEqual((plan["count"], plan["missing"], plan["who"], plan["other"]), (1, 0, "le bouton", "la BB"))
+            self.assertEqual([(st["key"], st["flops"], st["groups"]) for st in plan["strategies"]],
+                             [("range", 0, []), ("mixte", 0, []), ("check", 1, ["check-petite"])])  # 2 mains sur 7 misent
             group = plan["groups"][0]
-            self.assertEqual((group["category"], group["pattern"]), ("haut-sec", "check"))  # 2 mains sur 7 misent
-            self.assertTrue(group["turn"] and group["river"] and group["defense"]["vs_cbet"])
-            self.assertEqual(group["turn"][0]["text"], "plus haute que les cartes du flop")
+            self.assertEqual((group["size_text"], group["categories"]), ("petite mise (33 % du pot)", [("Haut · sec", 1)]))
+            attack, defense = group["attack"], group["defense"]
+            self.assertTrue(attack["turn"] and attack["river"] and attack["delayed"] and attack["vs_xr"])
+            self.assertEqual(attack["turn"][0]["text"], "plus haute que les cartes du flop")
+            self.assertTrue(defense["vs_cbet"] and defense["vs_barrel"] and defense["probe"])  # la BB mène à la turn
+            self.assertIsNone(defense["stab"])  # (le stab : quand l'attaquant est hors de position)
+            self.assertAlmostEqual(defense["max_fold"], 0.33 / 1.33)
+            self.assertIn("La BB folde", defense["text"])
+            self.assertEqual(plan["flops"][0]["fold"], defense["vs_cbet"]["fold"])
             page = build_coach_page({"missing": 0, "busy": 0})
-            for text in ("Plan de jeu suggéré", "Selon le flop", "Checke souvent", "Haut · sec", "Moyen · connecté",
-                         "À la turn, si la c-bet est payée", "En face : la BB", 'href="#cat-srp-haut-sec"'):
+            for text in ("Plan de jeu suggéré", "Au flop : trois stratégies de c-bet", "Miser range", "Stratégie mixte",
+                         "Checker range", "Petite mise (33 % du pot)", 'href="#att-srp-check-petite"',
+                         'href="#def-srp-check-petite"', "En attaque · le bouton", "En défense · la BB",
+                         "Face au 2e barrel, selon la turn", "la BB mène à la turn (probe)",
+                         "Aucun flop résolu ne s'y range : sur ces flops, le bouton mise au plus",
+                         "/explorateur/spot%3Asrp%3AKs7d2c", "À la turn, si la c-bet est payée",
+                         "selon la stratégie du bouton", "la défense de la BB"):
                 self.assertIn(text, page)
             self.assertNotIn(">Cartes<", page)
             self.assertEqual(coach.missing(), [])
+
+
+class RingPlanTest(unittest.TestCase):
+    """Le plan de jeu des tables à plusieurs : mêmes lignes que le heads-up de même structure, vraies positions."""
+    LINES = {"CO:raise BB:raise CO:raise BB:call": {"CO": "AA,KK,AKs,AKo,KQs,QJs", "BB": "88,65s,43s,ATo"},
+             "BTN:raise BB:call": {"BTN": "AA,KK,KQs", "BB": "88,QJs"}}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name})
+        self.env.start()
+
+    def tearDown(self):
+        from analyzer import db
+        db.close_all()
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def charts(self):
+        from analyzer.theory import ring_ranges
+        ring_ranges.save_solution("6-max", {"lines": {k: {"ranges": v} for k, v in self.LINES.items()}})
+
+    def test_lines_and_seats(self):
+        self.assertEqual(coach.seat_words("srp"), ("la BB", "le bouton"))
+        self.assertEqual(coach.seat_words("6max_bb_co_4bet"), ("la BB", "le CO"))
+        self.assertEqual(coach.seat_names("6max_sb_bb_srp"), ("SB", "BB"))
+        titles = dict((k, t) for k, t, _ in coach.lines("6max_sb_bb_srp"))  # la SB ouvre : initiative hors de position
+        self.assertEqual((titles["cbet"], titles["vs_cbet"], titles["stab"]),
+                         ("C-bet de la SB", "BB face à la c-bet", "Stab de la BB (la SB checke)"))
+        titles = dict((k, t) for k, t, _ in coach.lines("6max_bb_co_4bet"))
+        self.assertEqual((titles["cbet"], titles["vs_xr"]), ("C-bet du CO", "CO face au check-raise"))
+        self.assertEqual([s for _, _, s in coach.lines("6max_bb_co_4bet")], [s for _, _, s in coach.LINES_IP])
+        self.assertEqual(coach.aggressor_of("6max_sb_bb_srp"), 0)
+        self.assertIn("6max_bb_btn_srp", coach.plan_families())
+
+    def test_ring_plan_and_page(self):
+        from analyzer.app.plan_page import build_coach_page
+        page = build_coach_page({"missing": 0, "busy": 0})
+        self.assertIn("charge d'abord tes charts 6-max", page)  # sans charts : pas d'onglets 6-max
+        self.assertNotIn('data-fam="6max_bb_co_4bet"', page)
+        self.charts()
+        spot = StudySpot("6max_bb_co_4bet", list(BOARD), plan={})
+        key = postflop.study_key(spot.request())
+        data = coach.extract(make_query(), spot, key)  # le CO (1) à l'initiative, la BB ne mène pas
+        self.assertEqual((data["family"], data["nodes"]["cbet"]["title"]), ("6max_bb_co_4bet", "C-bet du CO"))
+        studies = {spot.ident: {"id": spot.ident, "key": key, "family": "6max_bb_co_4bet", "board": BOARD}}
+        with mock.patch.object(coach.studyspots, "spot_studies", lambda families=None: studies):
+            self.assertEqual(coach.missing(), [spot.ident])  # les études 6-max attendent aussi leur lecture
+            self.assertEqual(coach.missing("srp"), [])
+            coach.save_plan(data)
+            plan = coach.family_plan("6max_bb_co_4bet")
+            self.assertEqual((plan["count"], plan["who"], plan["other"], plan["ring"]), (1, "le CO", "la BB", True))
+            self.assertEqual(plan["title"], "6-max, BB contre CO, pot 4bet")
+            self.assertIn("Le CO a", plan["groups"][0]["why"])
+            self.assertEqual(coach.family_plan("srp")["count"], 0)  # chaque famille ses flops
+            page = build_coach_page({"missing": 0, "busy": 0})
+        for text in ('data-fam="6max_bb_co_4bet"', "BB contre CO", "Au flop, le CO mise", "En défense · la BB",
+                     'href="#att-6max_bb_co_4bet-check-petite"', "Résume-moi le plan de jeu 6-max, BB contre CO, pot 4bet",
+                     "Le CO face au check-raise", "Face au check-raise"):
+            self.assertIn(text, page)
+        self.assertIn("Pas de ranges 6-max pour « SB open, BB call »", page)  # ligne absente de tes charts
+        self.assertIn("Pas encore de plan pour : 6-max, BB contre BTN, SRP", page)
+
+    def test_ring_study_gives_its_plan(self):
+        self.charts()
+        spot = StudySpot("6max_bb_btn_srp", list(BOARD), plan={})
+        with mock.patch.object(coach, "extract_and_save") as extract:
+            spot.after_solve(None)
+        extract.assert_called_once()
+        self.assertEqual(coach.node_brief({"type": "action", "board": BOARD, "pot": 5.0, "player": 1,
+                                           "actions": [{"kind": "check", "amount": 0.0}],
+                                           "hands": [[["8h8c", 1.0, 0.4, 0.0, 1.0]], [["AhAd", 1.0, 0.6, 0.0, 1.0]]]},
+                                          names=("BB", "CO"))["joueur"], "CO")
 
 
 if __name__ == "__main__":

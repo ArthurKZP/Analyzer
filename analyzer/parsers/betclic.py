@@ -10,6 +10,7 @@ from ..models import (
     CALL,
     CHECK,
     FOLD,
+    POST_ANTE,
     POST_BB,
     POST_SB,
     RAISE,
@@ -47,6 +48,10 @@ def _money(text: str) -> float:
 
 def looks_like(text: str) -> bool:
     return HAND_SEPARATOR in text and "Site: Betclic" in text
+
+
+def count_hands(text: str) -> int:
+    return text.count(HAND_SEPARATOR)
 
 
 def split_hands(text: str) -> Iterator[str]:
@@ -147,6 +152,11 @@ def parse_hand(chunk: str) -> Hand | None:
                 continue
             kind, value = action
             before = committed.get(player, 0.0)
+            if kind == POST_BB and before:  # un joueur qui arrive poste petite et grosse blinde : la petite est morte
+                for earlier in hand.actions:
+                    if earlier.player == player and earlier.kind == POST_SB:
+                        earlier.kind, earlier.to = POST_ANTE, 0.0
+                before = 0.0
             facing = max(committed.values(), default=0.0) - before
             if kind in (RAISE,):
                 to, amount = value, value - before

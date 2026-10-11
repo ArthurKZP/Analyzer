@@ -1,6 +1,7 @@
 """Modèle de données commun à tous les parseurs d'historiques."""
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
@@ -19,7 +20,9 @@ MIDDLE = {0: (), 1: ("CO",), 2: ("HJ", "CO"), 3: ("UTG", "HJ", "CO"), 4: ("UTG",
           5: ("UTG", "UTG+1", "LJ", "HJ", "CO"), 6: ("UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO")}
 
 
-@dataclass
+# Les actions et les places sont les objets les plus nombreux en mémoire (une dizaine d'actions et quatre ou cinq
+# places par main) : sans dictionnaire par objet (slots), ils prennent deux à trois fois moins de place.
+@dataclass(slots=True)
 class Action:
     player: str
     kind: str
@@ -31,8 +34,12 @@ class Action:
     pot_before: float = 0.0  # pot (toutes streets) juste avant l'action
     facing: float = 0.0  # montant à payer pour suivre avant l'action
 
+    def __reduce__(self):  # gardée (cache des mains lues) en simple liste de valeurs : plus petite, relue plus vite
+        return Action, (self.player, self.kind, self.street, self.amount, self.to, self.all_in, self.time,
+                        self.pot_before, self.facing)
 
-@dataclass
+
+@dataclass(slots=True)
 class Seat:
     name: str
     seat: int
@@ -40,6 +47,9 @@ class Seat:
     is_button: bool = False  # en HU le bouton est aussi la SB
     is_hero: bool = False
     position: str = ""  # BTN, SB, BB, CO, HJ, UTG… (calculée par Hand.finalize)
+
+    def __reduce__(self):
+        return Seat, (self.name, self.seat, self.stack, self.is_button, self.is_hero, self.position)
 
 
 @dataclass
@@ -65,30 +75,50 @@ class Hand:
     put: dict[str, float] = field(default_factory=dict)
     uncalled: dict[str, float] = field(default_factory=dict)
 
+    def __getstate__(self) -> dict:
+        """Sans les lectures gardées sur la main (attributs « _… », comme HandReader.of) : le cache des mains lues
+        (analyzer.store) n'enregistre que la main."""
+        return {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
+
     # --- Accès pratiques -------------------------------------------------
     @property
     def players(self) -> list[str]:
         return list(self.seats)
 
+    # (des boucles simples plutôt que next(…) : ces propriétés sont lues des centaines de milliers de fois)
     @property
     def hero(self) -> Optional[str]:
-        return next((s.name for s in self.seats.values() if s.is_hero), None)
+        for s in self.seats.values():
+            if s.is_hero:
+                return s.name
+        return None
 
     @property
     def button(self) -> Optional[str]:
-        return next((s.name for s in self.seats.values() if s.is_button), None)
+        for s in self.seats.values():
+            if s.is_button:
+                return s.name
+        return None
 
     @property
     def big_blind(self) -> Optional[str]:
         """Le joueur qui a posté la grosse blinde (en HU, à défaut, celui qui n'a pas le bouton)."""
-        poster = next((a.player for a in self.actions if a.kind == POST_BB), None)
-        if poster is not None or len(self.seats) != 2:
-            return poster
-        return next((s.name for s in self.seats.values() if not s.is_button), None)
+        for a in self.actions:
+            if a.kind == POST_BB:
+                return a.player
+        if len(self.seats) != 2:
+            return None
+        for s in self.seats.values():
+            if not s.is_button:
+                return s.name
+        return None
 
     @property
     def small_blind(self) -> Optional[str]:
-        return next((a.player for a in self.actions if a.kind == POST_SB), None)
+        for a in self.actions:
+            if a.kind == POST_SB:
+                return a.player
+        return None
 
     @property
     def size(self) -> int:
@@ -124,6 +154,8 @@ class Hand:
         for a in self.actions:
             if a.player == old:
                 a.player = new
+        for key in [k for k in self.__dict__ if k.startswith("_")]:  # les lectures gardées sur la main (anciens noms)
+            del self.__dict__[key]
 
     def street_actions(self, street: str, voluntary_only: bool = True) -> list[Action]:
         return [
@@ -142,12 +174,38 @@ class Hand:
     def effective_stack(self) -> float:
         return min(s.stack for s in self.seats.values())
 
+    def remaining(self) -> set[str]:
+        """Les joueurs encore dans le coup à la fin : ceux qui ont agi (blindes comprises) sans se coucher."""
+        folded = {a.player for a in self.actions if a.kind == FOLD}
+        return {a.player for a in self.actions} - folded
+
+    def place_button(self, seat: int) -> None:
+        """Le bouton d'après sa place à la table. Bouton mort (place vide, joueur absent ou qui ne joue pas la main) :
+        le joueur servi juste avant, le dernier à parler au préflop après les blindes."""
+        if not self.seats:
+            return
+        for s in self.seats.values():
+            s.is_button = s.seat == seat
+        if self.button is not None:
+            return
+        blinds = {self.small_blind, self.big_blind}
+        before = sorted(self.seats.values(), key=lambda s: (s.seat > seat, -s.seat))  # en remontant depuis le bouton
+        chosen = next((s for s in before if s.name not in blinds), before[0])
+        chosen.is_button = True
+
+    def went_to_showdown(self) -> bool:
+        """Abattage : au moins deux joueurs vont au bout sans se coucher (la définition de PokerTracker et Hold'em
+        Manager). La ligne « Showdown » de l'historique ne suffit pas : selon le site ou la version du format, elle
+        manque, ou figure quand un joueur montre ses cartes après le fold des autres."""
+        return len(self.remaining()) >= 2
+
     def finalize(self) -> None:
-        """Calcule les mises totales et la part non payée rendue au joueur.
+        """Calcule les mises totales, la part non payée rendue au joueur et l'abattage (went_to_showdown).
 
         Selon les sites, un surplus non payé (ex. tapis supérieur au tapis adverse)
         n'apparaît pas dans le pot total : on le rend au plus gros contributeur.
         """
+        self.showdown = self.went_to_showdown()
         put = {p: 0.0 for p in self.seats}
         for a in self.actions:
             put[a.player] = put.get(a.player, 0.0) + a.amount
@@ -183,3 +241,44 @@ class Hand:
         self.seats[bb].position = "BB"
         for s, label in zip(rest, labels):
             s.position = label
+
+
+# --- Sérialisation (base de données) ------------------------------------------------------------
+# Une main en types simples (JSON), et retour : les actions et les places en listes, pour rester compact.
+
+def hand_to_dict(h: Hand) -> dict:
+    return {
+        "site": h.site, "id": h.hand_id, "table": h.table_id, "game": h.game_name, "date": h.date.isoformat(),
+        "sb": h.sb, "bb": h.bb, "pot": h.total_pot, "rake": h.rake, "max": h.max_seats,
+        "seats": [[s.name, s.seat, s.stack, s.is_button, s.is_hero, s.position] for s in h.seats.values()],
+        "cards": h.hole_cards, "board": h.board,
+        "actions": [[a.player, a.kind, a.street, a.amount, a.to, a.all_in, a.time.isoformat() if a.time else None,
+                     a.pot_before, a.facing] for a in h.actions],
+        "won": h.winnings, "sd": h.showdown, "shown": h.shown_hand, "put": h.put, "unc": h.uncalled,
+    }
+
+
+_intern = sys.intern
+
+
+def _names(table: dict) -> dict:
+    return {_intern(k): v for k, v in table.items()}
+
+
+def hand_from_dict(d: dict) -> Hand:
+    """Une main relue. Les textes qui se répètent (noms des joueurs, types d'action, streets, positions, cartes) sont
+    partagés (sys.intern) : des dizaines de milliers de mains en mémoire en prennent beaucoup moins de place."""
+    seats = {}
+    for name, seat, stack, button, hero, position in d["seats"]:
+        name = _intern(name)
+        seats[name] = Seat(name, seat, stack, button, hero, _intern(position))
+    actions = [Action(_intern(player), _intern(kind), _intern(street), amount, to, all_in,
+                      datetime.fromisoformat(time) if time else None, pot_before, facing)
+               for player, kind, street, amount, to, all_in, time, pot_before, facing in d["actions"]]
+    cards = {_intern(name): [_intern(c) for c in held] for name, held in d["cards"].items()}
+    hand = Hand(_intern(d["site"]), d["id"], _intern(d["table"]), _intern(d["game"]), datetime.fromisoformat(d["date"]),
+                d["sb"], d["bb"], d["pot"], d["rake"], d["max"], seats, cards, [_intern(c) for c in d["board"]],
+                actions, _names(d["won"]), d["sd"], {_intern(k): _intern(v) for k, v in d["shown"].items()},
+                _names(d["put"]), _names(d["unc"]))
+    hand.showdown = hand.went_to_showdown()  # (une main gardée par une version d'avant : son abattage recalculé)
+    return hand

@@ -6,6 +6,8 @@ from html import escape
 from typing import Optional
 from urllib.parse import quote
 
+from .. import NAME
+from ..errors import NotFound
 from ..report import cards_html, html_page, num
 from ..theory import postflop, sizing, studyspots
 
@@ -30,12 +32,17 @@ STYLE = """
 .stxt { font-size: 11px; color: var(--ink-2); margin-top: 2px; white-space: nowrap; }
 .k-fold { background: #2a78d6; } .k-pass { background: #1baf7a; } .k-bet { background: #eb6834; }
 .k-raise { background: #c4441c; } .k-allin { background: #4a3aa7; }
-.spot-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 4px 0 6px; }
-.spot-head button, .spot-other button { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
-  border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
-.spot-head button.go { background: var(--series-1); border-color: var(--series-1); color: #fff; font-weight: 600; }
-.spot-head button:disabled { opacity: .5; cursor: default; }
+.spot-head, .group-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 4px 0 6px; }
+.spot-head button, .group-head button, .spot-other button { font: inherit; font-size: 13px; padding: 5px 12px;
+  border-radius: 6px; cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
+.spot-head button.go, .group-head button.go { background: var(--series-1); border-color: var(--series-1); color: #fff;
+  font-weight: 600; }
+.spot-head button:disabled, .group-head button:disabled { opacity: .5; cursor: default; }
+.group-count { font-weight: 600; font-size: 14px; }
 .spot-status { font-size: 12px; color: var(--ink-2); }
+.spot-prec { font-size: 13px; color: var(--ink-2); display: inline-flex; gap: 6px; align-items: center; }
+.spot-prec select { font: inherit; font-size: 13px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--page); color: var(--ink); }
 .spot-status .bar { display: inline-block; vertical-align: middle; width: 120px; height: 6px; border-radius: 3px;
   background: var(--grid); overflow: hidden; margin-left: 6px; }
 .spot-status .bar span { display: block; height: 100%; background: var(--series-1); }
@@ -50,11 +57,45 @@ STYLE = """
 .spots tr.sizes .opt b { color: var(--ink); }
 .stale { margin-top: 14px; font-size: 13px; }
 .stale ul { margin: 6px 0 0; padding-left: 18px; }
+.fam-switch { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 6px 0 12px; }
+.fam-pair { display: flex; align-items: center; gap: 4px; }
+.fam-pair span { font-size: 12px; color: var(--muted); margin-right: 2px; }
+.fam-pair button { font: inherit; font-size: 13px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--ink-2); cursor: pointer; }
+.fam-pair button[aria-pressed="true"] { background: var(--ink); color: var(--page); border-color: var(--ink); }
 .spot-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--muted); margin: 8px 0 0; }
 .spot-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 """
 
 SCRIPT = """
+function duration(sec) {
+  if (sec < 60) return Math.max(5, Math.round(sec / 5) * 5) + ' s';
+  if (sec < 3600) return Math.round(sec / 60) + ' min';
+  if (sec < 86400) return Math.floor(sec / 3600) + ' h ' + String(Math.round((sec % 3600) / 60)).padStart(2, '0');
+  return Math.floor(sec / 86400) + ' j ' + Math.round((sec % 86400) / 3600) + ' h';
+}
+// Une série à la fois dans chaque onglet (heads-up, 6-max) ; la série choisie reste dans l'adresse (#4bet), pour la
+// retrouver quand la page se recharge (un flop de plus résolu).
+document.querySelectorAll('.fam-group').forEach(function (group) {
+  var buttons = group.querySelectorAll('.fam-switch button');
+  function pick(b, remember) {
+    buttons.forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+    group.querySelectorAll('.spot-family').forEach(function (s) {
+      var show = s.dataset.family === b.dataset.family, was = s.hidden;
+      s.hidden = !show;
+      var head = s.querySelector('.spot-head');
+      if (show && was && head) head.dispatchEvent(new Event('show'));
+    });
+    if (remember) history.replaceState(null, '', '#' + b.dataset.family);
+  }
+  buttons.forEach(function (b) { b.addEventListener('click', function () { pick(b, true); }); });
+  function fromAddress() {
+    var wanted = decodeURIComponent(location.hash.slice(1));
+    buttons.forEach(function (b) { if (b.dataset.family === wanted && b.getAttribute('aria-pressed') !== 'true') pick(b, false); });
+  }
+  fromAddress();
+  window.addEventListener('hashchange', fromAddress);  // l'application ouvre une autre série (#3bet)
+});
 function post(url, body) {
   return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })
     .then(function (r) { return r.json(); });
@@ -92,13 +133,44 @@ document.querySelectorAll('.spot-head').forEach(function (box) {
     clearTimeout(timer);
     if (s.busy) timer = setTimeout(refresh, 3000);
   }
-  function refresh() { fetch('/api/spots/' + family).then(function (r) { return r.json(); }).then(show); }
+  // Précision visée et durée estimée par flop (d'après le premier flop manquant), réglage commun à l'application.
+  var prec = card.querySelector('.spot-prec select'), est = card.querySelector('.spot-est'), estimate = null, missing = 0;
+  function dur(sec) {
+    return sec < 60 ? Math.max(5, Math.round(sec / 5) * 5) + ' s' : sec < 3600 ? Math.round(sec / 60) + ' min'
+      : Math.floor(sec / 3600) + ' h ' + String(Math.round((sec % 3600) / 60)).padStart(2, '0');
+  }
+  function showEstimate() {
+    if (!estimate) return;
+    Array.prototype.forEach.call(prec.options, function (o) {
+      var e = estimate.options.filter(function (x) { return x.target === Number(o.value); })[0];
+      o.textContent = o.value.replace('.', ',') + ' % du pot' + (e ? ' · ≈ ' + dur(e.seconds) + ' par flop' : '');
+    });
+    var e = estimate.options.filter(function (x) { return x.target === Number(prec.value); })[0];
+    est.textContent = e && missing ? '≈ ' + dur(e.seconds * missing) + ' pour les ' + missing + ' flops, choix des tailles en plus' : '';
+  }
+  prec.addEventListener('change', function () {
+    post('/api/precision', { precision: Number(prec.value) }).then(showEstimate);
+  });
+  function refresh() {
+    fetch('/api/spots/' + family).then(function (r) { return r.json(); }).then(function (s) {
+      if (s.precision) prec.value = String(s.precision);
+      var todo = (s.rows || []).filter(function (r) { return !r.done; });
+      missing = todo.length;
+      if (todo.length && !estimate && s.ready) {
+        post('/api/estimation', { hand: todo[0].id }).then(function (e) { if (e.options) { estimate = e; showEstimate(); } });
+      }
+      showEstimate();
+      show(s);
+    });
+  }
   run.addEventListener('click', function () {
     run.disabled = true;
     post('/api/spots/' + family + '/resoudre').then(show);
   });
   stop.addEventListener('click', function () { post('/api/spots/' + family + '/arreter').then(show); });
-  refresh();  // résolutions déjà lancées, solveur installé ou non
+  // résolutions déjà lancées, solveur installé ou non (une série 6-max cachée se lit quand on l'affiche)
+  if (!box.closest('[hidden]')) refresh();
+  box.addEventListener('show', refresh);
   var form = card.querySelector('form.spot-other'), msg = form.querySelector('.spot-other-msg');
   form.addEventListener('submit', function (e) {
     e.preventDefault();
@@ -111,6 +183,49 @@ document.querySelectorAll('.spot-head').forEach(function (box) {
     msg.textContent = '';
     window.open('/explorateur/spot:' + family + ':' + board.join(''), '_blank', 'noopener');
   });
+});
+// Toutes les séries d'un onglet (heads-up, 6-max) : un bouton pour mettre en file tous les flops manquants.
+document.querySelectorAll('.group-head').forEach(function (box) {
+  var group = box.dataset.group, label = box.dataset.label, upto = box.dataset.upto === '1';
+  var run = box.querySelector('.group-run'), stop = box.querySelector('.group-stop'), status = box.querySelector('.group-status');
+  var count = box.querySelector('.group-count'), done = null, timer = null, last = null;
+  function show(s) {
+    if (done !== null && s.done !== done) { location.reload(); return; }  // un flop de plus : les séries à jour
+    done = s.done;
+    last = s;
+    count.textContent = s.done + ' / ' + s.total + ' flops ' + label + ' résolus';
+    stop.hidden = !s.busy;
+    run.disabled = !s.ready;
+    run.hidden = !!s.busy || s.done >= s.total;
+    status.textContent = '';
+    if (!s.ready) { status.textContent = 'Installe d\\'abord le solveur : python -m analyzer gtopen --installer'; return; }
+    var c = s.current, waiting = s.waiting ? ' · ' + s.waiting + ' flop(s) en attente' : '';
+    if (c) {
+      var p = c.progress || {};
+      status.textContent = (c.mode === 'choose' ? 'Choix des tailles' : 'Résolution') + ' : ' + c.title + ', ' + c.board
+        + (c.mode === 'choose' ? ' (' + (p.stage || 'démarrage') + ')'
+          : p.iteration ? ' (itération ' + p.iteration + ' / ' + c.max_iterations + ')' : ' (construction de l\\'arbre)')
+        + waiting;
+    } else if (s.waiting) {
+      status.textContent = s.waiting + ' flop(s) en attente (une autre résolution passe d\\'abord)';
+    } else if (s.done < s.total) {
+      status.textContent = (upto ? 'Au plus ≈ ' : '≈ ') + duration(s.seconds) + ' sur 4 cœurs pour les ' + (s.total - s.done)
+        + ' flops manquants (moins avec plus de cœurs).';
+    }
+    clearTimeout(timer);
+    if (s.busy) timer = setTimeout(refresh, 4000);
+  }
+  function refresh() { fetch('/api/spots/' + group).then(function (r) { return r.json(); }).then(show); }
+  run.addEventListener('click', function () {
+    var n = last ? last.total - last.done : 0;
+    if (!confirm('Mettre en file les ' + n + ' flops ' + label + ' manquants ? Chacun passe par le choix de ses tailles puis '
+        + 'par sa résolution : ' + (upto ? 'au plus ' : '') + '≈ ' + duration(last ? last.seconds : 0) + ' sur 4 cœurs. '
+        + 'Tu peux tout arrêter à tout moment ; les flops déjà résolus restent.')) return;
+    run.disabled = true;
+    post('/api/spots/' + group + '/resoudre').then(show);
+  });
+  stop.addEventListener('click', function () { post('/api/spots/' + group + '/arreter').then(show); });
+  refresh();
 });
 """
 
@@ -157,7 +272,7 @@ def _average(entries: list[dict]) -> tuple[list[dict], list[float]]:
 def _columns(metas: list[dict], family: str) -> list[str]:
     titles = {e["title"] for m in metas for e in m.get("summary", [])}
     order = [title for title, _ in studyspots.SUMMARY[family]]
-    return [t for t in order if t in titles] or [t for t in order if t != "BB au flop"]
+    return [t for t in order if t in titles] or [t for t in order if not t.endswith(" au flop")]
 
 
 def _sizes_row(spot, width: int, series: bool) -> str:
@@ -183,7 +298,7 @@ def _sizes_row(spot, width: int, series: bool) -> str:
         reach = "flop" if e.get("method") == "arbre complet" else f'{num(100 * e.get("reach", 0), 1)} %'
         lines.append(f'<tr><td>{escape(e["label"])}</td><td>{reach}</td><td class="opt">{opts}</td></tr>')
     rare = sum(1 for e in report.values() if e.get("method") == "rare")
-    source = "livrées avec Analyzer" if chosen.get("source") == "livré" else f'choisies le {escape(chosen.get("created", ""))}'
+    source = f"livrées avec {NAME}" if chosen.get("source") == "livré" else f'choisies le {escape(chosen.get("created", ""))}'
     detail = (f'<table><thead><tr><th>Situation</th><th>Atteinte</th><th>Taille retenue, et écart des autres '
               f'(bb, quand la situation arrive)</th></tr></thead><tbody>{"".join(lines)}</tbody></table>'
               f'<div class="muted">{len(shown)} situations comparées ({source}) ; {rare} situation(s) presque jamais '
@@ -219,9 +334,26 @@ READING = {
 }
 
 
-def _spot_section(family: str = "srp") -> str:
-    info = studyspots.FAMILIES[family]
-    studies = studyspots.spot_studies()
+PRECISION_OPTIONS = "".join(f'<option value="{t:g}">{num(t, 1)} % du pot</option>' for t in postflop.PRECISIONS)
+
+
+def _reading(family: str) -> str:
+    """Ce que montre chaque ligne de la série (les nœuds de sa synthèse)."""
+    if family in READING:
+        return READING[family]
+    info = studyspots.family_info(family)
+    oop, ip = info["oop"], info["ip"]
+    de, la = studyspots._de, lambda pos: ("la " if pos in ("SB", "BB") else "le ") + pos
+    if info["oop_initiative"]:
+        return (f"la c-bet {de(oop)}, la réponse {de(ip)}, celle {de(oop)} face à sa relance, puis le stab {de(ip)} "
+                f"quand {la(oop)} checke et la réponse {de(oop)}")
+    return f"la c-bet {de(ip)} après le check {de(oop)}, la réponse {de(oop)}, puis celle {de(ip)} face au check-raise"
+
+
+def _spot_section(family: str = "srp", shown_now: bool = True) -> str:
+    info = studyspots.family_info(family)
+    ring = family in studyspots.RING_FAMILIES
+    studies = studyspots.spot_studies((family,))
     boards = studyspots.family_boards(family)
     spots = [studyspots.StudySpot(family, studyspots.cards_of(b)) for b in boards]
     metas = {s.ident: studies[s.ident] for s in spots if s.ident in studies and studies[s.ident].get("summary")}
@@ -261,7 +393,7 @@ def _spot_section(family: str = "srp") -> str:
                             f'</td>' for t in columns)
             exploit = data.get("exploit_pct")
             local = spot.ident in metas
-            tag = "" if local else (' <span class="ref" title="Synthèse de référence livrée avec Analyzer : résous ce '
+            tag = "" if local else (' <span class="ref" title="Synthèse de référence livrée avec ' + NAME + ' : résous ce '
                                     'flop pour l\'explorer">réf.</span>')
             delete = (f'<button type="button" class="del" data-key="{escape(data["key"])}">Supprimer</button>'
                       if local else "")
@@ -277,23 +409,35 @@ def _spot_section(family: str = "srp") -> str:
     legend = "".join(f'<span><i class="{c}"></i>{label}</span>' for c, label in
                      (("k-pass", "check / call"), ("k-bet", "mise"), ("k-raise", "relance"), ("k-fold", "fold"),
                       ("k-allin", "tapis")))
+    if ring:
+        title = f"6-max · {info['pair']} · {info['name']}"
+        origin = ("Ranges de tes charts 6-max (comme pour tes coups des tables à plusieurs), bien plus serrées qu'en "
+                  f"heads-up ; pas de donk ({'la ' if info['oop'] in ('SB', 'BB') else 'le '}{info['oop']} ne mène pas "
+                  "dans celui qui a misé à la street précédente). Les mêmes flops que les séries heads-up, pour comparer")
+        cost = "au plus " + COST[info["kind"]] + " (ranges plus serrées : souvent bien moins)"
+    else:
+        title = f"Heads-up · {info['name']}"
+        origin = ("Ranges de la solution préflop ; pas de donk (la BB ne mène pas dans celui qui a misé à la street "
+                  "précédente). Trois flops par texture : pairé, monotone, puis selon la plus haute carte")
+        cost = COST[family]
     return f"""
-<h2>Spots d'étude · {escape(info["name"])}</h2>
+<section class="spot-family" data-family="{escape(family)}"{"" if shown_now else " hidden"}>
+<h2>{escape(title, quote=False)}</h2>
 <div class="card">
-<p class="note" style="margin-top:0">{escape(info["label"])}. Ranges de la solution préflop ; pas de donk (la BB
-ne mène pas dans celui qui a misé à la street précédente). Trois flops par texture : pairé, monotone, puis selon
-la plus haute carte. Les tailles de mise sont choisies flop par flop, une par situation (deux à la river) :
-{escape(sizing.PROFILES[family].description)} ; la meilleure EV pour celui qui mise l'emporte. Chaque ligne donne
-la stratégie de toute la range : {READING[family]}. <b>Explorer ↗</b> ouvre le spot dans l'explorateur (turn et
-river comprises).{" Les flops marqués <b>réf.</b> montrent la synthèse livrée avec Analyzer (même arbre, calculée "
-"à l'avance) : résous-les ici pour les explorer." if refs else ""}</p>
+<p class="note" style="margin-top:0">{escape(info["label"])}. {escape(origin)}. Les tailles de mise sont choisies flop
+par flop, une par situation (deux à la river) : {escape(sizing.description(family))} ; la meilleure EV pour
+celui qui mise l'emporte. Chaque ligne donne la stratégie de toute la range : {escape(_reading(family))}.
+<b>Explorer ↗</b> ouvre le spot dans l'explorateur (turn et river comprises).{" Les flops marqués <b>réf.</b> montrent "
+f"la synthèse livrée avec {NAME} (même arbre, calculée à l'avance) : résous-les ici pour les explorer." if refs else ""}</p>
 <div class="spot-head" data-family="{escape(family)}" data-done="{done}">
   <span><b>{done} / {total}</b> flops résolus{" · " + _size(size) if size else ""}</span>
   <button type="button" class="go spot-run"{" hidden" if not missing else ""}>Résoudre les {missing} flops manquants</button>
   <button type="button" class="spot-stop" hidden>Arrêter</button>
+  <label class="spot-prec"{" hidden" if not missing else ""}>Précision <select aria-label="Précision visée">{PRECISION_OPTIONS}</select></label>
+  <span class="spot-est muted small"></span>
   <span class="spot-status"></span>
 </div>
-<p class="note">Un flop sans tailles choisies passe d'abord par leur choix, puis par sa résolution : {COST[family]}
+<p class="note">Un flop sans tailles choisies passe d'abord par leur choix, puis par sa résolution : {escape(cost)}
 (sur 4 cœurs ; moins avec plus de cœurs). Les flops se
 traitent l'un après l'autre en arrière-plan, tant que l'application reste ouverte ; tu peux fermer cette page. En ligne de commande : <code>python -m analyzer gtopen --spots {escape(family)}</code>.</p>
 <div class="scroll"><table class="stats studies spots"><thead><tr><th>Flop</th>{head}<th class="num">Précision</th>
@@ -304,10 +448,113 @@ traitent l'un après l'autre en arrière-plan, tant que l'application reste ouve
 <button type="submit">Ouvrir ↗</button><span class="muted spot-other-msg"></span></form>
 {_stale_section(family)}
 </div>
+</section>
 """
 
 
+def _ring_family_section(family: str, shown_now: bool) -> str:
+    """La série d'une famille 6-max ; si tes charts n'ont pas sa ligne, pourquoi elle ne s'affiche pas."""
+    try:
+        studyspots.ring_spot_ranges(family)
+    except postflop.Unsupported as exc:
+        info = studyspots.RING_FAMILIES[family]
+        title = f"6-max · {info['pair']} · {info['name']}"
+        return (f'<section class="spot-family" data-family="{escape(family)}"{"" if shown_now else " hidden"}>'
+                f'<h2>{escape(title, quote=False)}</h2><div class="card"><p class="note">{escape(str(exc))}</p></div>'
+                "</section>")
+    return _spot_section(family, shown_now)
+
+
+def _ring_section() -> str:
+    """Les spots d'étude 6-max : une famille à la fois (paire de positions et type de pot)."""
+    from ..theory import ring_ranges
+    families = list(studyspots.RING_FAMILIES)
+    intro = ('<p class="note">Les tables à plusieurs sont un autre jeu que le heads-up : les ranges y sont bien plus '
+             "serrées (la BB défend bien moins contre le CO qu'en heads-up contre le bouton). Ces séries reprennent "
+             "les flops des séries heads-up, avec tes charts 6-max, pour comparer les deux jeux flop par flop. Tailles "
+             "préflop : open à 2,5 bb, 3bet à 7,5 bb en position et 10 bb hors de position, 4bet à 22 bb en position "
+             "et 20 bb hors de position, 100 bb.</p>")
+    if ring_ranges.solution(studyspots.RING_FORMAT) is None:
+        return (f"<h2>Spots d'étude 6-max</h2><div class=\"card\">{intro}<p class=\"note\">Charge d'abord tes "
+                "charts 6-max : onglet <b>Tables à plusieurs</b> de <i>Mon jeu</i> (charts de Hand2Note Guide), ou "
+                "ta solution : <code>python -m analyzer ranges --importer FICHIER.json</code>.</p></div>")
+    pairs: dict[str, list[str]] = {}
+    for family in families:
+        pairs.setdefault(studyspots.RING_FAMILIES[family]["pair"], []).append(family)
+    switch = "".join(
+        f'<div class="fam-pair"><span>{escape(pair)}</span>' + "".join(
+            f'<button type="button" data-family="{escape(f)}" aria-pressed="{str(f == families[0]).lower()}">'
+            f'{escape(studyspots.RING_FAMILIES[f]["name"])}</button>' for f in group) + "</div>"
+        for pair, group in pairs.items())
+    sections = "".join(_ring_family_section(f, f == families[0]) for f in families)
+    return (f'<div class="fam-group" data-group="6max"><h2>Spots d\'étude 6-max</h2>{intro}{_group_all("6max")}'
+            f'<div class="fam-switch" role="group" aria-label="Paire de positions et type de pot">{switch}</div>'
+            f'{sections}{_ring_others()}</div>')
+
+
+def _hu_section(first: str = "srp") -> str:
+    """Les spots d'étude heads-up (bouton contre BB) : une série à la fois (SRP, pot 3bet, pot 4bet), first d'abord."""
+    families = list(studyspots.FAMILIES)
+    first = first if first in families else families[0]
+    intro = ('<p class="note">Le heads-up, bouton contre BB, 100 bb : les ranges de la solution préflop heads-up, une '
+             'série de flops par type de pot (les mêmes flops que les séries 6-max, pour comparer les deux jeux). '
+             'Tailles préflop : open à 2,5 bb, 3bet à 11,5 bb, 4bet à 26 bb.</p>')
+    switch = ('<div class="fam-pair"><span>BTN contre BB</span>' + "".join(
+        f'<button type="button" data-family="{escape(f)}" aria-pressed="{str(f == first).lower()}">'
+        f'{escape(studyspots.FAMILIES[f]["name"])}</button>' for f in families) + "</div>")
+    sections = "".join(_spot_section(f, f == first) for f in families)
+    return (f'<div class="fam-group" data-group="hu"><h2>Spots d\'étude heads-up</h2>{intro}{_group_all("hu")}'
+            f'<div class="fam-switch" role="group" aria-label="Type de pot">{switch}</div>{sections}</div>')
+
+
+def _ring_others() -> str:
+    """Les coups à plusieurs résolus depuis l'explorateur entre d'autres positions (le HJ contre le BTN…)."""
+    families = sorted({str(m.get("family")) for m in postflop.list_studies() if m.get("kind") == "spot"
+                       and str(m.get("family", "")) not in studyspots.RING_FAMILIES
+                       and studyspots.is_ring(str(m.get("family", "")))})
+    found = sorted(studyspots.spot_studies(tuple(families)).values(),
+                   key=lambda m: (m["family"], studyspots.TEXTURES.index(m.get("texture", "Low board")), m["id"]))
+    note = ("D'autres positions (l'UTG contre la BB, le HJ contre le BTN…) se travaillent depuis l'Explorateur, "
+            "en choisissant « À plusieurs (6-max) » : la ligne préflop des charts, puis le flop.")
+    if not found:
+        return f'<h3 style="margin-top:20px">Autres positions</h3><p class="note">{escape(note)}</p>'
+    rows = "".join(
+        f'<tr><td>{escape(studyspots.family_title(m["family"]))}</td><td class="flop">{cards_html(m["board"])}</td>'
+        f'<td>{escape(m.get("texture", ""))}</td><td class="muted small">{escape(m.get("created", ""))}</td>'
+        f'<td><a class="open" href="/explorateur/{quote(m["id"], safe=":")}" target="_blank" rel="noopener">Ouvrir ↗</a>'
+        "</td></tr>" for m in found)
+    return (f'<h3 style="margin-top:20px">Autres positions</h3><div class="card"><div class="scroll">'
+            f'<table class="stats"><thead><tr><th>Spot</th><th>Flop</th><th>Texture</th><th>Résolu le</th><th></th>'
+            f'</tr></thead><tbody>{rows}</tbody></table></div><p class="note">{escape(note)}</p></div>')
+
+
+GROUP_NOTES = {
+    "hu": ("Les trois séries heads-up, un flop de chaque série à tour de rôle (pots 4bet et 3bet d'abord, les plus "
+           "rapides) : chaque plan de jeu se dessine vite au lieu d'attendre la fin des séries précédentes."),
+    "6max": ("Toutes les séries que tes charts couvrent, un flop de chaque série à tour de rôle (pots 4bet et 3bet "
+             "d'abord, les plus rapides) : chaque plan de jeu se dessine vite au lieu d'attendre la fin des séries "
+             "précédentes."),
+}
+
+
+def _group_all(group: str) -> str:
+    """Le bouton qui met en file tous les flops manquants des séries d'un onglet (état lu par la page :
+    /api/spots/hu ou /api/spots/6max)."""
+    label = "heads-up" if group == "hu" else "6-max"
+    upto = "1" if group == "6max" else "0"  # ranges des charts plus serrées : au plus la durée heads-up
+    return (f'<div class="card"><div class="group-head" data-group="{group}" data-label="{label}" data-upto="{upto}">'
+            '<span class="group-count"></span>'
+            f'<button type="button" class="go group-run" hidden>Résoudre tous les flops {label} manquants</button>'
+            '<button type="button" class="group-stop" hidden>Tout arrêter</button>'
+            '<span class="spot-status group-status"></span></div>'
+            f'<p class="note">{escape(GROUP_NOTES[group])} Chaque flop passe d\'abord par le choix de ses tailles, puis '
+            'par sa résolution, à la précision réglée ; son plan de jeu est lu aussitôt. La file vit dans l\'application '
+            ': si elle s\'arrête, relance le bouton, il reprend avec les flops qui manquent.</p></div>')
+
+
 ADJUSTED = ' <span class="muted small" title="Résolu avec tes ranges préflop ajustées">· tes ranges</span>'
+EDITED = (' <span class="muted small" title="Résolu avec ton arbre : tes tailles de mise ou tes nœuds verrouillés">'
+          '· ton arbre</span>')
 
 
 def _hand_section() -> str:
@@ -319,7 +566,7 @@ def _hand_section() -> str:
             "<tr>"
             f"<td>{escape(s['date'])}</td><td>{escape(s['villain'])}</td>"
             f"<td>{cards_html(s.get('hero_cards', []))}</td><td>{cards_html(s['board'])}</td>"
-            f"<td>{escape(s['pot_type'])}{ADJUSTED if s.get('adjusted') else ''}</td>"
+            f"<td>{escape(s['pot_type'])}{ADJUSTED if s.get('adjusted') else ''}{EDITED if s.get('edited') else ''}</td>"
             f"<td>{escape(POSITION_NAMES.get(s['hero_position'], s['hero_position'] or ''))}</td>"
             f'<td class="num">{num(s["net"], 1, sign=True)} bb</td>'
             f'<td class="num">{num(exploit, 2) + " %" if exploit is not None else "–"}</td>'
@@ -343,19 +590,26 @@ quelques secondes, sans recalculer.</p>{table}</div>
 """
 
 
-SECTIONS = tuple(studyspots.FAMILIES) + ("coups",)
+# Les onglets de l'application : heads-up (ses trois séries), 6-max, coups joués ; « srp », « 3bet » et « 4bet »
+# (anciens onglets) ouvrent l'onglet heads-up sur cette série.
+SECTIONS = ("hu", "6max", "coups") + tuple(studyspots.FAMILIES)
 
 
 def build_studies_page(embed: bool = True, section: Optional[str] = None) -> str:
-    """Toutes les études, ou une seule section (onglets de l'application) : srp, 3bet, 4bet ou coups."""
+    """Toutes les études, ou une seule section (onglets de l'application) : hu (SRP, pots 3bet et 4bet heads-up), 6max
+    ou coups."""
     if section is not None and section not in SECTIONS:
-        raise KeyError(section)
+        raise NotFound(section)
     studies = postflop.list_studies()
     total = sum(s["size"] for s in studies)
     if section is None:
-        content = "".join(_spot_section(family) for family in studyspots.FAMILIES) + _hand_section()
+        content = _hu_section() + _ring_section() + _hand_section()
+    elif section == "coups":
+        content = _hand_section()
+    elif section == "6max":
+        content = _ring_section()
     else:
-        content = _hand_section() if section == "coups" else _spot_section(section)
+        content = _hu_section(section)
     body = f"""
 <div class="meta">{len(studies)} étude(s) · {_size(total)} sur le disque · {escape(str(postflop.studies_dir()))}</div>
 <p class="note">Précision : exploitabilité de la solution, en % du pot (plus c'est bas, plus elle est proche de

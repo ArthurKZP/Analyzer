@@ -8,6 +8,7 @@ from statistics import median
 from typing import Optional
 from urllib.parse import quote
 
+from . import NAME
 from .cards import describe_holding, equity
 from .insights import (
     DUELS,
@@ -115,18 +116,62 @@ def hand_line(hand: Hand, tags: dict[str, str], villain: str) -> list[tuple[str,
 
 # --- Graphique -------------------------------------------------------------------
 
+# Les couleurs des trackers : résultat réel en vert, EV all-in en jaune, à l'abattage en bleu, sans abattage en rouge.
 SERIES = [
-    ("Résultat réel", "--series-1"),
-    ("EV all-in", "--series-2"),
-    ("À l'abattage", "--series-3"),
-    ("Sans abattage", "--series-4"),
+    ("Résultat réel", "--curve-real"),
+    ("EV all-in", "--curve-ev"),
+    ("À l'abattage", "--curve-sd"),
+    ("Sans abattage", "--curve-nosd"),
 ]
+END_LABELS = ["Réel", "EV all-in", "Abattage", "Sans abattage"]  # en bout de courbe, avec le cumul
+END_GAP = 14  # écart minimum entre deux étiquettes de bout de courbe
+
+
+CHART_POINTS = 1500  # au-delà, la courbe garde les creux et les sommets de chaque tranche de mains
+
+
+def chart_sample(curve: list[tuple[float, ...]], limit: int = CHART_POINTS) -> list[int]:
+    """Les mains à dessiner : toutes, ou pour une longue série, par tranche, la première, la dernière, et les creux et
+    sommets du résultat réel et de l'EV (la forme de la courbe ne change pas, la page reste légère)."""
+    n = len(curve)
+    if n <= limit:
+        return list(range(n))
+    buckets = limit // 6
+    keep = {0, n - 1}
+    for b in range(buckets):
+        lo, hi = b * n // buckets, min((b + 1) * n // buckets, n)
+        if lo >= hi:
+            continue
+        keep.update((lo, hi - 1))
+        for series in (0, 1):
+            seg = range(lo, hi)
+            keep.add(min(seg, key=lambda i: curve[i][series]))
+            keep.add(max(seg, key=lambda i: curve[i][series]))
+    return sorted(keep)
+
+
+def spread_labels(ends: list[tuple[int, float]], top: float, bottom: float, gap: float = END_GAP) -> dict[int, float]:
+    """La hauteur des étiquettes de bout de courbe ({courbe: y}) : chacune à la hauteur de sa courbe, écartées d'au
+    moins gap (descendues l'une sous l'autre, puis remontées si la dernière déborde en bas)."""
+    order = sorted(ends, key=lambda e: e[1])
+    ys: list[float] = []
+    for _, y in order:
+        ys.append(max(y, top) if not ys else max(y, ys[-1] + gap))
+    if ys and ys[-1] > bottom:
+        ys[-1] = bottom
+        for k in range(len(ys) - 2, -1, -1):
+            ys[k] = min(ys[k], ys[k + 1] - gap)
+    return {s: y for (s, _), y in zip(order, ys)}
 
 
 def chart_svg(curve: list[tuple[float, ...]]) -> str:
     if not curve:
         return ""
-    width, height, pad_l, pad_r, pad_t, pad_b = 880, 300, 56, 16, 16, 32
+    last = curve[-1]
+    values_end = [num(last[s], 0, sign=True) for s in range(len(SERIES))]
+    longest = max(len(f"{END_LABELS[s]} {values_end[s]}") for s in range(len(SERIES)))
+    # à droite, la place des étiquettes de bout de courbe (6,4 unités par caractère en 11 px : large)
+    width, height, pad_l, pad_r, pad_t, pad_b = 880, 300, 56, round(20 + 6.4 * longest), 16, 32
     values = [v for point in curve for v in point] + [0.0]
     lo, hi = min(values), max(values)
     step = _nice_step((hi - lo) / 5 or 1)
@@ -139,7 +184,7 @@ def chart_svg(curve: list[tuple[float, ...]]) -> str:
     def y(v: float) -> float:
         return pad_t + (height - pad_t - pad_b) * (1 - (v - lo) / (hi - lo or 1))
 
-    grid = []
+    grid, xticks = [], []
     tick = lo
     while tick <= hi + 1e-9:
         cls = "axis" if abs(tick) < 1e-9 else "grid"
@@ -150,17 +195,29 @@ def chart_svg(curve: list[tuple[float, ...]]) -> str:
         tick += step
     xstep = _nice_step(n / 6)
     for i in range(0, n, int(xstep) or 1):
-        grid.append(f'<text class="tick" x="{x(i):.1f}" y="{height - 10}" text-anchor="middle">{i}</text>')
+        xticks.append(f'<text class="tick" x="{x(i):.1f}" y="{height - 10}" text-anchor="middle">{i}</text>')
     lines = []
-    for s, (_, var) in enumerate(SERIES):
-        pts = " ".join(f"{x(i):.1f},{y(p[s]):.1f}" for i, p in enumerate(curve))
-        lines.append(f'<polyline class="line" style="stroke:var({var})" points="{pts}"/>')
-    data = json.dumps([[round(v, 1) for v in p] for p in curve])
+    kept = chart_sample(curve)
+    for s in reversed(range(len(SERIES))):  # le résultat réel par-dessus les autres
+        pts = " ".join(f"{x(i):.1f},{y(curve[i][s]):.1f}" for i in kept)
+        lines.append(f'<polyline class="line" data-series="{s}" style="stroke:var({SERIES[s][1]})" points="{pts}"/>')
+    # En bout de courbe : son nom et son cumul (relié à la courbe quand les étiquettes s'écartent).
+    xe = width - pad_r
+    placed = spread_labels([(s, y(last[s])) for s in range(len(SERIES))], pad_t + 4, height - pad_b - 4)
+    ends = "".join(
+        f'<g class="end" data-end="{s}"><line class="lead" x1="{xe}" y1="{y(last[s]):.1f}" x2="{xe + 8}" '
+        f'y2="{placed[s]:.1f}"/><circle cx="{xe}" cy="{y(last[s]):.1f}" r="4" style="fill:var({var})"/>'
+        f'<text x="{xe + 12}" y="{placed[s] + 4:.1f}">{END_LABELS[s]} <tspan class="v">{values_end[s]}</tspan></text></g>'
+        for s, (_, var) in enumerate(SERIES))
+    data = json.dumps([[round(v, 1) for v in curve[i]] for i in kept])
+    sampled = f" data-idx='{json.dumps(kept)}' data-n=\"{n}\"" if len(kept) < n else ""
+    # Le script redessine l'axe vertical et les courbes quand on en masque (cases de la légende).
     return f"""
-<div class="chart-wrap"><div class="chart" data-points='{data}' data-x0="{pad_l}" data-x1="{width - pad_r}">
+<div class="chart-wrap"><div class="chart" data-points='{data}'{sampled} data-x0="{pad_l}" data-x1="{width - pad_r}"
+  data-y0="{pad_t}" data-y1="{height - pad_b}">
   <svg viewBox="0 0 {width} {height}" role="img" aria-label="Résultat cumulé en big blinds, main par main">
-    {''.join(grid)}
-    {''.join(lines)}
+    <g class="yaxis">{''.join(grid)}</g>{''.join(xticks)}
+    {''.join(lines)}<g class="ends">{ends}</g>
     <line class="cross" x1="0" x2="0" y1="{pad_t}" y2="{height - pad_b}" visibility="hidden"/>
     <rect class="hit" x="{pad_l}" y="{pad_t}" width="{width - pad_l - pad_r}" height="{height - pad_t - pad_b}"/>
   </svg>
@@ -187,7 +244,7 @@ def tiles(hero: PlayerStats) -> str:
         ("Résultat EV all-in", f"{num(ev_total, 1, sign=True)} bb",
          f"écart chance : {num(-hero.ev_adjust_bb, 1, sign=True)} bb sur {hero.allin_hands} all-in"),
         ("Avec / sans abattage", f"{num(hero.net_bb_showdown, 0, sign=True)} / {num(hero.net_bb_no_showdown, 0, sign=True)}",
-         "bb"),
+         f"bb · {num(hero.hands_showdown, 0)} / {num(hero.hands - hero.hands_showdown, 0)} mains"),
     ]
     return '<div class="tiles">' + "".join(
         f'<div class="tile"><div class="label">{label}</div><div class="value">{value}</div><div class="sub">{sub}</div></div>'
@@ -196,19 +253,23 @@ def tiles(hero: PlayerStats) -> str:
 
 
 def legend(curve) -> str:
+    """Légende du graphique : une case par courbe, pour la masquer ou l'afficher."""
     last = curve[-1] if curve else (0, 0, 0, 0)
     return '<div class="legend">' + "".join(
-        f'<span><i style="background:var({var})"></i>{name} <b>{num(last[i], 0, sign=True)}&nbsp;bb</b></span>'
+        f'<label><input type="checkbox" checked data-series="{i}"><i style="background:var({var})"></i>{name} '
+        f'<b>{num(last[i], 0, sign=True)}&nbsp;bb</b></label>'
         for i, (name, var) in enumerate(SERIES)
     ) + "</div>"
 
 
-def findings_html(ps: PlayerStats, hero_mode: bool = False, folds: Optional[dict] = None) -> str:
-    items = findings(ps)
+def findings_html(ps: PlayerStats, hero_mode: bool = False, folds: Optional[dict] = None,
+                  items: Optional[list] = None) -> str:
+    """Les écarts aux repères (items : ceux à montrer, dans l'ordre ; par défaut les 12 plus marqués)."""
+    items = findings(ps)[:12] if items is None else items
     if not items:
         return '<p class="muted">Aucun écart marqué par rapport aux repères (ou échantillon trop faible).</p>'
     rows = []
-    for f in items[:12]:
+    for f in items:
         lo, hi = f.stat.ref
         badge = '<span class="pill strong">net</span>' if f.strong else '<span class="pill">tendance</span>'
         arrow = "▲" if f.direction == "haut" else "▼"
@@ -464,7 +525,7 @@ def lines_html(lines: list[Line], hero: str, villain: str, min_count: int = 3, s
             if ln.count < min_count:
                 continue
             rows.append(line_rows(ln, spots_href=spots_href))
-            for s_ in ln.seen:
+            for s_ in sorted(ln.seen, key=lambda x: x.hand.date)[-MAX_ROWS:]:
                 h = s_.hand
                 seen_rows.append(
                     f'<tr><td class="nowrap">{h.date:%H:%M}</td><td>{escape(ln.name)}</td>'
@@ -611,6 +672,9 @@ def allin_html(hands: list[Hand], hero: str, villain: str) -> str:
     )
 
 
+MAX_ROWS = 40  # mains montrées par tableau (les plus récentes) ; toutes restent dans Spots
+
+
 def showdowns_html(villain_stats: PlayerStats, hero: str, villain: str, spots_href: str = "") -> str:
     groups: dict[str, list] = defaultdict(list)
     for entry in villain_stats.showdowns:
@@ -621,7 +685,11 @@ def showdowns_html(villain_stats: PlayerStats, hero: str, villain: str, spots_hr
         combos = Counter(e.combo for e in entries)
         combo_list = ", ".join(f"{c}{'×' + str(n) if n > 1 else ''}" for c, n in combos.most_common())
         rows = []
-        for e in sorted(entries, key=lambda e: e.hand.date):
+        recent = sorted(entries, key=lambda e: e.hand.date)[-MAX_ROWS:]
+        if len(recent) < len(entries):
+            rows.append(f'<tr><td colspan="5" class="muted">Les {MAX_ROWS} plus récentes ; toutes dans '
+                        f'{spots_link(spots_href, "known=1", "Spots") or "Spots"}.</td></tr>')
+        for e in recent:
             h = e.hand
             line = "".join(
                 f'<div class="st"><span class="sn">{street[0].upper() if street != "preflop" else "PF"}</span>{html}</div>'
@@ -692,6 +760,7 @@ def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, vi
         for i in sorted(set(list(range(99, len(h.curve), 100)) + [len(h.curve) - 1]))
     )
     return TEMPLATE.format(
+        app_name=escape(NAME),
         title=escape(f"Profil HU — {villain}"),
         style=STYLE,
         heading="" if embed else f"<h1>{escape(villain)}</h1>",
@@ -729,7 +798,8 @@ EMBED_SCRIPT = """
 (function () {
   if (window.parent === window) return;
   var post = function () {
-    window.parent.postMessage({ type: 'analyzer-page', path: location.pathname, hash: location.hash }, location.origin);
+    window.parent.postMessage({ type: 'analyzer-page', path: location.pathname, search: location.search,
+      hash: location.hash }, location.origin);
   };
   post();
   window.addEventListener('hashchange', post);
@@ -761,6 +831,24 @@ def html_page(title: str, body: str, embed: bool = False, script: str = "") -> s
                        script=script + (EMBED_SCRIPT if embed else ""))
 
 
+FORMAT_NAMES = {"HU": "Heads-up", "ring": "Tables à plusieurs"}
+
+
+def format_query(table_format: str) -> str:
+    """« ?format=ring » : la page des tables à plusieurs (rien pour le heads-up)."""
+    return "" if table_format == "HU" else f"?format={quote(table_format)}"
+
+
+def format_switch(formats: list[tuple[str, int]], current: str) -> str:
+    """Le choix entre le heads-up et les tables à plusieurs, avec leur nombre de mains (rien s'il n'y en a qu'un)."""
+    if len(formats) < 2:
+        return ""
+    links = "".join(
+        f'<a href="{escape(format_query(fmt) or "?format=HU")}" aria-current="{"page" if fmt == current else "false"}">'
+        f'{escape(FORMAT_NAMES.get(fmt, fmt))} <span>{n}</span></a>' for fmt, n in formats)
+    return f'<nav class="lk-fmt" aria-label="Format de table">{links}</nav>'
+
+
 def build_plan_page(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, villain: str,
                     embed: bool = False, lines: Optional[list[Line]] = None,
                     report_href: str = "rapport", spots_href: str = "spots") -> str:
@@ -786,6 +874,7 @@ STYLE = """:root {
   --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
   --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
   --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+  --curve-real: #008300; --curve-ev: #eda100; --curve-sd: #2a78d6; --curve-nosd: #e34948;
   --alert: #d03b3b; --alert-bg: rgba(208,59,59,0.08); --good: #006300;
   --hi-bg: rgba(235,104,52,0.14); --lo-bg: rgba(42,120,214,0.12);
   --sc: #0b0b0b; --sh: #d03b3b; --sd: #2a78d6; --sclub: #008300;
@@ -797,6 +886,7 @@ STYLE = """:root {
     --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
     --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+    --curve-real: #008300; --curve-ev: #c98500; --curve-sd: #3987e5; --curve-nosd: #e34948;
     --alert: #e66767; --alert-bg: rgba(230,103,103,0.12); --good: #0ca30c;
     --hi-bg: rgba(217,89,38,0.22); --lo-bg: rgba(57,135,229,0.22);
     --sc: #ffffff; --sh: #e66767; --sd: #6da7ec; --sclub: #0ca30c;
@@ -808,6 +898,7 @@ STYLE = """:root {
   --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
   --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+  --curve-real: #008300; --curve-ev: #c98500; --curve-sd: #3987e5; --curve-nosd: #e34948;
   --alert: #e66767; --alert-bg: rgba(230,103,103,0.12); --good: #0ca30c;
   --hi-bg: rgba(217,89,38,0.22); --lo-bg: rgba(57,135,229,0.22);
   --sc: #ffffff; --sh: #e66767; --sd: #6da7ec; --sclub: #0ca30c;
@@ -838,6 +929,12 @@ td .n.small { font-style: italic; }
 td.dev-haut { background: var(--hi-bg); }
 td.dev-bas { background: var(--lo-bg); }
 td.strong .v { font-weight: 700; }
+.lk-fmt { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.lk-fmt a { font-size: 13px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border); text-decoration: none;
+  color: var(--ink-2); background: var(--surface); }
+.lk-fmt a span { color: var(--muted); font-size: 12px; margin-left: 2px; }
+.lk-fmt a[aria-current="page"] { background: var(--ink); color: var(--page); border-color: var(--ink); font-weight: 600; }
+.lk-fmt a[aria-current="page"] span { color: var(--page); opacity: .75; }
 .legend-dev { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); margin: 0 0 12px; }
 .legend-dev i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
 .findings { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
@@ -855,6 +952,11 @@ table.duel tr.ok .lvl { color: var(--good); font-weight: 700; }
 .chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .chart .cross { stroke: var(--axis); stroke-width: 1; }
 .chart .hit { fill: transparent; cursor: crosshair; }
+.chart .end { pointer-events: none; }
+.chart .end text { fill: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .end .v { fill: var(--ink); font-weight: 600; }
+.chart .end circle { stroke: var(--surface); stroke-width: 2; }
+.chart .end .lead { stroke: var(--axis); stroke-width: 1; }
 .tooltip { position: absolute; top: 8px; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 170px; }
 .tooltip .row { display: flex; align-items: center; gap: 8px; }
 .tooltip .row i { width: 14px; height: 2px; display: inline-block; }
@@ -862,6 +964,9 @@ table.duel tr.ok .lvl { color: var(--good); font-weight: 700; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin-bottom: 8px; }
 .legend i { display: inline-block; width: 16px; height: 2px; vertical-align: middle; margin-right: 6px; }
 .legend b { color: var(--ink); font-weight: 600; }
+.legend label { cursor: pointer; }
+.legend input { margin: 0 6px 0 0; vertical-align: -2px; accent-color: var(--ink-2); }
+.legend label:has(input:not(:checked)) { opacity: 0.45; }
 .barcell { width: 34%; position: relative; }
 .bar { display: inline-block; height: 8px; background: var(--series-1); border-radius: 0 4px 4px 0; vertical-align: middle; max-width: calc(100% - 44px); }
 .barv { margin-left: 6px; color: var(--ink-2); font-size: 12px; }
@@ -921,6 +1026,7 @@ table.lines tr.pooled td { background: var(--page); }
 .chip.h-rien { color: var(--muted); } .chip.h-paire { background: var(--lo-bg); } .chip.h-fort { background: var(--lo-bg); font-weight: 600; }
 details.inner { margin: 12px 0 0; border-radius: 8px; }
 details.inner summary { padding: 8px 12px; font-size: 13px; }
+details .inner-body { padding: 10px 12px; }
 .chart-wrap { overflow-x: auto; }
 .chart { min-width: 600px; }
 table.sizing td:first-child { white-space: nowrap; }
@@ -1027,7 +1133,7 @@ TEMPLATE = """<!doctype html>
 <p class="muted">Groupées par sa ligne préflop. H = toi, V = lui ; le temps de réflexion de l'adversaire est indiqué après chacune de ses actions.</p>
 {showdowns}
 
-<p class="note">Repères indicatifs pour un régulier HU solide à 100bb+ : ils servent à repérer les écarts, pas à définir une stratégie optimale. Rapport généré par Analyzer.</p>
+<p class="note">Repères indicatifs pour un régulier HU solide à 100bb+ : ils servent à repérer les écarts, pas à définir une stratégie optimale. Rapport généré par {app_name}.</p>
 </main>
 <script>{script}</script>
 </body>
@@ -1037,19 +1143,96 @@ TEMPLATE = """<!doctype html>
 SCRIPT = """
 document.querySelectorAll('.chart').forEach(function (chart) {
   var pts = JSON.parse(chart.dataset.points);
+  // Longue série : seuls certains points sont dans la page (data-idx : leur numéro de main, data-n : le total).
+  var idx = chart.dataset.idx ? JSON.parse(chart.dataset.idx) : null, N = idx ? +chart.dataset.n : pts.length;
+  function at(k) { return idx ? idx[k] : k; }
   var svg = chart.querySelector('svg'), hit = chart.querySelector('.hit');
   var cross = chart.querySelector('.cross'), tip = chart.querySelector('.tooltip');
-  var x0 = +chart.dataset.x0, x1 = +chart.dataset.x1;
-  var names = ['Résultat réel', 'EV all-in', "À l'abattage", 'Sans abattage'];
-  var vars = ['--series-1', '--series-2', '--series-3', '--series-4'];
+  var x0 = +chart.dataset.x0, x1 = +chart.dataset.x1, y0 = +chart.dataset.y0, y1 = +chart.dataset.y1;
+  var names = __NAMES__, vars = __VARS__, GAP = __GAP__;
+  var shown = names.map(function () { return true; });
   function fmt(v) { return (v > 0 ? '+' : '') + v.toFixed(0).replace('-', '\\u2212') + ' bb'; }
+  // Courbes masquées (cases de la légende) : l'échelle verticale suit celles qui restent ; le choix est gardé.
+  var card = chart.closest('.card'), boxes = card ? card.querySelectorAll('.legend input[data-series]') : [];
+  var KEY = 'analyzer.courbes-masquees';
+  function niceStep(raw) {
+    raw = Math.max(raw, 1e-9);
+    var mag = raw >= 1 ? Math.pow(10, String(Math.floor(raw)).length) / 10 : 1;
+    var ms = [1, 2, 2.5, 5, 10];
+    for (var k = 0; k < ms.length; k++) if (raw <= ms[k] * mag) return ms[k] * mag;
+    return 10 * mag;
+  }
+  function tickText(v) { return (v < -1e-9 ? '\\u2212' : '') + Math.abs(Math.round(v)).toLocaleString('fr-FR'); }
+  function redraw() {
+    var values = [0];
+    pts.forEach(function (p) { p.forEach(function (v, s) { if (shown[s]) values.push(v); }); });
+    var lo = Math.min.apply(null, values), hi = Math.max.apply(null, values);
+    var step = niceStep((hi - lo) / 5 || 1);
+    lo = step * Math.floor(lo / step); hi = step * Math.ceil(hi / step);
+    var y = function (v) { return y0 + (y1 - y0) * (1 - (v - lo) / ((hi - lo) || 1)); };
+    var x = function (k) { return x0 + (x1 - x0) * (at(k) / Math.max(N - 1, 1)); };
+    var axis = svg.querySelector('.yaxis'), ns = 'http://www.w3.org/2000/svg';
+    axis.textContent = '';
+    for (var t = lo; t <= hi + 1e-9; t += step) {
+      var line = document.createElementNS(ns, 'line');
+      line.setAttribute('class', Math.abs(t) < 1e-9 ? 'axis' : 'grid');
+      line.setAttribute('x1', x0); line.setAttribute('x2', x1);
+      line.setAttribute('y1', y(t).toFixed(1)); line.setAttribute('y2', y(t).toFixed(1));
+      var text = document.createElementNS(ns, 'text');
+      text.setAttribute('class', 'tick'); text.setAttribute('x', x0 - 8); text.setAttribute('y', (y(t) + 4).toFixed(1));
+      text.setAttribute('text-anchor', 'end'); text.textContent = tickText(t);
+      axis.appendChild(line); axis.appendChild(text);
+    }
+    svg.querySelectorAll('polyline[data-series]').forEach(function (pl) {
+      var s = +pl.dataset.series;
+      pl.style.display = shown[s] ? '' : 'none';
+      if (shown[s]) pl.setAttribute('points', pts.map(function (p, i) { return x(i).toFixed(1) + ',' + y(p[s]).toFixed(1); }).join(' '));
+    });
+    placeEnds(y);
+  }
+  // Étiquettes de bout de courbe : à la hauteur de leur courbe, écartées d'au moins GAP (comme spread_labels).
+  function placeEnds(y) {
+    var ends = [], last = pts[pts.length - 1];
+    svg.querySelectorAll('g.end').forEach(function (g) {
+      var s = +g.dataset.end;
+      g.style.display = shown[s] ? '' : 'none';
+      if (shown[s]) ends.push({ g: g, y: y(last[s]) });
+    });
+    ends.sort(function (a, b) { return a.y - b.y; });
+    ends.forEach(function (e, k) { e.at = k ? Math.max(e.y, ends[k - 1].at + GAP) : Math.max(e.y, y0 + 4); });
+    if (ends.length && ends[ends.length - 1].at > y1 - 4) {
+      ends[ends.length - 1].at = y1 - 4;
+      for (var k = ends.length - 2; k >= 0; k--) ends[k].at = Math.min(ends[k].at, ends[k + 1].at - GAP);
+    }
+    ends.forEach(function (e) {
+      var lead = e.g.querySelector('line');
+      e.g.querySelector('circle').setAttribute('cy', e.y.toFixed(1));
+      lead.setAttribute('y1', e.y.toFixed(1)); lead.setAttribute('y2', e.at.toFixed(1));
+      e.g.querySelector('text').setAttribute('y', (e.at + 4).toFixed(1));
+    });
+  }
+  try {
+    var hidden = JSON.parse(localStorage.getItem(KEY) || '[]');
+    if (boxes.length) hidden.forEach(function (s) { if (s >= 0 && s < shown.length) shown[s] = false; });
+  } catch (e) { /* stockage indisponible : toutes les courbes */ }
+  boxes.forEach(function (box) {
+    var s = +box.dataset.series;
+    box.checked = shown[s];
+    box.addEventListener('change', function () {
+      shown[s] = box.checked;
+      try { localStorage.setItem(KEY, JSON.stringify(shown.map(function (v, k) { return v ? -1 : k; }).filter(function (k) { return k >= 0; }))); } catch (e) { /* rien */ }
+      redraw();
+    });
+  });
+  if (shown.some(function (v) { return !v; })) redraw();
   function show(i) {
-    var x = x0 + (x1 - x0) * i / Math.max(pts.length - 1, 1);
+    var x = x0 + (x1 - x0) * at(i) / Math.max(N - 1, 1);
     cross.setAttribute('x1', x); cross.setAttribute('x2', x); cross.setAttribute('visibility', 'visible');
     tip.textContent = '';
-    var head = document.createElement('div'); head.textContent = 'Main ' + (i + 1); head.style.color = 'var(--muted)';
+    var head = document.createElement('div'); head.textContent = 'Main ' + (at(i) + 1); head.style.color = 'var(--muted)';
     tip.appendChild(head);
     pts[i].forEach(function (v, s) {
+      if (!shown[s]) return;
       var row = document.createElement('div'); row.className = 'row';
       var key = document.createElement('i'); key.style.background = 'var(' + vars[s] + ')';
       var label = document.createElement('span'); label.textContent = names[s];
@@ -1063,7 +1246,11 @@ document.querySelectorAll('.chart').forEach(function (chart) {
   function index(evt) {
     var rect = svg.getBoundingClientRect();
     var x = (evt.clientX - rect.left) * svg.viewBox.baseVal.width / rect.width;
-    return Math.round(Math.min(Math.max((x - x0) / (x1 - x0), 0), 1) * (pts.length - 1));
+    var t = Math.min(Math.max((x - x0) / (x1 - x0), 0), 1) * (N - 1);
+    if (!idx) return Math.round(t);
+    var lo = 0, hi = idx.length - 1;  // le point gardé le plus proche
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (idx[mid] < t) lo = mid + 1; else hi = mid; }
+    return lo > 0 && t - idx[lo - 1] < idx[lo] - t ? lo - 1 : lo;
   }
   hit.addEventListener('pointermove', function (e) { show(index(e)); });
   hit.addEventListener('pointerleave', function () { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); });
@@ -1075,4 +1262,5 @@ document.querySelectorAll('.chart').forEach(function (chart) {
   });
   svg.addEventListener('blur', function () { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); });
 });
-"""
+""".replace("__NAMES__", json.dumps([name for name, _ in SERIES], ensure_ascii=False)).replace(
+    "__VARS__", json.dumps([var for _, var in SERIES])).replace("__GAP__", str(END_GAP))

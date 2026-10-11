@@ -53,9 +53,11 @@ class Job:
 
 
 class SolveQueue:
-    def __init__(self, iterations: int = postflop.DEFAULT_ITERATIONS, target: float = postflop.DEFAULT_TARGET,
+    def __init__(self, iterations: Optional[int] = None, target: Optional[float] = None,
                  idle_timeout: float = IDLE_TIMEOUT):
-        self.iterations, self.target, self.idle_timeout = iterations, target, idle_timeout
+        """iterations, target : précision fixe (tests) ; sans elles, le réglage de l'application (postflop.precision)."""
+        self.fixed = (iterations or postflop.DEFAULT_ITERATIONS, target) if target is not None else None
+        self.idle_timeout = idle_timeout
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gtopen")
         # Rouvrir une étude (quelques secondes) ne fait pas la queue derrière une série de résolutions.
         self._loader = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gtopen-etude")
@@ -75,9 +77,22 @@ class SolveQueue:
             except Exception:  # noqa: BLE001 — un rappel ne doit pas faire échouer la résolution
                 traceback.print_exc()
 
-    def _request(self, spot) -> dict:
-        """spot : une main jouée (postflop.PostflopSpot) ou un spot d'étude (studyspots.StudySpot)."""
-        return spot.request(self.iterations, self.target)
+    def precision(self) -> tuple[int, float]:
+        """(itérations au plus, exploitabilité visée en % du pot) des nouvelles résolutions."""
+        if self.fixed:
+            return self.fixed
+        target = postflop.precision()
+        return postflop.iterations_for(target), target
+
+    def _request(self, spot, fresh: bool = False) -> dict:
+        """spot : une main jouée (postflop.PostflopSpot) ou un spot d'étude (studyspots.StudySpot). La requête de
+        son résultat s'il est déjà résolu, à n'importe quelle précision ; sinon (ou fresh=True), à la précision
+        réglée."""
+        iterations, target = self.precision()
+        request = spot.request(iterations, target)
+        if not fresh and not self.fixed:
+            return postflop.solved_request(request) or request
+        return request
 
     # --- session navigable ------------------------------------------------------
     def live_session(self, hand_id: str, request: Optional[dict] = None) -> Optional[postflop.Session]:
@@ -108,59 +123,75 @@ class SolveQueue:
 
     # --- résolutions ------------------------------------------------------------
     def lookup(self, spot) -> dict:
-        """Résultat en cache ou résolution en cours pour ce spot, sans rien lancer."""
+        """Résultat en cache ou résolution en cours pour ce spot, sans rien lancer. « target » : la précision visée
+        de ce résultat (ou de la résolution à lancer)."""
         request = self._request(spot)
+        fresh = self._request(spot, fresh=True)
         key = postflop.cache_key(request)
         hand_id = spot.ident
         live = self.live_session(hand_id, request) is not None
-        study = postflop.study_path(request).is_file()
+        study = postflop.has_study(request)
         with self._lock:
             job = self._jobs.get(key)
+            refine = self._jobs.get(postflop.cache_key(fresh))  # la même, affinée à la précision réglée
             series = self._jobs.get(self._series.get(hand_id, ""))
         if series and series.state in ("waiting", "running"):
             return dict(series.view(), live=False, study=study)
-        if job and job.state in ("waiting", "running"):
-            return dict(job.view(), live=False, study=study)
+        for running in (refine, job):
+            if running and running.state in ("waiting", "running"):
+                return dict(running.view(), live=False, study=study)
+        target = request["target_exploit_pct"]
         raw = postflop.cached(request)
         if raw is not None:
-            return {"job": key, "hand": hand_id, "state": "done", "live": live, "study": study,
+            return {"job": key, "hand": hand_id, "state": "done", "live": live, "study": study, "target": target,
                     "result": spot.interpret(raw)}
         if job and job.state == "error":
             return dict(job.view(), live=False, study=study)
-        return {"job": key, "hand": hand_id, "state": "absent", "live": False, "study": study}
+        return {"job": key, "hand": hand_id, "state": "absent", "live": False, "study": study, "target": target}
 
-    def start(self, spot, force: bool = False, keep_live: bool = True) -> dict:
+    def start(self, spot, force: bool = False, keep_live: bool = True, fresh: bool = False) -> dict:
         """Lance la résolution ; force=True la relance même en cache, pour rouvrir une session.
 
-        keep_live=False (résolutions en lot) : la session est fermée dès l'étude enregistrée."""
+        keep_live=False (résolutions en lot) : la session est fermée dès l'étude enregistrée. fresh=True : à la
+        précision réglée, même si le spot est déjà résolu à une autre (affiner)."""
         view = self.lookup(spot)
-        if view["state"] in ("waiting", "running") or view["state"] == "done" and (view["live"] or not force):
+        if view["state"] in ("waiting", "running"):
             return view
-        request = self._request(spot)
-        job = Job(view["job"], spot.ident, self.iterations, self.target,
-                  mode="load" if postflop.study_path(request).is_file() else "solve")
+        request = self._request(spot, fresh=fresh)
+        if fresh and postflop.cache_key(request) != view["job"]:  # nouvelle précision : nouvelle résolution
+            view = {"job": postflop.cache_key(request), "state": "absent", "live": False}
+        elif view["state"] == "done" and (view["live"] or not force):
+            return view
+        job = Job(view["job"], spot.ident, request["max_iterations"], request["target_exploit_pct"],
+                  mode="load" if postflop.has_study(request) else "solve")
         with self._lock:
             self._jobs[job.key] = job
         (self._loader if job.mode == "load" else self._executor).submit(self._run, job, spot, request, keep_live)
         return dict(job.view(), live=False, study=job.mode == "load")
 
-    def choose_and_solve(self, ident: str, choose: Callable[[Job], None], make_spot: Callable[[], object]) -> dict:
-        """Choisit d'abord les tailles du spot (long), puis le résout sans garder de session.
+    def choose_and_solve(self, ident: str, choose: Callable[[Job], None], make_spot: Callable[[], object],
+                         aliases: tuple[str, ...] = (), keep_live: bool = False,
+                         after: Optional[Callable[[], None]] = None) -> dict:
+        """Choisit d'abord les tailles du spot (long), puis le résout (sans garder de session, sauf keep_live).
 
         choose(job) fait le choix (job.progress["stage"] : l'étape en cours ; job.process : le programme
-        lancé ; job.cancelled : l'arrêt demandé) ; make_spot() rend ensuite le spot avec ses tailles."""
+        lancé ; job.cancelled : l'arrêt demandé) ; make_spot() rend ensuite le spot avec ses tailles. aliases :
+        d'autres identifiants qui suivent la tâche (le coup joué dont on choisit les tailles du flop) ; after() :
+        lancé une fois le spot résolu."""
         with self._lock:
             current = self._jobs.get(self._series.get(ident, ""))
             if current and current.state in ("waiting", "running"):
                 return current.view()
             key = "choix-" + hashlib.sha256(ident.encode()).hexdigest()[:14]
-            job = Job(key, ident, self.iterations, self.target, mode="choose")
+            job = Job(key, ident, *self.precision(), mode="choose")
             self._jobs[key] = job
-            self._series[ident] = key
-        self._executor.submit(self._run_series, job, choose, make_spot)
+            for name in (ident, *aliases):
+                self._series[name] = key
+        self._executor.submit(self._run_series, job, choose, make_spot, keep_live, after)
         return job.view()
 
-    def _run_series(self, job: Job, choose: Callable[[Job], None], make_spot: Callable[[], object]) -> None:
+    def _run_series(self, job: Job, choose: Callable[[Job], None], make_spot: Callable[[], object],
+                    keep_live: bool = False, after: Optional[Callable[[], None]] = None) -> None:
         if job.cancelled:
             return
         job.state, job.started = "running", time.time()
@@ -179,7 +210,12 @@ class SolveQueue:
         spot = make_spot()
         job.mode = "solve"
         job.progress.clear()
-        self._run(job, spot, self._request(spot), keep_live=False)
+        self._run(job, spot, self._request(spot), keep_live=keep_live)
+        if after is not None and job.state == "done":
+            try:
+                after()
+            except Exception:  # noqa: BLE001 — le spot reste résolu
+                traceback.print_exc()
 
     def analyze(self, spot, on_done: Callable[[object, dict], None]) -> dict:
         """Résout une main jouée pour l'analyse : le résultat seul (cache), sans étude ni session ;
@@ -188,7 +224,7 @@ class SolveQueue:
         if view["state"] in ("waiting", "running", "done"):
             return view
         request = self._request(spot)
-        job = Job(view["job"], spot.ident, self.iterations, self.target, mode="analyse")
+        job = Job(view["job"], spot.ident, request["max_iterations"], request["target_exploit_pct"], mode="analyse")
         with self._lock:
             self._jobs[job.key] = job
         self._executor.submit(self._run_analysis, job, spot, request, on_done)
@@ -232,7 +268,7 @@ class SolveQueue:
                 proc.terminate()
         try:
             raw = session.start(on_progress=job.progress.update, on_start=on_start)
-            if session.study.is_file() and (not session.loading or not session.study.with_suffix(".json").is_file()):
+            if postflop.has_study(request) and (not session.loading or postflop.study_meta(request) is None):
                 spot.write_meta(request, raw, session)
             after = getattr(spot, "after_solve", None)
             if after is not None and not session.loading:  # ex. le plan de jeu d'un spot d'étude
@@ -271,7 +307,8 @@ class SolveQueue:
             current = self._jobs.get(self._plans.get(spot.ident, ""))
             if current and current.state in ("waiting", "running"):
                 return current.view()
-            job = Job("plan-" + postflop.study_key(request), spot.ident, self.iterations, self.target, mode="plan")
+            job = Job("plan-" + postflop.study_key(request), spot.ident, request["max_iterations"],
+                      request["target_exploit_pct"], mode="plan")
             self._jobs[job.key] = job
             self._plans[spot.ident] = job.key
         self._executor.submit(self._run_plan, job, spot, request, extract)
@@ -280,7 +317,7 @@ class SolveQueue:
     def _run_plan(self, job: Job, spot, request: dict, extract: Callable[[postflop.Session, object], None]) -> None:
         if job.cancelled:
             return
-        if not postflop.study_path(request).is_file():
+        if not postflop.has_study(request):
             job.state, job.error = "error", "Étude introuvable."
             return
         self._set_live("", None)  # une étude à la fois en mémoire
@@ -318,6 +355,13 @@ class SolveQueue:
         if node is None:
             raise NeedSession(spot.ident)
         return {"node": postflop.settle(node, postflop.weights_of(spot)), "live": False}
+
+    def active_for(self, hand_ids) -> list[dict]:
+        """Les résolutions en file ou en cours de ces mains (sans reconstruire leurs spots)."""
+        wanted = set(hand_ids)
+        with self._lock:
+            jobs = [j for j in self._jobs.values() if j.hand_id in wanted and j.state in ("waiting", "running")]
+        return [j.view() for j in jobs]
 
     def get(self, key: str) -> Optional[dict]:
         with self._lock:

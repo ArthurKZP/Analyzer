@@ -1,4 +1,3 @@
-import json
 import os
 import tempfile
 import unittest
@@ -10,7 +9,22 @@ from analyzer.app.ring_page import build_ring_page
 from analyzer.parsers import load_hands, parse_text
 from analyzer.theory import postflop, ring_ranges
 
+try:
+    from .base import isolate_module, release_module
+except ImportError:  # lancé par « unittest discover -s tests »
+    from base import isolate_module, release_module
+
+
+def setUpModule():
+    isolate_module()
+
+
+def tearDownModule():
+    release_module()
+
 SITES = Path(__file__).parent / "sites"
+# les exemples Betclic, Unibet et Winamax (les autres sites ont leurs tests dans test_sites)
+FIRST_SITES = [SITES / name for name in ("betclic_6max.txt", "unibet.txt", "winamax.txt")]
 
 
 def hand(name, index=0):
@@ -47,7 +61,7 @@ class ReadTest(unittest.TestCase):
 
 class AnalyzeTest(unittest.TestCase):
     def test_formats_positions_and_page(self):
-        hands = load_hands([SITES])
+        hands = load_hands(FIRST_SITES)
         stats = ring.analyze(hands, "Hero")
         self.assertEqual([fs.table_format for fs in stats], ["6-max", "3-max"])  # le HU n'en fait pas partie
         six = stats[0]
@@ -56,18 +70,27 @@ class AnalyzeTest(unittest.TestCase):
         self.assertAlmostEqual(six.total.net_bb, 88.5 / 5)
         self.assertEqual(ring.ref("6-max", "open", "BTN"), (40, 50))
         self.assertIsNone(ring.ref("3-max", "vpip"))
-        page = build_ring_page(stats, "Hero")
-        for text in ("Préflop par position", "Après le flop", "6-max (2)", "3-max (1)", "repère 18–23&nbsp;%"):
+        # toutes les tables ensemble : une position compte ses mains de chaque taille de table
+        merged = ring.analyze(hands, "Hero", merge=True)
+        self.assertEqual([(fs.table_format, fs.total.hands, fs.formats) for fs in merged],
+                         [(ring.MERGED, 3, ["3-max", "6-max"])])
+        self.assertEqual([p.position for p in merged[0].positions], ["HJ", "BB"])
+        self.assertEqual(ring.ref(ring.MERGED, "open", "HJ"), (18, 23))
+        scopes = [("all", "Toutes", merged), ("reg", "Réguliers", merged), ("rec", "Récréatifs", [])]
+        page = build_ring_page(scopes, "Hero")
+        for text in ("Préflop par position", "Après le flop", "Toutes tes mains (3)", "Contre les réguliers (3)",
+                     "repère 18–23&nbsp;%", "3-max, 6-max"):
             self.assertIn(text, page)
+        self.assertNotIn("Contre les récréatifs (", page)  # aucune main contre eux : pas de bouton
         self.assertIn("Aucune main", build_ring_page([], "Hero"))
-        # un pot à deux au flop en 6-max sans ranges : de quoi charger les charts de Hand2Note Guide
+        # un pot à deux au flop sans ranges : de quoi charger les charts de Hand2Note Guide
         row = {"id": "X1", "date": stats[0].first, "format": "6-max", "hero": "CO", "villain": "BB",
                "line": "CO open, BB call", "pot_type": None, "cards": ["Ah", "Kd"], "board": ["2c", "7d", "9s"],
                "total_bb": 12.0, "net_bb": 5.5, "status": "Pas de range préflop pour « CO open, BB call » en 6-max"}
-        page = build_ring_page(stats, "Hero", spots=[row], ranges={})
+        page = build_ring_page(scopes, "Hero", spots=[row], ranges={})
         self.assertIn("Charger les charts 100 bb de Hand2Note Guide (6-max et 3-max)", page)
         self.assertIn("pas de range préflop", page)
-        ready = build_ring_page(stats, "Hero", spots=[dict(row, status=None, pot_type="SRP")], ranges={"6-max": 23})
+        ready = build_ring_page(scopes, "Hero", spots=[dict(row, status=None, pot_type="SRP")], ranges={"6-max": 23})
         self.assertNotIn("Charger les charts", ready)
         self.assertIn('href="/explorateur/X1"', ready)
 
@@ -78,18 +101,15 @@ class HeadsUpPotTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        env = mock.patch.dict(os.environ, {"ANALYZER_HOME": tmp.name})
+        env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": tmp.name})
         env.start()
         self.addCleanup(env.stop)
         self.home = Path(tmp.name)
         self.hand = hand("winamax.txt")  # 3-max : toi en BB, 3bet contre l'open du bouton, la SB folde
 
     def write_ranges(self):
-        folder = ring_ranges.folder()
-        folder.mkdir(parents=True)
-        (folder / "3-max.json").write_text(json.dumps({"format": "3-max", "lines": {
-            "BTN:raise BB:raise BTN:call": {"ranges": {"BTN": "AA,KK:0.5,AQs,A9s", "BB": "AA,KK,QQ,AKs"}}}}),
-            encoding="utf-8")
+        ring_ranges.save_solution("3-max", {"format": "3-max", "lines": {
+            "BTN:raise BB:raise BTN:call": {"ranges": {"BTN": "AA,KK:0.5,AQs,A9s", "BB": "AA,KK,QQ,AKs"}}}})
 
     def test_line_and_missing_ranges(self):
         self.assertEqual(postflop.flop_pair(self.hand), ("Hero", "Incognito-a1b2c3d4"))
@@ -133,6 +153,9 @@ class HeadsUpPotTest(unittest.TestCase):
             rows = lib.ring_spots()
             self.assertEqual([(r["format"], r["hero"], r["villain"], r["status"]) for r in rows],
                              [("3-max", "BB", "BTN", None)])
+            self.assertIsNotNone(rows[0]["pot_type"])
+            unprepared = lib.ring_spots(0)  # au-delà de la limite : pas préparés pour le solveur (la page n'en montre pas)
+            self.assertEqual([(r["id"], r["status"], r["pot_type"]) for r in unprepared], [(rows[0]["id"], None, None)])
             state = lib.explorer_state(rows[0]["id"])
             meta = state["meta"]
             self.assertEqual((meta["positions"], meta["hero_oop"], meta["table_format"]), (["BB", "BTN"], True, "3-max"))
@@ -169,7 +192,8 @@ class Hand2NoteTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        env = mock.patch.dict(os.environ, {"ANALYZER_HOME": tmp.name})
+        self.home = Path(tmp.name)
+        env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": tmp.name})
         env.start()
         self.addCleanup(env.stop)
 
@@ -193,9 +217,24 @@ class Hand2NoteTest(unittest.TestCase):
         reference = ring_ranges.vs4bet_reference()  # la capture mesurée : AQs paie, AKs part à tapis
         self.assertEqual((reference["AQs"], "AKs" in reference), ({"C": 1.0}, False))
 
+    def test_import_a_solution_file(self):
+        path = self.home / "ma-solution.json"
+        path.write_text('{"format": "3-max", "lines": {"BTN:raise BB:call": {"ranges": {"BTN": "AA", "BB": "KK"}}}}',
+                        encoding="utf-8")
+        with mock.patch("sys.stdout"):
+            self.assertEqual(ring_ranges.main(["--importer", str(path)]), 0)
+        self.assertEqual(ring_ranges.available(), {"3-max": 1})
+        path.write_text('{"lines": {}}', encoding="utf-8")
+        self.assertEqual(ring_ranges.import_file(path, "6-max"), "6-max")  # format donné à part
+        with self.assertRaises(ValueError):
+            ring_ranges.import_file(path)  # ni dans le fichier, ni dans son nom
+        path.write_text('["pas une solution"]', encoding="utf-8")
+        with self.assertRaises(ValueError):
+            ring_ranges.import_file(path, "6-max")
+
     def test_install_and_solve_a_six_max_pot(self):
-        paths = ring_ranges.install_hand2note(log=lambda message: None, js=H2N_SAMPLE)
-        self.assertEqual([p.name for p in paths], ["6-max.json"])  # pas de chart BTN/SB/BB : pas de 3-max
+        formats = ring_ranges.install_hand2note(log=lambda message: None, js=H2N_SAMPLE)
+        self.assertEqual(formats, ["6-max"])  # pas de chart BTN/SB/BB : pas de 3-max
         self.assertEqual(ring_ranges.available(), {"6-max": 3})  # pot simple, pot 3bet, pot 4bet
         six = hand("betclic_6max.txt")  # le CO ouvre, la BB 3bet, le CO paie
         spot = postflop.build_spot(six, "Joueur6")

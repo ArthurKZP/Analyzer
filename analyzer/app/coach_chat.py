@@ -24,7 +24,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from .. import bluffs, leaks, students
+from .. import NAME, bluffs, leaks, students
 from ..theory import coach, exploit, postflop, review, studyspots
 
 MODEL = os.environ.get("ANALYZER_COACH_MODEL", "")  # vide : choisi dans la liste des modèles de l'API
@@ -44,16 +44,16 @@ SETUP = ("Le coach utilise Claude, l'IA d'Anthropic, par son API : installe le m
          "« python -m analyzer mcp --config » et suis les indications, puis pose tes questions dans Claude "
          "(« Copier pour Claude » ici reprend ce que tu regardes dans l'explorateur).")
 
-SYSTEM = """Tu es le coach de poker intégré à Analyzer, un outil d'étude du heads-up No Limit Hold'em (100 bb, salle Betclic). Ton élève est un joueur régulier qui étudie la théorie pour simplifier son jeu et mieux exploiter ses adversaires.
+SYSTEM = "Tu es le coach de poker intégré à " + NAME + """, un outil d'étude du No Limit Hold'em en heads-up et aux tables à plusieurs (6-max), 100 bb. Ton élève est un joueur régulier qui étudie la théorie pour simplifier son jeu et mieux exploiter ses adversaires.
 
 Tu consultes ses données avec des outils :
-- plan_de_jeu : la synthèse de ses études résolues pour un type de pot (catégories de flop : haut, moyen ou bas, sec, deux couleurs ou connecté, pairé, monotone ; niveau de c-bet ; règles pour quatre familles de mains : fortes, moyennes, tirages, rien ; suite à la turn et à la river selon la carte ; jeu de l'autre joueur).
+- plan_de_jeu : la synthèse de ses études résolues pour un type de pot, en heads-up ou en 6-max pour une paire de positions : les flops regroupés en trois stratégies de c-bet (miser range, stratégie mixte, checker range) et par taille de mise, avec des flops en exemple ; pour chaque groupe, l'attaque (règles pour quatre familles de mains : fortes, moyennes, tirages, rien ; suite à la turn et à la river selon la carte) et la défense de l'autre joueur (face à la c-bet et aux barrels, quand l'attaquant checke).
 - liste_etudes : les flops résolus disponibles, avec leur schéma de c-bet.
 - strategie_noeud : la stratégie du solveur à un moment précis d'un spot résolu (fréquences de toute la range, par famille de mains, équités, EV, exemples de mains).
 - strategie_main : une main précise à ce moment (sa stratégie, l'EV de chaque action, son équité).
 - ecarts_adversaire : un adversaire réel, son type (régulier ou récréatif) et ses écarts de fréquence face au solveur.
 - bluffs_adversaire : où un adversaire réel (ou la population des réguliers) bluffe : ses fréquences de mise selon la carte et la texture face au solveur, ses mains montrées par ligne, taille et carte, et les patterns qui en ressortent.
-- leakfinding : le rapport de leakfinding de l'élève (ou d'un de ses élèves de poker) : ses leaks prioritaires, ses stats face à la théorie contre réguliers et récréatifs, ses pertes face au solveur, les mains à revoir.
+- leakfinding : le rapport de leakfinding de l'élève (ou d'un de ses élèves de poker), en heads-up ou aux tables à plusieurs (toutes les tables de 3 à 9 joueurs ensemble) : ses leaks prioritaires, ses stats face à la théorie contre réguliers et récréatifs (aux tables à plusieurs, face aux charts avec les mêmes cartes et aux plans de jeu des flops 6-max), ses pertes face au solveur, les mains à revoir.
 - exploiter : node-lock d'un adversaire réel. Son profil postflop mesuré sur ses mains (c-bet, barrels, fold face aux mises, relances, probes) est verrouillé dans une étude, puis le solveur calcule la meilleure réponse : ce qui change par famille de mains, les mains qui changent d'action, le gain en bb.
 
 Comment répondre :
@@ -61,34 +61,42 @@ Comment répondre :
 - Explique le pourquoi avec les notions du jeu : avantage de range et de nuts, équité et sa réalisation, position, protection, blockers, polarisation, SPR, valeur et bluff.
 - Une action que le solveur mélange a une EV presque égale aux autres : dis-le plutôt que de lui chercher une raison forte. Un écart d'EV de moins de 0,1 bb est négligeable.
 - Privilégie des règles simples et applicables par un humain (par exemple « mise toutes tes top pairs et tes tirages couleur, checke les paires moyennes »), avec les fréquences quand elles éclairent.
-- L'arbre du solveur est simplifié : une taille de mise par situation au flop et à la turn, deux à la river, et les ranges préflop de la solution HU 100 bb. Rappelle-le si une question dépend d'une taille absente.
+- L'arbre du solveur est simplifié : une taille de mise par situation au flop et à la turn, deux à la river, et les ranges préflop de la solution HU 100 bb (en 6-max, celles des charts de l'élève). Rappelle-le si une question dépend d'une taille absente.
 - Contre un adversaire réel, sépare la théorie de l'exploitation : un écart « solide » justifie de s'adapter, un écart « indicatif » appelle de la prudence. Contre un récréatif, l'exploitation prime.
 - Pour proposer une stratégie exploitante, appuie-toi sur exploiter (un ou plusieurs flops représentatifs, puis les nœuds clés : c-bet, défense face à la c-bet, turn, river). Décris d'abord le type de joueur que dessine son profil, puis les ajustements, du plus rentable au moins rentable. La meilleure réponse est maximale : elle suppose qu'il ne s'adapte pas et pousse les mains vers des actions pures. Retiens la direction (quelles familles de mains changent d'action, où est le gain) et conseille une version tempérée, plus forte quand l'écart est solide.
 - Réponds en français, de façon concise et structurée (listes courtes), montants en bb, cartes notées comme A♠K♦ ou AKs.
 
-Repères : BTN = bouton (petite blinde, en position après le flop), BB = grosse blinde (hors de position). SRP : open du BTN à 2,5 bb payé par la BB (pot 5 bb, 97,5 bb derrière) ; pot 3bet : 3bet de la BB à 11,5 bb payé (pot 23 bb) ; pot 4bet : 4bet du BTN à 26 bb payé (pot 52 bb). Un spot se nomme « spot:<famille>:<flop> », par exemple spot:srp:KsKd4c. Une ligne d'actions est une liste : "check", "bet" (ou "bet 75" pour la taille la plus proche de 75 % du pot), "call", "raise", "fold", "allin", et les cartes de turn et de river ("Qh"). En SRP et en pot 4bet, la BB ne mène pas au flop : la ligne commence par "check"."""
+Repères : BTN = bouton (petite blinde, en position après le flop), BB = grosse blinde (hors de position). SRP : open du BTN à 2,5 bb payé par la BB (pot 5 bb, 97,5 bb derrière) ; pot 3bet : 3bet de la BB à 11,5 bb payé (pot 23 bb) ; pot 4bet : 4bet du BTN à 26 bb payé (pot 52 bb). Un spot se nomme « spot:<famille>:<flop> », par exemple spot:srp:KsKd4c. Une ligne d'actions est une liste : "check", "bet" (ou "bet 75" pour la taille la plus proche de 75 % du pot), "call", "raise", "fold", "allin", et les cartes de turn et de river ("Qh"). En SRP et en pot 4bet, la BB ne mène pas au flop : la ligne commence par "check".
+
+Tables à plusieurs (6-max, 100 bb) : un autre jeu, aux ranges bien plus serrées, tirées des charts 6-max de l'élève. Une famille par paire de positions des charts (UTG, HJ, CO, BTN, SB, BB ; hors de position puis en position) et type de pot : 6max_<hors de position>_<en position>_<srp|3bet|4bet>, par exemple 6max_bb_btn_srp, 6max_bb_co_3bet (spot:6max_bb_co_3bet:KsKd4c) ou 6max_co_btn_srp ; les séries d'étude et leurs plans de jeu ne couvrent que certaines paires, les autres se résolvent depuis l'explorateur. Tailles préflop : open à 2,5 bb, 3bet à 7,5 bb en position et 10 bb hors de position, 4bet à 22 bb en position et 20 bb hors de position. Les outils y nomment les vraies positions (SB, BB, CO, BTN). Celui qui a l'initiative hors de position (SB qui ouvre contre la BB, BB qui 3bette) fait la première vraie décision du flop ; quand elle est en position, le joueur hors de position ne mène pas au flop et la ligne commence par "check". Le node-lock (exploiter) ne couvre que le heads-up."""
 
 LINE_HELP = ("actions déjà jouées depuis le début du flop, dans l'ordre : \"check\", \"bet\" (ou \"bet 75\" pour la "
              "taille la plus proche de 75 % du pot), \"call\", \"raise\", \"fold\", \"allin\", et les cartes de turn et "
              "de river (\"Qh\"). L'outil renvoie la décision qui suit ; liste vide : la première vraie décision du flop "
              "(la c-bet du bouton en SRP et en pot 4bet, celle de la BB en pot 3bet)")
+PLAN_FAMILIES = coach.plan_families()
 TOOLS = [
     {"name": "plan_de_jeu",
-     "description": ("Plan de jeu suggéré d'un type de pot, tiré des études résolues : les flops regroupés par catégorie "
-                     "(haut, moyen ou bas ; sec, deux couleurs ou connecté ; pairé ; monotone) avec, pour chacune, son "
-                     "niveau de c-bet (mise presque tout, mise souvent, checke souvent), le pourquoi, la règle au flop "
-                     "pour quatre familles de mains (fortes, moyennes, tirages, rien) et le détail en onze familles, la "
-                     "suite à la turn et à la river selon le type de carte, et le jeu de l'autre joueur. Consulte-le pour "
-                     "toute question générale de stratégie."),
+     "description": ("Plan de jeu suggéré d'un type de pot, tiré des études résolues : les flops regroupés en trois "
+                     "stratégies de c-bet (miser range : 70 % et plus ; stratégie mixte ; checker range : 35 % et moins) "
+                     "et par taille (petite, moyenne, grosse mise, tapis), avec leurs flops et leurs catégories "
+                     "(haut, moyen ou bas ; sec, deux couleurs ou connecté ; pairé ; monotone). Pour chaque groupe : "
+                     "le pourquoi, l'attaque (règle au flop pour quatre familles de mains : fortes, moyennes, tirages, "
+                     "rien, et le détail en onze familles ; suite à la turn et à la river selon le type de carte ; "
+                     "c-bet retardée ; face au check-raise) et la défense de l'autre joueur (fold, call et relance face "
+                     "à la c-bet avec le fold au-delà duquel la mise rapporte d'elle-même, face aux barrels, probe ou "
+                     "stab quand l'attaquant checke). Consulte-le pour toute question générale de stratégie."),
      "input_schema": {"type": "object", "properties": {
-         "famille": {"type": "string", "enum": ["srp", "3bet", "4bet"],
-                     "description": "srp (pot simple), 3bet (pot 3bet) ou 4bet (pot 4bet)"}},
+         "famille": {"type": "string", "enum": list(PLAN_FAMILIES),
+                     "description": ("heads-up : srp (pot simple), 3bet (pot 3bet) ou 4bet (pot 4bet) ; 6-max : "
+                                     "6max_<hors de position>_<en position>_<srp|3bet|4bet>, ex. 6max_bb_btn_srp")}},
          "required": ["famille"]}},
     {"name": "liste_etudes",
      "description": ("Les flops résolus disponibles (identifiant de spot, texture, structure de couleurs, c-bet et schéma "
                      "quand ils sont lus). Consulte-le pour trouver un spot à examiner ou le flop résolu le plus proche."),
      "input_schema": {"type": "object", "properties": {
-         "famille": {"type": "string", "enum": ["srp", "3bet", "4bet"], "description": "type de pot (tous si absent)"}}}},
+         "famille": {"type": "string", "enum": list(PLAN_FAMILIES),
+                     "description": "type de pot, heads-up ou 6-max (tous si absent)"}}}},
     {"name": "strategie_noeud",
      "description": ("Stratégie du solveur à un moment précis d'un spot résolu : qui agit, pot et tapis, fréquence de chaque "
                      "action dans toute la range, puis par famille de mains (part de range, fréquences, équité et EV "
@@ -106,7 +114,8 @@ TOOLS = [
          "spot": {"type": "string", "description": "identifiant du spot, ex. spot:srp:KsKd4c"},
          "ligne": {"type": "array", "items": {"type": "string"}, "description": LINE_HELP},
          "main": {"type": "string", "description": "les deux cartes, ex. AhKd"},
-         "joueur": {"type": "string", "enum": ["BB", "BTN"], "description": "joueur qui tient la main (par défaut celui qui agit)"}},
+         "joueur": {"type": "string", "enum": ["BB", "BTN", "SB", "CO"],
+                    "description": "position du joueur qui tient la main (par défaut celui qui agit)"}},
          "required": ["spot", "ligne", "main"]}},
     {"name": "bluffs_adversaire",
      "description": ("Les bluffs d'un adversaire réel ou d'un groupe : les patterns qui ressortent (ligne, carte qui tombe, "
@@ -121,10 +130,15 @@ TOOLS = [
      "description": ("Le rapport de leakfinding d'un joueur : l'élève lui-même (par défaut) ou l'un de ses élèves de poker "
                      "(onglet Élèves). Ses leaks prioritaires (preuve chiffrée, confiance, conseil), ses stats préflop et "
                      "postflop face à la théorie contre les réguliers et contre les récréatifs, son EV perdue face au "
-                     "solveur par situation, les mains choisies à revoir. Consulte-le pour écrire un rapport de coaching "
-                     "ou répondre à une question sur les leaks d'un joueur."),
+                     "solveur par situation, les mains choisies à revoir. Deux rapports : le heads-up, et les tables à "
+                     "plusieurs (3 à 9 joueurs ensemble : préflop face aux charts avec les mêmes cartes, après le flop face "
+                     "aux plans de jeu des flops 6-max). Consulte-le pour écrire un rapport de coaching ou répondre à une "
+                     "question sur les leaks d'un joueur."),
      "input_schema": {"type": "object", "properties": {
-         "eleve": {"type": "string", "description": "nom de l'élève (onglet Élèves) ; absent : les mains de l'élève lui-même"}}}},
+         "eleve": {"type": "string", "description": "nom de l'élève (onglet Élèves) ; absent : les mains de l'élève lui-même"},
+         "format": {"type": "string", "enum": ["HU", "ring"],
+                    "description": "« HU » : le heads-up ; « ring » : les tables à plusieurs (3 à 9 joueurs) ; absent : "
+                                   "le heads-up (ou les tables à plusieurs s'il n'a que celles-là)"}}}},
     {"name": "exploiter",
      "description": ("Node-lock contre un adversaire réel dans un spot résolu. Son profil postflop dans ce type de pot et ce "
                      "rôle (c-bet, barrels, c-bet retardée, fold face aux mises et aux relances, relances, probes ou stabs), "
@@ -418,11 +432,13 @@ class Coach:
                 data = self._studies(args.get("famille"))
             elif name == "strategie_noeud":
                 path, node, steps = self._resolve(args.get("spot"), args.get("ligne"))
-                data = dict(coach.node_brief(node), spot=args["spot"], ligne=steps)
+                names = self._names(self._spot(args.get("spot")))
+                data = dict(coach.node_brief(node, names=names), spot=args["spot"], ligne=steps)
             elif name == "strategie_main":
                 path, node, steps = self._resolve(args.get("spot"), args.get("ligne"))
-                player = {"BB": 0, "BTN": 1}.get(args.get("joueur"))
-                data = coach.combo_brief(node, str(args.get("main", "")), player)
+                names = self._names(self._spot(args.get("spot")))
+                player = names.index(args["joueur"]) if args.get("joueur") in names else None
+                data = coach.combo_brief(node, str(args.get("main", "")), player, names)
                 if data is None:
                     raise CoachError(f"La main {args.get('main')} n'est pas dans les ranges à ce moment du coup.")
                 data["ligne"] = steps
@@ -433,7 +449,7 @@ class Coach:
             elif name == "bluffs_adversaire":
                 data = self._bluffs(args.get("adversaire"))
             elif name == "leakfinding":
-                data = self._leaks(args.get("eleve"))
+                data = self._leaks(args.get("eleve"), args.get("format"))
             else:
                 return f"Outil inconnu : {name}.", True
         except CoachError as exc:
@@ -444,12 +460,23 @@ class Coach:
         return json.dumps(data, ensure_ascii=False), False
 
     @staticmethod
+    def _names(spot) -> tuple[str, str]:
+        """Les positions des joueurs 0 (hors de position) et 1 : celles du spot d'étude, ou de la main jouée."""
+        hand = getattr(spot, "hand", None)
+        if hand is None:
+            return spot.oop, spot.ip
+        if len(hand.seats) > 2:
+            return hand.position(spot.oop) or "BB", hand.position(spot.ip) or "BTN"
+        return "BB", "BTN"
+
+    @staticmethod
     def _plan(family) -> dict:
-        if family not in studyspots.FAMILIES:
-            raise CoachError("Famille inconnue : srp, 3bet ou 4bet.")
+        if family not in PLAN_FAMILIES:
+            raise CoachError("Famille inconnue : srp, 3bet, 4bet, ou une famille 6-max (" + ", ".join(
+                studyspots.RING_FAMILIES) + ").")
         plan = coach.family_plan(family)
         if not plan["count"]:
-            raise CoachError(f"Pas encore de plan pour les {plan['name']} : aucun flop résolu n'a été lu "
+            raise CoachError(f"Pas encore de plan pour : {plan['title']}. Aucun flop résolu n'a été lu "
                              "(onglet « Plan de jeu suggéré », bouton « Préparer le plan »).")
         pct = lambda x: round(100 * x)  # noqa: E731
 
@@ -464,39 +491,47 @@ class Coach:
                      "regles": rules(r["rules"], defender)} for r in rows]
         groups = []
         for g in plan["groups"]:
-            d = g["defense"]
+            at, d = g["attack"], g["defense"]
             groups.append({
-                "categorie": g["label"], "niveau": g["level"], "flops": [studyspots.board_text(r["board"]) for r in g["flops"]],
-                "cbet_pct": pct(g["cbet"]), "taille": g.get("size"), "tailles_pct": g["sizes"],
+                "strategie": g["strategy_label"], "taille": g["size_text"], "cbet_pct": pct(g["cbet"]),
+                "flops": [r["id"] for r in g["flops"]],
+                "categories": {label: n for label, n in g["categories"]},
                 "avantage_equite_pts": round(100 * g["eq_adv"]), "avantage_nuts_pts": round(100 * g["nut_adv"]),
-                "pourquoi": g["why"], "flop": rules(g["flop"]), "flop_detail": dict(g["flop_detail"]),
-                "turn_2e_barrel": cards(g["turn"]), "river_3e_barrel": cards(g["river"]),
-                "cbet_retardee": cards(g["delayed"]),
+                "pourquoi": g["why"],
+                "attaque": {
+                    "flop": rules(at["flop"]), "flop_detail": dict(at["flop_detail"]),
+                    "turn_2e_barrel": cards(at["turn"]), "river_3e_barrel": cards(at["river"]),
+                    "cbet_retardee": cards(at["delayed"]),
+                    "face_relance": ({"fold_pct": pct(at["vs_xr"]["fold"]), "regles": rules(at["vs_xr"]["rules"], True)}
+                                     if at["vs_xr"] else None)},
                 "defense": {
-                    "face_cbet": ({"fold_pct": pct(d["vs_cbet"]["fold"]), "relance_pct": pct(d["vs_cbet"]["raise"]),
-                                   "regles": rules(d["vs_cbet"]["rules"], True)} if d["vs_cbet"] else None),
-                    "face_relance": ({"fold_pct": pct(d["vs_xr"]["fold"]), "regles": rules(d["vs_xr"]["rules"], True)}
-                                     if d["vs_xr"] else None),
+                    "resume": d["text"],
+                    "face_cbet": ({"fold_pct": pct(d["vs_cbet"]["fold"]), "call_pct": pct(d["vs_cbet"]["call"]),
+                                   "relance_pct": pct(d["vs_cbet"]["raise"]),
+                                   "fold_au_dela_duquel_la_mise_rapporte_pct": (pct(d["max_fold"])
+                                                                                if d["max_fold"] is not None else None),
+                                   "regles": rules(d["vs_cbet"]["rules"], True),
+                                   "detail": dict(d["vs_cbet"]["detail"])} if d["vs_cbet"] else None),
                     "stab": {"mise_pct": pct(d["stab"]["aggr"]), "regles": rules(d["stab"]["rules"])} if d["stab"] else None,
                     "face_2e_barrel": cards(d["vs_barrel"], True), "face_3e_barrel": cards(d["vs_barrel3"], True),
                     "probe": cards(d["probe"])}})
-        return {"famille": plan["name"], "description": plan["label"], "flops_lus": plan["count"],
-                "initiative": plan["who"], "adversaire": plan["other"],
+        return {"famille": plan["title"], "description": plan["label"], "flops_lus": plan["count"],
+                "attaquant": plan["who"], "defenseur": plan["other"],
+                "strategies": {st["label"]: {"definition": st["text"], "flops": st["flops"]} for st in plan["strategies"]},
                 "familles_de_mains": {label: text for _, label, _, text in coach.GROUPS},
-                "categories": groups}
+                "groupes": groups}
 
     @staticmethod
     def _studies(family) -> dict:
         out = []
-        for meta in studyspots.spot_studies().values():
-            if family and meta.get("family") != family:
-                continue
+        for meta in studyspots.spot_studies((family,) if family else PLAN_FAMILIES).values():
             row = {"spot": meta["id"], "flop": studyspots.board_text(meta["board"]), "texture": meta.get("texture"),
                    "couleurs": studyspots.suit_pattern(meta["board"])}
             plan = coach.load_plan(meta["key"])
             if plan:
                 r = coach.flop_row(plan)
-                row.update(cbet_pct=round(100 * r["cbet"]), schema=coach.PATTERN_LABEL[r["pattern"]])
+                row.update(cbet_pct=round(100 * r["cbet"]), strategie=coach.STRATEGY_LABEL[r["strategy"]],
+                           taille=coach.SIZE_LABEL[r["size_group"]])
             out.append(row)
         return {"etudes": sorted(out, key=lambda r: r["spot"]), "nombre": len(out)}
 
@@ -555,7 +590,7 @@ class Coach:
         info = kinds.get(match[0], {})
         return match[0], match, ("récréatif" if info.get("kind") == "rec" else "régulier")
 
-    def _leaks(self, who) -> dict:
+    def _leaks(self, who, table_format=None) -> dict:
         lib = self.library
         name = None
         if isinstance(who, str) and who.strip():
@@ -565,16 +600,21 @@ class Coach:
                 known = ", ".join(s["name"] for s in students.all_students()) or "aucun"
                 raise CoachError(f"Élève inconnu : {who}. Élèves : {known}.")
             lib, name = lib.student(match[0]["id"]), match[0]["name"]
-        if not lib.hands:
+        formats = [fmt for fmt, _ in lib.leak_formats()]
+        if not formats:
             raise CoachError("Pas encore de mains pour ce joueur : importe ses historiques.")
-        return dict(leaks.summary(lib.leaks_report()), eleve=name or "toi")
+        fmt = formats[0] if not table_format else "HU" if table_format == "HU" else "ring"
+        if fmt not in formats:
+            raise CoachError(f"Pas de mains de ce format pour ce joueur. Formats : {', '.join(formats)}.")
+        return dict(leaks.summary(lib.leaks_report(fmt)), eleve=name or "toi", formats=formats)
 
     def _bluffs(self, who) -> dict:
         label, names, kind = self._targets(who)
-        report = bluffs.analyze(self.library.hands, names, self.library.hero)
+        voice = bluffs.Voice(label, plural=True) if label.startswith("les ") else bluffs.Voice(label)
+        report = bluffs.analyze(self.library.hands, names, self.library.hero, voice)
         pct = lambda x: None if x is None else round(100 * x)  # noqa: E731
         freqs = [{"situation": f.spot.label, "pot": bluffs.FAMILY_NAMES.get(f.family, "autres pots"),
-                  "carte": bluffs.feature_label(f.spot.street, f.feature), "lui_pct": pct(f.ratio.hits / f.ratio.opps),
+                  "carte": bluffs.feature_label(f.spot.street, f.feature), "lui_pct": pct(f.rate),
                   "occasions": f.ratio.opps, "solveur_pct": pct(f.solver),
                   "ses_autres_cartes_pct": pct(f.average) if f.solver is None else None,
                   "ecart": f.verdict[0] if f.verdict else None, "confiance": f.verdict[1] if f.verdict else None}
@@ -582,7 +622,7 @@ class Coach:
         freqs = [{k: v for k, v in row.items() if v is not None} for row in freqs]
         shown = [{"street": g.street, "par": dict(bluffs.DIMENSIONS)[g.dimension].lower(),
                   "valeur": bluffs.feature_label(g.street, g.value) if g.dimension == "feature" else g.value,
-                  "intentions": {k: v for k, v in g.intents.items()}, "part_bluffs_pct": pct(g.ratio.hits / g.ratio.opps),
+                  "intentions": {k: v for k, v in g.intents.items()}, "part_bluffs_pct": pct(g.sample.hits / g.sample.opps),
                   "reference_pct": pct(g.reference), "reference": "théorie" if g.street == "river" else "sa moyenne",
                   "ecart": g.verdict[0] if g.verdict else None} for g in report.groups if len(g.items) >= bluffs.MIN_SHOWN]
         return {"adversaire": label, "type": kind, "mains": report.hands, "mises_postflop": report.bets,
@@ -590,11 +630,19 @@ class Coach:
                 "patterns": [{"titre": p.title, "preuve": p.evidence, "conseil": p.advice, "confiance": p.confidence,
                               "source": p.source} for p in report.patterns[:15]],
                 "frequences_par_carte": freqs, "mains_montrees": shown,
+                "profils": [{"groupe": k, "titre": c.title, "joueurs": c.names, "mains": c.hands,
+                             "ecarts_au_solveur_pts": {bluffs.DIMENSION_LABELS[d]: round(100 * g) for d, g in c.gaps.items()}}
+                            for k, c in enumerate(report.clusters, 1)],
                 "lecture": ("Intentions : value = top paire ou mieux, thin = value fine (paire moyenne ou faible), semi = "
-                            "semi-bluff, bluff. À la river, la référence est la part de bluffs de la théorie pour la taille.")}
+                            "semi-bluff, bluff. À la river, la référence est la part de bluffs de la théorie pour la taille. "
+                            "Plusieurs joueurs : fréquences = moyenne des joueurs (un gros volume ne compte pas plus) ; "
+                            "profils = groupes de joueurs aux écarts au solveur proches.")}
 
     def _exploit(self, args: dict) -> dict:
         spot = self._spot(args.get("spot"))
+        if spot.family not in studyspots.FAMILIES:
+            raise CoachError("Le node-lock contre un adversaire réel ne couvre que les spots heads-up pour l'instant "
+                             "(spot:srp:…, spot:3bet:…, spot:4bet:…) : en 6-max, appuie-toi sur strategie_noeud.")
         label, names, kind = self._targets(args.get("adversaire"))
         solves = self.library.solves
         if solves.live_for(spot) is None:
@@ -675,6 +723,7 @@ class Coach:
         if not isinstance(line, list):
             raise CoachError("La ligne est une liste d'actions, par exemple [\"check\", \"bet\", \"call\", \"Qh\"].")
         get = fetch or (lambda p: self._node(spot, p))
+        names = self._names(spot)
         path: list = []
         node = get(path)
         shown: list[str] = []
@@ -683,19 +732,19 @@ class Coach:
             card = re.fullmatch(r"([2-9tjqkaTJQKA])([cdhsCDHS])", token)
             while node["type"] == "action" and len(node["actions"]) == 1 and \
                     (card or node["actions"][0]["kind"] != self._kind(token)[0]):
-                path = path + [{"type": "action", "index": 0}]  # check forcé : la BB ne mène pas
+                path = path + [{"type": "action", "index": 0}]  # check forcé : hors de position, il ne mène pas
                 shown.append("check (forcé)")
                 node = get(path)
             if card:
                 value = card.group(1).upper() + card.group(2).lower()
                 if node["type"] != "chance":
-                    raise CoachError(f"Pas de carte à tirer ici (« {token} ») : {self._options(node)}.")
+                    raise CoachError(f"Pas de carte à tirer ici (« {token} ») : {self._options(node, names)}.")
                 if value not in (node.get("cards") or []):
                     raise CoachError(f"La carte {value} n'est pas possible ici (déjà sur le board ?).")
                 path = path + [{"type": "card", "card": value}]
                 shown.append(value)
             else:
-                index = self._find(node, token)
+                index = self._find(node, token, names)
                 path = path + [{"type": "action", "index": index}]
                 shown.append(postflop.action_labels(node)[index])
             node = get(path)
@@ -722,9 +771,9 @@ class Coach:
                 size = None
         return kind, size
 
-    def _find(self, node: dict, token: str) -> int:
+    def _find(self, node: dict, token: str, names: tuple[str, str] = ("BB", "BTN")) -> int:
         if node["type"] != "action":
-            raise CoachError(f"Pas d'action possible ici (« {token} ») : {self._options(node)}.")
+            raise CoachError(f"Pas d'action possible ici (« {token} ») : {self._options(node, names)}.")
         kind, size = self._kind(token)
         actions = node["actions"]
         if kind == "allin":
@@ -736,7 +785,7 @@ class Coach:
         else:
             hits = [i for i, a in enumerate(actions) if a["kind"] == kind]
         if not hits:
-            raise CoachError(f"Action « {token} » impossible ici : {self._options(node)}.")
+            raise CoachError(f"Action « {token} » impossible ici : {self._options(node, names)}.")
         if len(hits) == 1:
             return hits[0]
         if size is not None and node.get("pot"):
@@ -745,13 +794,12 @@ class Coach:
         return max(hits, key=lambda i: freqs[i])  # sans taille : la plus jouée
 
     @staticmethod
-    def _options(node: dict) -> str:
+    def _options(node: dict, names: tuple[str, str] = ("BB", "BTN")) -> str:
         if node["type"] == "chance":
             return "il faut une carte (turn ou river)"
         if node["type"] != "action":
             return "le coup est fini"
-        who = "BB" if node["player"] == 0 else "BTN"
-        return f"{who} a le choix entre " + ", ".join(postflop.action_labels(node))
+        return f"{names[node['player']]} a le choix entre " + ", ".join(postflop.action_labels(node))
 
     def _describe(self, ident: str, path: list) -> Optional[list[str]]:
         """La ligne de l'explorateur en mots que le coach peut reprendre dans ses appels d'outil."""

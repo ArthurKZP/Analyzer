@@ -3,14 +3,17 @@
 Destination : un dossier (de préférence synchronisé en ligne : OneDrive, Google Drive, Dropbox…) ou un
 stockage en ligne configuré avec rclone (« gdrive:Analyzer », « s3:mon-bucket/analyzer »… voir rclone.org).
 
-- L'essentiel, quelques Mo : tailles de mise choisies, résolutions en cache, résumés des mains analysées,
-  journal de l'entraîneur, type des adversaires et fiches des études. Une archive datée par sauvegarde (archives/), les
-  KEEP dernières sont gardées.
-- Les études (.etude : de 20 Mo à quelques centaines de Mo chacune), en option : copiées dans etudes/,
-  puis seules les nouvelles ou les modifiées passent.
+- L'essentiel : la base de données, copie cohérente même pendant que l'application tourne (tes mains et celles de
+  tes élèves avec leurs historiques d'origine, type des adversaires, résumés des mains analysées, tailles de mise
+  choisies, plans de jeu, résultats du solveur, ranges, réglages, journal de l'entraîneur et fiches des études).
+  Une archive datée par sauvegarde (archives/), les KEEP dernières sont gardées. Une base PostgreSQL (ANALYZER_DB)
+  est sauvegardée par son hébergeur.
+- Les arbres des études (.etude : de 20 Mo à quelques centaines de Mo chacun), en option : copiés dans etudes/,
+  puis seuls les nouveaux ou les modifiés passent.
 
-La restauration reprend la dernière archive (sans écraser un fichier local plus récent ; le journal de
-l'entraîneur est fusionné) puis les études absentes.
+La restauration fusionne la base de la dernière archive dans celle d'ici (analyzer/db/merge.py : rien n'est effacé
+ni remplacé par plus ancien ; une archive d'avant la base, faite de fichiers, est reprise de la même façon) puis
+copie les arbres d'études absents.
 """
 from __future__ import annotations
 
@@ -25,10 +28,13 @@ import zipfile
 from pathlib import Path
 from typing import Callable, Optional
 
+from . import NAME, blobs, db
 from .theory import postflop
 
-FOLDERS = ("tailles", "resolutions", "revue", "entrainement", "plans", "eleves", "ranges")  # recopiés en entier dans l'archive
-FILES = ("joueurs.json",)  # type des adversaires (régulier / récréatif)
+DB_ENTRY = "analyzer.db"  # la base SQLite, dans l'archive
+# Archives d'avant la base : leurs fichiers sont remis dans le dossier d'Analyzer puis repris dans la base.
+LEGACY = ("joueurs.json", "revue/", "eleves/", "tailles/", "resolutions/", "entrainement/", "plans/", "ranges/",
+          "etudes/", "precisions.json", "reglages.json", "durees.json")
 JOURNAL = "entrainement/journal.jsonl"
 KEEP = 10      # archives gardées à destination
 KEEP_LOCAL = 2
@@ -100,36 +106,62 @@ def _copied(proc: subprocess.CompletedProcess) -> int:
 
 # --- Contenu -------------------------------------------------------------------------------------
 
-def essential_files() -> list[Path]:
-    root = home()
-    files = [p for folder in FOLDERS if (root / folder).is_dir() for p in sorted((root / folder).rglob("*"))
-             if p.is_file()]
-    files += [root / name for name in FILES if (root / name).is_file()]
-    studies = root / "etudes"
-    if studies.is_dir():
-        files += sorted(studies.glob("*.json"))
-    return files
+def essentials_size() -> int:
+    """La taille de la base SQLite (ce que pèse l'archive de l'essentiel, avant compression) ; 0 pour PostgreSQL."""
+    path = db.current().path
+    total = 0
+    for suffix in ("", "-wal"):
+        try:
+            total += path.with_name(path.name + suffix).stat().st_size if path else 0
+        except OSError:
+            pass
+    return total
 
 
 def study_files() -> list[Path]:
-    folder = home() / "etudes"
+    folder = blobs.studies().root
     return sorted(folder.glob("*.etude")) if folder.is_dir() else []
 
 
 def make_archive() -> Path:
-    """Archive datée de l'essentiel, dans ~/.analyzer/sauvegardes."""
+    """Archive datée de l'essentiel (la base), dans ~/.analyzer/sauvegardes."""
     root = home()
     staging = root / "sauvegardes"
     staging.mkdir(parents=True, exist_ok=True)
     path = staging / f"{PREFIX}{time.strftime('%Y%m%d-%H%M%S')}.zip"
     tmp = path.with_suffix(".tmp")
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in essential_files():
-            z.write(f, f.relative_to(root).as_posix())
+        snapshot = db.current().snapshot(staging / "analyzer.db.copie")  # None : base PostgreSQL
+        if snapshot is not None:
+            z.write(snapshot, DB_ENTRY)
+            snapshot.unlink()
     tmp.replace(path)
     for old in sorted(staging.glob(PREFIX + "*.zip"))[:-KEEP_LOCAL]:
         old.unlink()
     return path
+
+
+def _restore_db(data: bytes, log: Callable[[str], None]) -> dict:
+    """Fusionne la base de l'archive dans celle d'ici (rien n'est effacé ni remplacé par plus ancien) ; renvoie ce
+    qui a été ajouté ou mis à jour."""
+    from .db.merge import merge
+    staging = home() / "sauvegardes"
+    staging.mkdir(parents=True, exist_ok=True)
+    tmp = staging / "analyzer.db.restauree"
+    tmp.write_bytes(data)
+    archived = db.Database(f"sqlite:///{tmp}")  # (son schéma est mis à jour si l'archive est plus ancienne)
+    try:
+        counts = merge(archived, db.current(), log=lambda message: None)
+    finally:
+        archived.close()
+        for suffix in ("", "-wal", "-shm"):
+            side = tmp.with_name(tmp.name + suffix)
+            if side.exists():
+                side.unlink()
+    added = {k: v for k, v in counts.items() if v}
+    log("Base : " + (", ".join(f"{v} {k}" for k, v in added.items()) + " repris de l'archive" if added
+                     else "déjà à jour") + ".")
+    return counts
 
 
 def _newer(src: Path, dst: Path) -> bool:
@@ -174,11 +206,12 @@ def backup(dest: Optional[str] = None, studies: Optional[bool] = None, log: Call
             _rclone("deletefile", _join(dest, "archives", old))
         if studies and study_files():
             log("Études : copie des nouvelles avec rclone…")
-            copied = _copied(_rclone("copy", str(home() / "etudes"), _join(dest, "etudes"), "--include", "*.etude", "-v"))
+            copied = _copied(_rclone("copy", str(blobs.studies().root), _join(dest, "etudes"), "--include", "*.etude",
+                                     "-v"))
     else:
         target = Path(dest).expanduser()
         if target.resolve() == home().resolve() or home().resolve() in target.resolve().parents:
-            raise BackupError("Choisis un dossier en dehors de celui d'Analyzer (" + str(home()) + ").")
+            raise BackupError(f"Choisis un dossier en dehors de celui de {NAME} (" + str(home()) + ").")
         try:
             (target / "archives").mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -235,9 +268,10 @@ def restore(source: Optional[str] = None, studies: bool = True, log: Callable[[s
         raise BackupError("Indique d'où restaurer (le dossier ou le stockage de la sauvegarde).")
     archive = _latest_archive(source, log)
     if archive is None:
-        raise BackupError(f"Aucune sauvegarde Analyzer dans {source}.")
+        raise BackupError(f"Aucune sauvegarde {NAME} dans {source}.")
     root = home().resolve()
     restored = kept = 0
+    legacy = False
     with zipfile.ZipFile(archive) as z:
         for info in z.infolist():
             name = info.filename
@@ -245,6 +279,15 @@ def restore(source: Optional[str] = None, studies: bool = True, log: Callable[[s
             if info.is_dir() or name.startswith("/") or ".." in Path(name).parts or root not in target.parents:
                 continue  # chemin hors du dossier d'Analyzer : ignoré
             data = z.read(info)
+            if name == DB_ENTRY:
+                if any(_restore_db(data, log).values()):
+                    restored += 1
+                else:
+                    kept += 1
+                continue
+            if not name.startswith(LEGACY):
+                continue  # (ni la base, ni un fichier d'avant la base : ignoré)
+            legacy = True
             if name == JOURNAL:
                 restored += bool(_merge_journal(target, data))
                 continue
@@ -255,10 +298,13 @@ def restore(source: Optional[str] = None, studies: bool = True, log: Callable[[s
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
             restored += 1
-    log(f"{archive.name} : {restored} fichier(s) restauré(s), {kept} déjà à jour.")
+    if legacy:  # archive d'avant la base : ses fichiers rejoignent la base
+        from .db import legacy as db_legacy
+        db_legacy.import_once(db.current(), force=True)
+    log(f"{archive.name} : {restored} élément(s) restauré(s), {kept} déjà à jour.")
     copied = 0
     if studies:
-        folder = home() / "etudes"
+        folder = blobs.studies().root
         if is_remote(source):
             copied = _copied(_rclone("copy", _join(source, "etudes"), str(folder), "--include", "*.etude",
                                      "--ignore-existing", "-v"))
@@ -277,8 +323,8 @@ def restore(source: Optional[str] = None, studies: bool = True, log: Callable[[s
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m analyzer sauvegarde",
-        description="Sauvegarde (ou restaure) ce qu'Analyzer a calculé : tailles, résolutions, mains analysées, "
-                    "entraînement et, en option, les études.")
+        description=f"Sauvegarde (ou restaure) la base de {NAME} (mains, tailles, résolutions, mains analysées, "
+                    "entraînement…) et, en option, les arbres des études.")
     parser.add_argument("destination", nargs="?",
                         help="dossier (synchronisé en ligne de préférence) ou stockage rclone « nom:dossier » ; "
                              "retenu pour les fois suivantes")
@@ -298,7 +344,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         if args.restaurer:
             result = restore()
-            print(f"Restauré : {result['restored']} fichier(s), {result['studies']} étude(s).")
+            print(f"Restauré : {result['restored']} élément(s), {result['studies']} étude(s).")
         else:
             backup()
             if config["auto"]:

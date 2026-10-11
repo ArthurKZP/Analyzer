@@ -2,6 +2,19 @@ import unittest
 
 from analyzer.cards import combo_notation, describe_holding, equity, evaluate, parse_card
 
+try:
+    from .base import isolate_module, release_module
+except ImportError:  # lancé par « unittest discover -s tests »
+    from base import isolate_module, release_module
+
+
+def setUpModule():
+    isolate_module()
+
+
+def tearDownModule():
+    release_module()
+
 
 def ev(cards: str):
     return evaluate([parse_card(c) for c in cards.split()])

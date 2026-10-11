@@ -3,24 +3,40 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Analyzer HU</title>
+<title>Merlin</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 <div class="app" id="app">
   <aside class="sidebar" id="sidebar" aria-label="Navigation">
-    <div class="brand">Analyzer <span>HU</span></div>
+    <div class="brand"><span>♠</span> Merlin</div>
     <div class="me" id="hero-name"></div>
     <nav class="nav">
       <a href="#/moi" data-view="moi">Mon jeu</a>
+      <a href="#/field" data-view="field">Étude du field</a>
+      <a href="#/references" data-view="references">Joueurs de référence</a>
       <a href="#/etudes" data-view="etudes">Études du solveur</a>
       <a href="#/entraineur" data-view="entraineur">Entraîneur</a>
       <a href="#/eleves" data-view="eleves">Élèves</a>
       <a href="#/importer" data-view="importer">Importer des mains</a>
       <a href="#/sauvegarde" data-view="sauvegarde">Sauvegarde</a>
+      <a href="#/parametres" data-view="parametres">Paramètres</a>
     </nav>
     <div class="opp-head">Adversaires <span id="opp-count"></span></div>
+    <div class="opp-fmt" id="opp-fmt" role="group" aria-label="Format des adversaires" hidden>
+      <button type="button" data-fmt="HU" aria-pressed="true">Heads-up</button>
+      <button type="button" data-fmt="ring" aria-pressed="false">À plusieurs</button>
+    </div>
     <input class="search" id="opp-search" type="search" placeholder="Rechercher un joueur" aria-label="Rechercher un adversaire">
+    <div class="opp-sorts">
+      <select id="opp-sort" aria-label="Trier les adversaires">
+        <option value="hands">Plus de mains</option><option value="net">Meilleur résultat</option>
+        <option value="loss">Pire résultat</option><option value="last">Plus récents</option><option value="name">Nom (A → Z)</option>
+      </select>
+      <select id="opp-kind" aria-label="Type d'adversaire">
+        <option value="">Tous</option><option value="reg">Réguliers</option><option value="rec">Récréatifs</option>
+      </select>
+    </div>
     <ul class="opps" id="opps"></ul>
   </aside>
   <div class="backdrop" id="backdrop"></div>
@@ -28,12 +44,17 @@
     <header class="topbar">
       <button class="menu" id="menu" type="button" aria-label="Ouvrir le menu">☰</button>
       <div class="titles">
-        <h1 id="title">Analyzer HU</h1>
+        <h1 id="title">Merlin</h1>
         <div class="subtitle" id="subtitle"></div>
       </div>
       <label class="kind" id="kind" hidden title="Contre un récréatif, tes mains ne sont pas comparées à la théorie">
         Type <select id="kind-select" aria-label="Type de joueur"></select>
       </label>
+      <div class="period" id="period" hidden>
+        <button type="button" class="period-btn" id="period-btn" aria-haspopup="dialog" aria-expanded="false"
+          aria-controls="period-pop" title="Les mains analysées : toutes, les dernières, ou une période"></button>
+        <div class="period-pop" id="period-pop" role="dialog" aria-label="Période d'analyse" hidden></div>
+      </div>
     </header>
     <nav class="tabs" id="tabs" aria-label="Sections"></nav>
     <section class="content">

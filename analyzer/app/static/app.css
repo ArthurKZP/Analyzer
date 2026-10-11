@@ -40,6 +40,15 @@ a { color: var(--accent); }
 .nav a[aria-current="page"], .opps a[aria-current="page"] { background: var(--accent-bg); font-weight: 600; box-shadow: inset 3px 0 0 var(--accent); }
 .opp-head { font-size: 12px; font-weight: 600; color: var(--muted); padding: 14px 8px 4px; text-transform: uppercase; letter-spacing: 0.04em; }
 .search { margin: 0 4px 6px; background: var(--page); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
+.opp-sorts { display: flex; gap: 6px; margin: 0 4px 6px; }
+.opp-fmt { display: flex; gap: 4px; margin: 0 4px 6px; }
+.opp-fmt[hidden] { display: none; }
+.opp-fmt button { flex: 1 1 0; font: inherit; font-size: 12px; padding: 4px 6px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--page); color: var(--ink-2); }
+.opp-fmt button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--page); }
+.nav a[hidden] { display: none; }
+.opp-sorts select { flex: 1 1 0; min-width: 0; font: inherit; font-size: 12px; color: var(--ink); background: var(--page);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 4px; }
 .opps { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; flex: 1; }
 .opps a { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; }
 .opps .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -54,6 +63,30 @@ a { color: var(--accent); }
 .kind { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
 .kind[hidden] { display: none; }
 .kind select { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; max-width: 46vw; }
+.period { position: relative; }
+.period[hidden] { display: none; }
+.period-btn { font-size: 13px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--ink); cursor: pointer; white-space: nowrap; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; }
+.period-btn.on { border-color: var(--accent); background: var(--accent-bg); font-weight: 600; }
+.period-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: min(390px, calc(100vw - 32px));
+  display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface); box-shadow: 0 8px 28px rgba(0,0,0,0.18); }
+.period-pop[hidden] { display: none; }
+.period-pop p { margin: 0; }
+.period-title { font-weight: 600; }
+.period-row { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; cursor: pointer; }
+.period-row > input { margin-top: 4px; }
+.period-row > span { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.period-row input[type="number"], .period-row input[type="date"] { font: inherit; font-size: 13px; padding: 2px 6px;
+  border-radius: 6px; border: 1px solid var(--border); background: var(--page); color: var(--ink); }
+.period-row input[type="number"] { width: 92px; }
+.period-hint { flex-basis: 100%; }
+.period-actions { display: flex; gap: 8px; }
+.period-actions .secondary { background: var(--page); color: var(--ink); border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 14px; cursor: pointer; }
+.period-actions button:disabled { opacity: 0.5; cursor: default; }
+.period-err { color: var(--loss); font-size: 12px; }
+.welcome .link { margin-left: 10px; }
 .opps .k { font-size: 10px; font-weight: 600; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
 .topbar h1 { font-size: 20px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .subtitle { font-size: 13px; color: var(--muted); }
@@ -78,12 +111,35 @@ a { color: var(--accent); }
 .primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 6px; padding: 7px 16px; font-weight: 600; cursor: pointer; }
 .link { background: none; border: 0; color: var(--accent); padding: 0; cursor: pointer; text-decoration: underline; }
 .result { margin-top: 16px; }
+.progress { max-width: 560px; }
+.progress-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.progress-pct { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.progress-bar { height: 8px; border-radius: 4px; background: var(--grid); overflow: hidden; }
+.progress-bar span { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--accent);
+  transition: width 0.3s ease; }
+.progress-detail { margin-top: 6px; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { .progress-bar span { transition: none; } }
+.imported { margin-top: 28px; }
+.imported h3 { font-size: 15px; margin: 0 0 8px; }
+.imported table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.imported th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--grid); padding: 4px 6px; }
+.imported td { border-bottom: 1px solid var(--grid); padding: 5px 6px; vertical-align: top; }
+.imported .num { text-align: right; font-variant-numeric: tabular-nums; }
+.imported .nowrap { white-space: nowrap; }
+.imported tr.removed td { color: var(--muted); }
+.imported .scroll { overflow-x: auto; }
+.imported h3.sub { margin-top: 18px; }
+.imported .pseudo-actions { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 10px; }
+.primary.danger { background: var(--loss); color: var(--page); }
+.primary:disabled { opacity: 0.5; cursor: default; }
 .result table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .result th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--grid); padding: 4px 6px; }
 .result td { border-bottom: 1px solid var(--grid); padding: 5px 6px; }
 .result .num { text-align: right; font-variant-numeric: tabular-nums; }
 .result .ok { color: var(--win); font-weight: 600; }
 .result .ko { color: var(--loss); font-weight: 600; }
+.result tr.archive td { font-weight: 600; }
+.result details summary { cursor: pointer; margin: 4px 0 8px; color: var(--ink-2); }
 .welcome { max-width: 560px; }
 .students { max-width: 760px; }
 .student-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
@@ -91,6 +147,14 @@ a.student { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px;
   border-radius: 10px; background: var(--surface); text-decoration: none; color: var(--ink); }
 a.student:hover { border-color: var(--series-1); }
 .student-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ref-card { display: flex; gap: 12px; align-items: center; }
+.ref-card a.student { flex: 1 1 auto; min-width: 0; }
+.ref-card button.link { border: none; background: none; color: var(--series-1); text-decoration: underline; cursor: pointer;
+  font: inherit; font-size: 13px; padding: 4px 0; flex: none; }
+.ref-form fieldset { border: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ref-form legend { font-weight: 600; margin-bottom: 4px; padding: 0; }
+.ref-opt { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
+.ref-opt input { margin: 0; flex: none; }
 .student-form input { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
   background: var(--surface); color: var(--ink); flex: 1 1 200px; }
 .welcome h2 { font-size: 18px; margin: 0 0 8px; }
@@ -103,7 +167,10 @@ a.student:hover { border-color: var(--series-1); }
   .app.drawer-open .sidebar { transform: none; }
   .app.drawer-open .backdrop { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 10; }
   .menu { display: inline-block; }
-  .topbar { padding: 10px 16px 4px; }
+  .topbar { padding: 10px 16px 4px; flex-wrap: wrap; }
+  .kind, .period { order: 3; flex-basis: 100%; }  /* sous le titre */
+  .period-btn { max-width: 100%; }
+  .period-pop { left: 0; right: auto; }
   .tabs { padding: 0 16px; }
   .panel { padding: 16px; }
 }

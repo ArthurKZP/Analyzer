@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from ..theory import postflop, preflop_tree, studyspots
+from .. import NAME, aliases, db
+from ..db import hands as db_hands
+from ..errors import NotFound
+from ..theory import postflop, preflop_tree, ring_tree, studyspots
 from . import trainer
 from .library import Library, UnknownPlayer
 from .solves import NeedSession
@@ -27,11 +30,13 @@ STATIC = Path(__file__).parent / "static"
 STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8",
                 "explorer.js": "text/javascript; charset=utf-8", "explorer.css": "text/css; charset=utf-8",
                 "trainer.js": "text/javascript; charset=utf-8", "trainer.css": "text/css; charset=utf-8",
-                "coach.js": "text/javascript; charset=utf-8", "coach.css": "text/css; charset=utf-8"}
+                "coach.js": "text/javascript; charset=utf-8", "coach.css": "text/css; charset=utf-8",
+                "rangekit.js": "text/javascript; charset=utf-8"}
 MAX_PATH = 40  # étapes d'un chemin dans l'arbre (bien plus qu'un coup réel)
 MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
 MAX_SMALL_BODY = 64 * 1024
-STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "bluffs", "tables")
+PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "bluffs", "tables", "mains")
 
 
 class AppServer(ThreadingHTTPServer):
@@ -55,7 +60,7 @@ class AppServer(ThreadingHTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     server: AppServer
-    server_version = "Analyzer"
+    server_version = NAME
 
     def log_message(self, fmt, *args):  # console silencieuse
         pass
@@ -79,11 +84,11 @@ class Handler(BaseHTTPRequestHandler):
     def _html(self, html: str, status: int = 200) -> None:
         self._send(status, "text/html; charset=utf-8", html.encode())
 
-    def _download(self, html_text: str, filename: str) -> None:
-        """Une page à enregistrer (rapport à envoyer)."""
-        body = html_text.encode()
+    def _download(self, content: str | bytes, filename: str, ctype: str = "text/html; charset=utf-8") -> None:
+        """Un fichier à enregistrer (rapport à envoyer : page, PDF, présentation)."""
+        body = content.encode() if isinstance(content, str) else content
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -118,6 +123,16 @@ class Handler(BaseHTTPRequestHandler):
     def _parts(self) -> list[str]:
         return [unquote(p) for p in urlsplit(self.path).path.split("/") if p]
 
+    def _format(self) -> Optional[str]:
+        """Le format demandé (« ?format=ring ») : le Leakfinding a un rapport pour le heads-up, un pour les tables à
+        plusieurs (« 6-max », « 3-max »… y mènent aussi)."""
+        return parse_qs(urlsplit(self.path).query).get("format", [None])[0]
+
+    @staticmethod
+    def _report_name(table_format: Optional[str], who: str = "", ext: str = "html") -> str:
+        suffix = "-tables-a-plusieurs" if table_format and table_format != "HU" else ""
+        return f"leakfinding{'-' + who if who else ''}{suffix}.{ext}"
+
     # --- GET --------------------------------------------------------------------
     def do_GET(self):
         if not self._trusted():
@@ -131,29 +146,100 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, STATIC_FILES[parts[1]], (STATIC / parts[1]).read_bytes())
             if parts == ["api", "state"]:
                 return self._json(library.summary())
+            if parts == ["api", "fichiers"]:  # tes historiques importés
+                return self._json(library.files_view())
+            if parts == ["api", "pseudos"]:  # les pseudos de tes historiques (leurs mains, celles supprimées)
+                return self._json(library.pseudos_view())
+            if len(parts) == 3 and parts[:2] == ["api", "import"]:  # l'avancement d'un import (barre)
+                job = library.import_status(parts[2])
+                return self._json(job) if job else self._error(404, "Import inconnu.")
+            if parts == ["api", "alias"]:  # les pseudos regroupés sous un alias
+                return self._json(aliases.groups())
+            if parts == ["api", "periode"]:  # la période d'analyse
+                return self._json(library.period_view())
             if parts == ["api", "solveur"]:
                 return self._json(postflop.status())
             if len(parts) == 3 and parts[:2] == ["api", "resoudre"]:
                 job = library.solves.get(parts[2])
                 return self._json(job) if job else self._error(404, "Résolution inconnue.")
             if parts == ["moi", "rapport"]:
-                return self._download(library.leaks_page(standalone=True), "leakfinding.html")
+                return self._download(library.leaks_page(standalone=True, table_format=self._format()),
+                                      self._report_name(self._format()))
+            if parts == ["moi", "rapport.pdf"]:
+                return self._download(library.report_pdf(self._format()), self._report_name(self._format(), ext="pdf"),
+                                      "application/pdf")
+            if parts == ["moi", "presentation.pptx"]:
+                return self._download(library.report_pptx(self._format()), self._report_name(self._format(), ext="pptx"),
+                                      PPTX)
+            if parts == ["moi", "leaks"]:
+                return self._html(library.leaks_page(table_format=self._format()))
             if len(parts) == 2 and parts[0] == "moi":
-                return self._html(library.self_page(parts[1]))
+                return self._html(library.self_page(parts[1], table_format=self._format()))
+            if len(parts) == 2 and parts[0] == "field":  # Étude du field
+                return self._html(library.field_page(parts[1], self._format()))
+            if len(parts) == 3 and parts[0] == "field" and parts[1] == "joueur":  # la fiche d'un adversaire
+                return self._html(library.field_player(parts[2], self._format()))
+            if len(parts) == 3 and parts[0] == "field" and parts[1] == "groupe":  # un groupe de récréatifs
+                return self._html(library.field_group(parts[2], self._format()))
+            if parts == ["parametres", "general"]:  # Paramètres
+                return self._html(library.settings_page())
+            if parts == ["parametres", "joueurs"]:  # … les types des adversaires et les alias
+                return self._html(library.field_page("joueurs"))
+            if parts == ["parametres", "ranges"]:  # … tes ranges préflop par défaut, ligne par ligne
+                return self._html(library.ranges_settings_page())
+            if parts == ["api", "ranges", "defaut"]:
+                return self._json(library.default_ranges_view())
             if parts == ["api", "leaks"]:
-                return self._json(library.leaks_state())
+                return self._json(library.leaks_state(table_format=self._format()))
             if parts == ["api", "eleves"]:
                 return self._json(library.students_summary())
+            if parts == ["api", "references"]:  # tes joueurs de référence, et les pseudos qui peuvent le devenir
+                return self._json(library.references_view())
+            if len(parts) == 3 and parts[0] == "reference":  # une page d'un joueur de référence
+                return self._html(library.reference_page(parts[1], parts[2], self._format()))
             if len(parts) == 3 and parts[0] == "eleve":
                 student = library.student(parts[1])
                 if parts[2] == "rapport":
-                    return self._download(student.leaks_page(standalone=True), f"leakfinding-{parts[1]}.html")
+                    return self._download(student.leaks_page(standalone=True, table_format=self._format()),
+                                          self._report_name(self._format(), parts[1]))
+                if parts[2] == "rapport.pdf":
+                    return self._download(student.report_pdf(self._format()),
+                                          self._report_name(self._format(), parts[1], "pdf"), "application/pdf")
+                if parts[2] == "presentation.pptx":
+                    return self._download(student.report_pptx(self._format()),
+                                          self._report_name(self._format(), parts[1], "pptx"), PPTX)
                 if parts[2] not in STUDENT_PAGES:
-                    raise KeyError(parts[2])
-                return self._html(student.self_page(parts[2]))
-            if len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] in ("leaks", "revue"):
+                    raise NotFound(parts[2])
+                if parts[2] == "leaks":
+                    return self._html(student.leaks_page(table_format=self._format()))
+                return self._html(student.self_page(parts[2], table_format=self._format()))
+            if len(parts) == 5 and parts[:2] == ["api", "eleves"] and parts[3] == "import":
+                job = library.student(parts[2]).import_status(parts[4])
+                return self._json(job) if job else self._error(404, "Import inconnu.")
+            if len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] in ("leaks", "revue", "fichiers", "periode",
+                                                                                   "pseudos"):
                 student = library.student(parts[2])
-                return self._json(student.leaks_state() if parts[3] == "leaks" else student.review_state())
+                if parts[3] == "fichiers":
+                    return self._json(student.files_view())
+                if parts[3] == "pseudos":
+                    return self._json(student.pseudos_view())
+                if parts[3] == "periode":
+                    return self._json(student.period_view())
+                return self._json(student.leaks_state(table_format=self._format()) if parts[3] == "leaks"
+                                  else student.review_state())
+            if parts[:2] == ["api", "coups"] and len(parts) in (2, 3) or \
+                    parts[:2] == ["api", "eleves"] and len(parts) in (4, 5) and parts[3] == "coups":
+                owner = library if parts[1] == "coups" else library.student(parts[2])
+                if len(parts) in (3, 5):  # une main, pour la rejouer
+                    return self._json(owner.hand_fiche(parts[-1]))
+                query = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+                return self._json(owner.spots_search(query))
+            if parts == ["api", "mains"] or (len(parts) == 4 and parts[:2] in (["api", "eleves"], ["api", "references"])
+                                             and parts[3] == "mains"):
+                owner = (library if len(parts) == 2 else library.student(parts[2]) if parts[1] == "eleves"
+                         else library.reference(parts[2]))
+                query = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+                return self._json(owner.hands_detail(query))
             if len(parts) == 3 and parts[0] == "p":
                 return self._html(library.player_page(parts[1], parts[2]))
             if parts == ["etudes"]:
@@ -178,13 +264,15 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["api", "revue"]:
                 villain = parse_qs(urlsplit(self.path).query).get("adversaire", [None])[0]
                 return self._json(library.review_state(villain))
+            if parts[:2] == ["api", "spots"] and len(parts) == 3 and parts[2] in library.SPOT_GROUPS:
+                return self._json(library.group_spot_sets(parts[2]))  # toutes les séries heads-up, ou 6-max
             if len(parts) == 3 and parts[:2] == ["api", "spots"]:
                 return self._json(library.spot_set(parts[2]))
             if len(parts) == 2 and parts[0] == "explorateur" and (parts[1] == "preflop" or library.find_hand(parts[1])
-                                                                   or studyspots.parse_ident(parts[1])):
+                                                                   or studyspots.is_ident(parts[1])):
                 page = (STATIC / "explorer.html").read_text(encoding="utf-8")
                 return self._html(page.replace("__HAND__", html.escape(parts[1], quote=True)))
-        except (UnknownPlayer, KeyError):
+        except NotFound:  # (une KeyError pendant un calcul est une erreur d'analyse, plus bas)
             return self._error(404, "Page introuvable.")
         except ConnectionError:
             self.close_connection = True
@@ -194,6 +282,108 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc()
             return self._error(500, "Erreur pendant l'analyse (détails dans le terminal).")
         return self._error(404, "Page introuvable.")
+
+    def _file_action(self, owner: Library, action: str):
+        """Retirer ou rétablir un historique importé (le tien, ou celui d'un élève)."""
+        payload = self._small_json()
+        file_id = payload.get("id") if isinstance(payload, dict) else None
+        if not isinstance(file_id, int) or isinstance(file_id, bool):
+            return self._error(400, "Requête invalide.")
+        try:
+            return self._json(owner.remove_file(file_id) if action == "retirer" else owner.restore_file(file_id))
+        except KeyError:
+            return self._error(404, "Historique inconnu.")
+
+    def _pseudo_action(self, owner: Library, action: str):
+        """Supprimer les mains d'un ou plusieurs pseudos ({"names": […]}), ou en rétablir un ({"name": …}) : les
+        tiens, ou ceux d'un élève."""
+        payload = self._small_json()
+        if not isinstance(payload, dict):
+            return self._error(400, "Requête invalide.")
+        try:
+            if action == "supprimer":
+                return self._json(owner.remove_pseudos(payload.get("names")))
+            return self._json(owner.restore_pseudo(payload.get("name")))
+        except ValueError as exc:
+            return self._error(400, str(exc))
+        except KeyError:
+            return self._error(404, "Pseudo inconnu : ses mains ne sont pas supprimées.")
+
+    def _tree_action(self, library: Library, action: Optional[str], payload: dict):
+        """L'onglet Arbre de l'explorateur : l'état (avec le nœud au bout de « path »), tes tailles, le retour à l'arbre
+        d'origine, un verrou posé ou retiré."""
+        hand, path = payload["hand"], payload.get("path")
+        try:
+            if action is None:
+                return self._json(library.tree_state(hand, path if valid_path(path) else None))
+            if action == "tailles" and isinstance(payload.get("plan"), dict):
+                return self._json(library.set_tree_sizes(hand, payload["plan"]))
+            if action == "origine":
+                return self._json(library.reset_tree(hand))
+            if action == "verrou" and valid_path(path) and isinstance(payload.get("edits"), list):
+                return self._json(library.add_lock(hand, path, payload["edits"], payload.get("labels")))
+            if action == "deverrouiller":
+                index = payload.get("index")
+                if index is not None and (not isinstance(index, int) or isinstance(index, bool)):
+                    return self._error(400, "Requête invalide.")
+                return self._json(library.remove_lock(hand, index))
+            return self._error(400, "Requête invalide.")
+        except (UnknownPlayer, KeyError):
+            return self._error(404, "Main introuvable.")
+        except (ValueError, postflop.Unsupported) as exc:
+            return self._error(400, str(exc))
+        except postflop.SolverError as exc:
+            return self._error(409, str(exc))
+
+    def _default_ranges(self, library: Library, action: Optional[str], payload):
+        """Une ligne de tes ranges par défaut (sans action), l'enregistrer, l'effacer ; l'option des spots d'étude."""
+        if not isinstance(payload, dict):
+            return self._error(400, "Requête invalide.")
+        if action == "spots":
+            if not isinstance(payload.get("for_spots"), bool):
+                return self._error(400, "Requête invalide.")
+            return self._json(library.set_ranges_for_spots(payload["for_spots"]))
+        context = payload.get("context")
+        if not isinstance(context, str) or len(context) > 200:
+            return self._error(400, "Requête invalide.")
+        try:
+            if action is None:
+                return self._json(library.default_range_line(context))
+            if action == "enregistrer":
+                return self._json(library.save_default_ranges(context, payload.get("ranges")))
+            if action == "effacer":
+                return self._json(library.clear_default_ranges(context))
+        except NotFound:
+            return self._error(404, "Ligne sans range de référence.")
+        except ValueError as exc:
+            return self._error(400, str(exc))
+        return self._error(400, "Requête invalide.")
+
+    def _period(self, owner: Library):
+        """Choisir la période d'analyse (la tienne, ou celle d'un élève) : {"kind": "all" | "last" (n) | "days" (days)
+        | "range" (from, to)}."""
+        try:
+            return self._json(owner.set_period(self._small_json()))
+        except ValueError as exc:
+            return self._error(400, str(exc))
+
+    def _ring_preflop(self, payload: dict):
+        """Le nœud de l'arbre préflop 6-max (ring_tree) au bout de la ligne, ou de celle qui mène au flop d'une
+        famille 6-max (le début du déroulé d'un spot d'étude)."""
+        line = payload.get("line")
+        family = payload.get("family")
+        if isinstance(family, str):
+            if not studyspots.is_ring(family):
+                return self._error(400, "Requête invalide.")
+            line = ring_tree.line_for_family(family)
+        if not (isinstance(line, list) and len(line) <= 16 and all(a in ring_tree.ACTIONS for a in line)):
+            return self._error(400, "Requête invalide.")
+        try:
+            return self._json(ring_tree.node(line))
+        except ring_tree.NoCharts as exc:
+            return self._error(404, str(exc))
+        except ValueError:
+            return self._error(404, "Ligne préflop hors des charts.")
 
     # --- POST -------------------------------------------------------------------
     def do_POST(self):
@@ -219,7 +409,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, "Requête invalide.")
             try:
                 return self._json(library.solve(payload["hand"], bool(payload.get("start")),
-                                                bool(payload.get("force"))))
+                                                bool(payload.get("force")), bool(payload.get("fresh"))))
             except UnknownPlayer:
                 return self._error(404, "Main introuvable.")
         if parts == ["api", "etudes", "supprimer"]:
@@ -239,6 +429,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = self._small_json()
             if not isinstance(payload, dict):
                 return self._error(400, "Requête invalide.")
+            if payload.get("table") == ring_tree.TABLE:  # un coup à plusieurs : l'arbre des charts 6-max
+                return self._ring_preflop(payload)
             line = payload.get("line")
             if payload.get("family") in preflop_tree.FAMILY_LINES:
                 line = list(preflop_tree.FAMILY_LINES[payload["family"]])
@@ -251,10 +443,39 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "explorateur", "flop"]:
             payload = self._small_json()
             board = payload.get("board") if isinstance(payload, dict) else None
-            if not (isinstance(payload, dict) and payload.get("family") in studyspots.FAMILIES
-                    and trainer.valid_cards(board, 3)):
+            if not (isinstance(payload, dict) and isinstance(payload.get("family"), str)
+                    and studyspots.known_family(payload["family"]) and trainer.valid_cards(board, 3)):
                 return self._error(400, "Requête invalide.")
-            return self._json(studyspots.flop_options(payload["family"], board))
+            try:
+                return self._json(studyspots.flop_options(payload["family"], board))
+            except postflop.Unsupported as exc:  # spot 6-max sans tes charts
+                return self._error(400, str(exc))
+        if parts == ["api", "estimation"]:  # durée d'une résolution selon la précision
+            payload = self._small_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.estimate(payload["hand"]))
+            except (UnknownPlayer, KeyError):
+                return self._error(404, "Main introuvable.")
+            except (ValueError, postflop.SolverError) as exc:  # coup non couvert, solveur absent
+                return self._error(400, str(exc))
+        if parts == ["api", "precision"]:  # précision visée des prochaines résolutions
+            payload = self._small_json()
+            try:
+                return self._json({"precision": postflop.set_precision(float(payload["precision"]))})
+            except (TypeError, KeyError, ValueError):
+                return self._error(400, "Précision inconnue.")
+        if parts == ["api", "explorateur", "tailles"]:
+            payload = self._small_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.choose_hand_sizes(payload["hand"]))
+            except (UnknownPlayer, KeyError):
+                return self._error(404, "Main introuvable.")
+            except ValueError as exc:  # pot non couvert (Unsupported compris)
+                return self._error(400, str(exc))
         if parts[:3] == ["api", "explorateur", "ranges"] and len(parts) <= 4:
             payload = self._small_json()
             if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
@@ -272,6 +493,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(404, "Main introuvable.")
             except (ValueError, postflop.Unsupported) as exc:
                 return self._error(400, str(exc))
+        if parts[:3] == ["api", "explorateur", "construction"] and len(parts) <= 4:  # ton arbre, avant la résolution
+            payload = self._small_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str) or (
+                    len(parts) == 4 and parts[3] != "enregistrer"):
+                return self._error(400, "Requête invalide.")
+            try:
+                if len(parts) == 3:
+                    return self._json(library.tree_builder(payload["hand"]))
+                return self._json(library.save_tree_builder(payload["hand"], payload.get("choices")))
+            except NotFound:
+                return self._error(404, "Main introuvable.")
+            except (ValueError, postflop.Unsupported) as exc:
+                return self._error(400, str(exc))
+        if parts[:3] == ["api", "explorateur", "arbre"] and len(parts) <= 4:  # tes tailles et tes verrous
+            payload = self._small_json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
+                return self._error(400, "Requête invalide.")
+            return self._tree_action(library, parts[3] if len(parts) == 4 else None, payload)
         if parts == ["api", "explorateur", "noeud"]:
             payload = self._small_json()
             path = payload.get("path") if isinstance(payload, dict) else None
@@ -318,6 +557,8 @@ class Handler(BaseHTTPRequestHandler):
             if parts[2] == "texte":  # à coller dans Claude (coach branché par MCP sur l'abonnement)
                 return self._json({"text": library.coach.prompt(text.strip(), context)})
             return self._json(library.coach.ask(conv, text.strip(), context))
+        if parts[:3] == ["api", "ranges", "defaut"] and len(parts) <= 4:  # Paramètres › Ranges préflop
+            return self._default_ranges(library, parts[3] if len(parts) == 4 else None, self._small_json())
         if parts == ["api", "ranges", "hand2note"]:  # charts 6-max de Hand2Note Guide, sur ta machine
             try:
                 return self._json(library.load_hand2note())
@@ -348,8 +589,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.review_state(villain, start=True))
             except UnknownPlayer:
                 return self._error(404, "Adversaire inconnu.")
+        if (parts[:2] == ["api", "spots"] and len(parts) == 4 and parts[2] in library.SPOT_GROUPS
+                and parts[3] in ("resoudre", "arreter")):
+            group = parts[2]
+            return self._json(library.group_spot_cancel(group) if parts[3] == "arreter"
+                              else library.group_spot_sets(group, start=True))
         if len(parts) == 4 and parts[:2] == ["api", "spots"] and parts[3] in ("resoudre", "arreter"):
-            if parts[2] not in studyspots.FAMILIES:
+            if not studyspots.is_series(parts[2]):
                 return self._error(404, "Série inconnue.")
             if parts[3] == "arreter":
                 return self._json(library.spot_cancel(parts[2]))
@@ -360,8 +606,36 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "import"]:
             files = self._import_files()
             return files if files is None else self._json(library.import_files(files))
+        if parts == ["api", "import", "lancer"]:  # en arrière-plan : son avancement, GET /api/import/<id>
+            files = self._import_files()
+            return files if files is None else self._json(library.start_import(files))
+        if len(parts) == 3 and parts[:2] == ["api", "fichiers"] and parts[2] in ("retirer", "retablir"):
+            return self._file_action(library, parts[2])
+        if len(parts) == 3 and parts[:2] == ["api", "pseudos"] and parts[2] in ("supprimer", "retablir"):
+            return self._pseudo_action(library, parts[2])
+        if parts == ["api", "periode"]:
+            return self._period(library)
+        if parts == ["api", "parametres"]:  # tes paramètres (pseudo, formats, coach, seuil du field)
+            try:
+                return self._json(library.set_settings(self._small_json()))
+            except ValueError as exc:
+                return self._error(400, str(exc))
+        if parts in (["api", "alias"], ["api", "alias", "defaire"]):
+            payload = self._small_json()
+            alias = payload.get("alias") if isinstance(payload, dict) else None
+            pseudos = payload.get("pseudos") if isinstance(payload, dict) else None
+            if not isinstance(alias, str) or (len(parts) == 2 and not (isinstance(pseudos, list) and len(pseudos) <= 50)):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.set_alias(alias, pseudos) if len(parts) == 2 else library.remove_alias(alias))
+            except ValueError as exc:
+                return self._error(400, str(exc))
         if len(parts) == 3 and parts[:2] == ["api", "leaks"] and parts[2] in ("lancer", "arreter"):
-            return self._json(library.leaks_cancel() if parts[2] == "arreter" else library.leaks_state(start=True))
+            try:
+                return self._json(library.leaks_cancel(self._format()) if parts[2] == "arreter"
+                                  else library.leaks_state(start=True, table_format=self._format()))
+            except UnknownPlayer:
+                return self._error(404, "Format de table inconnu.")
         if parts == ["api", "eleves"]:
             payload = self._small_json()
             name = payload.get("name") if isinstance(payload, dict) else None
@@ -373,6 +647,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.create_student(name, pseudo))
             except ValueError as exc:
                 return self._error(400, str(exc))
+        if parts == ["api", "references"]:  # un nouveau joueur de référence : son nom et ses pseudos
+            payload = self._small_json()
+            if not isinstance(payload, dict):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.create_reference(payload.get("name"), payload.get("pseudos")))
+            except ValueError as exc:
+                return self._error(400, str(exc))
+        if len(parts) == 4 and parts[:2] == ["api", "references"] and parts[3] == "retirer":
+            try:
+                return self._json(library.remove_reference(parts[2]))
+            except UnknownPlayer:
+                return self._error(404, "Joueur de référence inconnu.")
         if len(parts) >= 4 and parts[:2] == ["api", "eleves"]:
             try:
                 student = library.student(parts[2])
@@ -381,8 +668,21 @@ class Handler(BaseHTTPRequestHandler):
             if parts[3:] == ["import"]:
                 files = self._import_files()
                 return files if files is None else self._json(student.import_files(files))
+            if parts[3:] == ["import", "lancer"]:
+                files = self._import_files()
+                return files if files is None else self._json(student.start_import(files))
+            if len(parts) == 5 and parts[3] == "fichiers" and parts[4] in ("retirer", "retablir"):
+                return self._file_action(student, parts[4])
+            if len(parts) == 5 and parts[3] == "pseudos" and parts[4] in ("supprimer", "retablir"):
+                return self._pseudo_action(student, parts[4])
+            if parts[3:] == ["periode"]:
+                return self._period(student)
             if len(parts) == 5 and parts[3] == "leaks" and parts[4] in ("lancer", "arreter"):
-                return self._json(student.leaks_cancel() if parts[4] == "arreter" else student.leaks_state(start=True))
+                try:
+                    return self._json(student.leaks_cancel(self._format()) if parts[4] == "arreter"
+                                      else student.leaks_state(start=True, table_format=self._format()))
+                except UnknownPlayer:
+                    return self._error(404, "Format de table inconnu.")
             if len(parts) == 5 and parts[3] == "revue" and parts[4] in ("lancer", "arreter"):
                 return self._json(student.review_cancel() if parts[4] == "arreter" else student.review_state(start=True))
         return self._error(404, "Page introuvable.")
@@ -435,7 +735,7 @@ def start(library: Library, port: int = 8765, tries: int = 10) -> AppServer:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m analyzer app", description="Lance l'application Analyzer HU.")
+    parser = argparse.ArgumentParser(prog="python -m analyzer app", description=f"Lance l'application {NAME}.")
     parser.add_argument("-d", "--dossier", default="hands", help="dossier des historiques (défaut : hands/)")
     parser.add_argument("--hero", help="ton pseudo (détecté automatiquement via le tag Hero)")
     parser.add_argument("--port", type=int, default=8765, help="port local (défaut : 8765)")
@@ -443,11 +743,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     print("Chargement des mains…", flush=True)
-    library = Library(args.dossier, args.hero)
+    outdated = db_hands.outdated(db.current())
+    if outdated:  # le code de lecture a changé : une fois, les historiques gardés sont relus
+        print(f"Lecture améliorée : {outdated} mains relues une fois depuis tes historiques (quelques minutes pour une "
+              "grosse base)…", flush=True)
+    library = Library(args.dossier, args.hero, warm_up=True)  # les pages se calculent en arrière-plan
     server = start(library, args.port)
     url = f"http://127.0.0.1:{server.server_address[1]}/"
-    print(f"{len(library.hands)} mains, toi : {library.hero or 'inconnu'}")
-    print(f"Analyzer est ouvert sur {url}  (Ctrl+C pour arrêter)", flush=True)
+    print(f"{len(library.hands) + len(library.ring)} mains, toi : {library.hero or 'inconnu'}")
+    print(f"{NAME} est ouvert sur {url}  (Ctrl+C pour arrêter)", flush=True)
     if not args.sans_navigateur:
         webbrowser.open(url)
     try:

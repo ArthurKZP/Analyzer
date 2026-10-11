@@ -15,6 +15,11 @@ if sys.argv[1:2] == ["sauvegarde"]:
 
     sys.exit(backup_main(sys.argv[2:]))
 
+if sys.argv[1:2] == ["base"]:
+    from .db.cli import main as db_main
+
+    sys.exit(db_main(sys.argv[2:]))
+
 if sys.argv[1:2] == ["ranges"]:
     from .theory.ring_ranges import main as ranges_main
 

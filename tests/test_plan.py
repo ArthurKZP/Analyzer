@@ -7,6 +7,19 @@ from analyzer.plan import PHASES, _facing, _preflop, bluff_results, build_plan, 
 from analyzer.stats import PlayerStats, Ratio, analyze
 from analyzer.theory.preflop import Decision, load_solution, summarize
 
+try:
+    from .base import isolate_module, release_module
+except ImportError:  # lancé par « unittest discover -s tests »
+    from base import isolate_module, release_module
+
+
+def setUpModule():
+    isolate_module()
+
+
+def tearDownModule():
+    release_module()
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 

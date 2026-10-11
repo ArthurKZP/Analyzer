@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional, TextIO
 
+from .. import NAME as APP_NAME
 from .coach_chat import SYSTEM, TOOLS
 
 PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25")  # poignée de main initialize
@@ -29,7 +30,7 @@ NAME = "analyzer"
 VERSION = "1.0"
 PROGRESS_EVERY = 5.0  # secondes entre deux notifications de progression d'un outil lent
 
-PROMPT = {"name": "coach", "description": "Le coach de poker d'Analyzer : sa façon de répondre et ses outils.",
+PROMPT = {"name": "coach", "description": f"Le coach de poker de {APP_NAME} : sa façon de répondre et ses outils.",
           "arguments": [{"name": "question", "description": "ta question (facultatif)", "required": False}]}
 
 
@@ -96,7 +97,7 @@ class Server:
             asked = params.get("protocolVersion")
             return {"protocolVersion": asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[-1],
                     "capabilities": {"tools": {"listChanged": False}, "prompts": {"listChanged": False}},
-                    "serverInfo": {"name": NAME, "title": "Analyzer — coach de poker HU", "version": VERSION},
+                    "serverInfo": {"name": NAME, "title": f"{APP_NAME} — coach de poker", "version": VERSION},
                     "instructions": SYSTEM}
         if method == "ping":
             return {}
@@ -136,7 +137,7 @@ class Server:
             step += 1
             self.write({"jsonrpc": "2.0", "method": "notifications/progress",
                         "params": {"progressToken": token, "progress": step,
-                                   "message": "Analyzer consulte le solveur…"}})
+                                   "message": f"{APP_NAME} consulte le solveur…"}})
 
 
 def serve(library_factory: Callable, stdin: TextIO, stdout: TextIO) -> None:
@@ -186,7 +187,7 @@ def config(folder: str, hero: Optional[str]) -> str:
         "Claude Desktop : Réglages > Développeur > Modifier la configuration, puis ajoute dans "
         "claude_desktop_config.json (ou fusionne avec tes « mcpServers ») :\n\n"
         + json.dumps(desktop, ensure_ascii=False, indent=2)
-        + "\n\nRedémarre Claude Desktop : les outils d'Analyzer apparaissent dans la conversation.\n\n"
+        + f"\n\nRedémarre Claude Desktop : les outils de {APP_NAME} apparaissent dans la conversation.\n\n"
         "Claude Code (terminal) :\n\n" + code + "\n")
 
 
@@ -206,7 +207,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         from .library import Library
         start = time.time()
         lib = Library(args.dossier, args.hero)
-        print(f"Analyzer : {len(lib.hands)} mains chargées en {time.time() - start:.1f} s", file=sys.stderr, flush=True)
+        print(f"{APP_NAME} : {len(lib.hands)} mains chargées en {time.time() - start:.1f} s", file=sys.stderr, flush=True)
         return lib
     serve(library, stdin, stdout)
     return 0

@@ -25,7 +25,7 @@ class Backups:
 
     def view(self) -> dict:
         config = backup.load_config()
-        essentials = sum(f.stat().st_size for f in backup.essential_files())
+        essentials = backup.essentials_size()
         studies = backup.study_files()
         return dict(config, running=self.running, log=self.log[-8:], error=self.error, result=self.result,
                     rclone=bool(shutil.which("rclone")), home=str(backup.home()), essentials_size=essentials,

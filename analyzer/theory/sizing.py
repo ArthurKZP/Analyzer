@@ -12,11 +12,17 @@ gardant leur choix courant, street par street :
   presque jamais atteinte, elle prend la plus petite taille.
 
 Le résultat (le plan et le détail des comparaisons) est gardé par flop ; les spots d'étude l'utilisent.
+
+Ton arbre (explorateur, avant la résolution) : certaines situations ont des tailles que tu fixes (ou aucune mise),
+d'autres sont laissées au choix du solveur, parmi des tailles que tu peux changer. Selection(…, fixed=, auto=, base=)
+ne choisit alors que celles-là, les autres gardant tes tailles ; une situation qui ne peut plus arriver (la mise
+qu'elle relance est retirée…) ne se compare pas.
 """
 from __future__ import annotations
 
 import itertools
 import json
+import re
 import subprocess
 import tempfile
 import time
@@ -193,6 +199,102 @@ PROFILES = {
 }
 
 
+
+def _oop_river(sizes: list, stab: Optional[tuple] = None) -> Callable[[str, str], Optional[tuple]]:
+    """River d'un pot où l'agresseur préflop est hors de position : pas de donk ; le joueur en position mise
+    quand on checke vers lui (stab) ou après sa mise payée."""
+    def river(bettor: str, past: str) -> Optional[tuple]:
+        if bettor == "o":
+            return None if past[-1] == "i" else (sizes, 2)
+        return (sizes, 2) if past[-1] == "i" or stab is None else stab
+    return river
+
+
+def _ip_river(sizes: list) -> Callable[[str, str], Optional[tuple]]:
+    """River d'un pot où l'agresseur préflop est en position : pas de donk de celui hors de position."""
+    def river(bettor: str, past: str) -> Optional[tuple]:
+        return None if bettor == "o" and past[-1] == "i" else (sizes, 2)
+    return river
+
+
+# Structures des tables à plusieurs que les familles heads-up ne couvrent pas. Libellés : BB = le joueur hors de
+# position, BTN = celui en position (renommés selon la famille, voir rename_roles).
+OOP_LINES = {"o": ["bet", "call"], "x": ["check", "check"], "i": ["check", "bet", "call"]}
+IP_LINES = {"i": ["check", "bet", "call"], "x": ["check", "check"], "o": ["check", "bet", "raise", "call"]}
+OOP_NAMES = {k: v for k, v in PROFILES["3bet"].names.items()}
+OOP_MAIN = PROFILES["3bet"].main
+STRUCTURES = {
+    # SRP ouvert hors de position (SB contre BB) : SPR de 20 environ, les tailles d'un SRP.
+    "srp_oop": Profile(
+        flop=(("bet:fo:", [33, 75, "geo"]), ("raise:fi::0", [33, 66, "geo"]), ("bet:fi:", [33, 75, "geo"]),
+              ("raise:fo::0", [33, 66, "geo"]), ("raise:fo::1", [33, 66, "geo"]), ("raise:fi::1", [33, 66, "geo"])),
+        turn_bets={("o", "o"): [50, 100, "geo"], ("o", "x"): [33, 66, "geo"], ("i", "o"): [33, 75, "geo"],
+                   ("i", "x"): [33, 75, "geo"], ("i", "i"): [50, 100, "geo"]},
+        river_bets=_oop_river([50, 75, 100, 150, "a"]),
+        raises={"t": [33, 66, "geo"], "r": [33, 66, "a"]},
+        lines=OOP_LINES, flop_river=[75], names=OOP_NAMES,
+        flop_line={"o": "c-bet payée", "x": "flop checké", "i": "stab payé"}, main=OOP_MAIN,
+        description="c-bet 33 / 75 % / géo, relance face à la c-bet 33 / 66 % / géo, stab 33 / 75 % / géo, 2e barrel "
+                    "50 % / pot / géo, c-bet retardée 33 / 66 % / géo, river deux parmi 50 / 75 % / pot / 150 % / "
+                    "tapis, relances 33 / 66 % / géo (tapis à la river)",
+    ),
+    # Pot 3bet du joueur en position (la BB 3bette l'open de la SB) : SPR de 6 environ.
+    "3bet_ip": Profile(
+        flop=(("bet:fi:", [33, 75, "geo2"]), ("raise:fo::0", [33, 66, "a"]), ("raise:fi::1", [33, 66, "a"])),
+        turn_bets={("i", "i"): [33, 50, 75, "a"], ("i", "x"): [33, 75, "geo"], ("o", "x"): [33, 75, "a"],
+                   ("o", "o"): [33, 66, "a"], ("i", "o"): [33, 66, "a"]},
+        river_bets=_ip_river([33, 50, 75, "a"]),
+        raises={"t": [33, 66, "a"], "r": [33, 66, "a"]},
+        lines=IP_LINES, flop_river=[50], names=PROFILES["srp"].names, flop_line=PROFILES["srp"].flop_line,
+        main=PROFILES["srp"].main,
+        description="c-bet 33 / 75 % / géo sur deux streets, 2e barrel 33 / 50 / 75 % / tapis, c-bet retardée "
+                    "33 / 75 % / géo, probe 33 / 75 % / tapis, river deux parmi 33 / 50 / 75 % / tapis, relances "
+                    "33 / 66 % / tapis",
+    ),
+    # Pot 4bet du joueur hors de position (la SB 4bette le 3bet de la BB) : SPR de 2 environ.
+    "4bet_oop": Profile(
+        flop=(("bet:fo:", [25, "geo2", "a"]), ("raise:fi::0", [33, "a"]), ("bet:fi:", [25, 50, "a"]),
+              ("raise:fo::0", [33, "a"]), ("raise:fo::1", [33, "a"]), ("raise:fi::1", [33, "a"])),
+        turn_bets={key: [25, 50, "a"] for key in (("o", "o"), ("o", "x"), ("i", "o"), ("i", "x"), ("i", "i"))},
+        river_bets=_oop_river([25, 50, "a"]),
+        raises={"t": [33, "a"], "r": [33, "a"]},
+        lines=OOP_LINES, flop_river=[50], names=OOP_NAMES,
+        flop_line={"o": "c-bet payée", "x": "flop checké", "i": "stab payé"}, main=OOP_MAIN,
+        description="c-bet 25 % / géo sur deux streets / tapis, stab 25 / 50 % / tapis, puis 25 / 50 % / tapis à la "
+                    "turn, river deux parmi 25 / 50 % / tapis, relances 33 % / tapis",
+    ),
+}
+STRUCTURES.update({"srp_ip": PROFILES["srp"], "3bet_oop": PROFILES["3bet"], "4bet_ip": PROFILES["4bet"]})
+POSITIONS: dict[str, tuple[str, str]] = {}  # famille d'une table à plusieurs -> (hors de position, en position)
+
+
+def register(family: str, structure: str, oop: str, ip: str) -> None:
+    """Une famille de spots d'une table à plusieurs : ses tailles comparées sont celles de sa structure."""
+    PROFILES[family] = STRUCTURES[structure]
+    POSITIONS[family] = (oop, ip)
+
+
+_FEMININE = ("SB", "BB")
+_ROLE_RE = re.compile(r"\b(?:(du|de la|le|la) )?(BTN|BB|bouton)\b")
+
+
+def rename_roles(text: str, oop: str, ip: str) -> str:
+    """Les libellés nomment BB le joueur hors de position et BTN (ou le bouton) celui en position : avec les vraies
+    positions, articles compris (« du BTN » -> « de la BB », « de la BB » -> « de la SB »)."""
+    if (oop, ip) == ("BB", "BTN"):
+        return text
+
+    def sub(m: re.Match) -> str:
+        pos = oop if m.group(2) == "BB" else ip
+        if not m.group(1):
+            return pos
+        fem = pos in _FEMININE
+        if m.group(1) in ("du", "de la"):
+            return ("de la " if fem else "du ") + pos
+        return ("la " if fem else "le ") + pos
+    return _ROLE_RE.sub(sub, text)
+
+
 def situations(family: str = "srp") -> list[Situation]:
     """Les situations d'une famille de pots : mises et relances, street par street (le flop dans l'ordre du choix)."""
     profile = PROFILES[family]
@@ -217,6 +319,30 @@ def initial_plan(family: str = "srp") -> dict:
     return {s.key: s.initial() for s in situations(family)}
 
 
+def reachable(key: str, plan: dict, keys: set[str]) -> bool:
+    """Une situation peut-elle arriver avec ce plan (les situations de la famille : keys) ? Une relance demande la mise
+    (ou la relance) qu'elle relance ; chaque street déjà jouée de son passé, une mise (ou relance) de son agresseur.
+    Une situation hors du plan garde ses tailles par défaut : elle compte comme possible."""
+    def can(k: str) -> bool:
+        return k not in keys or bool(plan.get(k, [None]))
+
+    kind, where, past, *level = key.split(":")
+    street, player = where
+    for k, letter in enumerate(past):
+        if letter == "x":
+            continue  # une street checkée arrive toujours
+        before = past[:k]
+        options = [c for c in keys if c.split(":")[1] == "ftr"[k] + letter and c.split(":")[2] == before]
+        if options and not any(can(c) and reachable(c, plan, keys) for c in options):
+            return False
+    if kind == "raise":
+        other = "i" if player == "o" else "o"
+        n = int(level[0])
+        parent = f"bet:{street}{other}:{past}" if n == 0 else f"raise:{street}{other}:{past}:{n - 1}"
+        return can(parent) and (parent not in keys or reachable(parent, plan, keys))
+    return True
+
+
 # --- Libellés ------------------------------------------------------------------------------
 
 def size_text(size) -> str:
@@ -224,6 +350,7 @@ def size_text(size) -> str:
         return "tapis"
     if isinstance(size, str) and size.startswith("geo"):
         return "géo" if size == "geo" else f"géo {size[3:]} streets"
+    size = round(size)  # une taille jouée (53,7 % du pot) se lit arrondie
     return "pot" if size == 100 else f"{size} %"
 
 
@@ -231,25 +358,35 @@ def sizes_text(sizes: list) -> str:
     return " / ".join(size_text(s) for s in sizes)
 
 
-def label(key: str, family: str = "srp") -> str:
+def label(key: str, family: str = "srp", positions: Optional[tuple[str, str]] = None) -> str:
+    """Le nom d'une situation ; positions : (hors de position, en position), celles de la famille par défaut."""
     profile = PROFILES[family]
     if key in profile.names:
-        return profile.names[key]
-    kind, where, past, *level = key.split(":")
-    street = {"f": "flop", "t": "turn", "r": "river"}[where[0]]
-    who = "BB" if where[1] == "o" else "BTN"
-    line = [profile.flop_line[past[0]]] if past else []
-    if len(past) > 1:
-        line.append({"i": "mise du BTN payée à la turn", "x": "turn checkée", "o": "mise de la BB payée à la turn"}[past[1]])
-    what = "Mise" if kind == "bet" else "Relance" if level == ["0"] else "Sur-relance"
-    return f"{what} {street} {'de la' if who == 'BB' else 'du'} {who}" + (f" ({', '.join(line)})" if line else "")
+        text = profile.names[key]
+    else:
+        kind, where, past, *level = key.split(":")
+        street = {"f": "flop", "t": "turn", "r": "river"}[where[0]]
+        who = "BB" if where[1] == "o" else "BTN"
+        line = [profile.flop_line[past[0]]] if past else []
+        if len(past) > 1:
+            line.append({"i": "mise du BTN payée à la turn", "x": "turn checkée",
+                         "o": "mise de la BB payée à la turn"}[past[1]])
+        what = "Mise" if kind == "bet" else "Relance" if level == ["0"] else "Sur-relance"
+        text = f"{what} {street} {'de la' if who == 'BB' else 'du'} {who}" + (f" ({', '.join(line)})" if line else "")
+    oop, ip = positions or POSITIONS.get(family, ("BB", "BTN"))
+    return rename_roles(text, oop, ip)
 
 
-def plan_text(plan: dict, family: str = "srp") -> str:
+def description(family: str) -> str:
+    """Les tailles comparées de la famille, avec ses positions."""
+    return rename_roles(PROFILES[family].description, *POSITIONS.get(family, ("BB", "BTN")))
+
+
+def plan_text(plan: dict, family: str = "srp", positions: Optional[tuple[str, str]] = None) -> str:
     """Les tailles des situations principales, pour les menus."""
     profile = PROFILES[family]
     def name(key: str) -> str:
-        text = label(key, family)
+        text = label(key, family, positions)
         return text[0].lower() + text[1:]
     return " · ".join(f"{name(k)} {sizes_text(plan[k])}" for k in profile.main if k in plan)
 
@@ -326,17 +463,39 @@ class Selection:
 
     def __init__(self, spot, log: Callable[[str], None] = print, threads: int = 0, cards: int = TURN_CARDS,
                  on_start: Optional[Callable[[subprocess.Popen], None]] = None,
-                 stopped: Optional[Callable[[], bool]] = None):
-        """on_start reçoit chaque programme lancé (pour l'arrêter) ; stopped() dit si l'arrêt est demandé."""
+                 stopped: Optional[Callable[[], bool]] = None, fixed: Optional[dict] = None,
+                 auto: Optional[dict] = None, base: Optional[dict] = None):
+        """on_start reçoit chaque programme lancé (pour l'arrêter) ; stopped() dit si l'arrêt est demandé.
+
+        Ton arbre : fixed, des situations aux tailles imposées (une liste vide : pas de mise ni de relance), gardées
+        telles quelles même pendant le choix du flop ; auto, les seules situations à choisir ({clé: tailles comparées,
+        ou None pour celles de la famille}) ; base, les tailles des autres situations. Sans auto : toutes."""
         self.spot, self.log, self.threads, self.cards = spot, log, threads, cards
         self.on_start = on_start
         self.stopped = stopped or (lambda: False)
         self.family = spot.family
         self.profile = PROFILES[spot.family]
+        self.fixed = dict(fixed or {})
+        self.auto = None if auto is None else dict(auto)
         self.plan = initial_plan(spot.family)
+        self.plan.update(base or {})
+        self.plan.update(self.fixed)
+        self.keys = {s.key for s in situations(spot.family)}
         self.report: dict[str, dict] = {}
         self.session: Optional[postflop.Session] = None
         self.root_mass = 0.0
+
+    def _chosen(self) -> list[Situation]:
+        """Les situations à choisir (sans auto : toutes, sauf les fixées), avec leurs tailles comparées."""
+        out = []
+        for sit in situations(self.family):
+            if sit.key in self.fixed or (self.auto is not None and sit.key not in self.auto):
+                continue
+            mine = (self.auto or {}).get(sit.key)
+            if mine:
+                sit = Situation(sit.key, list(mine), min(sit.choose, len(mine)))
+            out.append(sit)
+        return out
 
     def _request(self, plan: dict) -> dict:
         self.spot.plan = plan
@@ -348,12 +507,22 @@ class Selection:
         complet reste deux fois plus petit ; ses tailles se choisissent ensuite, sur les sous-jeux."""
         out = dict(plan)
         for sit in situations(self.family):
-            if sit.street == 2:
+            if sit.street == 2 and sit.key not in self.fixed:  # (tes tailles fixées restent)
                 out[sit.key] = list(self.profile.flop_river) if sit.key.startswith("bet:") else []
         return out
 
     def _flop_situations(self) -> list[Situation]:
-        return [s for s in situations(self.family) if s.street == 0]
+        return [s for s in self._chosen() if s.street == 0]
+
+    def _unreachable(self, sit: Situation) -> bool:
+        """Avec ton arbre, la situation ne peut plus arriver : sa taille de départ est gardée, sans comparaison."""
+        if self.auto is None or reachable(sit.key, self.plan, self.keys):
+            return False
+        self.plan[sit.key] = sit.initial()
+        self.report[sit.key] = {"label": self._label(sit.key), "options": [list(o) for o in sit.options()],
+                                "evs": None, "chosen": list(self.plan[sit.key]), "reach": 0.0, "cards": 0,
+                                "method": "jamais atteinte"}
+        return True
 
     def _label(self, key: str) -> str:
         return label(key, self.family)
@@ -380,6 +549,8 @@ class Selection:
         known: dict[str, tuple[dict, postflop.Session]] = {}  # arbre (plan) -> résolution, sans doublon
         try:
             for sit in self._flop_situations():
+                if self._unreachable(sit):
+                    continue
                 options = sit.options()
                 evs, idents = [], []
                 for opt in options:
@@ -407,7 +578,10 @@ class Selection:
                 session.close()
             raise
         # L'arbre retenu : les ranges de la turn de chaque ligne en viennent.
-        self.session = next(iter(known.values()))[1]
+        if known:
+            self.session = next(iter(known.values()))[1]
+        else:  # rien à choisir au flop (ton arbre) : l'arbre tel quel
+            _, self.session = self._solve(self.plan)
         self.root_mass = _mass(self.session.node([]))
 
     # --- turn et river : sous-jeux ---
@@ -418,9 +592,11 @@ class Selection:
                 continue
             node = self.session.node(path)
             weight = _mass(node) / self.root_mass  # probabilité d'arriver à la turn par cette ligne
+            sits = [s for s in self._chosen() if s.street == street and s.past[0] == line]
+            if not sits:
+                continue  # rien à choisir sur cette ligne (ton arbre)
             cards = sample(node["cards"], self.cards if street == 1 else min(self.cards, RIVER_CARDS))
             bases = [subgame(self.spot, node, card, line) for card in cards]
-            sits = [s for s in situations(self.family) if s.street == street and s.past[0] == line]
             # Pour la turn, la river reste simple (comme au flop) ; elle se choisit ensuite.
             view = self._flop_plan if street == 1 else dict
             # Fréquence de chaque situation dans le sous-jeu, avec le plan courant.
@@ -485,17 +661,20 @@ class Selection:
     def run(self, resume: Optional[dict] = None) -> dict:
         """resume : un choix précédent dont on garde le flop (seule la turn et la river se refont)."""
         start = time.time()
+        if not self._chosen():  # ton arbre : tout est fixé
+            return {"plan": self.plan, "report": self.report, "seconds": 0, "cards": self.cards,
+                    "created": time.strftime("%d/%m/%Y %H:%M"), "method": METHOD}
         try:
             if resume:
                 self.log("  Flop : choix repris…")
                 self.resume_flop(resume)
             else:
-                self.log("  Flop (arbres complets)…")
+                self.log("  Flop (arbres complets)…" if self._flop_situations() else "  Flop : ton arbre, résolu une fois…")
                 self.flop()
-            self.log("  Turn (sous-jeux)…")
-            self.later(1)
-            self.log("  River (sous-jeux)…")
-            self.later(2)
+            for street, name in ((1, "Turn"), (2, "River")):
+                if any(s.street == street for s in self._chosen()):
+                    self.log(f"  {name} (sous-jeux)…")
+                    self.later(street)
         finally:
             if self.session is not None:
                 self.session.close()

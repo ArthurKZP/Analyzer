@@ -8,7 +8,7 @@ from typing import Optional
 
 from .models import Hand
 from .report import EMBED_SCRIPT
-from .spots import line_options, spot_records
+from .spots import line_options, list_record, spot_records
 
 
 def _json_for_script(data) -> str:
@@ -18,20 +18,28 @@ def _json_for_script(data) -> str:
 
 
 def build_viewer(hands: list[Hand], hero: str, villain: Optional[str] = None, report_href: str = "",
-                 embed: bool = False, solver: bool = False) -> str:
+                 embed: bool = False, solver: bool = False, api: str = "",
+                 records: Optional[list[dict]] = None) -> str:
     """villain=None : toutes tes mains, contre tous tes adversaires.
 
-    solver=True (application) : le replayer propose de résoudre le coup avec GTOpen.
+    solver=True (application) : le replayer propose de résoudre le coup avec GTOpen. api (application) : les mains
+    restent sur le serveur (Library.spots_search) ; records : leurs fiches (spots.list_record), pour les lignes et le
+    nombre de mains. Sans api, toutes les fiches sont dans la page (fichier autonome).
     """
-    records = spot_records(hands, hero, villain)
     title = f"Spots — {villain}" if villain else "Mes spots — tous adversaires"
-    data = {
-        "hero": hero,
-        "villain": villain or "",
-        "records": records,
-        "lines": line_options(records),
-        "solver": solver,
-    }
+    if api:
+        records = records if records is not None else [list_record(r) for r in spot_records(hands, hero, villain)]
+        data = {"hero": hero, "villain": villain or "", "api": api, "count": len(records),
+                "opponents": sorted({r["opp"] for r in records}), "lines": line_options(records), "solver": solver}
+    else:
+        records = spot_records(hands, hero, villain)
+        data = {
+            "hero": hero,
+            "villain": villain or "",
+            "records": records,
+            "lines": line_options(records),
+            "solver": solver,
+        }
     values = {
         "TITLE": escape(title),
         "BACK": f'<a href="{escape(report_href)}">Rapport complet</a>' if report_href else "",
@@ -235,7 +243,11 @@ button, select, input { font: inherit; color: inherit; }
 SCRIPT = r"""
 (function () {
   const DATA = JSON.parse(document.getElementById('data').textContent);
-  const R = DATA.records;
+  const R = DATA.records || [];
+  // Dans l'application, les mains restent sur le serveur : il filtre, trie et envoie la liste par pages, et le
+  // détail d'une main (actions, équités) quand on l'ouvre. Fichier autonome : tout est dans la page.
+  const REMOTE = !!DATA.api;
+  const PAGE = 150;
   const SUITS = { s: '♠', h: '♥', d: '♦', c: '♣' };
   const STREETS = { p: 'Préflop', f: 'Flop', t: 'Turn', r: 'River' };
   const BOARD_N = { p: 0, f: 3, t: 4, r: 5 };
@@ -265,7 +277,7 @@ SCRIPT = r"""
     { id: 'sort', label: 'Tri', options: [['date', 'Plus récentes'], ['old', 'Plus anciennes'], ['pot', 'Plus gros pots'], ['loss', 'Plus grosses pertes'], ['win', 'Plus gros gains']] },
     { id: 'q', label: 'Recherche (AKo, 99, Ah, n° de main)', input: true },
   ];
-  const OPPONENTS = [...new Set(R.map((r) => r.opp))].sort((a, b) => a.localeCompare(b));
+  const OPPONENTS = REMOTE ? DATA.opponents : [...new Set(R.map((r) => r.opp))].sort((a, b) => a.localeCompare(b));
   if (OPPONENTS.length > 1) {
     FILTERS.unshift({ id: 'opp', label: 'Adversaire', options: [['', 'Tous (' + OPPONENTS.length + ')']].concat(OPPONENTS.map((o) => [o, o])) });
   }
@@ -285,6 +297,8 @@ SCRIPT = r"""
 
   let F = {};
   let visible = [];
+  let total = 0;  // mains de la sélection (en ligne : toutes ne sont pas encore chargées)
+  let seq = 0;  // requête en cours : une réponse plus ancienne est ignorée
   let shown = 0;
   let current = null;
   let steps = [];
@@ -401,12 +415,54 @@ SCRIPT = r"""
     win: (a, b) => b.net - a.net,
   };
 
+  function query(offset) {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(F)) if (v) params.set(k, v);
+    if (DATA.villain) params.set('adversaire', DATA.villain);
+    params.set('offset', offset);
+    params.set('limit', PAGE);
+    return fetch(DATA.api + '?' + params).then((res) => (res.ok ? res.json() : Promise.reject(new Error('erreur ' + res.status))));
+  }
+
+  function fiche(id) {
+    return fetch(DATA.api + '/' + encodeURIComponent(id)).then((res) => (res.ok ? res.json() : Promise.reject(new Error('erreur ' + res.status))));
+  }
+
+  function summaryOf(list) {  // le même résumé que le serveur (spots.summary)
+    const st = F.l ? { flop: 'f', turn: 't', river: 'r' }[F.l.split('|')[1]] : (F.st || 'f');
+    const reached = list.filter((r) => r.reach >= REACH[st] && r.sa[st] && (r.sa[st].H.length || r.sa[st].V.length));
+    const freq = (who) => {
+      const counts = {};
+      reached.forEach((r) => r.sa[st][who].forEach((c) => { counts[c] = (counts[c] || 0) + 1; }));
+      return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 4);
+    };
+    return { n: list.length, net: list.reduce((s, r) => s + r.net, 0), sd: list.filter((r) => r.end === 'sd').length,
+      hf: list.filter((r) => r.end.startsWith('hf')).length, vf: list.filter((r) => r.end.startsWith('vf')).length,
+      st, reached: reached.length, H: freq('H'), V: freq('V') };
+  }
+
   function apply() {
-    visible = R.filter(matches).sort(SORTS[F.sort] || SORTS.date);
     shown = 0;
-    document.getElementById('list').textContent = '';
-    renderSummary();
-    renderMore();
+    visible = [];
+    const list = document.getElementById('list');
+    list.textContent = '';
+    const mine = ++seq;
+    if (REMOTE) {
+      list.append(el('div', { class: 'empty' }, 'Chargement…'));
+      query(0).then((data) => {
+        if (mine !== seq) return;
+        list.textContent = '';
+        visible = data.rows;
+        total = data.total;
+        renderSummary(data.summary);
+        renderMore();
+      }).catch((e) => { if (mine === seq) list.textContent = 'Impossible de charger les mains (' + e.message + ').'; });
+    } else {
+      visible = R.filter(matches).sort(SORTS[F.sort] || SORTS.date);
+      total = visible.length;
+      renderSummary(summaryOf(visible));
+      renderMore();
+    }
     const active = normalized(F);
     document.querySelectorAll('#presets button').forEach((b) => {
       b.setAttribute('aria-pressed', normalized(PRESETS[+b.dataset.i][1]) === active ? 'true' : 'false');
@@ -414,28 +470,17 @@ SCRIPT = r"""
     writeHash();
   }
 
-  function renderSummary() {
+  function renderSummary(s) {
     const box = document.getElementById('summary');
     box.textContent = '';
-    const n = visible.length;
-    const total = visible.reduce((s, r) => s + r.net, 0);
+    const n = s.n;
     box.append(el('b', {}, n + ' main' + (n > 1 ? 's' : '')));
     if (n) {
-      box.append(' · ton résultat ', el('b', {}, signed(total) + ' bb'), ' (' + signed(total / n) + ' bb par main)');
-      const sd = visible.filter((r) => r.end === 'sd').length;
-      const hf = visible.filter((r) => r.end.startsWith('hf')).length;
-      const vf = visible.filter((r) => r.end.startsWith('vf')).length;
-      box.append(' · abattage ' + sd + ' · tu folds ' + hf + ' · il folde ' + vf);
-      const st = F.l ? { flop: 'f', turn: 't', river: 'r' }[F.l.split('|')[1]] : (F.st || 'f');
-      const reached = visible.filter((r) => r.reach >= REACH[st] && r.sa[st] && (r.sa[st].H.length || r.sa[st].V.length));
-      if (reached.length) {
-        const freq = (who) => {
-          const counts = {};
-          reached.forEach((r) => r.sa[st][who].forEach((c) => { counts[c] = (counts[c] || 0) + 1; }));
-          return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 4)
-            .map(([c, k]) => ACT_LABEL[c].toLowerCase() + ' ' + Math.round(100 * k / reached.length) + ' %').join(', ');
-        };
-        box.append(el('span', { class: 'freq' }, STREETS[st] + ' (' + reached.length + ' mains jouées) — toi : ' + (freq('H') || '—') + ' · lui : ' + (freq('V') || '—')));
+      box.append(' · ton résultat ', el('b', {}, signed(s.net) + ' bb'), ' (' + signed(s.net / n) + ' bb par main)');
+      box.append(' · abattage ' + s.sd + ' · tu folds ' + s.hf + ' · il folde ' + s.vf);
+      if (s.reached) {
+        const freq = (who) => s[who].map(([c, k]) => ACT_LABEL[c].toLowerCase() + ' ' + Math.round(100 * k / s.reached) + ' %').join(', ');
+        box.append(el('span', { class: 'freq' }, STREETS[s.st] + ' (' + s.reached + ' mains jouées) — toi : ' + (freq('H') || '—') + ' · lui : ' + (freq('V') || '—')));
       }
     }
   }
@@ -444,15 +489,24 @@ SCRIPT = r"""
     const list = document.getElementById('list');
     const old = list.querySelector('.more');
     if (old) old.remove();
-    if (!visible.length) {
+    if (!total) {
       list.append(el('div', { class: 'empty' }, 'Aucune main pour ce spot.'));
       return;
     }
-    const next = visible.slice(shown, shown + 150);
+    if (shown >= visible.length && shown < total) {  // en ligne : la page suivante
+      const mine = seq;
+      query(shown).then((data) => {
+        if (mine !== seq) return;
+        visible = visible.concat(data.rows);
+        renderMore();
+      });
+      return;
+    }
+    const next = visible.slice(shown, shown + PAGE);
     next.forEach((r) => list.append(row(r)));
     shown += next.length;
-    if (shown < visible.length) {
-      list.append(el('button', { class: 'more', type: 'button', onclick: renderMore }, 'Afficher plus (' + (visible.length - shown) + ' restantes)'));
+    if (shown < total) {
+      list.append(el('button', { class: 'more', type: 'button', onclick: renderMore }, 'Afficher plus (' + (total - shown) + ' restantes)'));
     }
     markCurrent();
   }
@@ -525,6 +579,10 @@ SCRIPT = r"""
   }
 
   function open(r, step) {
+    if (REMOTE && !r.x) {  // le détail de la main (actions, équités) arrive à l'ouverture
+      fiche(r.id).then((full) => open(full, step)).catch((e) => { document.getElementById('summary').append(' · main introuvable (' + e.message + ')'); });
+      return;
+    }
     current = r;
     steps = buildSteps(r);
     stepIndex = step === undefined ? 0 : step;
@@ -814,12 +872,14 @@ SCRIPT = r"""
     for (const [k, v] of params) if (k !== 'hand') values[k] = v;
     setFilters(values);
     const id = params.get('hand');
-    const r = id && R.find((x) => x.id === id);
+    if (!id) return;
+    if (REMOTE) { if (!current || current.id !== id) open({ id }); return; }
+    const r = R.find((x) => x.id === id);
     if (r) open(r);
   }
 
   // ---------- démarrage ----------
-  document.getElementById('meta').textContent = R.length + ' mains · toi : ' + DATA.hero + ' ·';
+  document.getElementById('meta').textContent = (REMOTE ? DATA.count : R.length) + ' mains · toi : ' + DATA.hero + ' ·';
   buildFilters();
   document.getElementById('b-first').onclick = () => go(0);
   document.getElementById('b-prev').onclick = () => go(stepIndex - 1);

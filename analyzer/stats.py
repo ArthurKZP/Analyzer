@@ -12,13 +12,13 @@ from statistics import median
 from typing import Optional
 
 from .cards import combo_notation, equity
-from .models import AGGRESSIVE, BET, CALL, CHECK, FOLD, POSTFLOP, RAISE, VOLUNTARY, Hand
+from .models import AGGRESSIVE, BET, CALL, CHECK, FOLD, POSTFLOP, RAISE, VOLUNTARY, Action, Hand
 
 OUTCOMES = {FOLD: "fold", CALL: "call", RAISE: "raise", CHECK: "check", BET: "bet"}
 PF_LEVEL_NAMES = {1: "3bet", 2: "4bet"}
 
 
-@dataclass
+@dataclass(slots=True)
 class Ratio:
     hits: int = 0
     opps: int = 0
@@ -59,6 +59,7 @@ class PlayerStats:
     net_bb_by_pos: Counter = field(default_factory=Counter)
     net_bb_showdown: float = 0.0
     net_bb_no_showdown: float = 0.0
+    hands_showdown: int = 0  # mains allées à l'abattage
     ev_adjust_bb: float = 0.0
     allin_hands: int = 0
     curve: list = field(default_factory=list)  # (cumul réel bb, cumul EV bb, cumul SD, cumul non-SD)
@@ -93,13 +94,24 @@ class PlayerStats:
 
 
 class HandReader:
-    """Lit une main HU et produit, pour chaque joueur, ses situations et décisions."""
+    """Lit une main HU et produit, pour chaque joueur, ses situations et décisions. HandReader.of(main) : la lecture
+    faite une fois par main (gardée sur la main), à préférer quand on ne la modifie pas."""
+
+    @classmethod
+    def of(cls, hand: Hand) -> "HandReader":
+        reader = hand.__dict__.get("_reader")
+        if reader is None:
+            reader = hand.__dict__["_reader"] = cls(hand)
+        return reader
 
     def __init__(self, hand: Hand):
         self.h = hand
         self.sb = hand.button
         self.bb = hand.big_blind
         self.events: dict[str, list[tuple[str, bool]]] = defaultdict(list)
+        # les décisions après le flop, avec leur situation (« cbet_flop », « vs_cbet_turn »…) : de quoi mesurer ce
+        # qu'elles ont rapporté (analyzer/leakcheck.py)
+        self.spots: dict[str, list[tuple[str, Action]]] = defaultdict(list)
         self.sizes: dict[str, list[tuple[str, float]]] = defaultdict(list)
         self.tokens: dict[str, list[str]] = defaultdict(list)
         self.pfa: Optional[str] = None
@@ -217,6 +229,7 @@ class HandReader:
                         contexts += self._pfa_contexts(p, street, i, prev, made_cbet, checked_through, called_cbet)
                     for ctx in contexts:
                         self._flag(p, ctx, kind == BET)
+                        self.spots[p].append((ctx, a))
                     if kind == BET:
                         pct = 100.0 * a.amount / a.pot_before if a.pot_before else 0.0
                         bet_ctx = contexts[-1]
@@ -231,11 +244,14 @@ class HandReader:
                 else:
                     facing = "vs_bet" if level == 1 else "vs_raise"
                     self._record(p, f"{facing}_{street}", choice, ("fold", "call", "raise"))
+                    self.spots[p].append((f"{facing}_{street}", a))
                     if level == 1:
                         if p in checked:
                             self._flag(p, f"xr_{street}", kind == RAISE)
+                            self.spots[p].append((f"xr_{street}", a))
                         if bet_ctx and not bet_ctx.startswith(("lead_", "stab_")):
                             self._record(p, f"vs_{bet_ctx}", choice, ("fold", "call", "raise"))
+                            self.spots[p].append((f"vs_{bet_ctx}", a))
                             if bet_ctx == f"cbet_{street}" and kind == CALL:
                                 called_cbet[street] = True
                     if kind == RAISE and last_to and not a.all_in:
@@ -271,7 +287,14 @@ class HandReader:
 
 
 def think_times(hand: Hand) -> list[Optional[float]]:
-    """Temps de réflexion (s) de chaque action, mesuré depuis l'action précédente."""
+    """Temps de réflexion (s) de chaque action, mesuré depuis l'action précédente (calculé une fois par main)."""
+    known = hand.__dict__.get("_think_times")
+    if known is None:
+        known = hand.__dict__["_think_times"] = _think_times(hand)
+    return known
+
+
+def _think_times(hand: Hand) -> list[Optional[float]]:
     out: list[Optional[float]] = []
     prev = None
     for a in hand.actions:
@@ -284,20 +307,31 @@ def think_times(hand: Hand) -> list[Optional[float]]:
 
 
 def allin_ev(hand: Hand) -> Optional[dict[str, float]]:
-    """Gain net espéré (en monnaie) de chaque joueur pour un all-in payé avant la river."""
+    """Gain net espéré (en monnaie) de chaque joueur pour un all-in payé avant la river (calculé une fois par main) :
+    deux joueurs à l'abattage, cartes connues ; à une table à plusieurs, ceux qui ont foldé gardent leur résultat."""
+    if "_allin_ev" not in hand.__dict__:
+        hand.__dict__["_allin_ev"] = _allin_ev(hand)
+    return hand.__dict__["_allin_ev"]
+
+
+def _allin_ev(hand: Hand) -> Optional[dict[str, float]]:
     if not hand.showdown or not any(a.all_in for a in hand.actions):
         return None
-    if any(len(hand.hole_cards.get(p, [])) != 2 for p in hand.seats):
-        return None
+    folded = {a.player for a in hand.actions if a.kind == FOLD}
+    live = [p for p in hand.seats if p not in folded]
+    if len(live) != 2 or any(len(hand.hole_cards.get(p, [])) != 2 for p in live):
+        return None  # pot à plusieurs, ou main inconnue
     last = [a for a in hand.actions if a.kind in VOLUNTARY][-1]
     board_size = {"preflop": 0, "flop": 3, "turn": 4}.get(last.street)
     if board_size is None:
         return None
-    p1, p2 = hand.players
+    p1, p2 = live
     eq = equity(hand.hole_cards[p1], hand.hole_cards[p2], hand.board[:board_size], seed=hand.hand_id)
-    pot = hand.total_pot - hand.rake
+    pot = hand.total_pot - hand.rake  # l'argent mort des joueurs couchés compris
     invested = {p: hand.put[p] - hand.uncalled[p] for p in hand.seats}
-    return {p1: eq * pot - invested[p1], p2: (1 - eq) * pot - invested[p2]}
+    out = {p: hand.net(p) for p in hand.seats if p not in live}
+    out.update({p1: eq * pot - invested[p1], p2: (1 - eq) * pot - invested[p2]})
+    return out
 
 
 def analyze(hands: list[Hand]) -> dict[str, PlayerStats]:
@@ -306,12 +340,14 @@ def analyze(hands: list[Hand]) -> dict[str, PlayerStats]:
     for hand in hands:
         if not hand.button or not hand.big_blind or not hand.bb:
             continue
-        reader = HandReader(hand)
+        reader = HandReader.of(hand)
         times = think_times(hand)
         ev = allin_ev(hand)
         eff_bb = hand.effective_stack() / hand.bb
         for p in hand.seats:
-            st = stats.setdefault(p, PlayerStats(p))
+            st = stats.get(p)
+            if st is None:  # (setdefault créerait ses stats à chaque main)
+                st = stats[p] = PlayerStats(p)
             pos = reader.pos(p)
             st.hands += 1
             st.hands_by_pos[pos] += 1
@@ -350,6 +386,7 @@ def analyze(hands: list[Hand]) -> dict[str, PlayerStats]:
             st.net_bb_by_pos[pos] += net_bb
             if hand.showdown:
                 st.net_bb_showdown += net_bb
+                st.hands_showdown += 1
             else:
                 st.net_bb_no_showdown += net_bb
             if ev is not None:

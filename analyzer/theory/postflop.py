@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -26,8 +27,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from .. import blobs, db
 from ..cards import combo_notation
+from ..db import documents, studies as db_studies
 from ..models import BET, CALL, CHECK, FOLD, RAISE, VOLUNTARY, Hand
+from . import custom_tree
 from .extract import hand_at
 from .preflop import MAIN_THRESHOLD, MIXED_THRESHOLD, Solution, load_solution
 
@@ -97,8 +101,16 @@ class Unsupported(ValueError):
 
 # --- Installation ------------------------------------------------------------------------
 
+_HOMES: dict[str, Path] = {}
+
+
 def home() -> Path:
-    return Path(os.environ.get("ANALYZER_HOME") or Path.home() / ".analyzer")
+    """~/.analyzer, ou ANALYZER_HOME (appelé très souvent : le chemin est gardé)."""
+    env = os.environ.get("ANALYZER_HOME") or ""
+    found = _HOMES.get(env)
+    if found is None:
+        found = _HOMES[env] = Path(env) if env else Path.home() / ".analyzer"
+    return found
 
 
 def build_dir() -> Path:
@@ -110,11 +122,20 @@ def binary_path() -> Path:
     return Path(env) if env else build_dir() / "target" / "release" / EXE
 
 
+_NATIVE: dict[tuple, str] = {}
+
+
 def _native_hash() -> str:
-    digest = hashlib.sha256()
-    for path in sorted(NATIVE_DIR.glob("*.rs")):
-        digest.update(path.name.encode() + b"\0" + path.read_bytes())
-    return digest.hexdigest()[:16]
+    """Empreinte des sources du pont (recalculée seulement quand elles changent)."""
+    files = sorted(NATIVE_DIR.glob("*.rs"))
+    stamp = tuple((p.name, p.stat().st_mtime_ns, p.stat().st_size) for p in files)
+    if stamp not in _NATIVE:
+        digest = hashlib.sha256()
+        for path in files:
+            digest.update(path.name.encode() + b"\0" + path.read_bytes())
+        _NATIVE.clear()
+        _NATIVE[stamp] = digest.hexdigest()[:16]
+    return _NATIVE[stamp]
 
 
 def _valid_source(path: Path) -> bool:
@@ -220,8 +241,28 @@ def clone(dest: Path, log: Callable[[str], None] = print) -> Path:
 
 
 def gpu_enabled() -> bool:
-    flag = build_dir() / "gpu.txt"
-    return flag.is_file() and flag.read_text(encoding="utf-8").strip() == "1"
+    return _read_small(build_dir() / "gpu.txt").strip() == "1"
+
+
+_SMALL: dict[Path, tuple[tuple[int, int], str]] = {}
+
+
+def _read_small(path: Path) -> str:
+    """Un petit fichier de réglage (relu seulement quand il change) ; vide s'il n'existe pas."""
+    try:
+        stat = path.stat()
+    except OSError:
+        _SMALL.pop(path, None)
+        return ""
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    known = _SMALL.get(path)
+    if known is None or known[0] != stamp:
+        try:
+            known = (stamp, path.read_text(encoding="utf-8"))
+        except OSError:
+            return ""
+        _SMALL[path] = known
+    return known[1]
 
 
 def install(source: Optional[str] = None, log: Callable[[str], None] = print, gpu: bool = False) -> Path:
@@ -252,22 +293,28 @@ def install(source: Optional[str] = None, log: Callable[[str], None] = print, gp
          log, cwd=root)
     (root / "native.sha").write_text(_native_hash(), encoding="utf-8")
     (root / "gpu.txt").write_text("1" if gpu else "0", encoding="utf-8")
+    _SMALL.pop(root / "gpu.txt", None)
     return build_dir() / "target" / "release" / EXE
 
 
 # --- Spot d'une main -----------------------------------------------------------------------
 
 def range_weights(solution: Solution, node_key: str, action: str) -> dict[str, float]:
-    """Part de chaque main (AKs, 72o…) qui prend cette action à ce nœud de la solution."""
-    node = solution.nodes[node_key]
-    out = {}
-    for i in range(13):
-        for j in range(13):
-            hand = hand_at(i, j)
-            weight = solution.weight(node_key, hand) * (node.strategy(hand) or {}).get(action, 0.0)
-            if weight >= 0.001:
-                out[hand] = round(weight, 3)
-    return out
+    """Part de chaque main (AKs, 72o…) qui prend cette action à ce nœud de la solution (calculée une fois par
+    solution chargée ; chaque appel reçoit sa copie)."""
+    memo = solution.__dict__.setdefault("_range_weights", {})
+    key = (node_key, action)
+    if key not in memo:
+        node = solution.nodes[node_key]
+        out = {}
+        for i in range(13):
+            for j in range(13):
+                hand = hand_at(i, j)
+                weight = solution.weight(node_key, hand) * (node.strategy(hand) or {}).get(action, 0.0)
+                if weight >= 0.001:
+                    out[hand] = round(weight, 3)
+        memo[key] = out
+    return dict(memo[key])
 
 
 def range_text(weights: dict[str, float]) -> str:
@@ -325,12 +372,27 @@ class SpotTree:
         }
         # Tailles par situation de la ligne (c-bet, 2e barrel, probe…) : % du pot, "geo" ou "a" (tapis),
         # voir native/arbre.rs. Sans plan,
-        # la requête (et donc la clé des études déjà enregistrées) ne change pas.
-        plan = getattr(self, "plan", None)
+        # la requête (et donc la clé des études déjà enregistrées) ne change pas. Tes modifications de l'arbre
+        # (custom_tree : tailles, nœuds verrouillés) changent la requête : une étude à part.
+        edits = getattr(self, "edits", None)
+        plan = custom_tree.merged_plan(getattr(self, "plan", None), edits)
         if plan:
             out["plan"] = {key: [s if isinstance(s, str) else float(s) for s in sizes]
                            for key, sizes in sorted(plan.items())}
+        locks = custom_tree.request_locks(edits)
+        if locks:
+            out["locks"] = locks
         return out
+
+    def default_sizes_for(self, key: str) -> list:
+        """Les tailles d'une situation absente du plan : celles de sa street dans la configuration de l'arbre (comme
+        native/arbre.rs : la mise, le donk quand le joueur hors de position mène dans l'agresseur de la street
+        précédente, ou la relance)."""
+        kind, where, past = key.split(":")[:3]
+        sizing = self.sizes[self.oop if where[1] == "o" else self.ip]["ftr".index(where[0])]
+        if kind == "raise":
+            return list(sizing["raise"])
+        return list(sizing["donk"] if where[1] == "o" and past[-1:] == "i" else sizing["bet"])
 
     def menu_text(self) -> str:
         def fmt(values: list) -> str:
@@ -365,6 +427,13 @@ class PostflopSpot(SpotTree):
     context: str = ""  # la ligne préflop et son format, pour tes ranges ajustées (custom_ranges.context)
     adjusted: Optional[str] = None  # tes ranges ajustées en jeu : « coup », « ligne », ou None (référence)
     reference: dict[str, dict[str, float]] = field(default_factory=dict, repr=False)  # ranges de la référence
+    # Tailles théoriques par situation (plan de native/arbre.rs) : celles choisies pour ce flop dans sa famille de
+    # pots (srp, 3bet, 4bet), sinon celles du flop choisi le plus proche ; None : tailles par défaut (DEFAULT_BETS).
+    plan: Optional[dict] = None
+    family: Optional[str] = None  # famille dont viennent les tailles (heads-up ou 6-max, voir studyspots)
+    sizes_from: Optional[dict] = None  # {"board": flop dont viennent les tailles, "exact": ce flop aux couleurs près}
+    size_target: Optional[str] = None  # famille où choisir les tailles exactes de ce flop (la plus proche du coup)
+    played_sizes: list[dict] = field(default_factory=list)  # chaque mise ou relance jouée face aux tailles de l'arbre
 
     @property
     def board(self) -> list[str]:
@@ -379,6 +448,39 @@ class PostflopSpot(SpotTree):
     def ident(self) -> str:
         return self.hand.hand_id
 
+    @property
+    def positions(self) -> tuple[str, str]:
+        return self.hand.position(self.oop), self.hand.position(self.ip)
+
+    def menu_text(self) -> str:
+        if not self.plan:
+            return super().menu_text()
+        from . import sizing
+        return sizing.plan_text(self.plan, self.family, self.positions)
+
+    def sizes_info(self) -> dict:
+        """D'où viennent les tailles de l'arbre, et chaque taille jouée face à elles (pour l'explorateur)."""
+        from . import sizing, studyspots
+        source = self.sizes_from or {}
+        near = studyspots.cards_of(source["board"]) if source.get("board") else None
+        played = []
+        for p in self.played_sizes:
+            who = "H" if (self.oop if p["player"] == 0 else self.ip) == self.hero else "V"
+            label = (sizing.label(p["key"], self.family, self.positions) if self.family and self.plan
+                     and p["key"] in self.plan else _generic_label(p["key"]))
+            played.append(dict(p, who=who, label=label, size_text=sizing.size_text(p["size"]),
+                               theory_text=sizing.sizes_text(p["theory"])))
+        exact = bool(self.plan and source.get("exact") and self.family == self.size_target)
+        return {
+            "family": self.family if self.plan else None,
+            "family_title": studyspots.family_title(self.family) if self.plan else None,
+            "source": ("flop" if source.get("exact") else "proche") if self.plan else "defaut",
+            "board": near, "same_texture": bool(near and studyspots.flop_texture(near) == studyspots.flop_texture(self.board)),
+            "plan": self.menu_text(), "played": played,
+            "choose": None if exact or not self.size_target else self.size_target,
+            "choose_title": studyspots.family_title(self.size_target) if self.size_target and not exact else None,
+        }
+
     def interpret(self, raw: dict) -> dict:
         return interpret(self, raw)
 
@@ -389,11 +491,17 @@ class PostflopSpot(SpotTree):
 POSTFLOP_ORDER = ("SB", "BB", "UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN")  # ordre de parole après le flop
 
 
-def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custom: bool = True) -> PostflopSpot:
+def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custom: bool = True,
+               theory: bool = True) -> PostflopSpot:
     """Le spot postflop d'une main : heads-up (ranges de la solution HU), ou table à plusieurs quand il ne reste que
     deux joueurs au flop (ranges de ta solution du format, voir ring_ranges). Tes ranges ajustées pour ce coup ou
-    pour sa ligne (custom_ranges) remplacent celles de la référence, sauf avec custom=False."""
-    from . import custom_ranges
+    pour sa ligne (custom_ranges) remplacent celles de la référence, sauf avec custom=False.
+
+    Tailles : les tailles théoriques du flop dans la famille de spots la plus proche (studyspots.size_families :
+    heads-up pour un coup heads-up, 6-max d'abord à une table à plusieurs), une par situation, plus chaque taille jouée
+    (ajoutée, ou à la place d'une taille théorique à moins de 10 points) ; theory=False : l'arbre d'avant, aux
+    tailles fixes (DEFAULT_BETS), pour retrouver les analyses déjà faites."""
+    from . import custom_ranges, studyspots
     if len(hand.seats) == 2 and (not hand.button or not hand.big_blind or hand.opponent_of(hero) is None):
         raise Unsupported("Seules les mains heads-up se résolvent.")
     pre = [a for a in hand.actions if a.street == "preflop" and a.kind in VOLUNTARY]
@@ -433,18 +541,28 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
         raise Unsupported("Tapis préflop : il n'y a plus de décision après le flop.")
 
     played = {p: [{"bet": [], "raise": [], "donk": []} for _ in range(3)] for p in (oop, ip)}
+    situations: list[dict] = []  # chaque mise ou relance jouée : sa situation (clé de native/arbre.rs) et sa taille
+    spent = {oop: 0.0, ip: 0.0}
     line: list[dict] = []
     index: list[int] = []
-    street, aggressor, prev_aggressor = "flop", None, None
+    street, aggressor, prev_aggressor, past, raises = "flop", None, None, "", 0
     for i, a in enumerate(hand.actions):
         if a.street == "preflop" or a.kind not in VOLUNTARY:
             continue
         if a.street != street:
-            prev_aggressor, aggressor = aggressor, None
+            past += ("o" if aggressor == oop else "i") if aggressor else "x"
+            prev_aggressor, aggressor, raises = aggressor, None, 0
             street = a.street
             line.append({"card": hand.board[2 + STREET_INDEX[street]]})
             index.append(-1)
         s = STREET_INDEX[street]
+        where = "ftr"[s] + ("o" if a.player == oop else "i")
+        if a.kind in (BET, RAISE):
+            behind = min(stack - spent[oop], stack - spent[ip])  # tapis effectif avant la mise
+            key = f"bet:{where}:{past}" if a.kind == BET else f"raise:{where}:{past}:{raises}"
+            situations.append({"key": key, "street": s, "player": 0 if a.player == oop else 1,
+                               "kind": "bet" if a.kind == BET else "raise",
+                               "equiv": _symbolic_sizes(a.pot_before, behind, 3 - s) if a.kind == BET else {}})
         step: dict = {"action": a.kind}
         if a.kind in (BET, RAISE, CALL):
             step["to"] = round(a.to / bb, 4)
@@ -454,12 +572,16 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
             size = "a" if a.all_in else round(100 * a.to / a.pot_before, 1)
             kind = "donk" if a.player == oop and s > 0 and prev_aggressor == ip else "bet"
             played[a.player][s][kind].append(size)
+            situations[-1].update(size=size, config=kind)
         elif a.kind == RAISE:
             opponent_to = (a.to - a.amount) + a.facing
             size = "a" if a.all_in else round(100 * (a.to - opponent_to) / (a.pot_before + a.facing), 1)
             played[a.player][s]["raise"].append(size)
+            situations[-1].update(size=size, config="raise")
+            raises += 1
         if a.kind in (BET, RAISE):
             aggressor = a.player
+        spent[a.player] += a.amount
         line.append(step)
         index.append(i)
 
@@ -467,8 +589,63 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
     defaults = default_sizes(oop, ip, initiative)
     sizes = {p: [{k: _merge_sizes(defaults[p][s][k], played[p][s][k]) for k in ("bet", "raise", "donk")}
                  for s in range(3)] for p in (oop, ip)}
+    families = studyspots.size_families(len(hand.seats) == 2, hand.position(oop), hand.position(ip), pot_type,
+                                        initiative)
+    plan, sizes_from, family = None, None, None
+    for candidate in families if theory else []:
+        found = studyspots.hand_sizes_for(candidate, hand.board)
+        if found:
+            (plan, near, exact), family = found, candidate
+            sizes_from = {"board": near, "exact": exact}
+            break
+    played_sizes = []
+    for sit in situations:
+        if plan is not None and sit["key"] in plan:
+            theory_sizes = plan[sit["key"]]
+            plan[sit["key"]], how = _merge_played(theory_sizes, sit["size"], sit["equiv"])
+        else:  # situation hors du plan (donk…) : les tailles de la street, comme dans GTOpen
+            player = oop if sit["player"] == 0 else ip
+            theory_sizes = defaults[player][sit["street"]][sit["config"]]
+            how = _merge_played(theory_sizes, sit["size"], sit["equiv"])[1]
+        played_sizes.append({"key": sit["key"], "street": sit["street"], "player": sit["player"], "kind": sit["kind"],
+                             "size": sit["size"], "theory": list(theory_sizes), "how": how})
     return PostflopSpot(hand, hero, villain, pot_type, oop, ip, round(pot / bb, 4), round(stack / bb, 4),
-                        ranges, line, index, sizes, added, context, adjusted, reference)
+                        ranges, line, index, sizes, added, context, adjusted, reference, plan=plan,
+                        family=family, sizes_from=sizes_from, played_sizes=played_sizes,
+                        size_target=families[0] if families else None)
+
+
+def _symbolic_sizes(pot: float, behind: float, streets: int) -> dict[str, float]:
+    """Ce que valent, en % du pot, les tailles symboliques d'un plan pour une mise (voir native/arbre.rs) : le
+    géométrique sur les streets restantes (ou sur N), le tapis."""
+    if pot <= 0 or behind <= 0:
+        return {}
+    def geo(n: int) -> float:
+        return round(100 * ((1 + 2 * behind / pot) ** (1 / n) - 1) / 2, 1)
+    out = {"geo": geo(streets), "a": round(100 * behind / pot, 1)}
+    out.update({f"geo{n}": geo(min(n, streets)) for n in (1, 2, 3)})
+    return out
+
+
+def _merge_played(theory: list, played, equiv: dict[str, float]) -> tuple[list, str]:
+    """La taille jouée dans les tailles théoriques d'une situation : « same » (déjà là, à 1 point près),
+    « replaced » (elle remplace la taille théorique à moins de SIZE_MERGE points) ou « added » (en plus)."""
+    if played == "a":
+        return (list(theory), "same") if "a" in theory else (list(theory) + ["a"], "added")
+    values = [s if not isinstance(s, str) else equiv.get(s) for s in theory]
+    near = sorted((abs(v - played), k) for k, v in enumerate(values) if v is not None and abs(v - played) <= SIZE_MERGE)
+    if near and near[0][0] <= 1:
+        return list(theory), "same"
+    if near:
+        out = list(theory)
+        out[near[0][1]] = played
+        return out, "replaced"
+    return list(theory) + [played], "added"
+
+
+def _generic_label(key: str) -> str:
+    kind, where, *_ = key.split(":")
+    return ("Mise" if kind == "bet" else "Relance") + " " + {"f": "flop", "t": "turn", "r": "river"}[where[0]]
 
 
 
@@ -498,7 +675,8 @@ def flop_pair(hand: Hand) -> Optional[tuple[str, str]]:
 
 
 def _ring_ranges(hand: Hand, hero: str, pre: list) -> tuple[str, str, str, dict]:
-    """Table à plusieurs : les deux joueurs qui voient le flop, leurs ranges d'après ta solution du format."""
+    """Table à plusieurs : les deux joueurs qui voient le flop, leurs ranges d'après ta solution du format (ou les
+    charts 6-max à même nombre de joueurs derrière, voir ring_ranges.resolve)."""
     from . import ring_ranges
     folded = {a.player for a in pre if a.kind == FOLD}
     players = [p for p in hand.seats if p not in folded]
@@ -513,15 +691,17 @@ def _ring_ranges(hand: Hand, hero: str, pre: list) -> tuple[str, str, str, dict]
     if any(pos not in POSTFLOP_ORDER for pos in positions.values()):
         raise Unsupported("Positions inconnues : le bouton manque dans l'historique.")
     steps = [(positions[a.player], a.kind) for a in pre if a.kind != FOLD]
-    found = ring_ranges.lookup(hand.table_format, steps)
+    chart = ring_ranges.resolve(hand.table_format, steps)
+    found = ring_ranges.lookup(*chart) if chart else None
     if found is None:
         raise Unsupported(f"Pas de range préflop pour « {ring_ranges.describe(steps)} » en {hand.table_format} : "
-                          f"ajoute ta solution ({ring_ranges.folder() / (hand.table_format + '.json')}).")
+                          f"{ring_ranges.missing_hint(hand.table_format)}.")
     pot_type, by_position = found
-    if any(pos not in by_position for pos in positions.values()):
+    in_chart = dict(zip((pos for pos, _ in steps), (pos for pos, _ in chart[1])))  # position à la table -> charts
+    if any(in_chart.get(pos) not in by_position for pos in positions.values()):
         raise Unsupported(f"Ta solution ne donne pas les deux ranges de « {ring_ranges.describe(steps)} ».")
     oop, ip = sorted(players, key=lambda p: POSTFLOP_ORDER.index(positions[p]))
-    return oop, ip, pot_type, {p: dict(by_position[positions[p]]) for p in players}
+    return oop, ip, pot_type, {p: dict(by_position[in_chart[positions[p]]]) for p in players}
 
 PREFLOP_RAISES = ("Open", "3bet", "4bet", "5bet")
 
@@ -580,24 +760,203 @@ def study_key(request: dict) -> str:
     return hashlib.sha256(_identity(request).encode()).hexdigest()[:20]
 
 
-def cache_path(request: dict) -> Path:
-    return home() / "resolutions" / f"{cache_key(request)}.json"
-
-
 def cached(request: dict) -> Optional[dict]:
-    path = cache_path(request)
-    if path.is_file():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except ValueError:
-            return None
-    return None
+    """Le résultat de la ligne jouée, gardé dans la base (documents « resolution »), ou None."""
+    return documents.get(db.current(), "resolution", cache_key(request), memo=False)
 
 
 def _save_cache(request: dict, result: dict) -> None:
-    path = cache_path(request)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result), encoding="utf-8")
+    documents.put(db.current(), "resolution", cache_key(request), result)
+    _remember_precision(request)
+
+
+def solved_keys() -> tuple[set[str], set[str]]:
+    """Les clés des résultats gardés et des études enregistrées (une lecture pour toutes les mains)."""
+    base = db.current()
+    return set(documents.keys(base, "resolution")), db_studies.keys(base)
+
+
+# --- Précision des résolutions et durée ----------------------------------------------------------
+#
+# La précision visée (exploitabilité, en % du pot) se règle dans l'application ; elle fait partie de la requête
+# (et donc de la clé d'un résultat). Pour retrouver un spot déjà résolu quelle que soit sa précision, la dernière
+# précision employée pour chaque spot est notée (documents « precision ») ; sans note, celle par défaut.
+
+PRECISIONS = (3.0, 2.0, 1.5, 1.0, 0.5)
+ITERATION_CAP = {3.0: 120, 2.0: 120, 1.5: 120, 1.0: 250, 0.5: 600}  # garde-fou si l'objectif n'est pas atteint
+_lock = threading.Lock()
+
+
+def iterations_for(target: float) -> int:
+    return ITERATION_CAP.get(target, DEFAULT_ITERATIONS if target >= DEFAULT_TARGET else 600)
+
+
+SETTINGS = "reglages"  # type de révision des réglages du solveur (la précision)
+
+
+def precision() -> float:
+    """La précision visée des nouvelles résolutions (réglage de l'application, dans la base)."""
+    try:
+        value = float(db.current().setting("precision", DEFAULT_TARGET))
+    except (TypeError, ValueError):
+        return DEFAULT_TARGET
+    return value if value in PRECISIONS else DEFAULT_TARGET
+
+
+def set_precision(target: float) -> float:
+    if target not in PRECISIONS:
+        raise ValueError(f"Précision inconnue : {target}")
+    base = db.current()
+    with base.transaction():
+        base.set_setting("precision", target)
+        documents.bump(base, SETTINGS)
+    return target
+
+
+PRECISION_FIELDS = ("max_iterations", "target_exploit_pct")
+
+
+def base_key(request: dict) -> str:
+    """Le spot sans sa précision (itérations, exploitabilité visée)."""
+    rest = {k: v for k, v in request.items() if k not in RUNTIME_FIELDS + PRECISION_FIELDS}
+    return hashlib.sha256(json.dumps(rest, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:20]
+
+
+def precision_entries() -> dict:
+    """Les spots résolus à une autre précision que celle par défaut : base_key -> {iterations, target}."""
+    return dict(documents.items(db.current(), "precision"))
+
+
+def _remember_precision(request: dict) -> None:
+    """Note la précision du dernier résultat de ce spot (celle par défaut n'a pas besoin de note)."""
+    entry = {"iterations": request.get("max_iterations"), "target": request.get("target_exploit_pct")}
+    base = db.current()
+    if entry == {"iterations": DEFAULT_ITERATIONS, "target": DEFAULT_TARGET}:
+        documents.delete(base, "precision", base_key(request))
+    elif documents.get(base, "precision", base_key(request)) != entry:
+        documents.put(base, "precision", base_key(request), entry)
+
+
+def solved_request(request: dict, existing: Optional[tuple[set[str], set[str]]] = None) -> Optional[dict]:
+    """La requête de ce spot dont le résultat ou l'étude existe, quelle que soit sa précision ; None sinon.
+    existing : les clés des résultats et des études déjà listées (solved_keys : une lecture pour tous les spots)."""
+    entry = documents.get(db.current(), "precision", base_key(request))
+    candidates = [dict(request, max_iterations=entry["iterations"], target_exploit_pct=entry["target"])] if entry else []
+    candidates.append(dict(request, max_iterations=DEFAULT_ITERATIONS, target_exploit_pct=DEFAULT_TARGET))
+    results, studies = existing if existing is not None else (None, None)
+    for candidate in candidates:
+        if existing is not None:
+            if cache_key(candidate) in results or study_key(candidate) in studies:
+                return candidate
+        elif cached(candidate) is not None or has_study(candidate):
+            return candidate
+    return None
+
+
+def _durations() -> list[dict]:
+    """Les dernières résolutions faites ici (taille de l'arbre, exploitabilité par itération), dans la base."""
+    data = db.current().setting("durees", [])
+    return data if isinstance(data, list) else []
+
+
+class _Tracker:
+    """Suit la progression d'une résolution (taille de l'arbre, exploitabilité par itération) pour en garder la
+    durée : les estimations suivantes s'appuient sur cet ordinateur."""
+
+    def __init__(self, forward: Optional[Callable[[dict], None]]):
+        self.forward, self.size, self.curve = forward, {}, []
+
+    def __call__(self, data: dict) -> None:
+        if "tree_nodes" in data and "hands" in data:
+            self.size = data
+        elif "iteration" in data and "exploit_pct" in data:
+            self.curve.append([data["iteration"], data["exploit_pct"], data.get("elapsed", 0.0)])
+        if self.forward:
+            self.forward(data)
+
+    def record(self) -> None:
+        if not self.size or len(self.curve) < 2:
+            return
+        entry = {"nodes": self.size["tree_nodes"], "hands": sum(self.size["hands"]), "curve": self.curve[-60:]}
+        with _lock:
+            db.current().set_setting("durees", _durations()[-(MAX_DURATIONS - 1):] + [entry])
+
+
+MAX_DURATIONS = 100
+# Repères mesurés sur 4 cœurs (avant toute résolution sur cet ordinateur), sur K♠8♦3♥ : secondes par itération, par
+# nœud de l'arbre et par combo des deux ranges (de 2,7 à 3,3 milliardièmes de seconde en SRP, 3bet et 4bet, heads-up
+# ou 6-max) ; exploitabilité (% du pot) au fil des itérations, au milieu des courbes mesurées (le SRP SB contre BB
+# converge plus lentement : 1,5 % vers 65 itérations au lieu de 45 ; le pot 4bet plus vite).
+DEFAULT_SPEED = 2.9e-9
+DEFAULT_CURVE = [[10, 18.0], [20, 6.2], [30, 2.9], [40, 1.7], [50, 1.1], [60, 0.8], [70, 0.6], [80, 0.48],
+                 [90, 0.4], [100, 0.33], [120, 0.27]]
+START_SECONDS = 3.0  # construction de l'arbre, mémoire, lecture du résultat
+
+
+def _iterations_to(curve: list, target: float) -> float:
+    """Itérations pour descendre sous la cible, d'après une courbe (itération, exploitabilité) : interpolée, ou
+    prolongée en loi de puissance au-delà de la dernière mesure."""
+    points = [(float(c[0]), float(c[1])) for c in curve if c[0] > 0 and c[1] > 0]
+    if not points:
+        return float(DEFAULT_ITERATIONS)
+    if points[0][1] <= target:
+        return points[0][0]
+    for (i0, e0), (i1, e1) in zip(points, points[1:]):
+        if e1 <= target < e0:
+            slope = math.log(e0 / e1) / math.log(i1 / i0) if i1 > i0 and e0 > e1 else 1.0
+            return i0 * (e0 / target) ** (1 / slope)
+    (i0, e0), (i1, e1) = (points[-2], points[-1]) if len(points) > 1 else ((points[0][0] / 2, points[0][1] * 2),
+                                                                        points[0])
+    slope = min(max(math.log(e0 / e1) / math.log(i1 / i0), 0.4), 2.0) if i1 > i0 and e0 > e1 else 1.0
+    return i1 * (e1 / target) ** (1 / slope)
+
+
+def _median(values: list[float]) -> float:
+    values = sorted(values)
+    n = len(values)
+    return values[n // 2] if n % 2 else (values[n // 2 - 1] + values[n // 2]) / 2
+
+
+_SIZES: dict[str, dict] = {}
+
+
+def tree_size(request: dict) -> dict:
+    """Taille de l'arbre d'un spot sans le résoudre (analyzer-solve --taille) : nœuds, mémoire, combos."""
+    key = base_key(request)
+    if key not in _SIZES:
+        exe = binary_path()
+        if not exe.is_file():
+            raise SolverError(status()["message"])
+        with tempfile.TemporaryDirectory(prefix="analyzer-taille-") as tmp:
+            path = Path(tmp) / "requete.json"
+            path.write_text(json.dumps(request), encoding="utf-8")
+            done = subprocess.run([str(exe), "--taille", str(path)], capture_output=True, **PIPE_TEXT)
+        try:
+            _SIZES[key] = json.loads(done.stdout)
+        except ValueError:
+            raise SolverError((done.stderr or "").strip()[-300:] or "taille de l'arbre illisible") from None
+    return _SIZES[key]
+
+
+def estimate(request: dict, targets: tuple[float, ...] = PRECISIONS) -> dict:
+    """Durée estimée de la résolution d'un spot pour chaque précision : taille de l'arbre (nœuds × combos) ×
+    secondes par itération sur cet ordinateur × itérations pour atteindre la précision (d'après les résolutions
+    déjà faites ici ; repères mesurés sur 4 cœurs avant la première)."""
+    size = tree_size(request)
+    work = size["tree_nodes"] * max(sum(size["hands"]), 1)
+    history = [h for h in _durations() if h.get("nodes") and h.get("hands") and len(h.get("curve", [])) >= 2][-30:]
+    speeds = [h["curve"][-1][2] / h["curve"][-1][0] / (h["nodes"] * h["hands"]) for h in history
+              if h["curve"][-1][0] and h["curve"][-1][2]]
+    speed = _median(speeds) if len(speeds) >= 3 else DEFAULT_SPEED
+    curves = [h["curve"] for h in history] or [DEFAULT_CURVE]
+    options = []
+    for target in targets:
+        needed = _median([_iterations_to(c, target) for c in curves])
+        iterations = min(int(math.ceil(needed / 10) * 10), iterations_for(target))  # mesure toutes les 10
+        options.append({"target": target, "iterations": iterations,
+                        "seconds": round(START_SECONDS + speed * work * iterations)})
+    return {"tree_nodes": size["tree_nodes"], "hands": size["hands"], "arena_mb": size.get("arena_mb"),
+            "options": options, "measured": len(speeds) >= 3}
 
 
 def _progress_reader(stream, on_progress: Optional[Callable[[dict], None]], errors: list) -> None:
@@ -644,71 +1003,75 @@ def solve(request: dict, on_progress: Optional[Callable[[dict], None]] = None,
             proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.PIPE, **PIPE_TEXT)
             if on_start:
                 on_start(proc)
-            _progress_reader(proc.stderr, on_progress, errors)
+            tracker = _Tracker(on_progress)
+            _progress_reader(proc.stderr, tracker, errors)
             proc.wait()
         if proc.returncode != 0:
             raise SolverError(errors[-1] if errors else f"analyzer-solve s'est arrêté (code {proc.returncode}).")
         result = json.loads(out_path.read_text(encoding="utf-8"))
     _save_cache(request, result)
+    tracker.record()
     return result
 
 
-# --- Études : arbres résolus gardés sur disque ------------------------------------------------
+# --- Études : arbres résolus gardés (fichiers, analyzer/blobs.py), fiches dans la base ------------------
 
 def studies_dir() -> Path:
-    return home() / "etudes"
+    """Le dossier local des arbres (où le solveur les écrit et les relit)."""
+    return blobs.studies().root
 
 
 def study_path(request: dict) -> Path:
-    return studies_dir() / f"{study_key(request)}.etude"
+    """Le chemin local de l'arbre de cette étude (pour analyzer-solve --save)."""
+    return blobs.studies().path(study_key(request))
+
+
+def has_study(request: dict) -> bool:
+    """L'arbre de cette étude est-il enregistré ?"""
+    return blobs.studies().exists(study_key(request))
+
+
+def study_meta(request: dict) -> Optional[dict]:
+    return db_studies.get(db.current(), study_key(request))
+
+
+def save_study_meta(request: dict, meta: dict) -> None:
+    """Enregistre la fiche d'une étude dont l'arbre vient d'être écrit (et confie l'arbre au stockage)."""
+    files, key = blobs.studies(), study_key(request)
+    files.stored(key)
+    db_studies.save(db.current(), key, meta, files.size(key) or 0)
 
 
 def write_study_meta(spot: PostflopSpot, request: dict, raw: dict) -> None:
-    """Fiche de l'étude (pour la bibliothèque), à côté du fichier de l'arbre."""
+    """Fiche de l'étude (pour la bibliothèque)."""
     hand = spot.hand
     meta = {
-        "kind": "hand", "key": study_key(request), "hand": hand.hand_id, "date": hand.date.strftime("%d/%m/%Y %H:%M"),
+        "kind": "hand", "key": study_key(request), "base": base_key(request), "hand": hand.hand_id,
+        "date": hand.date.strftime("%d/%m/%Y %H:%M"),
         "hero": spot.hero, "villain": spot.villain, "hero_cards": hand.hole_cards.get(spot.hero, []),
         "board": hand.board, "pot_type": spot.pot_type, "table_format": hand.table_format,
         "hero_position": ("BB" if spot.oop == spot.hero else "BTN") if len(hand.seats) == 2 else hand.position(spot.hero),
         "pot": spot.pot_bb, "stack": spot.stack_bb, "net": round(hand.net(spot.hero) / hand.bb, 2),
         "iterations": raw.get("iterations"), "exploit_pct": raw.get("exploit_pct"), "seconds": raw.get("seconds"),
         "menu": spot.menu_text(), "created": time.strftime("%d/%m/%Y %H:%M"), "adjusted": spot.adjusted,
+        "edited": bool(getattr(spot, "edits", None)),
     }
-    path = study_path(request).with_suffix(".json")
-    path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    save_study_meta(request, meta)
 
 
 def list_studies() -> list[dict]:
-    """Études enregistrées, de la plus récente à la plus ancienne, avec la taille de leur fichier."""
-    out = []
-    folder = studies_dir()
-    if not folder.is_dir():
-        return out
-    for meta_path in folder.glob("*.json"):
-        tree = meta_path.with_suffix(".etude")
-        if not tree.is_file():
-            continue
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except ValueError:
-            continue
-        meta["size"] = tree.stat().st_size
-        meta["mtime"] = tree.stat().st_mtime
-        out.append(meta)
+    """Études enregistrées (fiche dans la base et arbre présent), de la plus récente à la plus ancienne, avec la
+    taille de leur arbre."""
+    present = blobs.studies().keys()
+    out = [m for m in db_studies.every(db.current()) if m["key"] in present]
     return sorted(out, key=lambda m: -m["mtime"])
 
 
 def delete_study(key: str) -> bool:
     if not re.fullmatch(r"[0-9a-f]{20}", key):
         return False
-    removed = False
-    for suffix in (".etude", ".json"):
-        path = studies_dir() / f"{key}{suffix}"
-        if path.is_file():
-            path.unlink()
-            removed = True
-    return removed
+    removed = db_studies.delete(db.current(), key)
+    return blobs.studies().delete(key) or removed
 
 
 class Session:
@@ -722,7 +1085,7 @@ class Session:
         self.request = request
         self.save = save
         self.study = study_path(request)
-        self.loading = save and self.study.is_file()
+        self.loading = save and has_study(request)
         self.result: Optional[dict] = None
         self.proc: Optional[subprocess.Popen] = None
         self.last_used = time.time()
@@ -738,7 +1101,7 @@ class Session:
         if not exe.is_file():
             raise SolverError(status()["message"])
         if self.loading:
-            cmd = [str(exe), "--load", str(self.study), "--serve"]
+            cmd = [str(exe), "--load", str(blobs.studies().fetch(study_key(self.request))), "--serve"]
         else:
             req_path = Path(self._tmp.name) / "requete.json"
             req_path.write_text(json.dumps(self.request), encoding="utf-8")
@@ -750,7 +1113,8 @@ class Session:
                                      **PIPE_TEXT)
         if on_start:
             on_start(self.proc)
-        reader = threading.Thread(target=_progress_reader, args=(self.proc.stderr, on_progress, self._errors),
+        tracker = _Tracker(on_progress)
+        reader = threading.Thread(target=_progress_reader, args=(self.proc.stderr, tracker, self._errors),
                                   daemon=True)
         reader.start()
         line = self.proc.stdout.readline()
@@ -763,6 +1127,8 @@ class Session:
         self.result = json.loads(line)
         if self.save:
             _save_cache(self.request, self.result)
+        if not self.loading:
+            tracker.record()
         self.last_used = time.time()
         return self.result
 
@@ -1023,10 +1389,80 @@ def interpret(spot: PostflopSpot, raw: dict) -> dict:
         "hand": hand.hand_id, "pot_type": spot.pot_type, "pot": spot.pot_bb, "stack": spot.stack_bb,
         "table_format": hand.table_format, "positions": {"H": hand.position(spot.hero), "V": hand.position(spot.villain)},
         "board": spot.board, "oop": who[spot.oop], "menu": spot.menu_text(), "adjusted": spot.adjusted,
+        "sizes": spot.sizes_info(),
         "added": [who[p] for p in spot.added],
         "iterations": raw["iterations"], "exploit_pct": raw["exploit_pct"], "seconds": raw["seconds"],
         "tree_nodes": raw["tree_nodes"], "stopped": raw.get("stopped"), "decisions": decisions,
     }
+
+
+def node_situation(node: dict) -> Optional[str]:
+    """La situation (clé de native/arbre.rs) où le joueur du nœud mise ou relance : sa première mise de la street,
+    ou sa relance face à une mise ; None hors d'un nœud d'action."""
+    if node.get("type") != "action" or node.get("player") is None:
+        return None
+    facing = any(a["kind"] in ("call", "fold") for a in node["actions"])
+    probe = dict(node, actions=[{"kind": "raise" if facing else "bet"}])
+    return situation_keys(probe)[0]
+
+
+def situation_keys(node: dict) -> list[Optional[str]]:
+    """La situation (clé de native/arbre.rs) de chaque action d'un nœud : sa mise ou sa relance ; None pour check,
+    call et fold. Le passé se lit dans l'historique du nœud (dernier agresseur de chaque street terminée)."""
+    past, street, aggressor, raises = "", 0, None, 0
+    steps = [h for h in node.get("history", []) if h.get("kind") == "action" and h.get("chosen") is not None]
+    for h in steps + [None]:
+        at = node["street"] if h is None else h["street"]
+        while street < at:
+            past += aggressor or "x"
+            street, aggressor, raises = street + 1, None, 0
+        if h is None:
+            break
+        kind = h["actions"][h["chosen"]]["kind"]
+        if kind in ("bet", "raise"):
+            raises += kind == "raise"
+            aggressor = "o" if h["player"] == 0 else "i"
+    where = "ftr"[node["street"]] + ("o" if node.get("player") == 0 else "i")
+    return [f"bet:{where}:{past}" if a["kind"] == "bet" else f"raise:{where}:{past}:{raises}" if a["kind"] == "raise"
+            else None for a in node["actions"]]
+
+
+def _action_pct(node: dict, k: int) -> Optional[float]:
+    """Taille d'une mise (% du pot) ou d'une relance (% du pot après le call), comme dans l'explorateur."""
+    a = node["actions"][k]
+    if a["kind"] == "bet" and node["pot"] > 0:
+        return 100 * a["amount"] / node["pot"]
+    call = next((x for x in node["actions"] if x["kind"] == "call"), None)
+    base = 2 * node["put"][1 - node["player"]] if call and node.get("put") else 0
+    return 100 * (a["amount"] - call["amount"]) / base if base else None
+
+
+def mark_played_sizes(node: dict, spot: PostflopSpot) -> None:
+    """Signale dans un nœud la taille jouée ajoutée à l'arbre (ou mise à la place d'une taille théorique) :
+    action["played_size"] = {"how", "size", "theory"} (textes pour l'explorateur)."""
+    if not spot.played_sizes:
+        return
+    from . import sizing
+    history = node.get("history", [])
+    # le nœud, et chaque étape du déroulé (même forme : street, joueur, pot, actions ; l'historique avant elle)
+    steps = [dict(h, history=history[:j]) for j, h in enumerate(history) if h.get("kind") == "action"]
+    if node.get("type") == "action":
+        steps.append(node)
+    for step in steps:
+        keys = situation_keys(step)
+        for p in spot.played_sizes:
+            options = [k for k, key in enumerate(keys) if key == p["key"]]
+            if p["how"] == "same" or not options:
+                continue
+            if p["size"] == "a":
+                k = next((k for k in options if step["actions"][k].get("allin")), None)
+            else:
+                pcts = {k: _action_pct(step, k) for k in options}
+                k = min((k for k in options if pcts[k] is not None), key=lambda k: abs(pcts[k] - p["size"]),
+                        default=None)
+            if k is not None:
+                step["actions"][k]["played_size"] = {"how": p["how"], "size": sizing.size_text(p["size"]),
+                                                     "theory": sizing.sizes_text(p["theory"])}
 
 
 def cached_node(raw: dict, path: list) -> Optional[dict]:
@@ -1042,6 +1478,21 @@ def _strategy_text(actions: list[dict], freqs: list[float]) -> str:
     return ", ".join(f"{actions[k]['label']} {round(100 * freqs[k])} %" for k in order if freqs[k] >= 0.005)
 
 
+def _sizes_note(info: Optional[dict]) -> str:
+    if not info:
+        return ""
+    if info["source"] == "flop":
+        note = " (tailles théoriques de ce flop)"
+    elif info["source"] == "proche":
+        note = f" (tailles théoriques empruntées à {''.join(info['board'])}, ce flop n'a pas encore les siennes)"
+    else:
+        note = " (tailles par défaut)"
+    added = [f"{p['label'].lower()} {p['size_text']}" for p in info["played"] if p["how"] == "added"]
+    if added:
+        note += " ; tailles jouées ajoutées pour juger la décision : " + ", ".join(added)
+    return note
+
+
 def result_text(result: dict, hero: str) -> str:
     where = "hors position" if result["oop"] == "H" else "en position"
     if result.get("table_format", "HU") != "HU":  # pot à deux à une table à plusieurs
@@ -1052,7 +1503,7 @@ def result_text(result: dict, hero: str) -> str:
              f"pot {_num(result['pot'])} bb · tapis {_num(result['stack'])} bb",
              f"GTOpen : {result['iterations']} itérations, exploitabilité {_num(result['exploit_pct'], 2)} % du pot, "
              f"{_num(result['seconds'], 0)} s · {result['tree_nodes']:_} nœuds".replace("_", " "),
-             f"Tailles de l'arbre — {result['menu']}"]
+             f"Tailles de l'arbre — {result['menu']}" + _sizes_note(result.get("sizes"))]
     if result.get("adjusted"):
         lines.append("Ranges préflop : les tiennes, ajustées " + ("pour ce coup" if result["adjusted"] == "coup"
                                                                   else "pour cette ligne") + " (pas la référence).")
