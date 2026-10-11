@@ -12,7 +12,7 @@ import re
 from datetime import datetime
 from typing import Iterator
 
-from ..models import BET, CALL, CHECK, FOLD, POST_ANTE, POST_BB, POST_SB, RAISE, Action, Hand, Seat
+from ..models import BET, CALL, CHECK, FOLD, POST_ANTE, POST_BB, POST_SB, RAISE, Action, Hand, Seat, real_cards
 
 SITE = "partypoker"
 START = "***** Hand History for Game "
@@ -130,8 +130,10 @@ def parse_hand(chunk: str) -> Hand | None:
                 committed.setdefault(p, 0.0)
         m = _DEALT_RE.match(line)
         if m and m.group(1) in listed:
-            listed[m.group(1)].is_hero = True
-            hand.hole_cards[m.group(1)] = _cards(m.group(2))
+            cards = _cards(m.group(2))
+            if real_cards(cards):  # des cartes cachées : un adversaire, pas le héros
+                listed[m.group(1)].is_hero = True
+                hand.hole_cards[m.group(1)] = cards
             continue
         m = _SHOWS_RE.match(line)
         if m and m.group(1) in listed:

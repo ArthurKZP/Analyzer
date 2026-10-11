@@ -15,6 +15,35 @@ FOLD, CHECK, CALL, BET, RAISE = "fold", "check", "call", "bet", "raise"
 VOLUNTARY = (FOLD, CHECK, CALL, BET, RAISE)
 AGGRESSIVE = (BET, RAISE)
 
+# Les 52 cartes, au format des historiques lus (« Ah », « Td »). Certains sites notent les cartes cachées « X » ou
+# « Xx » (celles d'un adversaire qui ne les montre pas) : ce ne sont pas des cartes, la main du joueur reste inconnue.
+CARDS = frozenset(rank + suit for rank in "23456789TJQKA" for suit in "shdc")
+
+
+def _card(c: str) -> str:
+    """« ah », « AH » -> « Ah »."""
+    return c[:1].upper() + c[1:].lower()
+
+
+def real_cards(cards) -> bool:
+    """Des cartes lisibles (aucune carte cachée)."""
+    return bool(cards) and all(_card(c) in CARDS for c in cards)
+
+
+def _readable(cards: dict[str, list[str]]) -> dict[str, list[str]]:
+    return {name: [_card(c) for c in held] for name, held in cards.items() if real_cards(held)}
+
+
+def _board(cards: list[str]) -> list[str]:
+    """Le tableau, jusqu'à sa première carte illisible."""
+    out = []
+    for c in map(_card, cards):
+        if c not in CARDS:
+            break
+        out.append(c)
+    return out
+
+
 # Positions entre le bouton et les blindes, selon le nombre de joueurs restants (de la première à parler au cutoff)
 MIDDLE = {0: (), 1: ("CO",), 2: ("HJ", "CO"), 3: ("UTG", "HJ", "CO"), 4: ("UTG", "LJ", "HJ", "CO"),
           5: ("UTG", "UTG+1", "LJ", "HJ", "CO"), 6: ("UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO")}
@@ -203,8 +232,11 @@ class Hand:
         """Calcule les mises totales, la part non payée rendue au joueur et l'abattage (went_to_showdown).
 
         Selon les sites, un surplus non payé (ex. tapis supérieur au tapis adverse)
-        n'apparaît pas dans le pot total : on le rend au plus gros contributeur.
+        n'apparaît pas dans le pot total : on le rend au plus gros contributeur. Les cartes cachées (« X ») sont
+        écartées : la main de ce joueur reste inconnue.
         """
+        self.hole_cards = _readable(self.hole_cards)
+        self.board = _board(self.board)
         self.showdown = self.went_to_showdown()
         put = {p: 0.0 for p in self.seats}
         for a in self.actions:
@@ -267,7 +299,8 @@ def _names(table: dict) -> dict:
 
 def hand_from_dict(d: dict) -> Hand:
     """Une main relue. Les textes qui se répètent (noms des joueurs, types d'action, streets, positions, cartes) sont
-    partagés (sys.intern) : des dizaines de milliers de mains en mémoire en prennent beaucoup moins de place."""
+    partagés (sys.intern) : des dizaines de milliers de mains en mémoire en prennent beaucoup moins de place. Les
+    cartes cachées d'une main lue par une version d'avant sont écartées (voir CARDS)."""
     seats = {}
     for name, seat, stack, button, hero, position in d["seats"]:
         name = _intern(name)
@@ -275,9 +308,9 @@ def hand_from_dict(d: dict) -> Hand:
     actions = [Action(_intern(player), _intern(kind), _intern(street), amount, to, all_in,
                       datetime.fromisoformat(time) if time else None, pot_before, facing)
                for player, kind, street, amount, to, all_in, time, pot_before, facing in d["actions"]]
-    cards = {_intern(name): [_intern(c) for c in held] for name, held in d["cards"].items()}
+    cards = {_intern(name): [_intern(c) for c in held] for name, held in _readable(d["cards"]).items()}
     hand = Hand(_intern(d["site"]), d["id"], _intern(d["table"]), _intern(d["game"]), datetime.fromisoformat(d["date"]),
-                d["sb"], d["bb"], d["pot"], d["rake"], d["max"], seats, cards, [_intern(c) for c in d["board"]],
+                d["sb"], d["bb"], d["pot"], d["rake"], d["max"], seats, cards, [_intern(c) for c in _board(d["board"])],
                 actions, _names(d["won"]), d["sd"], {_intern(k): _intern(v) for k, v in d["shown"].items()},
                 _names(d["put"]), _names(d["unc"]))
     hand.showdown = hand.went_to_showdown()  # (une main gardée par une version d'avant : son abattage recalculé)

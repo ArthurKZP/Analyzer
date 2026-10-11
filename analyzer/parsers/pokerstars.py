@@ -15,7 +15,7 @@ import re
 from datetime import datetime
 from typing import Iterator
 
-from ..models import BET, CALL, CHECK, FOLD, POST_ANTE, POST_BB, POST_SB, RAISE, Action, Hand, Seat
+from ..models import BET, CALL, CHECK, FOLD, POST_ANTE, POST_BB, POST_SB, RAISE, Action, Hand, Seat, real_cards
 
 SITES = {"PokerStars": "PokerStars", "Poker": "GGPoker", "PokerMaster": "HHPoker"}
 _START_RE = re.compile(r"^(?:PokerStars|PokerMaster|Poker)(?: Zoom)? Hand #", re.M)
@@ -141,7 +141,8 @@ def parse_hand(chunk: str) -> Hand | None:
             continue
         m = _DEALT_RE.match(line)
         if m and m.group(1) in listed:
-            if m.group(2):  # « Dealt to X [Ah Kd] » : le héros (GGPoker sert aussi les autres, sans les cartes)
+            # « Dealt to X [Ah Kd] » : le héros (GGPoker sert aussi les autres, sans cartes ou avec des cartes cachées)
+            if real_cards((m.group(2) or "").split()):
                 listed[m.group(1)].is_hero = True
                 hand.hole_cards[m.group(1)] = m.group(2).split()
             continue
