@@ -1091,51 +1091,8 @@
   // ---------- ranges préflop ajustées (onglet Ranges) ----------
   // Tes ranges à la place de celles de la référence, pour ce coup ou par défaut pour toute sa ligne : le coup
   // se résout à nouveau, dans une étude à part (celle de la référence reste et se rouvre en quelques secondes).
-  const BRUSHES = [[1, '100 %'], [0.75, '75 %'], [0.5, '50 %'], [0.25, '25 %'], [0, 'Retirer']];
-  const HAND_RE = /^(?:([2-9TJQKA])\1|[2-9TJQKA]{2}[so])$/;
-  const RESIZE = 0.10;  // « plus serré » / « plus large » : environ 10 % des combos de la range
-  const ALL_HANDS = [];
-  for (let i = 0; i < 13; i++) for (let j = 0; j < 13; j++) ALL_HANDS.push(handAt(i, j));
-  const rg = { data: null, edit: null, player: 0, brush: 1, scope: 'coup', painting: false, busy: false, msg: '', ui: null };
-
-  const comboCount = (h) => (h.length === 2 ? 6 : h[2] === 's' ? 4 : 12);
-  const combosOf = (w) => Object.entries(w).reduce((t, [h, x]) => t + x * comboCount(h), 0);
-  const validHand = (h) => HAND_RE.test(h) && (h.length === 2 || RANKS.indexOf(h[0]) < RANKS.indexOf(h[1]));
-  const sameRange = (a, b) => [...new Set(Object.keys(a).concat(Object.keys(b)))].every((h) => Math.abs((a[h] || 0) - (b[h] || 0)) <= 0.002);
-  const rangeText = (w) => ALL_HANDS.filter((h) => (w[h] || 0) >= 0.001)
-    .map((h) => (w[h] >= 0.999 ? h : h + ':' + Math.round(w[h] * 1000) / 1000)).join(',');
-
-  function parseRange(text) {
-    const out = {};
-    for (const item of text.replace(/\s+/g, '').split(',')) {
-      if (!item) continue;
-      const [h, weight] = item.split(':');
-      const v = weight === undefined || weight === '' ? 1 : Number(weight);
-      if (!validHand(h) || !Number.isFinite(v) || v < 0) throw new Error('Illisible : « ' + item + ' ». Écris AA, AKs, AKo…, avec un poids éventuel (AKo:0.5).');
-      if (v > 0) out[h] = Math.min(1, v);
-    }
-    if (!Object.keys(out).length) throw new Error('Range vide : garde au moins une main.');
-    return out;
-  }
-
-  // Plus serré : retire environ 10 % des combos, en partant des mains les plus faibles de la range (équité contre
-  // une main au hasard) ; plus large : en ajoute autant, en partant des plus fortes qui n'y sont pas en entier.
-  function resize(w, sign) {
-    const out = { ...w };
-    let left = RESIZE * combosOf(w);
-    if (sign > 0) left = Math.max(left, 0.01 * 1326);
-    for (const h of sign < 0 ? rg.data.order.slice().reverse() : rg.data.order) {
-      if (left <= 0.01) break;
-      const x = out[h] || 0;
-      const room = sign < 0 ? x : 1 - x;
-      if (room <= 0) continue;
-      const d = Math.min(room, left / comboCount(h));
-      const v = Math.round((x + sign * d) * 1000) / 1000;
-      if (v >= 0.001) out[h] = v; else delete out[h];
-      left -= d * comboCount(h);
-    }
-    return Object.keys(out).length ? out : w;
-  }
+  const { BRUSHES, combosOf, sameRange, rangeText, parseRange, resize } = window.AnalyzerRanges;  // rangekit.js
+  const rg = { data: null, edit: null, player: 0, brush: 1, scope: 'coup', busy: false, msg: '', ui: null };
 
   function setRanges(data) {
     rg.data = data;
@@ -1158,8 +1115,7 @@
   }
 
   const cellTitle = (h, x, r) => h + ' · ' + pct(x) + (Math.abs(x - r) > 0.002 ? ' (référence ' + pct(r) + ')' : '');
-  function paintCell(cell) {
-    const h = cell.dataset.h;
+  function paintCell(h) {
     const w = rg.edit[rg.player];
     if ((w[h] || 0) === rg.brush) return;
     if (rg.brush > 0) w[h] = rg.brush; else delete w[h];
@@ -1167,23 +1123,9 @@
   }
 
   function rangeGrid() {
-    const grid = el('div', { class: 'rgrid', 'aria-label': 'Range : clique ou glisse sur les mains pour les peindre' });
-    rg.ui.cells = ALL_HANDS.map((h) => grid.appendChild(el('div', { class: 'rcell', 'data-h': h }, el('span', { class: 'h' }, h))));
-    // souris et doigt : on peint les cases survolées tant que le bouton (ou le doigt) reste appuyé
-    grid.addEventListener('pointerdown', (e) => {
-      const cell = e.target.closest('.rcell');
-      if (!cell || rg.busy) return;
-      rg.painting = true;
-      paintCell(cell);
-      e.preventDefault();
-    });
-    grid.addEventListener('pointermove', (e) => {
-      if (!rg.painting) return;
-      const target = document.elementFromPoint(e.clientX, e.clientY);
-      const cell = target && target.closest('.rcell');
-      if (cell && grid.contains(cell)) paintCell(cell);
-    });
-    return grid;
+    const grid = window.AnalyzerRanges.grid(paintCell, () => rg.busy);
+    rg.ui.cells = grid.cells;
+    return grid.box;
   }
 
   const playerLabel = (q) => q.position + (q.role ? ' · ' + NAME[q.role] : '');
@@ -1221,8 +1163,8 @@
     const change = (next) => { rg.edit[rg.player] = next; rg.msg = ''; refreshRanges(); };
     const current = () => rg.edit[rg.player];
     wrap.append(el('div', { class: 'rg-row' }, brushes,
-      el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, title: 'Retire environ 10 % des combos, en commençant par les mains les plus faibles', onclick: () => change(resize(current(), -1)) }, 'Plus serré'),
-      el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, title: 'Ajoute environ 10 % de combos, en commençant par les mains les plus fortes', onclick: () => change(resize(current(), 1)) }, 'Plus large')));
+      el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, title: 'Retire environ 10 % des combos, en commençant par les mains les plus faibles', onclick: () => change(resize(current(), -1, d.order)) }, 'Plus serré'),
+      el('button', { type: 'button', class: 'rg-btn', disabled: rg.busy, title: 'Ajoute environ 10 % de combos, en commençant par les mains les plus fortes', onclick: () => change(resize(current(), 1, d.order)) }, 'Plus large')));
 
     wrap.append(rangeGrid());
     wrap.append(el('div', { class: 'small muted' }, 'Clique ou glisse sur les mains avec le pinceau choisi. Contour orange : différent de la référence.'));
@@ -1245,8 +1187,9 @@
 
     if (d.can_line) {
       const scope = el('div', { class: 'rg-scope', role: 'radiogroup', 'aria-label': 'Portée' });
-      [['coup', 'Pour ce coup seulement'],
-        ['ligne', 'Par défaut pour « ' + d.line + ' » en ' + d.format + ' : tes autres coups de cette ligne, leur analyse et le leakfinding']]
+      [['coup', 'Pour ' + what + ' seulement'],
+        ['ligne', 'Par défaut pour « ' + d.line + ' » en ' + d.format + ' : tes ' + (SPOT ? '' : 'autres ')
+          + 'coups de cette ligne, leur analyse et le leakfinding' + (d.for_spots ? ', et les spots d\'étude ouverts ici' : '')]]
         .forEach(([v, label]) => {
           const input = el('input', { type: 'radio', name: 'rg-scope', value: v, checked: rg.scope === v, onchange: () => { rg.scope = v; refreshRanges(); } });
           scope.append(el('label', {}, input, el('span', {}, label)));
@@ -1260,7 +1203,8 @@
     wrap.append(actions);
     ui.msg = wrap.appendChild(el('p', { class: 'err', role: 'alert' }));
     wrap.append(el('p', { class: 'small muted' }, 'Une autre range change la solution : ' + what + ' se résout à nouveau, dans une étude à part. '
-      + 'Celle de la référence reste : « Revenir à la référence » la rouvre en quelques secondes.'));
+      + 'Celle de la référence reste : « Revenir à la référence » la rouvre en quelques secondes. Toutes tes ranges par défaut, ligne par ligne : ',
+      el('a', { href: '/#/parametres/ranges', target: '_blank', rel: 'noopener' }, 'Paramètres › Ranges préflop'), '.'));
     refreshRanges();
   }
 
@@ -1947,7 +1891,6 @@
   $('tab-coach').onclick = () => { rightTab = 'coach'; renderTabs(); };
   $('tab-ranges').onclick = () => { rightTab = 'ranges'; renderTabs(); };
   $('tab-tree').onclick = () => { rightTab = 'tree'; renderTabs(); };
-  document.addEventListener('pointerup', () => { rg.painting = false; });
   $('b-line').onclick = () => state && state.result && goTo(state.result.decisions[0].path);
   $('b-train').onclick = () => window.open('/entraineur?spot=' + encodeURIComponent(HAND) + '&chemin='
     + encodeURIComponent(JSON.stringify(path)), '_blank', 'noopener');

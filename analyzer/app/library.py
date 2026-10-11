@@ -44,6 +44,7 @@ from .bluffs_page import build_bluffs_page
 from .import_job import ImportJob
 from .field_leaks_page import build_group_page, build_list_page, build_player_page
 from .field_page import build_players_page
+from .ranges_page import build_ranges_page
 from .settings_page import build_settings_page
 from .hands_page import build_hands_page
 from .leaks_page import build_leaks_page
@@ -1406,14 +1407,11 @@ class Library:
         study = isinstance(spot, studyspots.StudySpot)
         data = custom_ranges.load()
         by_hand = data["coups"].get(spot.ident, {})
-        by_line = {} if study else data["lignes"].get(spot.context, {})
+        can_line = not study or data["spots"]  # un spot d'étude : avec l'option des Paramètres
+        by_line = data["lignes"].get(spot.context, {}) if can_line else {}
         table_format, key = spot.context.split("|", 1)
         steps = [tuple(step.split(":", 1)) for step in key.split()]
-        if table_format == "HU":
-            reference = "solution préflop heads-up"
-        else:
-            source = (ring_ranges.solution(table_format) or {}).get("source") or ""
-            reference = (source.split(" — ")[0] or "ta solution") + f" ({table_format})"
+        reference = custom_ranges.reference_name(table_format)
         players = []
         for name, pos, role in self._range_players(spot):
             source = "coup" if pos in by_hand else "ligne" if pos in by_line else "reference"
@@ -1423,22 +1421,23 @@ class Library:
                             "line": ring_ranges.parse_range(by_line[pos]) if pos in by_line else None,
                             "current": current})
         return {"hand": hand_id, "supported": True, "spot": study, "format": table_format,
-                "line": ring_ranges.describe(steps), "can_line": not study, "adjusted": spot.adjusted,
-                "reference": reference, "players": players, "order": custom_ranges.hand_order()}
+                "line": ring_ranges.describe(steps), "can_line": can_line, "for_spots": data["spots"],
+                "adjusted": spot.adjusted, "reference": reference, "players": players,
+                "order": custom_ranges.hand_order()}
 
     def save_ranges(self, hand_id: str, scope: str, ranges: dict) -> dict:
         """Enregistre tes ranges pour ce coup (scope « coup ») ou pour sa ligne (« ligne ») ; seules celles qui
         diffèrent de ce qui s'appliquerait sans ce réglage sont gardées. ValueError si la demande ne va pas."""
         spot = self._spot(hand_id)
-        study = isinstance(spot, studyspots.StudySpot)
-        if scope not in custom_ranges.SCOPES or (study and scope != "coup"):
+        data = custom_ranges.load()
+        can_line = not isinstance(spot, studyspots.StudySpot) or data["spots"]
+        if scope not in custom_ranges.SCOPES or (scope == "ligne" and not can_line):
             raise ValueError("Portée inconnue.")
         names = {pos: name for name, pos, _ in self._range_players(spot)}
         if not ranges or set(ranges) - set(names) or not all(isinstance(t, str) for t in ranges.values()):
             raise ValueError("Positions inconnues pour ce coup.")
         weights = {pos: custom_ranges.check(text) for pos, text in ranges.items()}
-        data = custom_ranges.load()
-        by_line = data["lignes"].get(spot.context, {}) if scope == "coup" and not study else {}
+        by_line = data["lignes"].get(spot.context, {}) if scope == "coup" and can_line else {}
         keep = {}
         for pos, w in weights.items():
             base = ring_ranges.parse_range(by_line[pos]) if pos in by_line else spot.reference[names[pos]]
@@ -1464,6 +1463,95 @@ class Library:
         with self._lock:
             self._cache.clear()
         return self.ranges_state(hand_id)
+
+    # --- Paramètres › Ranges préflop : tes ranges par défaut, ligne par ligne, sans passer par un coup ---------------
+
+    def default_ranges_view(self) -> dict:
+        """Les lignes de chaque format que tu joues (custom_ranges.formats) et les positions où ta range remplace celle
+        de la référence ; les réglages dont la ligne n'a plus de référence (à effacer) ; l'option des spots d'étude."""
+        plays = settings.load()["formats"]
+        counts = Counter(h.table_format for h in self._all_ring)
+        counts["HU"] = len(self._all_hands)
+        data = custom_ranges.load()
+        groups, listed = [], set()
+        for table_format in custom_ranges.formats(counts, heads_up=not plays or "HU" in plays,
+                                                  ring=not plays or "ring" in plays):
+            lines = []
+            for line in custom_ranges.reference_lines(table_format):
+                context = custom_ranges.context(table_format, line["steps"])
+                listed.add(context)
+                lines.append({"context": context, "line": ring_ranges.describe(line["steps"]),
+                              "pot_type": line["pot_type"], "positions": list(line["ranges"]),
+                              "adjusted": [pos for pos in line["ranges"] if pos in data["lignes"].get(context, {})]})
+            groups.append({"format": table_format, "hands": counts.get(table_format, 0), "lines": lines,
+                           "reference": custom_ranges.reference_name(table_format)})
+        orphans = []
+        for context in sorted(set(data["lignes"]) - listed):
+            table_format, _, key = context.partition("|")
+            steps = [tuple(step.split(":", 1)) for step in key.split() if ":" in step]
+            orphans.append({"context": context, "format": table_format, "line": ring_ranges.describe(steps),
+                            "positions": sorted(data["lignes"][context])})
+        ring_played = not plays or "ring" in plays
+        return {"formats": groups, "orphans": orphans, "for_spots": data["spots"],
+                "charts": bool(ring_ranges.available()) or not ring_played}
+
+    def default_range_line(self, context: str) -> dict:
+        """Une ligne pour l'éditeur : la range de référence de chaque position, et la tienne. NotFound si la ligne n'a
+        pas de référence."""
+        line = custom_ranges.reference_line(context)
+        if line is None:
+            raise NotFound(context)
+        mine = custom_ranges.load()["lignes"].get(context, {})
+        table_format = context.split("|", 1)[0]
+        players = [{"position": pos, "role": None, "source": "ligne" if pos in mine else "reference",
+                    "reference": reference, "line": None,
+                    "current": ring_ranges.parse_range(mine[pos]) if pos in mine else dict(reference)}
+                   for pos, reference in line["ranges"].items()]
+        return {"context": context, "supported": True, "format": table_format,
+                "line": ring_ranges.describe(line["steps"]), "pot_type": line["pot_type"],
+                "reference": custom_ranges.reference_name(table_format), "players": players,
+                "adjusted": "ligne" if mine else None, "order": custom_ranges.hand_order()}
+
+    def save_default_ranges(self, context: str, ranges: object) -> dict:
+        """Enregistre tes ranges par défaut d'une ligne ; une range égale à celle de la référence n'est pas gardée.
+        Les positions absentes de la demande gardent leur réglage. ValueError si la demande ne va pas."""
+        line = custom_ranges.reference_line(context)
+        if line is None:
+            raise NotFound(context)
+        if not isinstance(ranges, dict) or not ranges or set(ranges) - set(line["ranges"]) \
+                or not all(isinstance(t, str) for t in ranges.values()):
+            raise ValueError("Positions inconnues pour cette ligne.")
+        weights = {pos: custom_ranges.check(text) for pos, text in ranges.items()}
+        mine = dict(custom_ranges.load()["lignes"].get(context, {}))
+        for pos, w in weights.items():
+            if custom_ranges.same(w, line["ranges"][pos]):
+                mine.pop(pos, None)
+            else:
+                mine[pos] = postflop.range_text(w)
+        if mine:
+            custom_ranges.save("ligne", context, mine)
+        else:
+            custom_ranges.clear("ligne", context)
+        with self._lock:
+            self._cache.clear()
+        return self.default_range_line(context)
+
+    def clear_default_ranges(self, context: str) -> dict:
+        """Efface tes ranges par défaut d'une ligne (aussi celles d'une ligne qui n'a plus de référence)."""
+        cleared = custom_ranges.clear("ligne", context)
+        with self._lock:
+            self._cache.clear()
+        return {"context": context, "cleared": cleared}
+
+    def set_ranges_for_spots(self, value: bool) -> dict:
+        """Tes ranges par défaut valent aussi (ou non) pour les spots d'étude ouverts dans l'explorateur."""
+        custom_ranges.set_for_spots(value)
+        with self._lock:
+            self._cache.clear()
+        return {"for_spots": custom_ranges.for_spots()}
+
+    def ranges_settings_page(self) -> str:
+        return build_ranges_page()
 
     def explorer_state(self, hand_id: str) -> dict:
         """Ce que l'explorateur affiche d'une main : le coup, et l'état de sa résolution."""

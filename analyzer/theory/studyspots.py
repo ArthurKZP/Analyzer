@@ -327,8 +327,9 @@ class StudySpot(postflop.SpotTree):
     plan: Optional[dict] = None
     sizes_from: Optional[str] = field(default=None, repr=False)  # flop dont les tailles sont empruntées
     sizes_family: Optional[str] = field(default=None, repr=False)  # et sa famille, si c'en est une autre
-    # True : tes ranges ajustées pour ce spot (custom_ranges, portée « coup ») ; les séries, plans et références
-    # restent faits avec les ranges de la solution.
+    # True : tes ranges ajustées pour ce spot (custom_ranges, portée « coup »), et celles de sa ligne avec l'option
+    # des Paramètres (custom_ranges.for_spots) ; les séries, plans et références restent faits avec les ranges de la
+    # solution.
     custom: bool = field(default=False, repr=False)
 
     def __post_init__(self):
@@ -348,7 +349,7 @@ class StudySpot(postflop.SpotTree):
         self.reference = {p: dict(r) for p, r in self.ranges.items()}
         self.adjusted = None
         if self.custom:
-            scope, mine = custom_ranges.lookup(self.ident, None)
+            scope, mine = custom_ranges.lookup(self.ident, self.context if custom_ranges.for_spots() else None)
             for p in (self.oop, self.ip):
                 if p in mine:
                     self.ranges[p], self.adjusted = dict(mine[p]), scope

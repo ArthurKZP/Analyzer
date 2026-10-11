@@ -8,7 +8,7 @@
       ['solveur', 'Face au solveur'], ['tables', 'Tables à plusieurs']],
     // étude du field : le leakfinding de tes adversaires (réguliers, récréatifs), les bluffs des réguliers en heads-up
     field: [['regs', 'Réguliers'], ['recs', 'Récréatifs'], ['bluffs', 'Bluffs des réguliers']],
-    parametres: [['general', 'Général'], ['joueurs', 'Joueurs et alias']],
+    parametres: [['general', 'Général'], ['joueurs', 'Joueurs et alias'], ['ranges', 'Ranges préflop']],
     eleve: [['leaks', 'Leakfinding'], ['mains', 'Mains de départ'], ['preflop', 'Préflop'], ['solveur', 'Face au solveur'], ['spots', 'Mains'],
       ['tables', 'Tables à plusieurs'], ['importer', 'Importer']],
     // un joueur de référence : la comparaison avec toi, sa value et ses bluffs, puis son jeu analysé comme le tien
@@ -226,7 +226,7 @@
       subtitle.textContent = 'Comment jouent tes adversaires : leurs leaks à exploiter, leur value et leurs bluffs';
     } else if (route.view === 'parametres') {
       title.textContent = 'Paramètres';
-      subtitle.textContent = 'Tes pseudos réunis, ce que tu joues, tes élèves, le type de tes adversaires et leurs alias';
+      subtitle.textContent = 'Tes pseudos réunis, ce que tu joues, tes élèves, le type de tes adversaires et leurs alias, tes ranges préflop';
     } else if (route.view === 'etudes') {
       title.textContent = 'Études du solveur';
       subtitle.textContent = 'Coups résolus avec GTOpen, gardés sur ton ordinateur pour être réexplorés';

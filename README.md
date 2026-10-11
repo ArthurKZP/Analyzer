@@ -60,11 +60,12 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
 - **Joueurs de référence** : un bon joueur dont tu as importé les historiques, étudié pour apprendre de lui et
   comparé à toi : *Toi et lui*, *Value et bluffs*, et son jeu analysé comme le tien (voir *Joueurs de référence*).
 - **Paramètres** : *Général* (tes pseudos réunis sous un nom, les formats que tu joues, coach ou non, le seuil de
-  l'Étude du field, la précision du solveur) et *Joueurs et alias* : tes adversaires en heads-up et aux tables à
+  l'Étude du field, la précision du solveur), *Joueurs et alias* : tes adversaires en heads-up et aux tables à
   plusieurs, réguliers et récréatifs, avec recherche, tri et leur type réglable (le même partout). **Alias** : un
   même joueur peut avoir plusieurs pseudos (un par site, ou un pseudo changé) ; coche-les dans ces listes et
   donne-leur un nom : ses mains, ses stats et son type sont réunis sous ce nom partout dans l'application (tes mains
-  et celles de tes élèves), sa fiche rappelle ses pseudos, et « Défaire » les sépare à nouveau. Voir *Paramètres*
+  et celles de tes élèves), sa fiche rappelle ses pseudos, et « Défaire » les sépare à nouveau. Et *Ranges
+  préflop* : tes ranges préflop par défaut, ligne par ligne et format par format, pour le solveur. Voir *Paramètres*
   plus bas.
 - **Entraîneur** : joue des mains sur les spots résolus, le solveur juge chaque décision (voir plus bas).
 - **Sauvegarde** : tes calculs vers un dossier synchronisé ou un stockage en ligne (voir plus bas).
@@ -289,14 +290,16 @@ rapporté au pot après le call (relancer à 4,5 sur une mise de 1,7 dans un pot
 
 **Tes ranges préflop** (onglet *Ranges* de l'explorateur) : le solveur part des ranges de la référence (solution
 préflop heads-up, ou ta solution du format à une table à plusieurs). Pour voir ce que change une autre range — un
-adversaire qui défend plus large, un open plus serré, une réponse au 4bet qui dépend de l'adversaire —, ajuste
-celle de chaque joueur : grille 13 × 13 à peindre au clic ou en glissant (100, 75, 50, 25 % ou retirer), texte à
-coller (« AA,AKs,KQo:0.5,… »), *Plus serré* / *Plus large* (environ 10 % des combos retirés en partant des mains
-les plus faibles de la range, ou ajoutés en partant des plus fortes ; force = équité contre une main au hasard).
-Contour orange : différent de la référence. Deux portées : **pour ce coup seulement** (ou ce spot d'étude), ou
-**par défaut pour la ligne** et le format (« BTN open, BB call » en HU, « CO open, BB 3bet, CO call » en 6-max…) :
-elle s'applique alors à tes autres coups de cette ligne, à leur analyse et au leakfinding ; le réglage d'un coup
-passe avant celui de sa ligne. *Résoudre avec ces ranges* relance le solveur sur une étude à part : celle de la
+adversaire qui défend plus large, un open plus serré, une réponse au 4bet qui dépend de l'adversaire —, ajuste celle
+de chaque joueur : grille 13 × 13 à peindre au clic ou en glissant (100, 75, 50, 25 % ou retirer), texte à coller
+(« AA,AKs,KQo:0.5,… »), *Plus serré* / *Plus large* (environ 10 % des combos retirés en partant des mains les plus
+faibles de la range, ou ajoutés en partant des plus fortes ; force = équité contre une main au hasard). Contour
+orange : différent de la référence. Deux portées : **pour ce coup seulement** (ou ce spot d'étude), ou **par défaut
+pour la ligne** et le format (« BTN open, BB call » en HU, « CO open, BB 3bet, CO call » en 6-max…) : elle
+s'applique alors à tes autres coups de cette ligne, à leur analyse et au leakfinding (et aux spots d'étude ouverts
+dans l'explorateur, avec l'option de *Paramètres › Ranges préflop*) ; le réglage d'un coup passe avant celui de sa
+ligne. Les ranges par défaut de toutes les lignes se règlent aussi sans ouvrir de coup, dans *Paramètres › Ranges
+préflop* (voir *Paramètres*). *Résoudre avec ces ranges* relance le solveur sur une étude à part : celle de la
 référence reste, et *Revenir à la référence* la rouvre en quelques secondes. Un badge *tes ranges* le rappelle en
 haut de l'explorateur, et la page *Études du solveur* marque ces études. Les séries de spots d'étude, leurs plans de
 jeu et la référence livrée restent faits avec la théorie. Tes ranges sont gardées dans la base (sauvegardée) ;
@@ -924,6 +927,20 @@ ses formats) :
 
 L'onglet *Joueurs et alias* : le type de chaque adversaire (régulier ou récréatif) et les alias (voir *Application*).
 Code : `analyzer/settings.py`, `analyzer/app/settings_page.py`.
+
+L'onglet *Ranges préflop* : tes ranges préflop par défaut, ligne par ligne, sans ouvrir de coup. Pour chaque format
+que tu joues — le heads-up (solution préflop), les formats qui ont leurs charts, et ceux de tes mains que les charts
+6-max couvrent (7 à 9 joueurs, position pour position) —, les lignes à deux joueurs au flop (pots simples, 3bet,
+4bet) et les positions où ta range remplace celle de la référence. *Modifier* ouvre l'éditeur de l'onglet *Ranges*
+de l'explorateur (grille à peindre, texte, *Plus serré* / *Plus large*, *Range de la référence*) ; *Enregistrer*
+garde les ranges qui diffèrent de la référence, *Revenir à la référence* efface celles de la ligne. Elles valent
+pour tous tes coups de la ligne (explorateur, analyse face au solveur, Leakfinding) ; un coup réglé à part dans
+l'explorateur garde son réglage, et un coup déjà résolu se résout à nouveau, dans une étude à part. *Aussi pour les
+spots d'étude ouverts dans l'explorateur* (décochée par défaut) : un spot d'étude part alors des ranges de sa
+ligne ; les séries, leurs plans de jeu et les repères restent faits avec la référence. Les réglages d'une ligne qui
+n'a plus de référence (charts retirés, format que tu ne joues plus) restent listés, à effacer. Code :
+`analyzer/app/ranges_page.py` (l'éditeur, partagé avec l'explorateur : `static/rangekit.js`),
+`theory/custom_ranges.py` (`reference_lines`).
 
 ## Bluffs des adversaires
 

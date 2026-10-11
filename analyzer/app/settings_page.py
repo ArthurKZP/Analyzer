@@ -1,7 +1,7 @@
 """Onglet « Général » des Paramètres : ton pseudo, les formats que tu joues, le coaching, le seuil de l'Étude du
 field et la précision du solveur. Chaque choix s'enregistre tout de suite (/api/parametres, /api/precision) ; le menu
 de l'application suit (message « analyzer-refresh »). Les types des adversaires et les alias ont leur onglet
-(field_page.build_players_page)."""
+(field_page.build_players_page), tes ranges préflop par défaut aussi (ranges_page)."""
 from __future__ import annotations
 
 from html import escape
@@ -258,6 +258,7 @@ def build_settings_page(view: dict, embed: bool = True) -> str:
 <h2>Ailleurs</h2>
 <div class="card"><ul class="st-links">
 <li><b>Types des adversaires</b> (régulier ou récréatif) et <b>alias</b> : onglet Joueurs et alias.</li>
+<li><b>Tes ranges préflop par défaut</b>, ligne par ligne, pour le solveur : onglet Ranges préflop.</li>
 <li><b>Période d'analyse</b> : en haut des pages (en ce moment : {escape(view['period'])}).</li>
 <li><b>Sauvegarde</b> de tes calculs : menu Sauvegarde.</li>
 </ul></div>

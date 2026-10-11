@@ -30,7 +30,8 @@ STATIC = Path(__file__).parent / "static"
 STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8",
                 "explorer.js": "text/javascript; charset=utf-8", "explorer.css": "text/css; charset=utf-8",
                 "trainer.js": "text/javascript; charset=utf-8", "trainer.css": "text/css; charset=utf-8",
-                "coach.js": "text/javascript; charset=utf-8", "coach.css": "text/css; charset=utf-8"}
+                "coach.js": "text/javascript; charset=utf-8", "coach.css": "text/css; charset=utf-8",
+                "rangekit.js": "text/javascript; charset=utf-8"}
 MAX_PATH = 40  # étapes d'un chemin dans l'arbre (bien plus qu'un coup réel)
 MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
 MAX_SMALL_BODY = 64 * 1024
@@ -184,6 +185,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.settings_page())
             if parts == ["parametres", "joueurs"]:  # … les types des adversaires et les alias
                 return self._html(library.field_page("joueurs"))
+            if parts == ["parametres", "ranges"]:  # … tes ranges préflop par défaut, ligne par ligne
+                return self._html(library.ranges_settings_page())
+            if parts == ["api", "ranges", "defaut"]:
+                return self._json(library.default_ranges_view())
             if parts == ["api", "leaks"]:
                 return self._json(library.leaks_state(table_format=self._format()))
             if parts == ["api", "eleves"]:
@@ -329,6 +334,30 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, str(exc))
         except postflop.SolverError as exc:
             return self._error(409, str(exc))
+
+    def _default_ranges(self, library: Library, action: Optional[str], payload):
+        """Une ligne de tes ranges par défaut (sans action), l'enregistrer, l'effacer ; l'option des spots d'étude."""
+        if not isinstance(payload, dict):
+            return self._error(400, "Requête invalide.")
+        if action == "spots":
+            if not isinstance(payload.get("for_spots"), bool):
+                return self._error(400, "Requête invalide.")
+            return self._json(library.set_ranges_for_spots(payload["for_spots"]))
+        context = payload.get("context")
+        if not isinstance(context, str) or len(context) > 200:
+            return self._error(400, "Requête invalide.")
+        try:
+            if action is None:
+                return self._json(library.default_range_line(context))
+            if action == "enregistrer":
+                return self._json(library.save_default_ranges(context, payload.get("ranges")))
+            if action == "effacer":
+                return self._json(library.clear_default_ranges(context))
+        except NotFound:
+            return self._error(404, "Ligne sans range de référence.")
+        except ValueError as exc:
+            return self._error(400, str(exc))
+        return self._error(400, "Requête invalide.")
 
     def _period(self, owner: Library):
         """Choisir la période d'analyse (la tienne, ou celle d'un élève) : {"kind": "all" | "last" (n) | "days" (days)
@@ -528,6 +557,8 @@ class Handler(BaseHTTPRequestHandler):
             if parts[2] == "texte":  # à coller dans Claude (coach branché par MCP sur l'abonnement)
                 return self._json({"text": library.coach.prompt(text.strip(), context)})
             return self._json(library.coach.ask(conv, text.strip(), context))
+        if parts[:3] == ["api", "ranges", "defaut"] and len(parts) <= 4:  # Paramètres › Ranges préflop
+            return self._default_ranges(library, parts[3] if len(parts) == 4 else None, self._small_json())
         if parts == ["api", "ranges", "hand2note"]:  # charts 6-max de Hand2Note Guide, sur ta machine
             try:
                 return self._json(library.load_hand2note())

@@ -461,6 +461,45 @@ class ServerTest(unittest.TestCase):
         status, _, body = self.request("POST", "/api/explorateur/ranges/effacer", clear, headers)
         self.assertEqual((status, json.loads(body)["adjusted"]), (200, None))
 
+    def test_default_ranges(self):
+        # Paramètres › Ranges préflop : la page, sa liste, une ligne, l'enregistrer, l'effacer, l'option des spots
+        status, _, body = self.request("GET", "/parametres/ranges")
+        self.assertEqual(status, 200)
+        self.assertIn(b'<script src="/static/rangekit.js"></script>', body)
+        self.assertEqual(self.request("GET", "/static/rangekit.js")[0], 200)
+        if shutil.which("node"):  # les scripts doivent au moins être du JavaScript valide
+            path = Path(self.tmp.name) / "ranges.js"
+            path.write_text(body.decode().rsplit("<script>", 1)[1].split("</script>")[0], encoding="utf-8")
+            for script in (path, Path(__file__).parent.parent / "analyzer" / "app" / "static" / "rangekit.js"):
+                check = subprocess.run(["node", "--check", str(script)], capture_output=True, text=True)
+                self.assertEqual(check.returncode, 0, check.stderr)
+        view = json.loads(self.request("GET", "/api/ranges/defaut")[2])
+        self.assertEqual([g["format"] for g in view["formats"]], ["HU"])
+        headers = {"Content-Type": "application/json"}
+        context = "HU|BTN:raise BB:raise BTN:call"
+        status, _, body = self.request("POST", "/api/ranges/defaut", json.dumps({"context": context}), headers)
+        self.assertEqual((status, json.loads(body)["line"]), (200, "BTN open, BB 3bet, BTN call"))
+        save = json.dumps({"context": context, "ranges": {"BB": "AA,KK"}})
+        status, _, body = self.request("POST", "/api/ranges/defaut/enregistrer", save, headers)
+        self.assertEqual((status, json.loads(body)["adjusted"]), (200, "ligne"))
+        state = json.loads(self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "HAND02"}), headers)[2])
+        self.assertEqual(state["adjusted"], "ligne")  # ton pot 3bet joué prend la range de la ligne
+        for path, bad in (("/api/ranges/defaut/enregistrer", {"context": context, "ranges": {"SB": "AA"}}),
+                          ("/api/ranges/defaut/enregistrer", {"context": context, "ranges": {"BB": "AXo"}}),
+                          ("/api/ranges/defaut/enregistrer", {"context": context}),
+                          ("/api/ranges/defaut", {"context": 3}), ("/api/ranges/defaut/autre", {"context": context}),
+                          ("/api/ranges/defaut/spots", {"for_spots": "oui"})):
+            self.assertEqual(self.request("POST", path, json.dumps(bad), headers)[0], 400, (path, bad))
+        self.assertEqual(self.request("POST", "/api/ranges/defaut", json.dumps({"context": "HU|BTN:call"}),
+                                      headers)[0], 404)
+        status, _, body = self.request("POST", "/api/ranges/defaut/spots", json.dumps({"for_spots": True}), headers)
+        self.assertEqual((status, json.loads(body)), (200, {"for_spots": True}))
+        self.request("POST", "/api/ranges/defaut/spots", json.dumps({"for_spots": False}), headers)
+        status, _, body = self.request("POST", "/api/ranges/defaut/effacer", json.dumps({"context": context}), headers)
+        self.assertEqual((status, json.loads(body)["cleared"]), (200, True))
+        state = json.loads(self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "HAND02"}), headers)[2])
+        self.assertEqual(state["adjusted"], None)
+
     def test_studies_page(self):
         status, _, body = self.request("GET", "/etudes")
         self.assertEqual(status, 200)
