@@ -13,6 +13,7 @@ from typing import Optional
 
 from .cards import combo_notation, equity
 from .models import AGGRESSIVE, BET, CALL, CHECK, FOLD, POSTFLOP, RAISE, VOLUNTARY, Action, Hand
+from .rake import paid as rake_paid
 
 OUTCOMES = {FOLD: "fold", CALL: "call", RAISE: "raise", CHECK: "check", BET: "bet"}
 PF_LEVEL_NAMES = {1: "3bet", 2: "4bet"}
@@ -59,6 +60,8 @@ class PlayerStats:
     net_bb_by_pos: Counter = field(default_factory=Counter)
     net_bb_showdown: float = 0.0
     net_bb_no_showdown: float = 0.0
+    rake: float = 0.0  # le rake payé (sa part de chaque pot : rake.paid), en monnaie et en bb
+    rake_bb: float = 0.0
     hands_showdown: int = 0  # mains allées à l'abattage
     ev_adjust_bb: float = 0.0
     allin_hands: int = 0
@@ -91,6 +94,11 @@ class PlayerStats:
     @property
     def bb_per_100(self) -> Optional[float]:
         return 100.0 * self.net_bb / self.hands if self.hands else None
+
+    @property
+    def rake_per_100(self) -> Optional[float]:
+        """Le rake payé, en bb pour 100 mains."""
+        return 100.0 * self.rake_bb / self.hands if self.hands else None
 
 
 class HandReader:
@@ -384,6 +392,9 @@ def analyze(hands: list[Hand]) -> dict[str, PlayerStats]:
             st.net += net
             st.net_bb += net_bb
             st.net_bb_by_pos[pos] += net_bb
+            fee = rake_paid(hand, p)
+            st.rake += fee
+            st.rake_bb += fee / hand.bb
             if hand.showdown:
                 st.net_bb_showdown += net_bb
                 st.hands_showdown += 1

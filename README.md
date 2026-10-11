@@ -39,20 +39,21 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   sur la bonne ligne ou la bonne main. Dans le replayer, **Résoudre ce coup** lance le solveur GTOpen
   (voir plus bas).
 - **Mon jeu** : ton *Bilan* contre tous tes adversaires — en tête, tes résultats **tous formats confondus**, en
-  heads-up et aux tables à plusieurs ; puis, au choix *Heads-up* / *Tables à plusieurs* (retenu avec le Leakfinding
-  et Mon préflop), le même plan : résultat et courbe (réel en vert, EV all-in en jaune, à l'abattage en bleu, sans
-  abattage en rouge : les couleurs des trackers, avec le cumul de chacune en bout de courbe), **tes écarts les plus
-  importants** avant le détail de tes stats (aux tables à plusieurs, sur toutes tes mains, contre les réguliers et
-  contre les récréatifs), résultats par adversaire avec recherche, filtre par type et tri par mains, résultat,
-  bb/100, date ou nom (aux tables à plusieurs : mains ensemble, pots disputés et ton résultat dans ces pots), pertes
-  sans abattage (heads-up) ; *Leakfinding*, *Mains de départ* (ce que rapporte chaque main, voir plus bas), *Mon
-  préflop*, *Mes spots*, *Face au solveur* (tes erreurs postflop, voir plus bas) et *Tables à plusieurs*. *Mon
-  préflop* compare tes décisions préflop à la solution heads-up, ou, aux tables à plusieurs (choix *Heads-up* /
-  *Tables à plusieurs* en haut de la page, retenu avec celui du Leakfinding), à tes charts avec les mêmes cartes :
-  un nœud par situation et positions (premier à parler, face à l'open de telle position, face au 3bet après ton
-  open), avec la grille de la stratégie, tes fréquences face aux charts et tes écarts main par main ; une table sans
-  charts à elle prend ceux du 6-max à même nombre de joueurs derrière, et les mains contre les récréatifs sont
-  exclues.
+  heads-up et aux tables à plusieurs (avec leur rake) ; puis, au choix *Heads-up* / *Tables à plusieurs* (retenu
+  avec le Leakfinding et Mon préflop), le même plan : résultat et courbe (réel en vert, EV all-in en jaune, à
+  l'abattage en bleu, sans abattage en rouge : les couleurs des trackers, avec le cumul de chacune en bout de
+  courbe), le **rake payé** (en € et en bb/100, avec ton winrate avant rake : ta part du rake de chaque pot, au
+  prorata de ce que tu y as mis, la méthode des sites pour le rakeback), **tes écarts les plus importants** avant le
+  détail de tes stats (aux tables à plusieurs, sur toutes tes mains, contre les réguliers et contre les récréatifs),
+  résultats par adversaire avec recherche, filtre par type et tri par mains, résultat, bb/100, date ou nom (aux
+  tables à plusieurs : mains ensemble, pots disputés et ton résultat dans ces pots), pertes sans abattage
+  (heads-up) ; *Leakfinding*, *Mains de départ* (ce que rapporte chaque main, voir plus bas), *Mon préflop*, *Mes
+  spots*, *Face au solveur* (tes erreurs postflop, voir plus bas) et *Tables à plusieurs*. *Mon préflop* compare tes
+  décisions préflop à la solution heads-up, ou, aux tables à plusieurs (choix *Heads-up* / *Tables à plusieurs* en
+  haut de la page, retenu avec celui du Leakfinding), à tes charts avec les mêmes cartes : un nœud par situation et
+  positions (premier à parler, face à l'open de telle position, face au 3bet après ton open), avec la grille de la
+  stratégie, tes fréquences face aux charts et tes écarts main par main ; une table sans charts à elle prend ceux du
+  6-max à même nombre de joueurs derrière, et les mains contre les récréatifs sont exclues.
 - **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Réguliers* et *Récréatifs* : le
   leakfinding de ceux que tu croises le plus, par limites (micro, milieu, hautes), chacun avec ses leaks à exploiter
   et ce que montrent ses lignes, puis sa fiche détaillée (voir *Étude du field : le leakfinding de tes
@@ -1267,7 +1268,7 @@ aussitôt.
 | Section | Ce qu'on y trouve |
 |---|---|
 | Plan de jeu | Son profil en une phrase et au plus 4 consignes par moment du coup (préflop, quand tu mises, face à ses mises, à tester), chacune avec sa preuve chiffrée et un niveau de confiance |
-| Résultat | Ton gain en bb et en €, bb/100, résultat **EV all-in** (la part de chance), gains avec/sans abattage, courbe main par main (une case par courbe dans la légende pour la masquer ; l'échelle suit les courbes affichées, le choix est gardé) |
+| Résultat | Ton gain en bb et en €, bb/100, résultat **EV all-in** (la part de chance), gains avec/sans abattage, rake payé (€ et bb/100), courbe main par main (une case par courbe dans la légende pour la masquer ; l'échelle suit les courbes affichées, le choix est gardé) |
 | Lecture de l'adversaire | Ses écarts aux repères d'un régulier HU, classés par importance, avec l'exploit correspondant ; tes propres écarts dans ce match |
 | Le duel | Ses attaques face à tes réponses (ses 3bets / tes folds vs 3bet, ses barrels / tes folds...), avec alerte quand il t'exploite — en tenant compte de ta main quand tu as foldé |
 | Ses lignes : value ou bluff ? | Chaque ligne postflop (c-bet, check-raise, barrel, mise après check…, par taille) : combien de fois, ta réponse, **avec quoi tu as foldé**, ce qu'il a montré (bluff / semi-bluff / value fine / value, selon son équité réelle contre ta main) et un verdict qui tient compte de la taille de l'échantillon. Synthèse par taille, ce qu'il montre quand il checke, timing selon sa main |
@@ -1343,6 +1344,8 @@ analyzer/
   errors.py            une demande qui ne désigne rien (NotFound : « introuvable »), à part des erreurs d'analyse
   memory.py            grosse base de mains : ramasse-miettes en pause pendant un chargement, mains mises à l'écart
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
+  rake.py              le rake payé : ta part du rake de chaque pot, au prorata de ce que tu y as mis (rakeback)
+  stakes.py            niveaux de limites (micro, milieu, hautes) d'après la grosse blinde, pour l'Étude du field
   field.py             étude du field : leaks à exploiter d'un adversaire, sa value et ses bluffs par ligne, style
                        des récréatifs (passif, agressif, prudent)
   reference.py         joueurs de référence : vos résultats et vos fréquences côte à côte, ses lignes de value et de
