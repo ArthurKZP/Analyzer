@@ -11,7 +11,7 @@ import unittest
 from collections import Counter
 from pathlib import Path
 
-from analyzer import field, players, settings
+from analyzer import field, players, settings, stakes
 from analyzer.app.library import Library
 from analyzer.app.server import start
 from analyzer.models import BET, CALL, CHECK, FOLD, RAISE
@@ -257,6 +257,38 @@ class SettingsTest(IsolatedHome):
             self.assertEqual(subprocess.run(["node", "--check", str(script)], capture_output=True).returncode, 0)
 
 
+class StakesTest(unittest.TestCase):
+    def test_bands(self):
+        self.assertEqual([stakes.band_of(bb) for bb in (0.02, 0.10, 0.12, 0.5, 1.0, 1.5, 2.0, 0)],
+                         ["micro", "micro", "milieu", "milieu", "milieu", "hautes", "hautes", None])
+        self.assertEqual(stakes.label("micro"), "Micro limites (NL10 et moins)")
+        hands = [barrel_hand(k, ["8c", "6c"]) for k in range(3)]
+        hands[0].bb = 0.05
+        self.assertEqual(stakes.counts(hands), [("micro", 1), ("hautes", 2)])
+        self.assertEqual((stakes.choose(None, stakes.counts(hands)), stakes.choose("micro", stakes.counts(hands)),
+                          stakes.choose("milieu", stakes.counts(hands)), stakes.choose(None, [])),
+                         ("hautes", "micro", "hautes", None))
+
+    def test_band_defs(self):
+        mid = {d.key: d for d in field.band_defs(field.RING_DEFS, "milieu")}
+        self.assertEqual(mid, field.RING_DEF)  # les limites du milieu : les repères de toujours
+        micro = {d.key: d for d in field.band_defs(field.RING_DEFS, "micro")}
+        high = {d.key: d for d in field.band_defs(field.RING_DEFS, "hautes")}
+        self.assertEqual((micro["fold_river"].ref, high["fold_river"].ref), ((45, 65), (35, 52)))
+        self.assertIn("overbet", micro["fold_river"].low.exploit)  # il paie trop la river : value-bet gros
+        self.assertEqual(micro["fold_river"].low.fact, field.RING_DEF["fold_river"].low.fact)
+        self.assertEqual(micro["limp"], field.RING_DEF["limp"])  # rien de propre au niveau
+        # 40 % de fold à la river : dans le repère du milieu, un leak aux micro limites (il paie trop)
+        ratios = {"fold_river": Ratio(40, 100)}
+        self.assertEqual(field.ring_findings(ratios, "milieu"), [])
+        self.assertEqual([(f.stat.key, f.direction) for f in field.ring_findings(ratios, "micro")],
+                         [("fold_river", "bas")])
+        from analyzer.insights import STAT_DEFS
+        hu = {d.key: d for d in field.band_defs(STAT_DEFS.values(), "hautes", heads_up=True)}
+        self.assertEqual((hu["vs_cbet_flop.fold"].ref, hu["sb_vs_3bet.fold"].ref),
+                         ((28, 42), STAT_DEFS["sb_vs_3bet.fold"].ref))  # le préflop : le solveur, à tous les niveaux
+
+
 class FieldLibraryTest(IsolatedHome):
     def setUp(self):
         super().setUp()
@@ -274,7 +306,9 @@ class FieldLibraryTest(IsolatedHome):
         settings.save({"min_hands": 50})
         regs = lib.field_page("regs", "ring")
         self.assertIn("Joueur par joueur", regs)
-        self.assertIn(f'href="/field/joueur/{CO}?format=ring"', regs)
+        self.assertIn(f'href="/field/joueur/{CO}?format=ring&amp;limites=hautes"', regs)  # 1/2 € : hautes limites
+        self.assertIn("tables à plusieurs, hautes limites (NL200 et plus)", regs)
+        self.assertNotIn('aria-label="Limites"', regs)  # un seul niveau : pas de choix
         self.assertIn("Analyse détaillée", regs)
         players.set_kind(BB, "rec")
         recs = lib.field_page("recs", "ring")
@@ -284,7 +318,7 @@ class FieldLibraryTest(IsolatedHome):
         for text in ("Ses leaks à exploiter", "Ce qui distingue sa value de ses bluffs", "Ses lignes",
                      "Barrel (a misé le flop)", "Quand il checke", "Ses mains montrées avant le flop", "Open"):
             self.assertIn(text, page)
-        style = lib.field_study("ring", (BB,)).style[0]
+        style = lib.field_study("ring", (BB,), "hautes").style[0]
         group = lib.field_group(style, "ring")
         self.assertIn("Les joueurs du groupe", group)
         self.assertIn("Comment les jouer", group)
@@ -294,6 +328,34 @@ class FieldLibraryTest(IsolatedHome):
         with lib._lock:
             lib._select()
         self.assertIn("Aucun régulier avec au moins 100 mains", lib.field_page("regs", "ring"))
+
+    def test_stakes(self):
+        lib = self.lib
+        micro = [barrel_hand(100 + k, ["8c", "6c"] if k % 3 else ["Kh", "Qh"]) for k in range(70)]
+        for h in micro:
+            h.bb = 0.05
+        with lib._lock:
+            lib._all_ring = lib._all_ring + micro
+            lib._select()
+        settings.save({"min_hands": 50})
+        self.assertEqual(lib.field_bands("ring"), [("micro", 70), ("hautes", 60)])
+        regs = lib.field_page("regs", "ring")  # le niveau où tu as le plus de mains
+        self.assertIn("tables à plusieurs, micro limites (NL10 et moins)", regs)
+        self.assertIn('<nav class="lk-fmt" aria-label="Limites">', regs)
+        self.assertIn('href="?format=ring&amp;limites=hautes"', regs)
+        self.assertIn(f'href="/field/joueur/{CO}?format=ring&amp;limites=micro"', regs)
+        self.assertIn("70 mains", regs)  # ses mains de ce niveau seulement
+        self.assertIn("aux micro limites (plus serré et plus passif", regs)
+        high = lib.field_page("regs", "ring", "hautes")
+        self.assertIn("60 mains", high)
+        self.assertEqual([lib.field_study("ring", (CO,), band).hands for band in ("micro", "hautes")], [70, 60])
+        page = lib.field_player(CO, "ring")  # sa fiche : le niveau où il a le plus de mains, et le choix
+        self.assertIn("micro limites (NL10 et moins) · 70 mains", page)
+        self.assertIn('aria-label="Limites"', page)
+        self.assertIn("hautes limites (NL200 et plus) · 60 mains", lib.field_player(CO, "ring", "hautes"))
+        players.set_kind(BB, "rec")
+        style = lib.field_study("ring", (BB,), "hautes").style[0]
+        self.assertIn("hautes limites", lib.field_group(style, "ring", "hautes"))
 
     def test_heads_up_player(self):
         page = self.lib.field_player("Villain", "HU")
@@ -325,7 +387,8 @@ class RoutesTest(IsolatedHome):
 
     def test_routes(self):
         for path in ("/field/regs", "/field/recs", "/field/regs?format=HU", "/field/joueur/Villain", "/parametres/general",
-                     "/parametres/joueurs", "/field/joueurs"):
+                     "/parametres/joueurs", "/field/joueurs", "/field/regs?format=HU&limites=micro",
+                     "/field/joueur/Villain?format=HU&limites=autre"):
             self.assertEqual(self.request("GET", path)[0], 200, path)
         self.assertEqual(self.request("GET", "/field/joueur/Inconnu")[0], 404)
         self.assertEqual(self.request("GET", "/field/groupe/inconnu")[0], 404)

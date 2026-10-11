@@ -54,9 +54,9 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   charts à elle prend ceux du 6-max à même nombre de joueurs derrière, et les mains contre les récréatifs sont
   exclues.
 - **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Réguliers* et *Récréatifs* : le
-  leakfinding de ceux que tu croises le plus, chacun avec ses leaks à exploiter et ce que montrent ses lignes, puis
-  sa fiche détaillée (voir *Étude du field : le leakfinding de tes adversaires*) ; *Bluffs des réguliers* (où ils
-  bluffent en heads-up, ensemble puis un par un, voir plus bas).
+  leakfinding de ceux que tu croises le plus, par limites (micro, milieu, hautes), chacun avec ses leaks à exploiter
+  et ce que montrent ses lignes, puis sa fiche détaillée (voir *Étude du field : le leakfinding de tes
+  adversaires*) ; *Bluffs des réguliers* (où ils bluffent en heads-up, ensemble puis un par un, voir plus bas).
 - **Joueurs de référence** : un bon joueur dont tu as importé les historiques, étudié pour apprendre de lui et
   comparé à toi : *Toi et lui*, *Value et bluffs*, et son jeu analysé comme le tien (voir *Joueurs de référence*).
 - **Paramètres** : *Général* (tes pseudos réunis sous un nom, les formats que tu joues, coach ou non, le seuil de
@@ -837,6 +837,19 @@ joueurs de ce type que tu as croisés au moins N mains (*Paramètres*, 50 par d�
 mains à la même table), du plus fréquent au moins fréquent. Pour chacun, une carte : ses mains, ton résultat contre
 lui, ses **leaks à exploiter** (les trois plus nets) et ce que disent ses lignes à l'abattage, puis *Analyse
 détaillée*. En tête, les réguliers (ou les récréatifs) **en général** : leurs fréquences réunies.
+
+**Par limites** : chaque page est à un niveau de limites, d'après la grosse blinde des mains (la monnaie ne compte
+pas) : *Micro limites* (NL10 et moins), *Limites du milieu* (jusqu'à NL100), *Hautes limites* (NL200 et plus : tout
+ce qui dépasse NL100). Elle s'ouvre sur le niveau où tu as le plus de mains (le dernier choisi est retenu) ; un
+joueur qui joue à plusieurs niveaux a une étude à chacun, sur ses seules mains de ce niveau, et sa fiche propose ses
+niveaux. Les repères et les exploits suivent le niveau : aux limites du milieu, ceux d'un régulier solide
+(`RING_DEFS`, et ceux du rapport d'adversaire en heads-up) ; aux micro limites, un régulier solide joue plus serré
+et plus passif, et la population s'adapte peu : les exploits vont plus loin (value-bets plus gros face à qui paie
+trop la river, folds face à ses rares 3bets et check-raises…) ; aux hautes limites, il joue plus large et plus
+agressif, et s'adapte vite : les exploits se font par petites touches (3bet light avec des bloqueurs en gardant des
+3bets en value…). En heads-up, seuls les repères d'après le flop changent : ceux d'avant le flop viennent du
+solveur, le même à tous les niveaux. Fourchettes indicatives, comme les autres (`field.BAND_REFS`, `HU_BAND_REFS`,
+`BAND_EXPLOITS` ; les niveaux : `analyzer/stakes.py`).
 
 **Un leak** : une fréquence nettement hors des repères d'un régulier solide (l'intervalle de confiance à 90 % hors du
 repère, au moins 15 occasions ; « à confirmer » quand l'écart est net sur peu de mains), avec l'exploit qui en

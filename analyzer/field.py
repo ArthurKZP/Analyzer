@@ -22,13 +22,13 @@ où tu n'étais plus (l'historique montre les cartes).
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from statistics import median
 from typing import Iterable, Optional
 
 from . import ring
 from .cards import combo_notation, describe_holding
-from .insights import Finding, R, StatDef, deviation, findings, strength_class, wilson
+from .insights import STAT_DEFS, Finding, R, StatDef, deviation, findings, strength_class, wilson
 from .lines import BOARD_SIZE, PREVIOUS_PHRASE, size_class
 from .models import BET, CALL, CHECK, FOLD, POSTFLOP, RAISE, VOLUNTARY, Hand
 from .stats import PlayerStats, Ratio, think_times
@@ -476,10 +476,100 @@ RING_DEFS = [
 RING_DEF = {d.key: d for d in RING_DEFS}
 
 
-def ring_findings(ratios: dict[str, Ratio]) -> list[Finding]:
-    """Ses écarts nets aux repères d'un régulier 6-max (comme insights.findings), du plus marqué au moins marqué."""
+# --- Repères et exploits selon les limites (stakes) -------------------------------------------------------------------
+# Les repères de RING_DEFS et du heads-up (insights) sont ceux d'un régulier solide aux limites du milieu. Aux micro
+# limites, les réguliers jouent plus serré et plus passif, et la population s'adapte peu à ce qu'on lui fait : on
+# exploite ses écarts à fond. Aux hautes limites, ils jouent plus large et plus agressif, et s'adaptent vite : on
+# exploite par petites touches, sans se déséquilibrer. Fourchettes indicatives de tracker, comme celles de RING_DEFS ;
+# en heads-up, seuls les repères d'après le flop changent (ceux d'avant le flop viennent du solveur).
+BAND_REFS = {
+    "micro": {"vpip": (18, 25), "pfr": (14, 20), "threebet": (5, 9), "fold_3bet": (50, 68), "fold_steal": (60, 80),
+              "threebet_steal": (5, 11), "cbet_hu": (55, 75), "fold_cbet": (38, 55), "cbet_turn": (40, 60),
+              "fold_turn": (38, 55), "fold_river": (45, 65), "xr_flop": (5, 12), "stab_flop": (30, 60),
+              "wtsd": (24, 31), "afq": (30, 46)},
+    "hautes": {"vpip": (22, 30), "pfr": (19, 26), "limp": (0, 3), "threebet": (8, 14), "fold_3bet": (40, 56),
+               "fold_steal": (48, 68), "threebet_steal": (10, 18), "cbet_hu": (45, 68), "fold_cbet": (33, 48),
+               "cbet_turn": (45, 65), "fold_turn": (35, 50), "fold_river": (35, 52), "xr_flop": (8, 17),
+               "stab_flop": (40, 70), "wtsd": (25, 33), "afq": (38, 55)},
+}
+HU_BAND_REFS = {
+    "micro": {"vs_cbet_flop.fold": (33, 50), "vs_cbet_flop.raise": (6, 15), "xr_flop": (6, 15), "cbet_river": (35, 60),
+              "vs_cbet_river.fold": (40, 60), "vs_bet_river.fold": (40, 60), "wtsd": (26, 36)},
+    "hautes": {"cbet_flop_ip": (50, 78), "vs_cbet_flop.fold": (28, 42), "vs_cbet_flop.raise": (10, 20),
+               "xr_flop": (10, 20), "float_flop": (45, 80), "probe_turn": (35, 60), "cbet_river": (42, 68),
+               "vs_cbet_river.fold": (32, 50), "vs_bet_river.fold": (32, 50), "wtsd": (28, 38)},
+}
+_RIVER_CALLS = {"micro": "value-bet fin et gros (jusqu'à l'overbet) : à ces limites, il paie sans regarder ta taille ; "
+                         "aucun bluff river contre lui",
+                "hautes": "value-bet fin, et garde quelques bluffs bien choisis : il paie trop, sans payer tout"}
+_RIVER_FOLDS = {"micro": "bluffe la river avec des tailles moyennes : il folde trop et ne s'adapte pas",
+                "hautes": "bluffe plus la river avec tes meilleurs bloqueurs, et varie tes lignes : il ajustera"}
+# (stat, sens de l'écart) -> l'exploit à ce niveau, quand il diffère de celui des limites du milieu
+BAND_EXPLOITS = {
+    "micro": {
+        ("vpip", "haut"): "isole-le gros (4 à 5 bb, plus 1 par limper) en position : il paie avec des mains dominées",
+        ("threebet", "bas"): "ses 3bets sont presque toujours QQ+ ou AK : folde tes opens sauf le haut de ta range, "
+                             "sans 4bet bluff",
+        ("fold_3bet", "haut"): "3bet-le large en position avec tes mains jouables : à ces limites, il ne riposte "
+                               "presque pas",
+        ("fold_cbet", "bas"): "c-bet seulement en value et avec tes tirages : il paie trop avec ses paires faibles",
+        ("fold_river", "bas"): _RIVER_CALLS["micro"], ("fold_river", "haut"): _RIVER_FOLDS["micro"],
+        ("vs_bet_river.fold", "bas"): _RIVER_CALLS["micro"], ("vs_bet_river.fold", "haut"): _RIVER_FOLDS["micro"],
+        ("vs_cbet_river.fold", "bas"): _RIVER_CALLS["micro"], ("vs_cbet_river.fold", "haut"): _RIVER_FOLDS["micro"],
+        ("xr_flop", "bas"): "ses rares check-raises sont des mains très fortes : folde tes overpaires sans tirage",
+        ("wtsd", "haut"): "value-bet large et gros, ne bluffe jamais : il va au bout avec trop de mains",
+        ("afq", "bas"): "quand il mise ou relance, il a une main forte : folde tes mains moyennes sans hésiter, et "
+                        "value-bet gros contre lui",
+    },
+    "hautes": {
+        ("threebet", "haut"): "4bet-le plus léger avec des bloqueurs (As, Ks) et paie plus de ses 3bets en position ; "
+                              "ouvre un peu plus serré devant lui",
+        ("fold_3bet", "haut"): "3bet-le plus light, avec des bloqueurs (Ax, Kx), en gardant des 3bets en value : à ces "
+                               "limites, il riposte vite (4bet light)",
+        ("fold_steal", "haut"): "vole plus large contre lui, sans tout ouvrir : il re-volera vite",
+        ("fold_river", "bas"): _RIVER_CALLS["hautes"], ("fold_river", "haut"): _RIVER_FOLDS["hautes"],
+        ("vs_bet_river.fold", "bas"): _RIVER_CALLS["hautes"], ("vs_bet_river.fold", "haut"): _RIVER_FOLDS["hautes"],
+        ("vs_cbet_river.fold", "bas"): _RIVER_CALLS["hautes"], ("vs_cbet_river.fold", "haut"): _RIVER_FOLDS["hautes"],
+        ("xr_flop", "haut"): "c-bet plus petit et plus polarisé, et défends plus souvent face à ses check-raises "
+                             "(call, 3bet)",
+        ("afq", "haut"): "paie plus large avec tes bluff-catchers et piège tes mains fortes : il bluffe beaucoup, mais "
+                         "pas au hasard",
+    },
+}
+BAND_NOTES = {
+    "micro": "Repères d'un régulier solide aux micro limites (plus serré et plus passif qu'au-dessus) ; à ces limites, "
+             "la population s'adapte peu : exploite ses écarts à fond.",
+    "milieu": "Repères d'un régulier solide aux limites du milieu.",
+    "hautes": "Repères d'un régulier solide aux hautes limites (plus large et plus agressif) ; à ces limites, les "
+              "réguliers s'adaptent vite : exploite par petites touches, sans te déséquilibrer.",
+}
+_BAND_DEFS: dict = {}
+
+
+def band_defs(defs: Iterable[StatDef], band: Optional[str], heads_up: bool = False) -> list[StatDef]:
+    """Les repères et les exploits d'un niveau de limites (stakes.BANDS) : ceux des limites du milieu, sinon."""
+    defs = list(defs)
+    key = (band, heads_up, tuple(d.key for d in defs))
+    if key not in _BAND_DEFS:
+        refs = (HU_BAND_REFS if heads_up else BAND_REFS).get(band, {})
+        exploits = BAND_EXPLOITS.get(band, {})
+        out = []
+        for d in defs:
+            changes = {"ref": refs[d.key]} if d.key in refs and d.ref is not None else {}
+            for side, direction in (("high", "haut"), ("low", "bas")):
+                reading, text = getattr(d, side), exploits.get((d.key, direction))
+                if reading and text:
+                    changes[side] = replace(reading, exploit=text)
+            out.append(replace(d, **changes) if changes else d)
+        _BAND_DEFS[key] = out
+    return _BAND_DEFS[key]
+
+
+def ring_findings(ratios: dict[str, Ratio], band: Optional[str] = None) -> list[Finding]:
+    """Ses écarts nets aux repères d'un régulier 6-max de son niveau de limites (comme insights.findings), du plus
+    marqué au moins marqué."""
     out = []
-    for stat in RING_DEFS:
+    for stat in band_defs(RING_DEFS, band):
         r = ratios.get(stat.key)
         dev = deviation(stat, r) if r else None
         if dev is None:
@@ -599,6 +689,7 @@ class Study:
     sizes: list
     checks: dict
     preflop: dict
+    band: Optional[str] = None  # le niveau de limites de ses mains (stakes.BANDS), None : toutes
 
     @property
     def ring_game(self) -> bool:
@@ -633,20 +724,21 @@ class Study:
 
 
 def study(hands: list[Hand], names: Iterable[str], table_format: str,
-          stats: Optional[PlayerStats] = None) -> Study:
+          stats: Optional[PlayerStats] = None, band: Optional[str] = None) -> Study:
     """L'étude de ces joueurs (un adversaire, ou un groupe) dans leurs mains du format (« HU » : stats, ses stats
-    heads-up, déjà calculées ou réunies ; « ring » : tables de 3 à 9 joueurs)."""
+    heads-up, déjà calculées ou réunies ; « ring » : tables de 3 à 9 joueurs). band : le niveau de limites de ces
+    mains, dont les repères et les exploits jugent ses écarts (band_defs)."""
     names = list(names)
     mine = [h for h in hands if set(names) & set(h.seats)]
     if table_format == "HU":
         ps = stats if stats is not None else PlayerStats(names[0])
-        ratios, leaks = hu_ratios(ps), findings(ps)
+        ratios, leaks = hu_ratios(ps), findings(ps, band_defs(STAT_DEFS.values(), band, heads_up=True))
     else:
         ratios = ring_ratios(mine, names)
-        leaks = ring_findings(ratios)
+        leaks = ring_findings(ratios, band)
     bets = player_bets(mine, names)
     return Study(names, table_format, len(mine), ratios, leaks, style_of(ratios, table_format != "HU"), bets,
-                 lines_of(bets), by_size(bets), checks(mine, names), preflop_shown(mine, names))
+                 lines_of(bets), by_size(bets), checks(mine, names), preflop_shown(mine, names), band)
 
 
 def finding_text(f: Finding) -> tuple[str, str, str]:

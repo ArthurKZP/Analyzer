@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .. import NAME, aliases, db
+from .. import NAME, aliases, db, stakes
 from ..db import hands as db_hands
 from ..errors import NotFound
 from ..theory import postflop, preflop_tree, ring_tree, studyspots
@@ -128,6 +128,11 @@ class Handler(BaseHTTPRequestHandler):
         plusieurs (« 6-max », « 3-max »… y mènent aussi)."""
         return parse_qs(urlsplit(self.path).query).get("format", [None])[0]
 
+    def _stakes(self) -> Optional[str]:
+        """Le niveau de limites demandé (« ?limites=micro ») pour l'Étude du field (stakes.BANDS), ou None."""
+        band = parse_qs(urlsplit(self.path).query).get("limites", [None])[0]
+        return band if band in stakes.BANDS else None
+
     @staticmethod
     def _report_name(table_format: Optional[str], who: str = "", ext: str = "html") -> str:
         suffix = "-tables-a-plusieurs" if table_format and table_format != "HU" else ""
@@ -176,11 +181,11 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 2 and parts[0] == "moi":
                 return self._html(library.self_page(parts[1], table_format=self._format()))
             if len(parts) == 2 and parts[0] == "field":  # Étude du field
-                return self._html(library.field_page(parts[1], self._format()))
+                return self._html(library.field_page(parts[1], self._format(), self._stakes()))
             if len(parts) == 3 and parts[0] == "field" and parts[1] == "joueur":  # la fiche d'un adversaire
-                return self._html(library.field_player(parts[2], self._format()))
+                return self._html(library.field_player(parts[2], self._format(), self._stakes()))
             if len(parts) == 3 and parts[0] == "field" and parts[1] == "groupe":  # un groupe de récréatifs
-                return self._html(library.field_group(parts[2], self._format()))
+                return self._html(library.field_group(parts[2], self._format(), self._stakes()))
             if parts == ["parametres", "general"]:  # Paramètres
                 return self._html(library.settings_page())
             if parts == ["parametres", "joueurs"]:  # … les types des adversaires et les alias
