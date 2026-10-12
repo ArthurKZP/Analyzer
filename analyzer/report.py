@@ -236,6 +236,14 @@ def _nice_step(raw: float) -> float:
 
 # --- Sections ----------------------------------------------------------------------
 
+def rake_tile(rake: float, per_100: Optional[float], winrate: Optional[float]) -> tuple[str, str, str]:
+    """(libellé, valeur, détail) de la tuile du rake payé : en monnaie, en bb/100, et le winrate avant rake."""
+    if per_100 is None:
+        return "Rake payé", "–", ""
+    before = f" · avant rake {num(winrate + per_100, 1, sign=True)} bb/100" if winrate is not None else ""
+    return "Rake payé", f"{num(rake, 2)} €", f"{num(per_100, 1)} bb/100{before}"
+
+
 def tiles(hero: PlayerStats) -> str:
     ev_total = hero.net_bb + hero.ev_adjust_bb
     items = [
@@ -245,8 +253,9 @@ def tiles(hero: PlayerStats) -> str:
          f"écart chance : {num(-hero.ev_adjust_bb, 1, sign=True)} bb sur {hero.allin_hands} all-in"),
         ("Avec / sans abattage", f"{num(hero.net_bb_showdown, 0, sign=True)} / {num(hero.net_bb_no_showdown, 0, sign=True)}",
          f"bb · {num(hero.hands_showdown, 0)} / {num(hero.hands - hero.hands_showdown, 0)} mains"),
+        rake_tile(hero.rake, hero.rake_per_100, hero.bb_per_100),
     ]
-    return '<div class="tiles">' + "".join(
+    return '<div class="tiles res">' + "".join(
         f'<div class="tile"><div class="label">{label}</div><div class="value">{value}</div><div class="sub">{sub}</div></div>'
         for label, value, sub in items
     ) + "</div>"
@@ -915,6 +924,7 @@ h3 { font-size: 14px; margin: 0 0 10px; color: var(--ink-2); }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 16px; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 20px; }
+.tiles.res { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }  /* les cinq tuiles du résultat */
 .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
 .tile .label { color: var(--ink-2); font-size: 13px; }
 .tile .value { font-size: 26px; font-weight: 600; margin: 2px 0; }

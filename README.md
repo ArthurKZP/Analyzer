@@ -39,24 +39,25 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   sur la bonne ligne ou la bonne main. Dans le replayer, **Résoudre ce coup** lance le solveur GTOpen
   (voir plus bas).
 - **Mon jeu** : ton *Bilan* contre tous tes adversaires — en tête, tes résultats **tous formats confondus**, en
-  heads-up et aux tables à plusieurs ; puis, au choix *Heads-up* / *Tables à plusieurs* (retenu avec le Leakfinding
-  et Mon préflop), le même plan : résultat et courbe (réel en vert, EV all-in en jaune, à l'abattage en bleu, sans
-  abattage en rouge : les couleurs des trackers, avec le cumul de chacune en bout de courbe), **tes écarts les plus
-  importants** avant le détail de tes stats (aux tables à plusieurs, sur toutes tes mains, contre les réguliers et
-  contre les récréatifs), résultats par adversaire avec recherche, filtre par type et tri par mains, résultat,
-  bb/100, date ou nom (aux tables à plusieurs : mains ensemble, pots disputés et ton résultat dans ces pots), pertes
-  sans abattage (heads-up) ; *Leakfinding*, *Mains de départ* (ce que rapporte chaque main, voir plus bas), *Mon
-  préflop*, *Mes spots*, *Face au solveur* (tes erreurs postflop, voir plus bas) et *Tables à plusieurs*. *Mon
-  préflop* compare tes décisions préflop à la solution heads-up, ou, aux tables à plusieurs (choix *Heads-up* /
-  *Tables à plusieurs* en haut de la page, retenu avec celui du Leakfinding), à tes charts avec les mêmes cartes :
-  un nœud par situation et positions (premier à parler, face à l'open de telle position, face au 3bet après ton
-  open), avec la grille de la stratégie, tes fréquences face aux charts et tes écarts main par main ; une table sans
-  charts à elle prend ceux du 6-max à même nombre de joueurs derrière, et les mains contre les récréatifs sont
-  exclues.
+  heads-up et aux tables à plusieurs (avec leur rake) ; puis, au choix *Heads-up* / *Tables à plusieurs* (retenu
+  avec le Leakfinding et Mon préflop), le même plan : résultat et courbe (réel en vert, EV all-in en jaune, à
+  l'abattage en bleu, sans abattage en rouge : les couleurs des trackers, avec le cumul de chacune en bout de
+  courbe), le **rake payé** (en € et en bb/100, avec ton winrate avant rake : ta part du rake de chaque pot, au
+  prorata de ce que tu y as mis, la méthode des sites pour le rakeback), **tes écarts les plus importants** avant le
+  détail de tes stats (aux tables à plusieurs, sur toutes tes mains, contre les réguliers et contre les récréatifs),
+  résultats par adversaire avec recherche, filtre par type et tri par mains, résultat, bb/100, date ou nom (aux
+  tables à plusieurs : mains ensemble, pots disputés et ton résultat dans ces pots), pertes sans abattage
+  (heads-up) ; *Leakfinding*, *Mains de départ* (ce que rapporte chaque main, voir plus bas), *Mon préflop*, *Mes
+  spots*, *Face au solveur* (tes erreurs postflop, voir plus bas) et *Tables à plusieurs*. *Mon préflop* compare tes
+  décisions préflop à la solution heads-up, ou, aux tables à plusieurs (choix *Heads-up* / *Tables à plusieurs* en
+  haut de la page, retenu avec celui du Leakfinding), à tes charts avec les mêmes cartes : un nœud par situation et
+  positions (premier à parler, face à l'open de telle position, face au 3bet après ton open), avec la grille de la
+  stratégie, tes fréquences face aux charts et tes écarts main par main ; une table sans charts à elle prend ceux du
+  6-max à même nombre de joueurs derrière, et les mains contre les récréatifs sont exclues.
 - **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Réguliers* et *Récréatifs* : le
-  leakfinding de ceux que tu croises le plus, chacun avec ses leaks à exploiter et ce que montrent ses lignes, puis
-  sa fiche détaillée (voir *Étude du field : le leakfinding de tes adversaires*) ; *Bluffs des réguliers* (où ils
-  bluffent en heads-up, ensemble puis un par un, voir plus bas).
+  leakfinding de ceux que tu croises le plus, par limites (micro, milieu, hautes), chacun avec ses leaks à exploiter
+  et ce que montrent ses lignes, puis sa fiche détaillée (voir *Étude du field : le leakfinding de tes
+  adversaires*) ; *Bluffs des réguliers* (où ils bluffent en heads-up, ensemble puis un par un, voir plus bas).
 - **Joueurs de référence** : un bon joueur dont tu as importé les historiques, étudié pour apprendre de lui et
   comparé à toi : *Toi et lui*, *Value et bluffs*, et son jeu analysé comme le tien (voir *Joueurs de référence*).
 - **Paramètres** : *Général* (tes pseudos réunis sous un nom, les formats que tu joues, coach ou non, le seuil de
@@ -838,6 +839,19 @@ mains à la même table), du plus fréquent au moins fréquent. Pour chacun, une
 lui, ses **leaks à exploiter** (les trois plus nets) et ce que disent ses lignes à l'abattage, puis *Analyse
 détaillée*. En tête, les réguliers (ou les récréatifs) **en général** : leurs fréquences réunies.
 
+**Par limites** : chaque page est à un niveau de limites, d'après la grosse blinde des mains (la monnaie ne compte
+pas) : *Micro limites* (NL10 et moins), *Limites du milieu* (jusqu'à NL100), *Hautes limites* (NL200 et plus : tout
+ce qui dépasse NL100). Elle s'ouvre sur le niveau où tu as le plus de mains (le dernier choisi est retenu) ; un
+joueur qui joue à plusieurs niveaux a une étude à chacun, sur ses seules mains de ce niveau, et sa fiche propose ses
+niveaux. Les repères et les exploits suivent le niveau : aux limites du milieu, ceux d'un régulier solide
+(`RING_DEFS`, et ceux du rapport d'adversaire en heads-up) ; aux micro limites, un régulier solide joue plus serré
+et plus passif, et la population s'adapte peu : les exploits vont plus loin (value-bets plus gros face à qui paie
+trop la river, folds face à ses rares 3bets et check-raises…) ; aux hautes limites, il joue plus large et plus
+agressif, et s'adapte vite : les exploits se font par petites touches (3bet light avec des bloqueurs en gardant des
+3bets en value…). En heads-up, seuls les repères d'après le flop changent : ceux d'avant le flop viennent du
+solveur, le même à tous les niveaux. Fourchettes indicatives, comme les autres (`field.BAND_REFS`, `HU_BAND_REFS`,
+`BAND_EXPLOITS` ; les niveaux : `analyzer/stakes.py`).
+
 **Un leak** : une fréquence nettement hors des repères d'un régulier solide (l'intervalle de confiance à 90 % hors du
 repère, au moins 15 occasions ; « à confirmer » quand l'écart est net sur peu de mains), avec l'exploit qui en
 découle : « Folde trop face à la c-bet — Fold vs c-bet 62 % sur 45 (repère 35–52 %) → c-bet large et petit contre
@@ -990,32 +1004,96 @@ flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de fl
   fois tes charts 6-max chargés ; une famille que tes charts ne couvrent pas dit pourquoi.
 
 - **Lecture des études** : chaque étude est ouverte une fois pour lire ses stratégies aux nœuds clés : c-bet,
-  réponse à la c-bet et au check-raise, 2e barrel à chaque turn, 3e barrel sur un échantillon de rivers (13
-  turns, toutes leurs rivers), c-bet retardée et probe après un flop checké. Les mains y sont regroupées par
-  famille (deux paires et mieux, overpair, top pair bon ou petit kicker, paire moyenne, petite paire, tirage
-  couleur, tirage quinte, gutshot ou backdoor, hauteur As ou Roi, rien), les turns et rivers par effet sur le
-  board (overcard, brique, board pairé, couleur possible, quinte possible). Une étude résolue est lue tout de
-  suite ; les anciennes, avec **Préparer le plan** (quelques secondes en pot 4bet, une minute environ en SRP).
+  réponse à la c-bet et au check-raise, 2e barrel à chaque turn, 3e barrel et river après une turn checkée sur un
+  échantillon de rivers (9 turns, toutes leurs rivers), c-bet retardée et probe après un flop checké, et la réponse
+  au probe et au stab. Les mains y sont regroupées par famille (deux paires et mieux, overpair, top pair bon ou
+  petit kicker, paire moyenne, petite paire, tirage couleur, tirage quinte, gutshot ou backdoor, hauteur As ou Roi,
+  rien), les turns et rivers par effet sur le board (overcard, brique, board pairé, couleur possible, quinte
+  possible). À chacun de ces nœuds, pour chaque case de la range, sa boîte d'équité (l'équité de la main face à la
+  range de l'adversaire à ce moment-là, avant d'agir : 75 % et plus, de 50 à 75 %, de 25 à 50 %, moins de 25 %) et
+  sa famille de mains, ce que vaut chaque action et la part que le solveur lui donne (par type de carte à la turn et
+  à la river), avec les tailles de mise (% du pot) et de relance (× la mise) : de quoi chiffrer les niveaux du plan,
+  du flop à la river. Une étude résolue est lue tout de suite ; les anciennes, avec **Préparer le plan** (une
+  vingtaine de secondes en pot 4bet, un peu plus d'une minute en SRP) ; une étude lue par une version d'avant reste
+  affichée, et se relit de même pour avoir ses niveaux (ils attendent la version qui lit les boîtes d'équité).
   Résultats dans la base (sauvegardée).
+- **Du plus simple au plus précis, du flop à la river** (en tête de l'attaque, et de la défense face à la c-bet) :
+  des plans de plus en plus fins, chacun avec ce qu'il coûte face à la stratégie du solveur (en % du pot par main,
+  en moyenne sur les flops lus, face à un adversaire qui ne s'adapte pas). La range s'y découpe en **boîtes
+  d'équité** (très fortes, bonnes, faibles, très faibles), chacune détaillée par famille de mains : chaque case dit
+  quelle part de la boîte mise (ou paie, relance), et, de la famille qui le fait le plus souvent à celle qui le fait
+  le moins, **qui mise d'abord** (au survol et sous chaque tableau : les tirages avant les hauteurs, les bluffs
+  river sans abattage plutôt que la hauteur As…) ; chaque case joue la part du solveur, de quoi garder des bluffs à
+  la river. Une seule **taille** de mise par type de flop ou de carte (ou de relance, en multiple de la mise :
+  « relance ×4 »), celle qui coûte le moins. En attaque : *niveau 1*, une seule règle au flop, une action pour toute
+  la range sur tous les flops (« le bouton mise toute sa range en petite mise (33 %) », « la SB checke toute sa
+  range »), avec ce que coûte chaque autre action ; *niveau 2*, une action pour toute la range selon le type de flop
+  (haut, moyen ou bas ; sec, deux couleurs ou connecté ; pairé ; monotone) ; *niveau 3*, selon le type de flop et
+  l'équité des mains (les parts par boîte, une taille par type de flop) ; *niveau 4*, avec les tailles du solveur ;
+  au-delà, ses stratégies (le détail plus bas, puis l'explorateur). En défense face à la c-bet : selon l'équité des
+  mains sur tous les flops, puis selon le type de flop, puis avec les tailles du solveur. Une règle ne prescrit
+  qu'une action que tous ses flops ont dans leur arbre (pas de « grosse mise » là où l'arbre n'a qu'une petite
+  mise). **Chaque niveau couvre toute la main** : sa suite donne les autres décisions, toujours selon la carte de la
+  turn ou de la river, avec les parts par boîte d'équité et une taille par type de carte (celles du solveur au
+  dernier niveau). Quand le niveau mise au flop : face au check-raise (avec la taille de la relance), à la turn
+  après la c-bet payée (2e barrel), à la river après deux mises payées (3e barrel) ou après la c-bet payée et la
+  turn checkée ; quand il checke : à la turn après le flop checké (c-bet retardée) et face à la mise de l'autre
+  (probe à la turn, ou stab au flop quand celui qui a l'initiative est hors de position). En défense : face aux 2e
+  et 3e barrels, à la mise river après la turn checkée, et quand l'attaquant checke. La perte de la suite est en %
+  du pot de la street (chaque carte compte autant) ; chaque niveau montre celle du flop, de la turn et de la river.
+  La suite est lue aux nœuds du solveur, après sa propre stratégie : une approximation, que l'option suivante
+  affine. Code : `coach.levels`, `coach.mixes`.
+- **Affiner au solveur** (option sous chaque niveau, en attaque comme en défense) : avec un jeu simplifié, les
+  ranges qui arrivent ensuite ne sont plus tout à fait celles du solveur (en misant toute sa range au flop, on
+  arrive à la turn avec plus de mains faibles). L'option résout de nouveau quelques flops lus (6 au plus, un par
+  type de flop, les plus fréquents d'abord), à la précision de leur résolution d'origine, avec une partie du niveau
+  imposée par des verrous (nodelock) : chaque main y joue l'action, ou les parts, de sa case, l'adversaire s'y
+  adapte, et la suite se relit. Trois façons : en attaque, *le flop imposé* (l'arbre réduit à la taille de c-bet du
+  niveau, un verrou sur la c-bet ; la turn et la river se relisent) ; en attaque, *le flop et la turn imposés* (en
+  plus, le 2e barrel et la c-bet retardée à chaque turn, telles que la page les montre ; la river se relit après une
+  turn jouée simplement : deux résolutions, la première gardée comme le flop imposé) ; en défense, *la réponse à la
+  c-bet imposée*, face à chaque taille de c-bet de l'arbre (la suite de la défense se relit). Un verrou en parts
+  place chaque main dans sa case d'après son équité au nœud, lue là où elle est juste : sur l'arbre seul pour la
+  c-bet (une résolution d'une itération, quelques secondes), dans la résolution d'origine face à la c-bet, dans
+  celle du flop imposé à la turn. Les règles relues remplacent celles d'avant (« affinée au solveur », « affinée,
+  flop et turn imposés ») ; l'écart d'EV à la racine avec la résolution d'origine dit ce que coûte vraiment la
+  partie imposée face à un adversaire qui s'adapte, avec la marge de précision des résolutions. Durée annoncée :
+  celle des résolutions d'origine de ces flops, qu'un verrou accélère (8 minutes au lieu de 12 pour un SRP sur
+  K♠7♦2♣ à 1 % du pot, sur 4 cœurs), et la relecture. Les calculs passent dans la file des résolutions, l'un après
+  l'autre, et s'arrêtent au bouton. Des flops lus ou affinés depuis qui changent les règles imposées rendent
+  l'affinage périmé (« à affiner de nouveau »). Ces résolutions ne sont pas gardées en études : leurs résultats,
+  dans la base. Code : `coach.refine_spots`, `coach.refine_one`.
 - **En attaque** (celui qui a l'initiative) : au flop, **trois stratégies de c-bet**, chacune précisée par sa
-  **taille** (petite, moyenne, grosse mise ou tapis, avec le % du pot de l'arbre) : *miser range* (c-bet de 70 %
-  et plus : une mise avec presque toute la range), *stratégie mixte* (de 35 à 70 % : on mise une partie des mains,
-  on checke les autres) et *checker range* (35 % et moins). Chaque groupe (stratégie et taille) montre sa
-  fréquence de c-bet, son nombre de flops et des flops résolus en exemple, de catégories différentes (haut, moyen
-  ou bas ; sec, deux couleurs ou connecté ; pairé ; monotone) : un clic ouvre l'étude dans l'explorateur pour
-  entrer dans le détail. Une stratégie sans flop dit pourquoi (par exemple : le bouton mise toujours au moins 40 %). Le
-  détail d'un groupe : tous ses flops, le pourquoi (avantage d'équité et de nuts), la règle au flop pour quatre
-  familles de mains, *fortes* (deux paires et mieux, overpair, top pair bon kicker), *moyennes* (top pair petit
-  kicker, paires moyennes et petites), *tirages* (couleur, quinte) et *rien* (hauteur, gutshots, backdoors), puis
-  à la turn et à la river selon la carte (overcard, brique, board pairé, couleur ou quinte possible), avec la
-  fréquence de mise ; repliés : la c-bet retardée, le jeu face au check-raise et le détail en onze familles.
-- **En défense** (l'autre joueur), le même découpage vu d'en face : pour chaque groupe, ce que fait la défense
-  face à la c-bet (fold, call, relance, et le fold au-delà duquel la mise rapporte d'elle-même : 25 % face à une
-  mise de 33 % du pot), la règle par famille de mains, la défense face au 2e barrel selon la turn et au 3e barrel
-  selon la river, et ce qu'elle fait quand l'attaquant checke (probe à la turn quand elle est hors de position,
-  stab au flop quand elle est en position).
-- **Les flops résolus** : chacun avec sa catégorie, sa stratégie, sa c-bet et sa taille, le fold de la défense
-  face à la c-bet et les deux avantages ; un clic l'ouvre dans l'explorateur.
+  **taille** (petite, moyenne, grosse mise ou tapis, avec le % du pot de l'arbre) : *miser range* (c-bet de 70 % et
+  plus : une mise avec presque toute la range), *stratégie mixte* (de 35 à 70 % : on mise une partie des mains, on
+  checke les autres) et *checker range* (35 % et moins). Chaque groupe (stratégie et taille) montre sa fréquence de
+  c-bet, son nombre de flops et des flops résolus en exemple, de catégories différentes (haut, moyen ou bas ; sec,
+  deux couleurs ou connecté ; pairé ; monotone) : un clic ouvre l'étude dans l'explorateur pour entrer dans le
+  détail. Une stratégie sans flop dit pourquoi (par exemple : le bouton mise toujours au moins 40 %). Le détail d'un
+  groupe : tous ses flops, le pourquoi (avantage d'équité et de nuts), la règle au flop pour quatre familles de
+  mains, *fortes* (deux paires et mieux, overpair, top pair bon kicker), *moyennes* (top pair petit kicker, paires
+  moyennes et petites), *tirages* (couleur, quinte) et *rien* (hauteur, gutshots, backdoors), puis à la turn et à la
+  river selon la carte (overcard, brique, board pairé, couleur ou quinte possible), avec la fréquence de mise et la
+  **taille préférée** (la plus jouée à cette carte, en % du pot de l'arbre, et sa part des mises, puis les autres ;
+  chaque famille de mains avec sa taille la plus jouée) ; repliés : la river après la c-bet payée et la turn
+  checkée, la c-bet retardée, le jeu face au check-raise et le détail en onze familles.
+- **En défense** (l'autre joueur), le même découpage vu d'en face : pour chaque groupe, ce que fait la défense face
+  à la c-bet (fold, call, relance, et le fold au-delà duquel la mise rapporte d'elle-même : 25 % face à une mise de
+  33 % du pot), la règle par famille de mains, la défense face au 2e barrel selon la turn et au 3e barrel selon la
+  river (et à la mise river après une turn checkée), et ce qu'elle fait quand l'attaquant checke (probe à la turn
+  quand elle est hors de position, stab au flop quand elle est en position).
+- **Les flops résolus** : chacun avec sa catégorie, sa stratégie, sa c-bet et sa taille, le fold de la défense face
+  à la c-bet et les deux avantages ; un clic l'ouvre dans l'explorateur.
+- **Contre le field** (troisième onglet de chaque famille) : le plan suggéré, avec quelques ajustements légers pour
+  exploiter les leaks d'une population de l'Étude du field, au choix : les réguliers, les récréatifs ou un style de
+  récréatifs (passifs, agressifs, prudents), du format de la famille (heads-up ou tables à plusieurs) et au niveau
+  de limites où tu as le plus de mains (les autres niveaux en lien). Chaque leak qui touche le jeu après le flop
+  donne un ajustement parti du chiffre du plan : « le plan c-bet 58 % de la range ; contre eux, vers 68 %, en
+  ajoutant des mains « rien » que le plan checke » (ils foldent trop face à la c-bet), « face au 2e barrel, le plan
+  folde 40 % ; contre eux, vers 30 % » (ils barrellent trop)… ; quand tu as l'initiative, ce sont les leaks des
+  défenseurs qui comptent (folds face à la c-bet, aux barrels et à la river, check-raises, abattage, mises quand tu
+  checkes), quand tu défends ceux des attaquants (c-bet, 2e et 3e barrels, agressivité). Chaque ajustement montre
+  son leak et ses chiffres, « à confirmer » sur un petit échantillon. Code : `analyzer/field_plan.py`.
 
 ## Coach
 
@@ -1254,7 +1332,7 @@ aussitôt.
 | Section | Ce qu'on y trouve |
 |---|---|
 | Plan de jeu | Son profil en une phrase et au plus 4 consignes par moment du coup (préflop, quand tu mises, face à ses mises, à tester), chacune avec sa preuve chiffrée et un niveau de confiance |
-| Résultat | Ton gain en bb et en €, bb/100, résultat **EV all-in** (la part de chance), gains avec/sans abattage, courbe main par main (une case par courbe dans la légende pour la masquer ; l'échelle suit les courbes affichées, le choix est gardé) |
+| Résultat | Ton gain en bb et en €, bb/100, résultat **EV all-in** (la part de chance), gains avec/sans abattage, rake payé (€ et bb/100), courbe main par main (une case par courbe dans la légende pour la masquer ; l'échelle suit les courbes affichées, le choix est gardé) |
 | Lecture de l'adversaire | Ses écarts aux repères d'un régulier HU, classés par importance, avec l'exploit correspondant ; tes propres écarts dans ce match |
 | Le duel | Ses attaques face à tes réponses (ses 3bets / tes folds vs 3bet, ses barrels / tes folds...), avec alerte quand il t'exploite — en tenant compte de ta main quand tu as foldé |
 | Ses lignes : value ou bluff ? | Chaque ligne postflop (c-bet, check-raise, barrel, mise après check…, par taille) : combien de fois, ta réponse, **avec quoi tu as foldé**, ce qu'il a montré (bluff / semi-bluff / value fine / value, selon son équité réelle contre ta main) et un verdict qui tient compte de la taille de l'échantillon. Synthèse par taille, ce qu'il montre quand il checke, timing selon sa main |
@@ -1330,8 +1408,11 @@ analyzer/
   errors.py            une demande qui ne désigne rien (NotFound : « introuvable »), à part des erreurs d'analyse
   memory.py            grosse base de mains : ramasse-miettes en pause pendant un chargement, mains mises à l'écart
   players.py           type des adversaires : régulier ou récréatif (choix et suggestion)
+  rake.py              le rake payé : ta part du rake de chaque pot, au prorata de ce que tu y as mis (rakeback)
+  stakes.py            niveaux de limites (micro, milieu, hautes) d'après la grosse blinde, pour l'Étude du field
   field.py             étude du field : leaks à exploiter d'un adversaire, sa value et ses bluffs par ligne, style
                        des récréatifs (passif, agressif, prudent)
+  field_plan.py        le plan de jeu suggéré ajusté aux leaks d'une population du field (réguliers, récréatifs)
   reference.py         joueurs de référence : vos résultats et vos fréquences côte à côte, ses lignes de value et de
                        bluff avec toutes ses cartes connues
   settings.py          tes paramètres : tes pseudos réunis, les formats que tu joues, coach, seuil du field, tes

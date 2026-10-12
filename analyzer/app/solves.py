@@ -32,7 +32,8 @@ class Job:
     target: float
     state: str = "waiting"  # waiting | running | done | error | cancelled
     mode: str = "solve"  # solve | load (étude enregistrée) | choose (choix des tailles) | analyse (main jouée)
-    #                      | plan (extraction du plan de jeu d'une étude)
+    #                      | plan (extraction du plan de jeu d'une étude) | batch (une suite de calculs, ex. affiner
+    #                      un niveau du plan de jeu)
     progress: dict = field(default_factory=dict)
     result: Optional[dict] = None
     error: Optional[str] = None
@@ -343,6 +344,56 @@ class SolveQueue:
         finally:
             session.close()
             job.process = None
+
+    def batch(self, key: str, items: list, run_one: Callable[[Job, object], None],
+              describe: Callable[[object], str] = str) -> dict:
+        """Une suite de calculs en une seule tâche de la file (affiner un niveau du plan de jeu : quelques flops résolus
+        de nouveau, l'un après l'autre) ; run_one(job, item) fait chacun (job.process : le programme lancé ;
+        job.cancelled : l'arrêt demandé). job.progress : « done » et « total » (calculs faits et prévus), l'étape en
+        cours (describe(item)) et l'avancement de la résolution en cours."""
+        with self._lock:
+            current = self._jobs.get(key)
+            if current and current.state in ("waiting", "running"):
+                return current.view()
+            job = Job(key, key, *self.precision(), mode="batch")
+            job.progress.update(done=0, total=len(items))
+            self._jobs[key] = job
+        self._executor.submit(self._run_batch, job, items, run_one, describe)
+        return job.view()
+
+    def _run_batch(self, job: Job, items: list, run_one: Callable[[Job, object], None],
+                   describe: Callable[[object], str]) -> None:
+        if job.cancelled:
+            return
+        self._set_live("", None)  # une résolution à la fois en mémoire
+        job.state, job.started = "running", time.time()
+        try:
+            for k, item in enumerate(items):
+                if job.cancelled:
+                    break
+                job.progress.clear()
+                job.progress.update(done=k, total=len(items), stage=describe(item))
+                run_one(job, item)
+            if job.cancelled:
+                job.state = "cancelled"
+            else:
+                job.progress.update(done=len(items), stage=None)
+                job.state = "done"
+                self._finished(job)
+        except postflop.SolverError as exc:
+            job.state = "cancelled" if job.cancelled else "error"
+            job.error = None if job.cancelled else str(exc)
+        except Exception:  # noqa: BLE001 — l'erreur est montrée dans l'interface
+            traceback.print_exc()
+            job.state, job.error = "error", "Erreur inattendue pendant le calcul (détails dans le terminal)."
+        finally:
+            job.process = None
+
+    def views(self, prefix: str) -> dict[str, dict]:
+        """Les tâches dont la clé commence par prefix (celles d'une suite de calculs : batch)."""
+        with self._lock:
+            jobs = [j for k, j in self._jobs.items() if k.startswith(prefix)]
+        return {j.key: j.view() for j in jobs}
 
     def node(self, spot, path: list) -> dict:
         """Nœud au bout du chemin : depuis la session si elle est ouverte, sinon depuis le cache. Les mains

@@ -98,6 +98,77 @@ class LibraryTest(IsolatedHome):
             self.assertIn("cbet", plan["nodes"])
         lib.solves.shutdown()
 
+    @unittest.skipIf(os.name == "nt", "faux solveur : script exécutable POSIX")
+    def test_refine_plan(self):
+        # « Affiner au solveur » : des flops lus, résolus de nouveau avec le flop d'un niveau imposé, en une tâche
+        from analyzer.app.plan_page import build_coach_page
+        from analyzer.theory import coach, postflop, studyspots
+        try:
+            from .test_coach import make_query
+        except ImportError:
+            from test_coach import make_query
+        lib = Library(self.folder)
+        self.addCleanup(lib.solves.shutdown)
+        env = {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.folder / "home"), "ANALYZER_SOLVER": str(FAKE_SOLVER)}
+        with mock.patch.dict(os.environ, env):
+            studies = {}
+            for board in (["Ks", "7d", "2c"], ["9s", "8d", "6c"]):
+                spot = studyspots.StudySpot("srp", board, plan={})
+                key = postflop.study_key(spot.request())
+                coach.save_plan(coach.extract(make_query(board), spot, key))
+                studies[spot.ident] = {"id": spot.ident, "key": key, "family": "srp", "board": board, "seconds": 30}
+            # la résolution d'origine du premier flop (son EV à la racine) ; le second n'en a plus
+            postflop._save_cache(studyspots.StudySpot("srp", ["Ks", "7d", "2c"]).request(),
+                                 {"root_ev": [2.4, 2.6], "exploit_pct": 1.0})
+            with mock.patch.object(studyspots, "spot_studies", lambda families=None: studies):
+                # la durée attendue : l'arbre lu avant, chaque résolution verrouillée (une part de celle d'origine)
+                # et sa relecture (deux pour la turn imposée)
+                self.assertEqual(coach.family_plan("srp")["refine"], {"flops": 2, "seconds": {
+                    "attack-flop": 2 * (0.7 * 30 + 60 + 6), "attack-turn": 2 * (2 * (0.7 * 30 + 60) + 6),
+                    "defense-flop": 2 * (0.9 * 30 + 60 + 6)}})
+                with self.assertRaises(ValueError):
+                    lib.plan_refine("srp", "inconnu")
+                with self.assertRaises(ValueError):
+                    lib.plan_refine("srp", "mains", "defense")  # (la défense n'a pas ce niveau)
+
+                def run(side: str, mode: str) -> dict:
+                    key = f"srp|{side}|{mode}|une"
+                    state = lib.plan_refine("srp", "une", side, mode)
+                    self.assertIn(state["jobs"][key]["state"], ("waiting", "running", "done"))
+                    deadline = time.time() + 60
+                    while lib.plan_refine_state()["jobs"][key]["state"] in ("waiting", "running") \
+                            and time.time() < deadline:
+                        time.sleep(0.05)
+                    return lib.plan_refine_state()["jobs"][key]
+                job = run("attack", "flop")
+                self.assertEqual((job["state"], job["progress"]["done"]), ("done", 2), job.get("error"))
+                found = coach.refined("srp")[("attack", "flop", "une")]
+                self.assertEqual(sorted("".join(r["board"]) for r in found), ["9s8d6c", "Ks7d2c"])
+                self.assertEqual(found[0]["exploit"][0], 4.2)
+                refined = coach.family_plan("srp")["levels"]["attack"]["steps"][0]["refined"]
+                self.assertEqual((refined["flops"], refined["stale"]), (2, 0))
+                ks = next(r for r in found if r["board"] == ["Ks", "7d", "2c"])
+                self.assertAlmostEqual(refined["loss"], (2.6 - ks["root_ev"][1]) / 5)  # le seul flop qui a son origine
+                self.assertIn("delayed", refined["streets"])  # la turn après le flop checké, relue
+                # la turn imposée en plus (le niveau 1 checke toute la range : la c-bet retardée, sur l'arbre lu
+                # avant), puis la défense face à la c-bet
+                self.assertEqual(run("attack", "turn")["state"], "done")
+                self.assertEqual(run("defense", "flop")["state"], "done")
+                found = coach.refined("srp")
+                turn = next(r for r in found[("attack", "turn", "une")] if r["board"] == ["Ks", "7d", "2c"])
+                self.assertGreater(turn["locks"], 0)
+                defense = found[("defense", "flop", "une")]
+                self.assertEqual({r["player"] for r in defense}, {0})  # la BB, qui défend
+                self.assertTrue(all(r["locks"] for r in defense))
+                plan = coach.family_plan("srp")
+                self.assertEqual(plan["levels"]["attack"]["steps"][0]["refined_turn"]["flops"], 2)
+                self.assertEqual(plan["levels"]["defense"]["steps"][0]["refined"]["flops"], 2)
+                page = build_coach_page({"missing": 0, "busy": 0})
+                for text in ("Affiné sur 2 flop(s)", "affinée au solveur</span>", 'data-key="srp|attack|flop|une"',
+                             "Imposer la turn de nouveau", 'data-key="srp|defense|flop|une"', 'data-cote="defense"',
+                             "Ce que coûte vraiment cette défense simplifiée"):
+                    self.assertIn(text, page)
+
     def test_students(self):
         with mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.folder / "home")}):
             main = Library(self.folder / "moi")  # aucune main à moi

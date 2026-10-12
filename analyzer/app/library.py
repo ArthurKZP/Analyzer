@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import quote
 
-from .. import (aliases, bluffs, db, field, handplay, leaks, memory, players, ring, ring_leaks, settings, spots, store,
-               students)
+from .. import (aliases, bluffs, db, field, handplay, leaks, memory, players, ring, ring_leaks, settings, spots, stakes,
+               store, students)
 from .. import period as periods
 from .. import reference as refstudy
 from ..db import analyses as db_analyses
@@ -42,7 +42,7 @@ from .report_pdf import build_pdf
 from .report_pptx import build_pptx
 from .bluffs_page import build_bluffs_page
 from .import_job import ImportJob
-from .field_leaks_page import build_group_page, build_list_page, build_player_page
+from .field_leaks_page import build_group_page, build_list_page, build_player_page, stakes_switch
 from .field_page import build_players_page
 from .ranges_page import build_ranges_page
 from .settings_page import build_settings_page
@@ -873,7 +873,9 @@ class Library:
         return spots.hand_record(hand, self.hero, hand.opponent_of(self.hero))
 
     # --- étude du field -------------------------------------------------------------------
-    def field_page(self, page: str, table_format: Optional[str] = None) -> str:
+    # Chaque adversaire est étudié à un niveau de limites (stakes) : ses mains de ce niveau, face aux repères et aux
+    # exploits de ce niveau (field.band_defs) ; les pages partent du niveau où tu as le plus de mains.
+    def field_page(self, page: str, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
         """Étude du field : le leakfinding des réguliers et des récréatifs, les bluffs des réguliers (heads-up), tes
         adversaires et leur type."""
         if page not in FIELD_PAGES:
@@ -883,7 +885,7 @@ class Library:
         if not self.hands and not self.ring:
             raise UnknownPlayer("moi")
         if page in ("regs", "recs"):
-            return self.field_list(page[:3], table_format)
+            return self.field_list(page[:3], table_format, band)
         return build_players_page(self.summary()["opponents"] if self.hands else [], self.ring_opponents_view(),
                                   aliases.groups())
 
@@ -895,91 +897,127 @@ class Library:
         wanted = "HU" if table_format == "HU" else ring_leaks.FORMAT if table_format else None
         return wanted if wanted in formats else formats[0]
 
-    def _field_rows(self, fmt: str) -> list[dict]:
-        """Tes adversaires d'un format, du plus joué au moins joué : mains, ton résultat, type."""
-        if fmt == "HU":
-            kinds = self.kinds()
-            return [{"name": o["name"], "hands": o["hands"], "net_bb": o["net_bb"], "bb100": o["bb100"],
-                     "info": kinds[o["name"]]} for o in self.opponents()]
-        kinds = self.ring_kinds()
-        return [{"name": o["name"], "hands": o["hands"], "net_bb": o["net_bb"], "bb100": o["bb100"],
-                 "info": kinds[o["name"]]} for o in self.ring_opponents()]
+    def field_bands(self, fmt: str) -> list[tuple[str, int]]:
+        """Les niveaux de limites de tes mains d'un format, et leur nombre."""
+        return self._cached(("field_bands", fmt), lambda: stakes.counts(self.hands if fmt == "HU" else self.ring))
 
-    def _field_index(self, fmt: str) -> dict[str, list[Hand]]:
-        """Les mains d'un format par joueur (pour étudier chacun sans relire toutes les mains)."""
+    def _field_band(self, fmt: str, wanted: Optional[str]) -> str:
+        band = stakes.choose(wanted, self.field_bands(fmt))
+        if band is None:
+            raise UnknownPlayer("aucune main")
+        return band
+
+    def _band_hands(self, fmt: str, band: str) -> list[Hand]:
+        """Tes mains d'un format à un niveau de limites (toutes, s'il n'y en a qu'un)."""
+        hands = self.hands if fmt == "HU" else self.ring
+        if len(self.field_bands(fmt)) <= 1:
+            return hands
+        return self._cached(("band_hands", fmt, band), lambda: stakes.select(hands, band))
+
+    def _field_rows(self, fmt: str, band: str) -> list[dict]:
+        """Tes adversaires d'un format à un niveau de limites, du plus joué au moins joué : mains, ton résultat,
+        type."""
+        def build():
+            if not self.hero:
+                return []
+            hands = self._band_hands(fmt, band)
+            return opponent_results(hands, self.hero) if fmt == "HU" else ring.opponents(hands, self.hero)
+        kinds = self.kinds() if fmt == "HU" else self.ring_kinds()
+        return [{"name": o["name"], "hands": o["hands"], "net_bb": o["net_bb"], "bb100": o["bb100"],
+                 "info": kinds[o["name"]]} for o in self._cached(("field_rows", fmt, band), build)
+                if o["name"] in kinds]
+
+    def _field_index(self, fmt: str, band: str) -> dict[str, list[Hand]]:
+        """Les mains d'un format et d'un niveau par joueur (pour étudier chacun sans relire toutes les mains)."""
         def build():
             index: dict[str, list[Hand]] = {}
-            for h in self.hands if fmt == "HU" else self.ring:
+            for h in self._band_hands(fmt, band):
                 for name in h.seats:
                     index.setdefault(name, []).append(h)
             return index
-        return self._cached(("field_index", fmt), build)
+        return self._cached(("field_index", fmt, band), build)
 
-    def field_study(self, fmt: str, names: tuple) -> "field.Study":
-        """L'étude d'un adversaire ou d'un groupe (field.study), gardée en cache."""
+    def _band_stats(self, band: str) -> dict:
+        """Les stats heads-up de tes adversaires à un niveau de limites."""
+        if len(self.field_bands("HU")) <= 1:
+            return self.all_stats()
+        return self._cached(("stats", band), lambda: analyze(self._band_hands("HU", band)))
+
+    def field_study(self, fmt: str, names: tuple, band: str) -> "field.Study":
+        """L'étude d'un adversaire ou d'un groupe à un niveau de limites (field.study), gardée en cache."""
         def build():
-            index = self._field_index(fmt)
+            index = self._field_index(fmt, band)
             hands = list({h.hand_id: h for n in names for h in index.get(n, [])}.values())
             hands.sort(key=lambda h: h.date)
             if fmt == "HU":
-                stats = self.all_stats()
+                stats = self._band_stats(band)
                 found = [stats[n] for n in names if n in stats]
                 ps = found[0] if len(found) == 1 else field.merge_stats(found)
-                return field.study(hands, names, "HU", ps)
-            return field.study(hands, names, "ring")
-        return self._cached(("field_study", fmt, names), build)
+                return field.study(hands, names, "HU", ps, band)
+            return field.study(hands, names, "ring", band=band)
+        return self._cached(("field_study", fmt, band, names), build)
 
-    def _field_switch(self, fmt: str) -> str:
-        return format_switch(self.leak_formats(), fmt)
+    def _field_switch(self, fmt: str, band: str) -> str:
+        return format_switch(self.leak_formats(), fmt) + stakes_switch(self.field_bands(fmt), band, fmt)
 
-    def field_list(self, kind: str, table_format: Optional[str] = None) -> str:
-        """Les réguliers (« reg ») ou les récréatifs (« rec ») que tu croises le plus, avec leurs leaks à exploiter ;
-        les récréatifs aussi par style."""
+    def field_list(self, kind: str, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
+        """Les réguliers (« reg ») ou les récréatifs (« rec ») que tu croises le plus à un niveau de limites, avec leurs
+        leaks à exploiter ; les récréatifs aussi par style."""
         fmt = self._field_format(table_format)
+        band = self._field_band(fmt, band)
         min_hands = settings.load()["min_hands"]
         kinds_key = self._kinds_key() if fmt == "HU" else (self._ring_kinds_key(),)
 
         def build():
-            every = [r for r in self._field_rows(fmt) if r["info"]["kind"] == kind]
-            rows = [(r, self.field_study(fmt, (r["name"],))) for r in every if r["hands"] >= min_hands]
+            every = [r for r in self._field_rows(fmt, band) if r["info"]["kind"] == kind]
+            rows = [(r, self.field_study(fmt, (r["name"],), band)) for r in every if r["hands"] >= min_hands]
             names = tuple(r["name"] for r, _ in rows)
-            population = self.field_study(fmt, names) if len(names) > 1 else None
+            population = self.field_study(fmt, names, band) if len(names) > 1 else None
             groups = []
             if kind == "rec":
                 for style in field.STYLE_ORDER:
                     members = [r for r, st in rows if st.style[0] == style]
                     if members:
                         groups.append({"style": style, "members": members,
-                                       "study": self.field_study(fmt, tuple(m["name"] for m in members))})
-            return build_list_page(kind, fmt, rows, population, min_hands, len(every), self._field_switch(fmt), groups)
-        return self._cached(("field", kind, fmt, min_hands) + tuple(kinds_key), build)
+                                       "study": self.field_study(fmt, tuple(m["name"] for m in members), band)})
+            return build_list_page(kind, fmt, rows, population, min_hands, len(every), self._field_switch(fmt, band),
+                                   groups, band=band)
+        return self._cached(("field", kind, fmt, band, min_hands) + tuple(kinds_key), build)
 
-    def field_player(self, name: str, table_format: Optional[str] = None) -> str:
-        """La fiche d'un adversaire dans l'Étude du field : ses leaks, sa value et ses bluffs par ligne."""
-        rows = {fmt: next((r for r in self._field_rows(fmt) if r["name"] == name), None)
-                for fmt, _ in self.leak_formats()}
-        rows = {fmt: r for fmt, r in rows.items() if r}
-        if not rows:
+    def field_player(self, name: str, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
+        """La fiche d'un adversaire dans l'Étude du field, à un niveau de limites (celui demandé, sinon celui où il
+        a le plus de mains) : ses leaks, sa value et ses bluffs par ligne."""
+        found = {}  # format -> {niveau: sa ligne}
+        for fmt, _ in self.leak_formats():
+            by_band = {b: r for b, _ in self.field_bands(fmt) for r in self._field_rows(fmt, b) if r["name"] == name}
+            if by_band:
+                found[fmt] = by_band
+        if not found:
             raise UnknownPlayer(name)
         wanted = "HU" if table_format == "HU" else ring_leaks.FORMAT if table_format else None
-        fmt = wanted if wanted in rows else next(iter(rows))
-        row = rows[fmt]
-        switch = format_switch([(f, r["hands"]) for f, r in rows.items()], fmt)
-        fiche = f"/#/adversaire/{quote(name, safe='')}/plan" if "HU" in rows else ""
-        return build_player_page(row, self.field_study(fmt, (name,)), fmt, row["info"], switch, fiche)
+        fmt = wanted if wanted in found else next(iter(found))
+        mine = found[fmt]
+        band = stakes.choose(band, [(b, r["hands"]) for b, r in mine.items()])
+        row = mine[band]
+        switch = format_switch([(f, sum(r["hands"] for r in rows.values())) for f, rows in found.items()], fmt)
+        switch += stakes_switch([(b, r["hands"]) for b, r in mine.items()], band, fmt)
+        fiche = f"/#/adversaire/{quote(name, safe='')}/plan" if "HU" in found else ""
+        return build_player_page(row, self.field_study(fmt, (name,), band), fmt, row["info"], switch, fiche, band=band)
 
-    def field_group(self, style: str, table_format: Optional[str] = None) -> str:
-        """La fiche d'un groupe de récréatifs (un style) : ses joueurs, son plan, ses leaks et ses lignes réunis."""
+    def field_group(self, style: str, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
+        """La fiche d'un groupe de récréatifs (un style) à un niveau de limites : ses joueurs, son plan, ses leaks et
+        ses lignes réunis."""
         if style not in field.STYLES:
             raise NotFound(style)
         fmt = self._field_format(table_format)
+        band = self._field_band(fmt, band)
         min_hands = settings.load()["min_hands"]
-        rows = [r for r in self._field_rows(fmt) if r["info"]["kind"] == "rec" and r["hands"] >= min_hands]
-        members = [(r, st) for r in rows for st in [self.field_study(fmt, (r["name"],))] if st.style[0] == style]
+        rows = [r for r in self._field_rows(fmt, band) if r["info"]["kind"] == "rec" and r["hands"] >= min_hands]
+        members = [(r, st) for r in rows for st in [self.field_study(fmt, (r["name"],), band)] if st.style[0] == style]
         if not members:
             raise UnknownPlayer(style)
-        study = self.field_study(fmt, tuple(r["name"] for r, _ in members))
-        return build_group_page(style, fmt, study, members, self._field_switch(fmt))
+        study = self.field_study(fmt, tuple(r["name"] for r, _ in members), band)
+        return build_group_page(style, fmt, study, members, self._field_switch(fmt, band), band=band)
 
     def _population_bluffs(self) -> str:
         """Les bluffs des réguliers, ensemble puis un par un."""
@@ -2020,8 +2058,79 @@ class Library:
                 self.solves.cancel(view["job"])
         return self.plan_state()
 
-    def plan_page(self) -> str:
-        return build_coach_page(self.plan_state(), villains=tuple(o["name"] for o in self.opponents()))
+    REFINE = "affiner|"  # tâches « affiner un niveau du plan » de la file : « affiner|famille|côté|façon|niveau »
+
+    def plan_refine_state(self) -> dict:
+        """Les niveaux du plan en cours d'affinage au solveur (ou affinés depuis le lancement) :
+        {"famille|côté|façon|niveau": tâche}."""
+        return {"ready": postflop.status()["ready"],
+                "jobs": {k[len(self.REFINE):]: v for k, v in self.solves.views(self.REFINE).items()}}
+
+    def plan_refine(self, family: str, level: str, side: str = "attack", mode: str = "flop") -> dict:
+        """Affine un niveau du plan au solveur (coach.refine_spots) : quelques flops résolus de nouveau avec une partie
+        du niveau imposée (side, mode : coach.REFINE_MODES), à la précision de leur résolution d'origine, en une
+        tâche de la file."""
+        if (family not in coach.plan_families() or (side, mode) not in coach.REFINE_MODES
+                or level not in {key for key, _, _ in coach.STEPS[side]}):
+            raise ValueError("Niveau inconnu.")
+        if not postflop.status()["ready"]:
+            raise ValueError("Installe d'abord le solveur : python -m analyzer gtopen --installer")
+        items = coach.refine_spots(family, level, side, mode)
+        if not items:
+            raise ValueError("Pas encore de flop lu pour ce niveau : clique d'abord sur « Préparer le plan ».")
+
+        def run_one(job, item: dict) -> None:
+            def started(proc) -> None:
+                job.process = proc
+                if job.cancelled:  # arrêt demandé pendant le lancement
+                    proc.terminate()
+            base = item["base"]
+            iterations, target = ((base["max_iterations"], base["target_exploit_pct"]) if base
+                                  else self.solves.precision())
+            coach.refine_one(item, iterations, target, on_progress=job.progress.update, on_start=started)
+        self.solves.batch(f"{self.REFINE}{family}|{side}|{mode}|{level}", items, run_one,
+                          lambda item: studyspots.board_text(item["spot"].board))
+        return self.plan_refine_state()
+
+    def plan_refine_cancel(self, family: str, level: str, side: str = "attack", mode: str = "flop") -> dict:
+        self.solves.cancel(f"{self.REFINE}{family}|{side}|{mode}|{level}")
+        return self.plan_refine_state()
+
+    def plan_field(self, band: Optional[str] = None) -> dict:
+        """Les populations de l'Étude du field, pour ajuster le plan de jeu (field_plan) : par format de tes mains, à
+        un niveau de limites (celui demandé, sinon celui où tu as le plus de mains), les réguliers, les récréatifs et
+        chaque style de récréatifs (ceux qui ont assez de mains pour en avoir un), avec leur étude."""
+        out = {}
+        min_hands = settings.load()["min_hands"]
+        for fmt, _ in self.leak_formats():
+            found = self.field_bands(fmt)
+            chosen = stakes.choose(band, found)
+            if chosen is None:
+                continue
+            rows = self._field_rows(fmt, chosen)
+            populations = []
+            for kind, label in (("reg", "Les réguliers"), ("rec", "Les récréatifs")):
+                names = tuple(r["name"] for r in rows if r["info"]["kind"] == kind)
+                if names:
+                    populations.append({"key": kind, "label": label, "players": len(names),
+                                        "study": self.field_study(fmt, names, chosen)})
+            styles: dict[str, list[str]] = {}
+            for r in rows:
+                if r["info"]["kind"] == "rec" and r["hands"] >= min_hands:
+                    style = self.field_study(fmt, (r["name"],), chosen).style[0]
+                    if style != "autre":
+                        styles.setdefault(style, []).append(r["name"])
+            for style in field.STYLE_ORDER:
+                if style in styles:
+                    label = "Récréatifs " + field.STYLES[style].name.lower()
+                    populations.append({"key": f"rec-{style}", "label": label, "players": len(styles[style]),
+                                        "study": self.field_study(fmt, tuple(styles[style]), chosen)})
+            out[fmt] = {"band": chosen, "bands": found, "populations": populations}
+        return out
+
+    def plan_page(self, band: Optional[str] = None) -> str:
+        return build_coach_page(self.plan_state(), villains=tuple(o["name"] for o in self.opponents()),
+                                field=self.plan_field(band))
 
     # --- analyse des mains jouées ---------------------------------------------------
     def review_state(self, villain: Optional[str] = None, start: bool = False) -> dict:

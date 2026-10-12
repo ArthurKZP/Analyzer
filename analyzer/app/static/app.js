@@ -89,8 +89,8 @@
     if (parts[0] === 'moi' && parts[1] === 'bluffs') return { view: 'field', tab: 'bluffs' };  // ancienne adresse
     if (parts[0] === 'moi') return { view: 'moi', tab: tabOf('moi', parts[1], 'bilan') };
     if (parts[0] === 'field' && parts[1] === 'joueurs') return { view: 'parametres', tab: 'joueurs' };  // ancienne adresse
-    if (parts[0] === 'field' && parts[1] === 'joueur' && parts[2]) return { view: 'field', tab: 'joueur', player: parts[2], fmt: parts[3] || null };
-    if (parts[0] === 'field' && parts[1] === 'groupe' && parts[2]) return { view: 'field', tab: 'groupe', group: parts[2], fmt: parts[3] || null };
+    if (parts[0] === 'field' && parts[1] === 'joueur' && parts[2]) return { view: 'field', tab: 'joueur', player: parts[2], fmt: parts[3] || null, stakes: parts[4] || null };
+    if (parts[0] === 'field' && parts[1] === 'groupe' && parts[2]) return { view: 'field', tab: 'groupe', group: parts[2], fmt: parts[3] || null, stakes: parts[4] || null };
     if (parts[0] === 'field') return { view: 'field', tab: tabOf('field', parts[1], 'regs') };
     if (parts[0] === 'parametres') return { view: 'parametres', tab: tabOf('parametres', parts[1], 'general') };
     if (parts[0] === 'eleves') return { view: 'eleves' };
@@ -103,8 +103,9 @@
   function hashFor(r) {
     if (r.view === 'adv') return '#/adversaire/' + encodeURIComponent(r.player) + '/' + r.tab;
     if (r.view === 'moi') return '#/moi/' + r.tab;
-    if (r.view === 'field' && r.tab === 'joueur') return '#/field/joueur/' + encodeURIComponent(r.player) + (r.fmt ? '/' + r.fmt : '');
-    if (r.view === 'field' && r.tab === 'groupe') return '#/field/groupe/' + encodeURIComponent(r.group) + (r.fmt ? '/' + r.fmt : '');
+    const where = r.fmt ? '/' + r.fmt + (r.stakes ? '/' + r.stakes : '') : '';  // format, puis limites
+    if (r.view === 'field' && r.tab === 'joueur') return '#/field/joueur/' + encodeURIComponent(r.player) + where;
+    if (r.view === 'field' && r.tab === 'groupe') return '#/field/groupe/' + encodeURIComponent(r.group) + where;
     if (r.view === 'field') return '#/field/' + r.tab;
     if (r.view === 'parametres') return '#/parametres/' + r.tab;
     if (r.view === 'etudes') return '#/etudes/' + r.tab;
@@ -125,9 +126,11 @@
     }
     if (r.view === 'entraineur') return '/entraineur';
     if (r.view === 'parametres') return '/parametres/' + r.tab;
-    if (r.view === 'field') {  // le format choisi en dernier dans l'Étude du field (ou celui de la fiche)
+    if (r.view === 'field') {  // le format et les limites choisis en dernier dans l'Étude du field (ou ceux de la fiche)
       const fmt = r.fmt || pref('format:/field');
-      const query = fmt ? '?format=' + encodeURIComponent(fmt) : '';
+      const stakes = r.fmt ? r.stakes : pref('limites:/field');
+      const query = (fmt ? '?format=' + encodeURIComponent(fmt) : '')
+        + (fmt && stakes ? '&limites=' + encodeURIComponent(stakes) : '');
       if (r.tab === 'joueur') return '/field/joueur/' + encodeURIComponent(r.player) + query;
       if (r.tab === 'groupe') return '/field/groupe/' + encodeURIComponent(r.group) + query;
       return '/field/' + r.tab + query;
@@ -1122,14 +1125,22 @@
     else if (parts[0] === 'eleve' && parts.length === 3) r = { view: 'eleve', student: parts[1], tab: parts[2] };
     else if (parts[0] === 'reference' && parts.length === 3) r = { view: 'reference', ref: parts[1], tab: parts[2] };
     if (!r) return;
-    if (r.view === 'field') {  // le format de la page : gardé pour les pages suivantes du field
-      const fmt = new URLSearchParams(e.data.search || '').get('format');
-      if (fmt && ['regs', 'recs'].includes(r.tab)) pref('format:/field', fmt === 'HU' ? 'HU' : 'ring');
-      if (fmt && (r.tab === 'joueur' || r.tab === 'groupe')) r.fmt = fmt === 'HU' ? 'HU' : 'ring';
+    if (r.view === 'field') {  // le format et les limites de la page : gardés pour les pages suivantes du field
+      const query = new URLSearchParams(e.data.search || '');
+      const fmt = query.get('format');
+      const stakes = ['micro', 'milieu', 'hautes'].includes(query.get('limites')) ? query.get('limites') : null;
+      if (fmt && ['regs', 'recs'].includes(r.tab)) {
+        pref('format:/field', fmt === 'HU' ? 'HU' : 'ring');
+        pref('limites:/field', stakes);
+      }
+      if (fmt && (r.tab === 'joueur' || r.tab === 'groupe')) {
+        r.fmt = fmt === 'HU' ? 'HU' : 'ring';
+        r.stakes = stakes;
+      }
     }
     frame.dataset.src = srcFor(r);
     if (route && route.view === r.view && route.player === r.player && route.tab === r.tab && route.group === r.group
-      && route.ref === r.ref && (route.fmt || null) === (r.fmt || null)) return;
+      && route.ref === r.ref && (route.fmt || null) === (r.fmt || null) && (route.stakes || null) === (r.stakes || null)) return;
     route = r;
     history.replaceState(null, '', hashFor(r));
     renderHeader();

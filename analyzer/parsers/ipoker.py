@@ -11,7 +11,7 @@ import re
 from datetime import datetime
 from typing import Iterator
 
-from ..models import BET, CALL, CHECK, FOLD, POST_ANTE, POST_BB, POST_SB, RAISE, Action, Hand, Seat
+from ..models import BET, CALL, CHECK, FOLD, POST_ANTE, POST_BB, POST_SB, RAISE, Action, Hand, Seat, real_cards
 
 SITE = "iPoker"
 _START_RE = re.compile(r"^GAME #\d+ ", re.M)
@@ -139,8 +139,10 @@ def parse_hand(chunk: str) -> Hand | None:
             continue
         m = _DEALT_RE.match(line)
         if m and m.group(1) in listed:
-            listed[m.group(1)].is_hero = True
-            hand.hole_cards[m.group(1)] = [card(c) for c in m.group(2).split()]
+            cards = [card(c) for c in m.group(2).split()]
+            if real_cards(cards):  # « [X X] » : les cartes cachées d'un adversaire, pas le héros
+                listed[m.group(1)].is_hero = True
+                hand.hole_cards[m.group(1)] = cards
             continue
         player = next((p for p in names if line.startswith(p + ": ")), None)
         if player is None:

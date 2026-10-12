@@ -8,7 +8,8 @@ from typing import Optional
 
 from .. import ring
 from ..models import FOLD, Hand
-from ..report import SCRIPT, chart_svg, html_page, legend, num, pct_cell
+from ..rake import paid as rake_paid
+from ..report import SCRIPT, chart_svg, html_page, legend, num, pct_cell, rake_tile
 from ..selfreport import OPP_SCRIPT, OPP_STYLE, opponent_row_data, opponent_tools
 from ..stats import allin_ev
 from .leaks_page import STYLE as LEAK_STYLE
@@ -18,9 +19,9 @@ from .ring_page import _gaps
 
 def results(hands: list[Hand], hero: str) -> dict:
     """Ton résultat sur ces mains : net (en monnaie et en bb), EV all-in (tapis à deux payés avant la river), avec et
-    sans abattage, et la courbe (cumul réel, EV, abattage, sans abattage), main par main."""
+    sans abattage, le rake payé (rake.paid), et la courbe (cumul réel, EV, abattage, sans abattage), main par main."""
     out = {"hands": 0, "net": 0.0, "net_bb": 0.0, "ev_bb": 0.0, "allin": 0, "sd_bb": 0.0, "nosd_bb": 0.0,
-           "sd_hands": 0, "curve": [], "first": None, "last": None}
+           "sd_hands": 0, "rake": 0.0, "rake_bb": 0.0, "curve": [], "first": None, "last": None}
     prev = (0.0, 0.0, 0.0, 0.0)
     for h in hands:
         if hero not in h.seats or not h.bb:
@@ -38,12 +39,16 @@ def results(hands: list[Hand], hero: str) -> dict:
                                                                   for a in h.actions)
         out["sd_bb" if showdown else "nosd_bb"] += net_bb
         out["sd_hands"] += showdown
+        fee = rake_paid(h, hero)
+        out["rake"] += fee
+        out["rake_bb"] += fee / h.bb
         out["first"] = out["first"] or h.date
         out["last"] = h.date
         prev = (prev[0] + net_bb, prev[1] + ev_bb, prev[2] + (net_bb if showdown else 0.0),
                 prev[3] + (0.0 if showdown else net_bb))
         out["curve"].append(prev)
     out["bb100"] = 100 * out["net_bb"] / out["hands"] if out["hands"] else None
+    out["rake100"] = 100 * out["rake_bb"] / out["hands"] if out["hands"] else None
     return out
 
 
@@ -61,22 +66,28 @@ def overall_html(heads_up: dict, tables: dict) -> str:
         return ""
     hands = heads_up["hands"] + tables["hands"]
     net = heads_up["net_bb"] + tables["net_bb"]
-    items = [("Tous formats confondus", hands, net, 100 * net / hands),
-             ("En heads-up", heads_up["hands"], heads_up["net_bb"], heads_up["bb100"]),
-             ("Aux tables à plusieurs", tables["hands"], tables["net_bb"], tables["bb100"])]
-    tiles = "".join(_tile(label, _bb100(rate), f"{n} mains · {num(bb, 1, sign=True)} bb") for label, n, bb, rate in items)
+    rake, rake_bb = heads_up["rake"] + tables["rake"], heads_up["rake_bb"] + tables["rake_bb"]
+    items = [("Tous formats confondus", hands, net, 100 * net / hands, rake, 100 * rake_bb / hands),
+             ("En heads-up", heads_up["hands"], heads_up["net_bb"], heads_up["bb100"], heads_up["rake"],
+              heads_up["rake100"]),
+             ("Aux tables à plusieurs", tables["hands"], tables["net_bb"], tables["bb100"], tables["rake"],
+              tables["rake100"])]
+    tiles = "".join(_tile(label, _bb100(rate), f"{n} main{'s' if n > 1 else ''} · {num(bb, 1, sign=True)} bb · "
+                          f"rake {num(fee, 2)} € ({num(fee100, 1)} bb/100)")
+                    for label, n, bb, rate, fee, fee100 in items)
     return f'<div class="tiles bl-all">{tiles}</div>'
 
 
 def result_tiles(res: dict) -> str:
-    """Les mêmes tuiles que le bilan heads-up : résultat, winrate, EV all-in, avec et sans abattage."""
-    return '<div class="tiles">' + "".join((
+    """Les mêmes tuiles que le bilan heads-up : résultat, winrate, EV all-in, avec et sans abattage, rake payé."""
+    return '<div class="tiles res">' + "".join((
         _tile("Ton résultat", f"{num(res['net_bb'], 1, sign=True)} bb", f"{num(res['net'], 2, sign=True)} €"),
         _tile("Winrate", num(res["bb100"], 1, sign=True) if res["bb100"] is not None else "–", "bb/100 mains"),
         _tile("Résultat EV all-in", f"{num(res['ev_bb'], 1, sign=True)} bb",
               f"écart chance : {num(res['net_bb'] - res['ev_bb'], 1, sign=True)} bb sur {res['allin']} all-in"),
         _tile("Avec / sans abattage", f"{num(res['sd_bb'], 0, sign=True)} / {num(res['nosd_bb'], 0, sign=True)}",
               f"bb · {num(res['sd_hands'], 0)} / {num(res['hands'] - res['sd_hands'], 0)} mains"),
+        _tile(*rake_tile(res["rake"], res["rake100"], res["bb100"])),
     )) + "</div>"
 
 
@@ -158,7 +169,8 @@ def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, 
 <div class="card">{legend(res['curve'])}{chart_svg(res['curve'])}
 <p class="note">« EV all-in » remplace le résultat réel des tapis payés avant la river, quand il ne reste que deux
 joueurs, par ton espérance : l'écart mesure la chance. « À l'abattage » : les mains où tu es allé jusqu'à
-l'abattage.</p></div>
+l'abattage. Rake payé : ta part du rake de chaque pot, au prorata de ce que tu y as mis (la méthode des sites pour
+le rakeback) ; tes résultats en sont déjà nets, « avant rake » le leur rajoute.</p></div>
 
 {_gaps(gaps) if gaps is not None else ""}
 

@@ -431,6 +431,23 @@ class OtherSitesTest(unittest.TestCase):
         self.assertEqual(acts(three, "Hero")[1], ("raise", 149.0, 150.0, 5.0))
         self.assertEqual(nets(three), {"Joueur1": 149.0, "Hero": -150.0, "Villain": -2.0})
 
+    def test_hidden_cards(self):
+        # Les cartes cachées d'un adversaire (« [X X] ») ne sont pas des cartes : sa main reste inconnue, il n'est pas
+        # le héros, et l'Étude du field passe sur la main sans erreur.
+        from analyzer import field
+        from analyzer.models import hand_from_dict, hand_to_dict
+        text = (SITES / "ipoker.txt").read_text(encoding="utf-8").split("\n\n")[0]
+        text = text.replace("Dealt to Hero [DJ C10]", "Dealt to Villain [X X]\nDealt to Hero [DJ C10]")
+        text = text.replace("Villain: Shows [SA HA]", "Villain: Mucks [X X]")
+        h = parse_text(text)[0]
+        self.assertEqual((h.hero, h.hole_cards), ("Hero", {"Hero": ["Jd", "Tc"]}))
+        self.assertEqual(field.checks([h], ["Villain"]), {})
+        stored = hand_to_dict(h)  # une main gardée par une version d'avant, avec ses cartes cachées
+        stored["cards"]["Villain"], stored["board"] = ["Xx", "Xx"], h.board[:3] + ["X"]
+        again = hand_from_dict(stored)
+        self.assertEqual((again.hole_cards, again.board), ({"Hero": ["Jd", "Tc"]}, h.board[:3]))
+        self.assertEqual(field.checks([again], ["Villain", "Hero"])["flop"].total(), 0)  # Hero mise au flop
+
     def test_partypoker(self):
         returning, capped = parse_text((SITES / "partypoker.txt").read_text(encoding="utf-8"))
         h = returning

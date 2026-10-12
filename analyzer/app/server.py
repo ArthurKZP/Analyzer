@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .. import NAME, aliases, db
+from .. import NAME, aliases, db, stakes
 from ..db import hands as db_hands
 from ..errors import NotFound
 from ..theory import postflop, preflop_tree, ring_tree, studyspots
@@ -37,6 +37,7 @@ MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
 MAX_SMALL_BODY = 64 * 1024
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "bluffs", "tables", "mains")
+REFINE_SIDES = {"attaque": "attack", "defense": "defense"}  # affiner un niveau du plan : le côté
 
 
 class AppServer(ThreadingHTTPServer):
@@ -128,6 +129,11 @@ class Handler(BaseHTTPRequestHandler):
         plusieurs (« 6-max », « 3-max »… y mènent aussi)."""
         return parse_qs(urlsplit(self.path).query).get("format", [None])[0]
 
+    def _stakes(self) -> Optional[str]:
+        """Le niveau de limites demandé (« ?limites=micro ») pour l'Étude du field (stakes.BANDS), ou None."""
+        band = parse_qs(urlsplit(self.path).query).get("limites", [None])[0]
+        return band if band in stakes.BANDS else None
+
     @staticmethod
     def _report_name(table_format: Optional[str], who: str = "", ext: str = "html") -> str:
         suffix = "-tables-a-plusieurs" if table_format and table_format != "HU" else ""
@@ -176,11 +182,11 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 2 and parts[0] == "moi":
                 return self._html(library.self_page(parts[1], table_format=self._format()))
             if len(parts) == 2 and parts[0] == "field":  # Étude du field
-                return self._html(library.field_page(parts[1], self._format()))
+                return self._html(library.field_page(parts[1], self._format(), self._stakes()))
             if len(parts) == 3 and parts[0] == "field" and parts[1] == "joueur":  # la fiche d'un adversaire
-                return self._html(library.field_player(parts[2], self._format()))
+                return self._html(library.field_player(parts[2], self._format(), self._stakes()))
             if len(parts) == 3 and parts[0] == "field" and parts[1] == "groupe":  # un groupe de récréatifs
-                return self._html(library.field_group(parts[2], self._format()))
+                return self._html(library.field_group(parts[2], self._format(), self._stakes()))
             if parts == ["parametres", "general"]:  # Paramètres
                 return self._html(library.settings_page())
             if parts == ["parametres", "joueurs"]:  # … les types des adversaires et les alias
@@ -244,10 +250,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.player_page(parts[1], parts[2]))
             if parts == ["etudes"]:
                 return self._html(build_studies_page(embed=True))
-            if parts == ["etudes", "plan"]:
-                return self._html(library.plan_page())
+            if parts == ["etudes", "plan"]:  # (« ?limites=micro » : le field de ce niveau)
+                return self._html(library.plan_page(self._stakes()))
             if parts == ["api", "plan"]:
                 return self._json(library.plan_state())
+            if parts == ["api", "plan", "affiner"]:
+                return self._json(library.plan_refine_state())
             if parts == ["api", "coach"]:
                 return self._json(library.coach.status())
             if len(parts) == 3 and parts[:2] == ["api", "coach"]:
@@ -568,6 +576,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(library.plan_state(start=True))
         if parts == ["api", "plan", "arreter"]:
             return self._json(library.plan_cancel())
+        if parts[:3] == ["api", "plan", "affiner"] and len(parts) <= 4 and parts[3:] in ([], ["arreter"]):
+            payload = self._small_json()  # affiner un niveau du plan au solveur, ou l'arrêter
+            if not (isinstance(payload, dict) and isinstance(payload.get("famille"), str)
+                    and isinstance(payload.get("niveau"), str) and payload.get("cote", "attaque") in REFINE_SIDES
+                    and payload.get("mode", "flop") in ("flop", "turn")):
+                return self._error(400, "Requête invalide.")
+            args = (payload["famille"], payload["niveau"], REFINE_SIDES[payload.get("cote", "attaque")],
+                    payload.get("mode", "flop"))
+            if parts[3:]:
+                return self._json(library.plan_refine_cancel(*args))
+            try:
+                return self._json(library.plan_refine(*args))
+            except ValueError as exc:
+                return self._error(400, str(exc))
         if parts == ["api", "sauvegarde", "reglages"]:
             payload = self._small_json()
             if not (isinstance(payload, dict) and isinstance(payload.get("dest"), str) and len(payload["dest"]) <= 500

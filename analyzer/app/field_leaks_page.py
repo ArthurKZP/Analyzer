@@ -1,7 +1,9 @@
 """Étude du field : le leakfinding de tes adversaires (analyzer/field.py).
 
 - Réguliers et Récréatifs : ceux que tu croises le plus (Paramètres : mains minimum), avec leurs leaks à exploiter et
-  ce que montrent leurs lignes ; les récréatifs sont aussi rangés par style (passifs, agressifs, prudents).
+  ce que montrent leurs lignes ; les récréatifs sont aussi rangés par style (passifs, agressifs, prudents). Chaque
+  page est à un niveau de limites (stakes : micro limites, limites du milieu, hautes limites), aux repères et aux
+  exploits de ce niveau.
 - La fiche d'un joueur : tous ses leaks, sa value et ses bluffs ligne par ligne (ce qui les distingue), ce qu'il
   montre quand il checke, ses mains montrées avant le flop.
 - La fiche d'un groupe de récréatifs : ses joueurs, son plan, ses lignes.
@@ -13,7 +15,7 @@ from html import escape
 from typing import Optional
 from urllib.parse import quote
 
-from .. import field
+from .. import field, stakes
 from ..field import BLUFF, INTENT_LABELS, STYLES, Study
 from ..lines import BOARD_SIZE
 from ..models import POSTFLOP
@@ -61,12 +63,36 @@ MAX_CARDS = 24     # joueurs en fiche dans une liste ; les autres en tableau
 MAX_LINES = 12     # lignes par street dans une fiche (les autres repliées)
 
 
-def player_href(name: str, fmt: str) -> str:
-    return f"/field/joueur/{quote(name, safe='')}?format={quote(fmt)}"
+def _query(fmt: str, band: Optional[str]) -> str:
+    return f"?format={quote(fmt)}" + (f"&limites={quote(band)}" if band else "")
 
 
-def group_href(style: str, fmt: str) -> str:
-    return f"/field/groupe/{quote(style)}?format={quote(fmt)}"
+def player_href(name: str, fmt: str, band: Optional[str] = None) -> str:
+    return f"/field/joueur/{quote(name, safe='')}{_query(fmt, band)}"
+
+
+def group_href(style: str, fmt: str, band: Optional[str] = None) -> str:
+    return f"/field/groupe/{quote(style)}{_query(fmt, band)}"
+
+
+def stakes_switch(found: list[tuple[str, int]], current: str, fmt: str) -> str:
+    """Le choix du niveau de limites (stakes), avec ses mains (rien s'il n'y en a qu'un)."""
+    if len(found) < 2:
+        return ""
+    links = "".join(
+        f'<a href="{escape(_query(fmt, band))}" aria-current="{"page" if band == current else "false"}" '
+        f'title="{escape(stakes.LEVELS[band])}">{escape(stakes.NAMES[band])} <span>{num(n, 0)}</span></a>'
+        for band, n in found)
+    return f'<nav class="lk-fmt" aria-label="Limites">{links}</nav>'
+
+
+def _band_words(band: Optional[str]) -> str:
+    """« , micro limites (NL10 et moins) »."""
+    return f", {stakes.NAMES[band].lower()} ({stakes.LEVELS[band]})" if band else ""
+
+
+def _band_note(band: Optional[str]) -> str:
+    return f" {field.BAND_NOTES[band]}" if band else ""
 
 
 def _result(row: dict, fmt: str) -> str:
@@ -119,10 +145,11 @@ def _lower_first(text: str) -> str:
 def player_card(row: dict, study: Study, fmt: str) -> str:
     """La carte d'un joueur dans une liste : ses chiffres, ses leaks principaux, ce que disent ses lignes."""
     name = row["name"]
-    head = (f'<header><h3><a href="{escape(player_href(name, fmt))}">{escape(name)}</a></h3>{_style_badge(study)}'
+    href = escape(player_href(name, fmt, study.band))
+    head = (f'<header><h3><a href="{href}">{escape(name)}</a></h3>{_style_badge(study)}'
             f'<span class="fl-sub">{num(row["hands"], 0)} mains · {escape(_result(row, fmt))}</span></header>')
     return (f'<article class="fl-card">{head}{leaks_list(study, field.LEAKS_SHOWN)}{key_lines_html(study)}'
-            f'<a class="fl-more" href="{escape(player_href(name, fmt))}">Analyse détaillée →</a></article>')
+            f'<a class="fl-more" href="{href}">Analyse détaillée →</a></article>')
 
 
 def _others_table(rows: list[tuple[dict, Study]], fmt: str) -> str:
@@ -130,7 +157,8 @@ def _others_table(rows: list[tuple[dict, Study]], fmt: str) -> str:
     for row, study in rows:
         top = study.top_leaks(1)
         leak = escape(field.finding_text(top[0])[0]) if top else '<span class="muted">–</span>'
-        body.append(f'<tr><td><a href="{escape(player_href(row["name"], fmt))}">{escape(row["name"])}</a></td>'
+        href = escape(player_href(row["name"], fmt, study.band))
+        body.append(f'<tr><td><a href="{href}">{escape(row["name"])}</a></td>'
                     f'<td class="num">{num(row["hands"], 0)}</td><td>{leak}</td></tr>')
     return (f'<details><summary>Les {len(rows)} autres</summary><div class="scroll"><table class="stats fl"><thead><tr>'
             '<th>Joueur</th><th class="num">Mains</th><th>Son leak le plus net</th></tr></thead><tbody>'
@@ -170,13 +198,13 @@ def style_tiles(study: Study, hands_label: str = "Mains") -> list[tuple[str, str
 
 def build_list_page(kind: str, fmt: str, rows: list[tuple[dict, Study]], population: Optional[Study],
                     min_hands: int, total: int, switch: str = "", groups: Optional[list[dict]] = None,
-                    embed: bool = True) -> str:
-    """Réguliers (kind « reg ») ou récréatifs (« rec ») d'un format : rows, ceux qui ont assez de mains (du plus joué
-    au moins joué), chacun avec son étude ; population : eux tous ensemble ; total : tous les joueurs de ce type ;
-    groups (récréatifs) : [{"style", "study", "members": [rows]}]."""
+                    embed: bool = True, band: Optional[str] = None) -> str:
+    """Réguliers (kind « reg ») ou récréatifs (« rec ») d'un format et d'un niveau de limites (band) : rows, ceux qui
+    ont assez de mains (du plus joué au moins joué), chacun avec son étude ; population : eux tous ensemble ; total :
+    tous les joueurs de ce type ; groups (récréatifs) : [{"style", "study", "members": [rows]}]."""
     regs = kind == "reg"
     who = "réguliers" if regs else "récréatifs"
-    where = FORMAT_WORDS[fmt]
+    where = FORMAT_WORDS[fmt] + _band_words(band)
     if not rows:
         body = (f'<div class="meta">Les {who} que tu croises le plus {where}.</div>{switch}'
                 f'<div class="card"><p class="note" style="margin:0">Aucun {who[:-1]} avec au moins {min_hands} mains '
@@ -194,10 +222,10 @@ def build_list_page(kind: str, fmt: str, rows: list[tuple[dict, Study]], populat
         lines = f'<div style="margin-top:8px">{lines}</div>' if lines else ""
         pop = (f'<h2>Les {who} en général</h2><div class="card">{leaks_list(population, 4)}{lines}'
                f'<p class="note">Leurs fréquences réunies ({num(population.hands, 0)} mains), face aux repères d\'un '
-               "régulier solide ; et ce que montrent leurs lignes à l'abattage.</p></div>")
-    groups_html = _groups_html(groups or [], fmt) if not regs else ""
-    body = f"""<div class="meta">Les {who} que tu croises le plus {where} (au moins {min_hands} mains) : leurs leaks à
-exploiter, d'après leurs fréquences et leurs mains montrées. Le détail de chacun s'ouvre d'un clic.</div>
+               "régulier solide de ces limites ; et ce que montrent leurs lignes à l'abattage.</p></div>")
+    groups_html = _groups_html(groups or [], fmt, band) if not regs else ""
+    body = f"""<div class="meta">Les {who} que tu croises le plus {where}, avec au moins {min_hands} mains : leurs leaks
+à exploiter, d'après leurs fréquences et leurs mains montrées. Le détail de chacun s'ouvre d'un clic.</div>
 {switch}
 {tiles}
 {groups_html}
@@ -205,7 +233,9 @@ exploiter, d'après leurs fréquences et leurs mains montrées. Le détail de ch
 <h2>Joueur par joueur</h2>
 {cards_html_list(rows, fmt)}
 <p class="note">Un leak : une fréquence nettement hors des repères d'un régulier solide (intervalle de confiance à 90 %
-hors du repère, au moins 15 occasions) ; « à confirmer » : l'écart est net, l'échantillon encore petit. À l'abattage :
+hors du repère, au moins 15 occasions) ; « à confirmer » : l'écart est net, l'échantillon encore petit.
+{escape(_band_note(band))} Seules les mains de ce niveau comptent : un joueur qui joue à plusieurs niveaux a une
+étude à chacun. À l'abattage :
 la part de mises sans main faite dans une ligne (à la river, face à l'équité qu'il te faut pour payer).
 {"Toutes les mains allées à l'abattage comptent, même celles où tu n'étais plus." if fmt != "HU" else ""}
 Le type de chaque joueur se règle dans Paramètres › Joueurs et alias.</p>
@@ -213,7 +243,7 @@ Le type de chaque joueur se règle dans Paramètres › Joueurs et alias.</p>
     return html_page(f"Field — {who}", f"<style>{STYLE}</style>{body}", embed)
 
 
-def _groups_html(groups: list[dict], fmt: str) -> str:
+def _groups_html(groups: list[dict], fmt: str, band: Optional[str] = None) -> str:
     """Les récréatifs par style : membres, leaks communs, plan."""
     cards = []
     for g in groups:
@@ -222,11 +252,12 @@ def _groups_html(groups: list[dict], fmt: str) -> str:
             f" et {len(members) - 6} autres" if len(members) > 6 else "")
         plan = "".join(f"<li>{escape(step)}</li>" for step in style.plan[:3])
         leaks = leaks_list(study, 2) if g["style"] != "autre" else ""
-        cards.append(f'<article class="fl-card"><header><h3><a href="{escape(group_href(g["style"], fmt))}">'
+        href = escape(group_href(g["style"], fmt, band))
+        cards.append(f'<article class="fl-card"><header><h3><a href="{href}">'
                      f'{escape(style.name)}</a></h3><span class="fl-sub">{len(members)} joueur(s) · '
                      f'{num(study.hands, 0)} mains</span></header><div class="fl-small">{names}</div>'
                      f'<ul class="fl-plan">{plan}</ul>{leaks}'
-                     f'<a class="fl-more" href="{escape(group_href(g["style"], fmt))}">Le groupe en détail →</a></article>')
+                     f'<a class="fl-more" href="{href}">Le groupe en détail →</a></article>')
     if not cards:
         return ""
     return (f'<h2>Par style</h2><div class="fl-cards">{"".join(cards)}</div>'
@@ -374,7 +405,7 @@ def _kind_select(name: str, info: dict) -> str:
 
 
 def build_player_page(row: dict, study: Study, fmt: str, info: dict, switch: str = "", fiche: str = "",
-                      embed: bool = True) -> str:
+                      embed: bool = True, band: Optional[str] = None) -> str:
     """La fiche d'un adversaire : row (mains, ton résultat), study (field.study), info (son type : players.classify),
     fiche : le lien vers sa fiche heads-up (plan de jeu, rapport, bluffs)."""
     name = row["name"]
@@ -387,14 +418,16 @@ def build_player_page(row: dict, study: Study, fmt: str, info: dict, switch: str
     more = (f'<p style="margin:0">Sa fiche heads-up (plan de jeu, rapport complet, ses bluffs face au solveur) : '
             f'<a href="{escape(fiche)}" target="_top">ouvrir</a>.</p>' if fiche else "")
     hands = f"{num(study.hands, 0)} mains {'à la même table' if fmt != 'HU' else 'contre toi'}"
-    body = f"""<div class="meta">{escape(name)} {FORMAT_WORDS[fmt]} · {hands} · {kind}{escape(style)}</div>
+    where = FORMAT_WORDS[fmt] + _band_words(band)
+    body = f"""<div class="meta">{escape(name)} {escape(where)} · {hands} · {kind}{escape(style)}</div>
 {switch}
 <div class="card" style="display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center">{_kind_select(name, info)}{more}</div>
 {_tiles(tiles)}
 <h2>Ses leaks à exploiter</h2>
 <div class="card">{leaks_list(study)}
 <p class="note">Ses fréquences nettement hors des repères d'un régulier solide, de la plus marquée à la moins marquée,
-et ce qu'il faut en faire. « À confirmer » : l'écart est net, l'échantillon encore petit.</p></div>
+et ce qu'il faut en faire. « À confirmer » : l'écart est net, l'échantillon encore petit.
+{escape(_band_note(band))}</p></div>
 <h2>Value ou bluff ?</h2>
 <div class="card"><h3 style="margin-top:0">Ce qui distingue sa value de ses bluffs</h3>{differences_html(study)}</div>
 <div class="card" style="margin-top:12px"><h3 style="margin-top:0">Ses lignes</h3>{lines_html(study)}{shown_examples(study)}</div>
@@ -409,14 +442,14 @@ cachées dans ses checks, ou rien.</p></div>
 
 
 def build_group_page(style_key: str, fmt: str, study: Study, members: list[tuple[dict, Study]], switch: str = "",
-                     embed: bool = True) -> str:
+                     embed: bool = True, band: Optional[str] = None) -> str:
     """La fiche d'un groupe de récréatifs (un style) : son plan, ses joueurs, ses leaks et ses lignes réunis."""
     style = STYLES[style_key]
     plan = "".join(f"<li>{escape(step)}</li>" for step in style.plan)
     rows = []
     for row, s in members:
         r = s.ratios
-        rows.append(f'<tr><td><a href="{escape(player_href(row["name"], fmt))}">{escape(row["name"])}</a></td>'
+        rows.append(f'<tr><td><a href="{escape(player_href(row["name"], fmt, band))}">{escape(row["name"])}</a></td>'
                     f'<td class="num">{num(row["hands"], 0)}</td><td class="num">{num(row["net_bb"], 1, sign=True)} bb</td>'
                     f'<td class="num">{_pct(r.get("vpip"))}</td><td class="num">{_pct(r.get("pfr"))}</td>'
                     f'<td class="num">{_pct(r.get("afq"))}</td><td class="num">{_pct(r.get("fold_bet"))}</td>'
@@ -425,7 +458,9 @@ def build_group_page(style_key: str, fmt: str, study: Study, members: list[tuple
              '<th class="num">Ton résultat</th><th class="num">VPIP</th><th class="num">PFR</th><th class="num">Agressivité</th>'
              '<th class="num">Fold vs mises</th><th class="num">Abattage</th><th>Pourquoi ce style</th></tr></thead><tbody>'
              + "".join(rows) + "</tbody></table></div>")
-    body = f"""<div class="meta">{escape(style.title)} {FORMAT_WORDS[fmt]} : {len(members)} joueur(s), leurs mains réunies.</div>
+    where = FORMAT_WORDS[fmt] + _band_words(band)
+    body = f"""<div class="meta">{escape(style.title)} {escape(where)} : {len(members)} joueur(s), leurs mains
+réunies.</div>
 {switch}
 {_tiles(style_tiles(study))}
 <h2>Comment les jouer</h2>

@@ -274,7 +274,9 @@ def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: st
 
 <h2>Résultat cumulé (bb)</h2>
 <div class="card">{legend(h.curve)}{chart_svg(h.curve)}
-<p class="note">« EV all-in » remplace le résultat réel des all-in payés avant la river par ton espérance : l'écart mesure la chance.</p></div>
+<p class="note">« EV all-in » remplace le résultat réel des all-in payés avant la river par ton espérance : l'écart mesure la chance.
+Rake payé : ta part du rake de chaque pot, au prorata de ce que tu y as mis (la méthode des sites pour le rakeback) ;
+tes résultats en sont déjà nets, « avant rake » le leur rajoute.</p></div>
 
 <h2>Tes écarts les plus importants</h2>
 <div class="card">{priorities_html(h, len(hands), folds=hero_fold_holdings(hands, hero))}

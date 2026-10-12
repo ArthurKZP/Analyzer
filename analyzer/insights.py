@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from typing import Optional
+from typing import Iterable, Optional
 
 from .cards import describe_holding
 from .models import BET, CALL, FOLD, RAISE
@@ -215,10 +215,11 @@ def deviation(stat: StatDef, r: Ratio) -> Optional[tuple[str, bool]]:
     return None
 
 
-def findings(ps: PlayerStats) -> list[Finding]:
-    """Écarts significatifs aux repères, triés du plus marqué au moins marqué."""
+def findings(ps: PlayerStats, defs: Optional[Iterable[StatDef]] = None) -> list[Finding]:
+    """Écarts significatifs aux repères (defs : d'autres repères que STAT_DEFS, ceux d'un niveau de limites par
+    exemple), triés du plus marqué au moins marqué."""
     out = []
-    for stat in STAT_DEFS.values():
+    for stat in STAT_DEFS.values() if defs is None else defs:
         r = ps.r(stat.key)
         dev = deviation(stat, r)
         if dev is None:
