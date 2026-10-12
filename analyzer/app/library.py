@@ -2058,6 +2058,42 @@ class Library:
                 self.solves.cancel(view["job"])
         return self.plan_state()
 
+    REFINE = "affiner|"  # tâches « affiner un niveau du plan » de la file : « affiner|famille|niveau »
+
+    def plan_refine_state(self) -> dict:
+        """Les niveaux du plan en cours d'affinage au solveur (ou affinés depuis le lancement) : {"famille|niveau":
+        tâche}."""
+        return {"ready": postflop.status()["ready"],
+                "jobs": {k[len(self.REFINE):]: v for k, v in self.solves.views(self.REFINE).items()}}
+
+    def plan_refine(self, family: str, level: str) -> dict:
+        """Affine la suite d'un niveau d'attaque du plan au solveur (coach.refine_spots) : quelques flops résolus de
+        nouveau avec le flop du niveau imposé, à la précision de leur résolution d'origine, en une tâche de la file."""
+        if family not in coach.plan_families() or level not in {key for key, _, _ in coach.STEPS["attack"]}:
+            raise ValueError("Niveau inconnu.")
+        if not postflop.status()["ready"]:
+            raise ValueError("Installe d'abord le solveur : python -m analyzer gtopen --installer")
+        items = coach.refine_spots(family, level)
+        if not items:
+            raise ValueError("Pas encore de flop lu pour ce niveau : clique d'abord sur « Préparer le plan ».")
+
+        def run_one(job, item: dict) -> None:
+            def started(proc) -> None:
+                job.process = proc
+                if job.cancelled:  # arrêt demandé pendant le lancement
+                    proc.terminate()
+            base = item["base"]
+            iterations, target = ((base["max_iterations"], base["target_exploit_pct"]) if base
+                                  else self.solves.precision())
+            coach.refine_one(item, iterations, target, on_progress=job.progress.update, on_start=started)
+        self.solves.batch(f"{self.REFINE}{family}|{level}", items, run_one,
+                          lambda item: studyspots.board_text(item["spot"].board))
+        return self.plan_refine_state()
+
+    def plan_refine_cancel(self, family: str, level: str) -> dict:
+        self.solves.cancel(f"{self.REFINE}{family}|{level}")
+        return self.plan_refine_state()
+
     def plan_field(self, band: Optional[str] = None) -> dict:
         """Les populations de l'Étude du field, pour ajuster le plan de jeu (field_plan) : par format de tes mains, à
         un niveau de limites (celui demandé, sinon celui où tu as le plus de mains), les réguliers, les récréatifs et

@@ -105,7 +105,7 @@ class ExtractTest(unittest.TestCase):
             data = coach.extract(make_query(), spot, "cle")
         nodes = data["nodes"]
         self.assertEqual(set(nodes), {"cbet", "vs_cbet", "vs_xr", "barrel", "vs_barrel", "delayed", "probe",
-                                      "barrel3", "vs_barrel3"})
+                                      "vs_probe", "barrel3", "vs_barrel3"})
         cbet = nodes["cbet"]["groups"]["flop"]
         self.assertEqual((nodes["cbet"]["actor"], cbet["n"]), (1, 1))
         self.assertAlmostEqual(sum(cbet["f"].values()), 1.0, places=3)
@@ -117,14 +117,17 @@ class ExtractTest(unittest.TestCase):
         self.assertEqual(sum(g["n"] for g in nodes["barrel3"]["groups"].values()), len(TURNS) * len(RIVERS))
         self.assertEqual(nodes["vs_cbet"]["groups"]["flop"]["b"]["overpair"]["f"], {"raise": 1.0})
         self.assertEqual(data["advantages"], {"eq": [0.4, 0.6], "nuts": [0.0, 0.0]})
-        # au flop, ce que vaut chaque action pour chaque famille de mains (en part du pot, range de poids 1)
-        ev = nodes["cbet"]["ev"]
-        self.assertEqual((ev["classes"], ev["sizes"]), (["check", "small"], {"small": 33}))
+        # ce que vaut chaque action pour chaque famille de mains (en part du pot, range de poids 1)
+        ev = nodes["cbet"]["evs"]["flop"]
+        self.assertEqual((ev["n"], ev["classes"], ev["sizes"]), (1, ["check", "small"], {"small": 33}))
         self.assertAlmostEqual(sum(g["r"] for g in ev["b"].values()), 1.0, places=3)
         self.assertEqual(ev["b"]["overpair"]["e"], {"check": round(1 / 7 / 5, 6), "small": round(2 / 7 / 5, 6)})
         self.assertEqual(ev["b"]["overpair"]["s"], ev["b"]["overpair"]["e"]["small"])  # AA mise : la stratégie
-        self.assertEqual(nodes["vs_cbet"]["ev"]["classes"], ["fold", "call", "raise"])
-        self.assertNotIn("ev", nodes["barrel"])  # seulement au flop
+        self.assertEqual(nodes["vs_cbet"]["evs"]["flop"]["classes"], ["fold", "call", "raise"])
+        turn = nodes["barrel"]["evs"]  # à la turn : par type de carte, la moyenne de ses cartes
+        self.assertEqual({k: g["n"] for k, g in turn.items()}, {"over": 1, "paired": 1, "brick": 2})
+        self.assertAlmostEqual(sum(g["r"] for g in turn["brick"]["b"].values()), 1.0, places=3)
+        self.assertEqual(sum(g["n"] for g in nodes["barrel3"]["evs"].values()), len(TURNS) * len(RIVERS))
         self.assertEqual(data["version"], coach.VERSION)
 
         coach.save_plan(data)
@@ -223,11 +226,109 @@ class LevelsTest(unittest.TestCase):
         self.assertIsNone(coach.levels([], "attack"))
         self.assertEqual(coach.class_text("small", {"small": 33}), "petite mise (33 %)")
 
+    def test_streets(self):
+        # la suite d'un niveau : une action par famille de mains sur toutes les cartes, puis selon la carte ; chaque
+        # entrée compte pour son nombre de cartes (n)
+        flop = ev_of({"nuts": (0.2, {"check": 0.10, "small": 0.12}), "air": (0.8, {"check": 0.01, "small": 0.03})},
+                     {"small": 33})
+        brick = dict(ev_of({"nuts": (0.3, {"check": 0.10, "big": 0.20}), "air": (0.7, {"check": 0.02, "big": 0.00})},
+                           {"big": 75}), n=3)
+        over = dict(ev_of({"nuts": (0.3, {"check": 0.10, "big": 0.12}), "air": (0.7, {"check": 0.00, "big": 0.04})},
+                          {"big": 80}), n=1)
+        later = {"barrel": [("brick", brick), ("over", over)], "delayed": []}
+        levels = coach.levels([("haut-sec", flop)], "attack", later)
+        self.assertEqual(levels["street_sizes"], {"barrel": {"big": 80}})  # (la médiane de 75 et 80 : la 2e)
+        one, by_flop = levels["steps"][:2]
+        self.assertEqual(set(one["streets"]), {"barrel"})  # (sans entrée : pas de suite)
+        barrel = one["streets"]["barrel"]
+        self.assertEqual((barrel["by_flop"], barrel["hands"]), (False, "familles"))
+        # sur toutes les cartes : « rien » checke (0,02 × 3 + 0 contre 0 + 0,04), et perd sur l'overcard
+        self.assertEqual({k: r["class"] for k, r in barrel["rules"]["tous"].items()},
+                         {"fortes": "big", "rien": "check"})
+        self.assertAlmostEqual(barrel["loss"], 0.04 / 4)
+        by_card = by_flop["streets"]["barrel"]
+        self.assertEqual(by_card["rules"]["over"]["rien"]["class"], "big")
+        self.assertAlmostEqual(by_card["loss"], 0.0)
+        self.assertEqual(by_card["flops"], {"brick": 1, "over": 1})
+        self.assertEqual(levels["steps"][3]["streets"]["barrel"]["hands"], "detail")
+
     def test_sizes_by_card(self):
         mix = coach.size_mix({"check": 0.4, "small": 0.15, "big": 0.45}, [33, 75, 120])
         self.assertEqual([(m["class"], round(m["share"], 2), m["pcts"]) for m in mix],
                          [("big", 0.75, [120]), ("small", 0.25, [33])])
         self.assertEqual(coach.size_mix({"check": 1.0}), [])
+
+
+class RefineTest(unittest.TestCase):
+    """Affiner la suite d'un niveau : quelques flops résolus de nouveau avec le flop du niveau imposé (un verrou)."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.env = mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_sample_and_edits(self):
+        boards = ("Ks7d2c", "Kd8s3h", "9s8d6c", "7h7c3d", "Ah9d4c")
+        data = [{"id": f"spot:srp:{b}", "board": cards_of(b)} for b in boards]
+        sample = coach.refine_sample(data, n=4)  # un flop par type à tour de rôle, les types les plus fréquents d'abord
+        self.assertEqual([d["id"][9:] for d in sample], ["Ah9d4c", "9s8d6c", "7h7c3d", "Kd8s3h"])
+        spot = StudySpot("srp", list(BOARD), plan={})
+        one = {"key": "une", "by_flop": False, "hands": "range",
+               "rules": {"tous": {"range": {"class": "small", "share": 1.0}}}}
+        edits = coach.refine_edits(spot, one, {"small": 33})
+        self.assertEqual(edits["plan"], {"bet:fi:": [33]})  # l'arbre n'a plus que la taille du niveau
+        lock = edits["locks"][0]
+        self.assertEqual(lock["path"], [{"type": "action", "index": 0}])  # la c-bet, après le check de la BB
+        self.assertEqual({tuple(f) for f in lock["combos"].values()}, {(0, 1)})  # toute la range mise
+        self.assertFalse(any({c[:2], c[2:]} & set(BOARD) for c in lock["combos"]))
+        families = {"key": "mains", "by_flop": True, "hands": "familles", "rules": {"haut-sec": {
+            "fortes": {"class": "big", "share": 0.2}, "moyennes": {"class": "check", "share": 0.3},
+            "tirages": {"class": "small", "share": 0.1}, "rien": {"class": "small", "share": 0.4}}}}
+        edits = coach.refine_edits(spot, families, {"small": 33, "big": 100})
+        self.assertEqual(edits["plan"], {"bet:fi:": [33, 100]})
+        combos = edits["locks"][0]["combos"]
+        self.assertEqual((combos["AhAd"], combos["8h8c"], combos["QhJh"]), ([0, 0, 1], [1, 0, 0], [0, 1, 0]))
+        check = {"key": "une", "by_flop": False, "hands": "range",
+                 "rules": {"tous": {"range": {"class": "check", "share": 1.0}}}}
+        self.assertEqual(coach.refine_edits(spot, check, {}), {"plan": {"bet:fi:": []}, "locks": [], "auto": {}})
+        # en pot 4bet (pot 52, tapis 74) : une mise d'au moins 85 % du tapis devient le tapis, une action de l'arbre
+        spot4 = StudySpot("4bet", list(BOARD), plan={})
+        mixed = {"key": "une", "by_flop": False, "hands": "detail", "rules": {"tous": {
+            "overpair": {"class": "overbet", "share": 0.1}, "nuts": {"class": "allin", "share": 0.1},
+            "air": {"class": "small", "share": 0.5}, "midpair": {"class": "check", "share": 0.3}}}}
+        edits = coach.refine_edits(spot4, mixed, {"small": 25, "overbet": 125})
+        self.assertEqual(edits["plan"], {"bet:fi:": [25, 125, "a"]})
+        self.assertEqual(edits["locks"][0]["combos"]["AhAd"], [0, 0, 1])  # overbet = tapis
+        self.assertEqual(len(next(iter(edits["locks"][0]["combos"].values()))), 3)
+        # la signature : la règle de la case et les tailles jouées, pas la part de la range
+        sig = coach.refine_signature(families, "haut-sec", {"small": 33, "big": 100})
+        self.assertEqual(sig, coach.refine_signature(families, "haut-sec", {"small": 33, "big": 100, "medium": 66}))
+        families["rules"]["haut-sec"]["fortes"]["share"] = 0.25
+        self.assertEqual(sig, coach.refine_signature(families, "haut-sec", {"small": 33, "big": 100}))
+        families["rules"]["haut-sec"]["moyennes"]["class"] = "small"
+        self.assertNotEqual(sig, coach.refine_signature(families, "haut-sec", {"small": 33, "big": 100}))
+
+    def test_refined_step(self):
+        step = {"key": "une", "by_flop": False, "hands": "range",
+                "rules": {"tous": {"range": {"class": "small", "share": 1.0}}}}
+        turn = dict(ev_of({"nuts": (0.3, {"check": 0.10, "big": 0.20}), "air": (0.7, {"check": 0.02, "big": 0.00})},
+                          {"big": 75}), n=20)
+        fresh = {"category": "haut-sec", "board": ["Ks", "7d", "2c"], "aggressor": 1, "pot": 5.0,
+                 "signature": coach.refine_signature(step, "haut-sec", {"small": 33}), "root_ev": [2.0, 3.0],
+                 "base_ev": [1.9, 3.1], "exploit": [1.0, 1.2], "nodes": {"barrel": {"evs": {"brick": turn}}}}
+        stale = dict(fresh, signature="avant", board=["9s", "8d", "6c"])
+        found = coach._refined_step(step, [fresh, stale], {"small": 33})
+        self.assertEqual((found["flops"], found["stale"], found["boards"]), (1, 1, [["Ks", "7d", "2c"]]))
+        self.assertAlmostEqual(found["loss"], 0.1 / 5)  # l'écart d'EV à la racine, en part du pot
+        self.assertAlmostEqual(found["margin"], 0.012)
+        rules = found["streets"]["barrel"]["rules"]["tous"]
+        self.assertEqual({k: r["class"] for k, r in rules.items()}, {"fortes": "big", "rien": "check"})
+        self.assertEqual(found["street_sizes"], {"barrel": {"big": 75}})
+        self.assertIsNone(coach._refined_step(step, [], {"small": 33}))
+        self.assertEqual(coach._refined_step(step, [stale], {"small": 33}), {"flops": 0, "stale": 1, "boards": []})
 
 
 class PlanPageTest(unittest.TestCase):
@@ -295,7 +396,8 @@ class PlanPageTest(unittest.TestCase):
             coach.save_plan(dict(data, version=1))  # une étude lue par une version d'avant : à relire
             self.assertEqual(coach.missing(), [spot.ident])
             old = {k: v for k, v in data.items() if k != "nodes"}
-            old["nodes"] = {k: {kk: vv for kk, vv in n.items() if kk != "ev"} for k, n in data["nodes"].items()}
+            old["nodes"] = {k: {kk: vv for kk, vv in n.items() if kk not in ("ev", "evs")}
+                            for k, n in data["nodes"].items()}
             coach.save_plan(dict(old, version=1))
             plan = coach.family_plan("srp")
             self.assertEqual((plan["count"], plan["levels"]["older"], plan["levels"]["attack"]), (1, 1, None))

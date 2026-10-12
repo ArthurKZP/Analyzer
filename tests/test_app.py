@@ -98,6 +98,54 @@ class LibraryTest(IsolatedHome):
             self.assertIn("cbet", plan["nodes"])
         lib.solves.shutdown()
 
+    @unittest.skipIf(os.name == "nt", "faux solveur : script exécutable POSIX")
+    def test_refine_plan(self):
+        # « Affiner au solveur » : des flops lus, résolus de nouveau avec le flop d'un niveau imposé, en une tâche
+        from analyzer.app.plan_page import build_coach_page
+        from analyzer.theory import coach, postflop, studyspots
+        try:
+            from .test_coach import make_query
+        except ImportError:
+            from test_coach import make_query
+        lib = Library(self.folder)
+        self.addCleanup(lib.solves.shutdown)
+        env = {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.folder / "home"), "ANALYZER_SOLVER": str(FAKE_SOLVER)}
+        with mock.patch.dict(os.environ, env):
+            studies = {}
+            for board in (["Ks", "7d", "2c"], ["9s", "8d", "6c"]):
+                spot = studyspots.StudySpot("srp", board, plan={})
+                key = postflop.study_key(spot.request())
+                coach.save_plan(coach.extract(make_query(board), spot, key))
+                studies[spot.ident] = {"id": spot.ident, "key": key, "family": "srp", "board": board, "seconds": 30}
+            # la résolution d'origine du premier flop (son EV à la racine) ; le second n'en a plus
+            postflop._save_cache(studyspots.StudySpot("srp", ["Ks", "7d", "2c"]).request(),
+                                 {"root_ev": [2.4, 2.6], "exploit_pct": 1.0})
+            with mock.patch.object(studyspots, "spot_studies", lambda families=None: studies):
+                # la durée attendue : chaque résolution verrouillée (70 % de celle d'origine) et sa relecture
+                self.assertEqual(coach.family_plan("srp")["refine"], {"flops": 2, "seconds": 2 * (0.7 * 30 + 60)})
+                with self.assertRaises(ValueError):
+                    lib.plan_refine("srp", "inconnu")
+                state = lib.plan_refine("srp", "une")
+                self.assertIn(state["jobs"]["srp|une"]["state"], ("waiting", "running", "done"))
+                deadline = time.time() + 60
+                while lib.plan_refine_state()["jobs"]["srp|une"]["state"] in ("waiting", "running") \
+                        and time.time() < deadline:
+                    time.sleep(0.05)
+                job = lib.plan_refine_state()["jobs"]["srp|une"]
+                self.assertEqual((job["state"], job["progress"]["done"]), ("done", 2), job.get("error"))
+                found = coach.refined("srp")["une"]
+                self.assertEqual(sorted("".join(r["board"]) for r in found), ["9s8d6c", "Ks7d2c"])
+                self.assertEqual(found[0]["exploit"][0], 4.2)
+                refined = coach.family_plan("srp")["levels"]["attack"]["steps"][0]["refined"]
+                self.assertEqual((refined["flops"], refined["stale"]), (2, 0))
+                ks = next(r for r in found if r["board"] == ["Ks", "7d", "2c"])
+                self.assertAlmostEqual(refined["loss"], (2.6 - ks["root_ev"][1]) / 5)  # le seul flop qui a son origine
+                self.assertIn("delayed", refined["streets"])  # la turn après le flop checké, relue
+                page = build_coach_page({"missing": 0, "busy": 0})
+                self.assertIn("Suite affinée au solveur sur 2 flop(s)", page)
+                self.assertIn("affinée au solveur</span>", page)
+                self.assertIn('data-level="une"', page)
+
     def test_students(self):
         with mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.folder / "home")}):
             main = Library(self.folder / "moi")  # aucune main à moi

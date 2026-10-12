@@ -253,6 +253,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.plan_page(self._stakes()))
             if parts == ["api", "plan"]:
                 return self._json(library.plan_state())
+            if parts == ["api", "plan", "affiner"]:
+                return self._json(library.plan_refine_state())
             if parts == ["api", "coach"]:
                 return self._json(library.coach.status())
             if len(parts) == 3 and parts[:2] == ["api", "coach"]:
@@ -573,6 +575,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(library.plan_state(start=True))
         if parts == ["api", "plan", "arreter"]:
             return self._json(library.plan_cancel())
+        if parts[:3] == ["api", "plan", "affiner"] and len(parts) <= 4 and parts[3:] in ([], ["arreter"]):
+            payload = self._small_json()  # affiner un niveau du plan au solveur, ou l'arrêter
+            if not (isinstance(payload, dict) and isinstance(payload.get("famille"), str)
+                    and isinstance(payload.get("niveau"), str)):
+                return self._error(400, "Requête invalide.")
+            if parts[3:]:
+                return self._json(library.plan_refine_cancel(payload["famille"], payload["niveau"]))
+            try:
+                return self._json(library.plan_refine(payload["famille"], payload["niveau"]))
+            except ValueError as exc:
+                return self._error(400, str(exc))
         if parts == ["api", "sauvegarde", "reglages"]:
             payload = self._small_json()
             if not (isinstance(payload, dict) and isinstance(payload.get("dest"), str) and len(payload["dest"]) <= 500

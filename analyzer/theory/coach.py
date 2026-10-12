@@ -4,8 +4,8 @@
    principale (c-bet, réponse à la c-bet, 2e barrel à chaque turn, 3e barrel sur un échantillon de rivers,
    c-bet retardée, probe…), la stratégie de toute la range regroupée par famille de mains (deux paires et
    mieux, overpair, top pair…, tirage couleur, air) et, à la turn et à la river, par type de carte
-   (overcard, brique, board pairé, couleur ou quinte possible) ; au flop (c-bet et réponse à la c-bet), ce que
-   vaut chaque action pour chaque famille de mains (ev_summary). Gardée dans la base (documents « plan »).
+   (overcard, brique, board pairé, couleur ou quinte possible) ; à chacun de ces nœuds, ce que vaut chaque action
+   pour chaque famille de mains (ev_summary), par type de carte. Gardée dans la base (documents « plan »).
 2. Synthèse, à l'affichage : les flops regroupés en trois stratégies de c-bet (miser range, stratégie mixte,
    checker range) et, dans chacune, par taille de mise (petite, moyenne, grosse, tapis). Pour chaque groupe :
    ses flops (des exemples, chacun ouvrable dans l'explorateur), le pourquoi (avantage d'équité, avantage de
@@ -14,7 +14,9 @@
    c-bet et aux barrels, et quand l'attaquant checke). Plus il y a de flops résolus, plus le plan est précis.
 3. Niveaux (levels) : des plans de plus en plus fins — une seule action pour toute la range sur tous les flops,
    puis une par type de flop, puis une par type de flop et famille de mains —, chacun avec ce qu'il coûte face à
-   la stratégie du solveur.
+   la stratégie du solveur, et la suite à la turn et à la river (une action par famille de mains, puis par type de
+   carte). Option : affiner la suite d'un niveau au solveur, sur quelques flops résolus de nouveau avec le flop du
+   niveau imposé (refine_spots).
 
 Un plan par famille de spots d'étude : heads-up (SRP, pot 3bet, pot 4bet) et tables à plusieurs (6-max, une famille
 par paire de positions et type de pot, avec tes charts). Les arbres 6-max ont la forme du heads-up de même structure
@@ -28,12 +30,13 @@ from typing import Callable, Iterable, Optional
 from .. import db
 from ..cards import RANK_VALUE
 from ..db import documents
-from . import postflop, sizing, studyspots
+from . import postflop, preflop_tree, sizing, studyspots
 from .handclass import DRAW_BIT, MADE, MADE_INDEX, classify
 
-VERSION = 2  # change quand l'extraction change : les plans plus anciens sont relus (« Préparer le plan »)
-READABLE = (1, 2)  # versions encore affichées en attendant (la version 1 n'a pas l'EV des actions : pas de niveaux)
-EV_LINES = ("cbet", "vs_cbet")  # nœuds du flop dont on garde aussi ce que vaut chaque action (ev_summary)
+VERSION = 3  # change quand l'extraction change : les plans plus anciens sont relus (« Préparer le plan »)
+# Versions encore affichées en attendant : la version 1 n'a pas l'EV des actions (pas de niveaux), la version 2
+# seulement celle du flop (« ev » de la c-bet et de la réponse à la c-bet : les niveaux sans la turn ni la river).
+READABLE = (1, 2, 3)
 ORDER = ("fold", "check", "call", "small", "medium", "big", "overbet", "raise", "allin")
 
 BUCKETS = (
@@ -68,6 +71,7 @@ LINES_IP = (  # le bouton à l'initiative : SRP, pot 4bet
     ("vs_barrel", "BB face au 2e barrel", ["check", "bet", "call", "*", "check", "bet"]),
     ("delayed", "C-bet retardée du bouton", ["check", "check", "*", "check"]),
     ("probe", "Probe de la BB", ["check", "check", "*"]),
+    ("vs_probe", "Bouton face au probe", ["check", "check", "*", "bet"]),
     ("barrel3", "3e barrel du bouton", ["check", "bet", "call", "*", "check", "bet", "call", "*", "check"]),
     ("vs_barrel3", "BB face au 3e barrel", ["check", "bet", "call", "*", "check", "bet", "call", "*", "check", "bet"]),
 )
@@ -76,6 +80,7 @@ LINES_OOP = (  # la BB à l'initiative : pot 3bet
     ("vs_cbet", "Bouton face à la c-bet", ["bet"]),
     ("vs_xr", "BB face à la relance", ["bet", "raise"]),
     ("stab", "Stab du bouton (la BB checke)", ["check"]),
+    ("vs_stab", "BB face au stab", ["check", "bet"]),
     ("barrel", "2e barrel de la BB", ["bet", "call", "*"]),
     ("vs_barrel", "Bouton face au 2e barrel", ["bet", "call", "*", "bet"]),
     ("delayed", "C-bet retardée de la BB", ["check", "check", "*"]),
@@ -219,19 +224,22 @@ def _walk(query: Callable[[list], dict], steps: list[str], path: list, node: dic
     yield from _walk(query, rest, p, query(p), dealt, stride)
 
 
-def _accumulate(acc: dict, node: dict, flop: list[str], dealt: list[str]) -> None:
+def _buckets(node: dict) -> list[Optional[str]]:
+    """La famille de mains (BUCKETS) de chaque main du joueur qui agit ; None pour une main qui n'arrive pas ici."""
+    return [bucket(row[0], node["board"]) if row[1] > 0 else None for row in node["hands"][node["player"]]]
+
+
+def _accumulate(acc: dict, node: dict, group: str, buckets: list[Optional[str]]) -> None:
     actor = node["player"]
     na = len(node["actions"])
     classes = [action_class(node, a) for a in node["actions"]]
-    group = card_class(flop + dealt[:-1], dealt[-1]) if dealt else "flop"
-    board = node["board"]
     g = acc.setdefault(group, {"n": 0, "w": 0.0, "f": {}, "b": {}})
     g["n"] += 1
-    for row in node["hands"][actor]:
+    for row, key in zip(node["hands"][actor], buckets):
         reach = row[1]
         if reach <= 0:
             continue
-        b = g["b"].setdefault(bucket(row[0], board), {"w": 0.0, "f": {}})
+        b = g["b"].setdefault(key, {"w": 0.0, "f": {}})
         b["w"] += reach
         g["w"] += reach
         for k in range(na):
@@ -251,27 +259,31 @@ def _normalize(acc: dict) -> dict:
     return out
 
 
-def ev_summary(node: dict) -> Optional[dict]:
+def ev_summary(node: dict, buckets: Optional[list[Optional[str]]] = None) -> Optional[dict]:
     """Ce que vaut chaque action à ce nœud jouée par chaque famille de mains (BUCKETS), et la stratégie du solveur :
     sommes pondérées par la présence des mains, en part du pot, pour une range de poids 1 (les flops se comparent
     ainsi entre eux). Une action par classe (action_class) : la plus jouée de sa classe. EV face à la stratégie de
-    l'adversaire telle qu'elle est. None sans EV par action."""
+    l'adversaire telle qu'elle est. None sans EV par action (ou sans main qui arrive ici). buckets : _buckets(node),
+    s'il est déjà calculé."""
     actor = node.get("player")
     if actor is None or not node.get("pot"):
         return None
+    if buckets is None:
+        buckets = _buckets(node)
     na = len(node["actions"])
     classes = [action_class(node, a) for a in node["actions"]]
-    freqs, _ = postflop.node_summary(node)
+    # (les fréquences de la range ne servent qu'à départager deux actions d'une même classe)
+    freqs = postflop.node_summary(node)[0] if len(set(classes)) < na else [0.0] * na
     chosen: dict[str, int] = {}
     for i, c in enumerate(classes):
         if c not in chosen or freqs[i] > freqs[chosen[c]]:
             chosen[c] = i
     total, groups = 0.0, {}
-    for row in node["hands"][actor]:
+    for row, key in zip(node["hands"][actor], buckets):
         reach, strategy, evs = row[1], row[4:4 + na], row[4 + na:4 + 2 * na]
         if reach <= 0 or len(evs) < na or any(e is None for e in evs):
             continue
-        g = groups.setdefault(bucket(row[0], node["board"]), {"r": 0.0, "s": 0.0, "e": dict.fromkeys(chosen, 0.0)})
+        g = groups.setdefault(key, {"r": 0.0, "s": 0.0, "e": dict.fromkeys(chosen, 0.0)})
         g["r"] += reach
         g["s"] += reach * sum(p * e for p, e in zip(strategy, evs))
         for c, i in chosen.items():
@@ -285,6 +297,38 @@ def ev_summary(node: dict) -> Optional[dict]:
     return {"classes": sorted(chosen, key=ORDER.index), "sizes": sizes,
             "b": {k: {"r": round(g["r"] / total, 5), "s": round(g["s"] * scale, 6),
                       "e": {c: round(v * scale, 6) for c, v in g["e"].items()}} for k, g in groups.items()}}
+
+
+def _add_ev(acc: dict, node: dict, group: str, buckets: list[Optional[str]]) -> None:
+    """Ajoute l'EV de ce nœud (ev_summary) à son groupe (« flop », ou le type de la carte de la turn ou de la river)."""
+    ev = ev_summary(node, buckets)
+    if ev is None:
+        return
+    g = acc.setdefault(group, {"n": 0, "classes": None, "sizes": {}, "b": {}})
+    g["n"] += 1
+    g["classes"] = set(ev["classes"]) if g["classes"] is None else g["classes"] & set(ev["classes"])
+    for c, pct in ev["sizes"].items():
+        g["sizes"].setdefault(c, []).append(pct)
+    for key, b in ev["b"].items():
+        t = g["b"].setdefault(key, {"r": 0.0, "s": 0.0, "e": {}})
+        t["r"] += b["r"]
+        t["s"] += b["s"]
+        for c, v in b["e"].items():
+            t["e"][c] = t["e"].get(c, 0.0) + v
+
+
+def _normalize_ev(acc: dict) -> dict:
+    """L'EV moyenne des nœuds de chaque groupe (chaque carte compte autant), comme ev_summary, avec « n » : le nombre
+    de nœuds. Les actions gardées : celles de tous les nœuds du groupe."""
+    out = {}
+    for group, g in acc.items():
+        n, classes = g["n"], sorted(g["classes"], key=ORDER.index)
+        out[group] = {"n": n, "classes": classes,
+                      "sizes": {c: sorted(v)[len(v) // 2] for c, v in g["sizes"].items() if c in classes},
+                      "b": {k: {"r": round(b["r"] / n, 5), "s": round(b["s"] / n, 6),
+                                "e": {c: round(b["e"][c] / n, 6) for c in classes if c in b["e"]}}
+                            for k, b in g["b"].items()}}
+    return out
 
 
 def _advantages(node: dict) -> dict:
@@ -307,20 +351,22 @@ def extract(query: Callable[[list], dict], spot: studyspots.StudySpot, key: str)
     nodes = {}
     for name, title, steps in lines(spot.family):
         acc: dict = {}
+        evs: dict = {}
         sizes = set()
-        actor, ev = None, None
+        actor = None
         for node, dealt in _walk(query, steps, [], root, [], stride):
-            _accumulate(acc, node, spot.board, dealt)
+            group = card_class(spot.board + dealt[:-1], dealt[-1]) if dealt else "flop"
+            buckets = _buckets(node)
+            _accumulate(acc, node, group, buckets)
+            _add_ev(evs, node, group, buckets)
             actor = node["player"]
             for a in node["actions"]:
                 if a["kind"] == "bet" and not a.get("allin") and node["pot"]:
                     sizes.add(round(100 * a["amount"] / node["pot"]))
-            if name in EV_LINES and not dealt and ev is None:
-                ev = ev_summary(node)
         if acc:
             nodes[name] = {"title": title, "actor": actor, "sizes": sorted(sizes), "groups": _normalize(acc)}
-            if ev:
-                nodes[name]["ev"] = ev
+            if evs:
+                nodes[name]["evs"] = _normalize_ev(evs)
     flop = query(_flop_path(query, spot.family))
     return {"version": VERSION, "key": key, "id": spot.ident, "family": spot.family, "board": spot.board,
             "texture": spot.texture, "pattern": studyspots.suit_pattern(spot.board),
@@ -668,13 +714,23 @@ def _facing(merged: dict) -> Optional[dict]:
 # familles de mains ou une des onze), celle qui vaut le plus sur les flops résolus de la case. Sa perte : ce qu'il
 # coûte face à la stratégie du solveur, en % du pot par main, en moyenne sur les flops (chacun compte autant), face à
 # un adversaire qui joue la stratégie du solveur sans s'adapter (un adversaire qui s'adapte ferait payer un peu plus).
+# Chaque niveau a sa suite : les autres décisions de la main (face au check-raise, 2e et 3e barrels, c-bet retardée…),
+# une action par famille de mains sur toutes les cartes, puis par type de carte de la turn ou de la river ; leur perte
+# en % du pot de la street, chaque carte comptant autant. La suite est lue aux nœuds du solveur, après sa propre
+# stratégie du flop (refine_spots l'affine avec le flop du niveau imposé).
 SIZED = ("small", "medium", "big", "overbet", "allin")
 RAISES = ("raise", "allin")
-STEPS = {  # (clé, une règle par type de flop, mains : « range », « familles » (GROUPS) ou « detail » (BUCKETS))
-    "attack": (("une", False, "range"), ("flop", True, "range"), ("mains", True, "familles"),
-               ("detail", True, "detail")),
-    "defense": (("une", False, "familles"), ("flop", True, "familles"), ("detail", True, "detail")),
+# (clé, première décision, décisions suivantes) ; une décision : (une règle par type de flop ou de carte, mains :
+# « range », « familles » (GROUPS) ou « detail » (BUCKETS))
+STEPS = {
+    "attack": (("une", (False, "range"), (False, "familles")), ("flop", (True, "range"), (True, "familles")),
+               ("mains", (True, "familles"), (True, "familles")), ("detail", (True, "detail"), (True, "detail"))),
+    "defense": (("une", (False, "familles"), (False, "familles")), ("flop", (True, "familles"), (True, "familles")),
+                ("detail", (True, "detail"), (True, "detail"))),
 }
+# Les décisions de chaque côté, dans l'ordre de la main : la première (au flop), puis la suite (celles de la famille).
+SIDE_NODES = {"attack": ("cbet", "vs_xr", "vs_stab", "barrel", "delayed", "vs_probe", "barrel3"),
+              "defense": ("vs_cbet", "stab", "vs_barrel", "probe", "vs_barrel3")}
 
 
 def _substitute(cls: Optional[str], available: Iterable[str]) -> Optional[str]:
@@ -720,10 +776,10 @@ def _eligible(available: list[list[str]]) -> list[str]:
 
 
 def simplify(entries: list[tuple[str, dict]], by_flop: bool, hands: str) -> Optional[dict]:
-    """Le meilleur plan simplifié. entries : [(catégorie du flop, ev_summary du nœud)] ; by_flop : une règle par
-    catégorie de flop (sinon une pour tous, « tous ») ; hands : « range », « familles » ou « detail ». Renvoie sa perte
-    moyenne (part du pot), celle de chaque catégorie, et la règle de chaque case
-    {catégorie: {mains: {class, share}}}."""
+    """Le meilleur plan simplifié. entries : [(catégorie du flop ou type de carte, ev_summary du nœud)], chacune
+    comptant pour son nombre de nœuds (« n » : les cartes d'un type) ; by_flop : une règle par catégorie (sinon une
+    pour toutes, « tous ») ; hands : « range », « familles » ou « detail ». Renvoie sa perte moyenne (part du pot),
+    celle de chaque catégorie, et la règle de chaque case {catégorie: {mains: {class, share}}}."""
     if not entries:
         return None
     available: dict[str, list[list[str]]] = {}
@@ -733,32 +789,33 @@ def simplify(entries: list[tuple[str, dict]], by_flop: bool, hands: str) -> Opti
     flops, cells = [], {}
     for category, ev in entries:
         where = category if by_flop else "tous"
+        weight = ev.get("n", 1)
         groups = _grouped(ev, hands)
-        flops.append((where, groups, ev["classes"]))
+        flops.append((where, groups, ev["classes"], weight))
         for hk, g in groups.items():
             cell = cells.setdefault((where, hk), {"v": dict.fromkeys(allowed[where], 0.0), "ok": set(allowed[where]),
                                                   "r": 0.0, "n": 0})
-            cell["r"] += g["r"]
-            cell["n"] += 1
+            cell["r"] += weight * g["r"]
+            cell["n"] += weight
             for c in allowed[where]:
-                cell["v"][c] += g["e"].get(_substitute(c, ev["classes"]), 0.0)
+                cell["v"][c] += weight * g["e"].get(_substitute(c, ev["classes"]), 0.0)
     # à valeur égale, l'action la plus simple (check avant mise, petite mise avant grosse)
     choice = {key: max(sorted(cell["ok"], key=ORDER.index), key=lambda c: round(cell["v"][c], 6))
               for key, cell in cells.items() if cell["ok"]}
-    losses: dict[str, list[float]] = {}
-    for where, groups, available in flops:
+    losses: dict[str, list[tuple[float, float]]] = {}
+    for where, groups, available, weight in flops:
         loss = 0.0
         for hk, g in groups.items():
             sub = _substitute(choice.get((where, hk)), available)
             loss += g["s"] - g["e"].get(sub, g["s"]) if sub else 0.0
-        losses.setdefault(where, []).append(max(loss, 0.0))
-    every = [x for xs in losses.values() for x in xs]
+        losses.setdefault(where, []).append((max(loss, 0.0), weight))
     rules: dict = {}
     for (where, hk), c in choice.items():
         cell = cells[(where, hk)]
         rules.setdefault(where, {})[hk] = {"class": c, "share": cell["r"] / cell["n"]}
-    return {"loss": sum(every) / len(every), "by": {w: sum(xs) / len(xs) for w, xs in losses.items()},
-            "flops": {w: len(xs) for w, xs in losses.items()}, "rules": rules}
+    return {"loss": _mean([x for xs in losses.values() for x in xs]),
+            "by": {w: _mean(xs) for w, xs in losses.items()}, "flops": {w: len(xs) for w, xs in losses.items()},
+            "rules": rules}
 
 
 def pure_options(entries: list[tuple[str, dict]]) -> list[tuple[str, float]]:
@@ -773,7 +830,7 @@ def pure_options(entries: list[tuple[str, dict]]) -> list[tuple[str, float]]:
 
 
 def class_sizes(entries: list[tuple[str, dict]]) -> dict[str, int]:
-    """La taille de chaque classe de mise (% du pot), la médiane sur les flops."""
+    """La taille de chaque classe de mise (% du pot), la médiane sur les flops (ou les types de carte)."""
     found: dict[str, list[int]] = {}
     for _, ev in entries:
         for c, pct in ev.get("sizes", {}).items():
@@ -781,18 +838,46 @@ def class_sizes(entries: list[tuple[str, dict]]) -> dict[str, int]:
     return {c: sorted(v)[len(v) // 2] for c, v in found.items()}
 
 
-def levels(entries: list[tuple[str, dict]], side: str) -> Optional[dict]:
-    """Les niveaux d'un nœud du flop (side : « attack », la c-bet ; « defense », la réponse à la c-bet), du plus
-    simple au plus précis, chacun avec sa règle et sa perte ; en attaque, toutes les actions jouées par toute la
-    range (options)."""
+def _streets(later: dict[str, list], by_card: bool, hands: str) -> dict[str, dict]:
+    return {name: dict(simplify(e, by_card, hands), by_flop=by_card, hands=hands) for name, e in later.items()}
+
+
+def levels(entries: list[tuple[str, dict]], side: str, later: Optional[dict[str, list]] = None) -> Optional[dict]:
+    """Les niveaux d'un côté (side : « attack », la c-bet ; « defense », la réponse à la c-bet), du plus simple au plus
+    précis, chacun avec sa règle et sa perte, et sa suite (« streets » : later, {nœud: entrées} des décisions
+    suivantes de SIDE_NODES, de même forme que entries, avec le type de carte à la turn et à la river) ; en attaque,
+    toutes les actions jouées par toute la range (options)."""
     if not entries:
         return None
+    later = {name: e for name, e in (later or {}).items() if e}
     out = {"flops": len(entries), "sizes": class_sizes(entries),
-           "steps": [dict(simplify(entries, by_flop, hands), key=key, by_flop=by_flop, hands=hands)
-                     for key, by_flop, hands in STEPS[side]]}
+           "street_sizes": {name: class_sizes(e) for name, e in later.items()},
+           "steps": [dict(simplify(entries, by_flop, hands), key=key, by_flop=by_flop, hands=hands,
+                          streets=_streets(later, *rest)) for key, (by_flop, hands), rest in STEPS[side]]}
     if side == "attack":
         out["options"] = pure_options(entries)
     return out
+
+
+def node_evs(data: dict, name: str) -> dict[str, dict]:
+    """L'EV des actions d'un nœud d'un plan extrait, par groupe (« flop » ou type de la carte) ; un plan de la version
+    2 n'a que celle du flop, de la c-bet et de la réponse à la c-bet."""
+    node = data["nodes"].get(name) or {}
+    if "evs" in node:
+        return node["evs"]
+    return {"flop": node["ev"]} if node.get("ev") else {}
+
+
+def level_entries(data: list[dict], name: str) -> list[tuple[str, dict]]:
+    """Les entrées des niveaux pour ce nœud : (catégorie du flop, EV) au flop, (type de la carte, EV) ensuite."""
+    return [(board_category(d["board"]) if group == "flop" else group, ev)
+            for d in data for group, ev in node_evs(d, name).items()]
+
+
+def plan_levels(data: list[dict]) -> dict:
+    """Les niveaux en attaque et en défense de ces plans extraits, avec leur suite."""
+    return {side: levels(level_entries(data, nodes[0]), side, {name: level_entries(data, name) for name in nodes[1:]})
+            for side, nodes in SIDE_NODES.items()}
 
 
 def class_text(cls: str, sizes: dict[str, int]) -> str:
@@ -862,12 +947,14 @@ def family_plan(family: str) -> dict:
                                   "flops": sum(1 for r in rows if r["strategy"] == strategy)})
     for group in out["groups"]:
         group["flops"].sort(key=lambda r: (order.index(r["category"]), -r["cbet"]))
-    attack = [(board_category(d["board"]), d["nodes"]["cbet"]["ev"]) for d in data
-              if d["nodes"].get("cbet", {}).get("ev")]
-    defense = [(board_category(d["board"]), d["nodes"]["vs_cbet"]["ev"]) for d in data
-               if d["nodes"].get("vs_cbet", {}).get("ev")]
-    out["levels"] = {"attack": levels(attack, "attack"), "defense": levels(defense, "defense"),
-                     "read": len(attack), "older": sum(1 for d in data if d.get("version") != VERSION)}
+    out["levels"] = dict(plan_levels(data), read=sum(1 for d in data if node_evs(d, "cbet")),
+                         older=sum(1 for d in data if d.get("version") != VERSION))
+    sample = refine_sample(data)
+    out["refine"] = {"flops": len(sample), "seconds": refine_seconds(family, sample)}
+    if out["levels"]["attack"]:
+        found = refined(family)
+        for step in out["levels"]["attack"]["steps"]:
+            step["refined"] = _refined_step(step, found.get(step["key"], []), out["levels"]["attack"]["sizes"])
     out["baseline"] = baseline(out)
     return out
 
@@ -921,6 +1008,184 @@ def _group(members: list[tuple[dict, dict]], strategy: str, size: str, who: str,
             if stab["flops"] else None,
         },
     }
+
+
+# --- Affiner la suite d'un niveau au solveur ------------------------------------------------------------------
+# La suite d'un niveau (turn, river) est lue aux nœuds du solveur, après sa propre stratégie du flop : avec le flop
+# simplifié, les ranges qui arrivent à la turn ne sont plus tout à fait les mêmes (en misant toute sa range, on y
+# arrive avec plus de mains faibles). Pour l'affiner, quelques flops résolus le sont de nouveau avec le flop du niveau
+# imposé : l'arbre n'a plus que les tailles de c-bet du niveau, et un verrou sur la c-bet y fait jouer à chaque main
+# l'action de sa case. L'adversaire s'y adapte (face à la c-bet comme ensuite) ; la turn et la river se relisent
+# (extract), et l'écart d'EV à la racine avec la résolution d'origine dit ce que coûte vraiment le flop simplifié face
+# à un adversaire qui s'adapte. Gardé dans la base (documents « plan-simple », clé « famille|niveau|flop »).
+REFINE_KIND = "plan-simple"
+REFINE_FLOPS = 6  # flops résolus de nouveau par niveau : un par type de flop, les plus fréquents d'abord
+DEFAULT_PCT = {"small": 33, "medium": 66, "big": 100, "overbet": 150}  # une taille que les flops lus n'ont pas
+# Durée d'un flop affiné (mesurée sur 4 cœurs) : la résolution verrouillée, 70 % environ de celle d'origine, puis la
+# relecture de la turn et de la river (une vingtaine de secondes en pot 4bet, une minute environ ailleurs).
+LOCKED_SPEED = 0.7
+READ_SECONDS = {"short": 20, "deep": 60}  # selon le rapport tapis / pot au flop : sous 3, ou plus
+
+
+def refine_sample(data: list[dict], n: int = REFINE_FLOPS) -> list[dict]:
+    """Les flops à résoudre de nouveau : un par type de flop à tour de rôle, les types les plus fréquents d'abord."""
+    by_cat: dict[str, list[dict]] = {}
+    for d in sorted(data, key=lambda d: d["id"]):
+        by_cat.setdefault(board_category(d["board"]), []).append(d)
+    order = [c for c, _ in CATEGORIES]
+    cats = sorted(by_cat, key=lambda c: (-len(by_cat[c]), order.index(c)))
+    out: list[dict] = []
+    for k in range(max((len(v) for v in by_cat.values()), default=0)):
+        out += [by_cat[c][k] for c in cats if k < len(by_cat[c])]
+    return out[:n]
+
+
+def step_class(step: dict, category: str, key: str) -> str:
+    """L'action au flop de ce niveau d'une main de la famille key (BUCKETS) sur un flop de cette catégorie ; une
+    famille sans règle (absente des flops lus) joue l'action de la plus grande case."""
+    rules = step["rules"].get(category if step["by_flop"] else "tous") or {}
+    rule = rules.get(_hand_key(key, step["hands"]))
+    if rule is None:
+        rule = max(rules.values(), key=lambda r: r["share"], default={"class": "check"})
+    return rule["class"]
+
+
+def refine_signature(step: dict, category: str, sizes: dict[str, int]) -> str:
+    """Ce qui fixe le flop imposé sur un flop de cette catégorie : la règle de sa case et les tailles du niveau. Un
+    flop affiné dont la signature a changé (des flops lus depuis ont changé la règle) est à refaire."""
+    where = category if step["by_flop"] else "tous"
+    rules = {hk: r["class"] for hk, r in sorted((step["rules"].get(where) or {}).items())}
+    used = sorted({c for c in rules.values() if c != "check"}, key=ORDER.index)
+    return json.dumps({"hands": step["hands"], "rules": rules, "sizes": {c: sizes.get(c) for c in used}},
+                      sort_keys=True)
+
+
+def refine_edits(spot: studyspots.StudySpot, step: dict, sizes: dict[str, int]) -> dict:
+    """Les modifications de l'arbre d'un flop pour l'affiner (format de custom_tree) : les seules tailles de c-bet du
+    niveau (sizes : celles des flops lus) et un verrou sur la c-bet, chaque main de celui qui a l'initiative y jouant
+    l'action de sa case. Les actions de l'arbre (native/arbre.rs) : le check, puis les mises par montant croissant ;
+    une mise d'au moins allin_threshold du tapis devient le tapis."""
+    a = aggressor_of(spot.family)
+    seat = spot.ip if a == 1 else spot.oop
+    category = board_category(spot.board)
+    blocked = set(spot.board)
+    plays = {}
+    for cls, weight in spot.ranges[seat].items():
+        if weight <= 0:
+            continue
+        for combo in preflop_tree.combos(cls):
+            if not {combo[:2], combo[2:]} & blocked:
+                plays[combo] = step_class(step, category, bucket(combo, spot.board))
+    used = sorted(set(plays.values()) - {"check"}, key=ORDER.index)
+    pcts = {c: sizes.get(c) or DEFAULT_PCT[c] for c in used if c != "allin"}
+    tree = spot.tree()
+    stack, pot, threshold = tree["effective_stack"], tree["starting_pot"], tree["allin_threshold"]
+    amounts = {}
+    for c in used:
+        to = stack if c == "allin" else pcts[c] / 100 * pot
+        amounts[c] = round(stack if to >= threshold * stack - 1e-9 else to, 6)
+    distinct = sorted(set(amounts.values()))
+    index = {c: 1 + distinct.index(x) for c, x in amounts.items()}
+    index["check"] = 0
+
+    def freqs(c: str) -> list[int]:
+        return [1 if k == index[c] else 0 for k in range(1 + len(distinct))]
+    key = "bet:fi:" if a == 1 else "bet:fo:"
+    edits = {"plan": {key: sorted(pcts.values()) + (["a"] if "allin" in used else [])}, "locks": [], "auto": {}}
+    if used:  # (toute la range checke : l'arbre n'a plus de c-bet, rien à verrouiller)
+        path = [{"type": "action", "index": 0}] if a == 1 else []  # (la BB qui ne mène pas checke d'abord)
+        edits["locks"] = [{"path": path, "combos": {c: freqs(cls) for c, cls in sorted(plays.items())}}]
+    return edits
+
+
+def refine_spots(family: str, level: str) -> list[dict]:
+    """Les flops à résoudre de nouveau pour affiner la suite de ce niveau d'attaque : chacun avec son spot (le flop du
+    niveau imposé : spot.edits), la requête de sa résolution d'origine (base, ou None) et sa signature."""
+    data = plans(family)
+    found = plan_levels(data)["attack"]
+    step = next((st for st in (found or {}).get("steps", []) if st["key"] == level), None)
+    if step is None:
+        return []
+    out = []
+    for d in refine_sample(data):
+        spot = studyspots.StudySpot(family, list(d["board"]))
+        base = postflop.solved_request(spot.request())
+        spot.edits = refine_edits(spot, step, found["sizes"])
+        category = board_category(spot.board)
+        out.append({"spot": spot, "base": base, "level": level, "category": category, "id": d["id"],
+                    "signature": refine_signature(step, category, found["sizes"])})
+    return out
+
+
+def refine_seconds(family: str, items: list[dict]) -> Optional[float]:
+    """La durée attendue de l'affinage de ces flops : chaque résolution verrouillée (d'après celle d'origine) et sa
+    relecture."""
+    metas = studyspots.spot_studies((family,))
+    found = [metas.get(it["id"], {}).get("seconds") for it in items]
+    if not found or not all(found):
+        return None
+    info = studyspots.family_info(family)
+    read = READ_SECONDS["short" if info["stack"] < 3 * info["pot"] else "deep"]
+    return sum(LOCKED_SPEED * x + read for x in found)
+
+
+def refine_one(item: dict, iterations: int, target: float, on_progress: Optional[Callable[[dict], None]] = None,
+               on_start: Optional[Callable] = None) -> dict:
+    """Résout un flop avec le flop du niveau imposé (une résolution de travail : ni étude ni cache), en tire la suite
+    (extract) et la garde avec l'EV à la racine des deux résolutions."""
+    spot = item["spot"]
+    request = spot.request(iterations, target)
+    session = postflop.Session(request, save=False)
+    try:
+        raw = session.start(on_progress=on_progress, on_start=on_start)
+        data = extract(session.node, spot, postflop.study_key(request))
+    finally:
+        session.close()
+    base = postflop.cached(item["base"]) if item["base"] else None
+    payload = {
+        "version": VERSION, "family": spot.family, "level": item["level"], "board": spot.board,
+        "category": item["category"], "signature": item["signature"], "aggressor": aggressor_of(spot.family),
+        "pot": spot.pot_bb, "root_ev": raw.get("root_ev"), "base_ev": (base or {}).get("root_ev"),
+        "exploit": [raw.get("exploit_pct"), (base or {}).get("exploit_pct")], "seconds": raw.get("seconds"),
+        "nodes": {name: {"evs": node["evs"]} for name, node in data["nodes"].items()
+                  if name in SIDE_NODES["attack"][1:] and node.get("evs")},
+    }
+    documents.put(db.current(), REFINE_KIND, f"{spot.family}|{item['level']}|{''.join(spot.board)}", payload)
+    return payload
+
+
+def refined(family: str) -> dict[str, list[dict]]:
+    """Les flops affinés de chaque niveau de cette famille : {niveau: [résultats de refine_one]}."""
+    out: dict[str, list[dict]] = {}
+    for key, value in documents.items(db.current(), REFINE_KIND, family + "|"):
+        if isinstance(value, dict) and value.get("version") == VERSION and value.get("family") == family:
+            out.setdefault(value["level"], []).append(value)
+    return out
+
+
+def _refined_step(step: dict, found: list[dict], sizes: dict[str, int]) -> Optional[dict]:
+    """La suite d'un niveau d'attaque affinée au solveur : ses règles lues sur les flops affinés à jour, et ce que
+    coûte vraiment le flop simplifié (écart d'EV à la racine, en part du pot) ; None sans flop affiné."""
+    fresh = [r for r in found if r["signature"] == refine_signature(step, r["category"], sizes)]
+    if not found:
+        return None
+    out = {"flops": len(fresh), "stale": len(found) - len(fresh),
+           "boards": [r["board"] for r in sorted(fresh, key=lambda r: r["board"])]}
+    if not fresh:
+        return out
+    losses = [((r["base_ev"][r["aggressor"]] - r["root_ev"][r["aggressor"]]) / r["pot"], 1) for r in fresh
+              if r.get("base_ev") and r.get("root_ev")]
+    margins = [(max(x for x in r["exploit"] if x is not None) / 100, 1) for r in fresh
+               if any(x is not None for x in r["exploit"])]
+    later: dict[str, list] = {}
+    for r in fresh:
+        for name, node in r["nodes"].items():
+            later.setdefault(name, []).extend((r["category"] if group == "flop" else group, ev)
+                                              for group, ev in node["evs"].items())
+    rest = next(rest for key, _, rest in STEPS["attack"] if key == step["key"])
+    out.update(loss=_mean(losses), margin=_mean(margins), streets=_streets(later, *rest),
+               street_sizes={name: class_sizes(e) for name, e in later.items()})
+    return out
 
 
 # --- Lecture d'un nœud, pour le coach conversationnel --------------------------------------------------
