@@ -103,6 +103,15 @@ details.pl-street > summary .sub { font-weight: 400; color: var(--ink-2); margin
   border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
 .pl-refine .pl-refine-go { background: var(--series-1); border-color: var(--series-1); color: #fff; font-weight: 600; }
 .pl-refine-row + .pl-refine-row { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
+table.pl-mixes td.pl-mix { min-width: 110px; font-size: 12px; white-space: nowrap; cursor: help; }
+table.pl-mixes th small { font-weight: 400; }
+.pl-bar { display: block; height: 6px; border-radius: 3px; background: var(--lo-bg); overflow: hidden; margin: 2px 0 3px;
+  display: flex; }
+.pl-bar i { display: block; height: 100%; }
+.pl-bar i.up { background: var(--series-1); }
+.pl-bar i.flat { background: var(--axis); }
+details.pl-prio { margin: 4px 0 8px; font-size: 13px; }
+details.pl-prio > summary { cursor: pointer; color: var(--ink-2); }
 .pl-rule { font-size: 16px; font-weight: 600; margin: 4px 0 6px; }
 .pl-level h3 { margin-top: 16px; }
 table.pl-lv td { vertical-align: middle; font-size: 13px; }
@@ -461,13 +470,15 @@ def _table(plan: dict) -> str:
 # --- Niveaux : du plus simple au plus précis -----------------------------------------------------------------------
 
 LEVEL_TITLES = {"une": "Une seule règle au flop", "flop": "Selon le type de flop",
-                "mains": "Selon le flop et tes mains", "detail": "En onze familles de mains"}
-DEFENSE_TITLES = {"une": "Une règle par famille de mains", "flop": "Selon le type de flop",
-                  "detail": "En onze familles de mains"}
+                "equite": "Selon le flop et l'équité de tes mains", "detail": "Avec les tailles du solveur"}
+DEFENSE_TITLES = {"une": "Selon l'équité de tes mains", "flop": "Selon le type de flop",
+                  "detail": "Avec les tailles du solveur"}
 ACTION_SHORT = {"fold": "folde", "check": "checke", "call": "paie", "small": "petite", "medium": "moyenne",
                 "big": "grosse", "overbet": "overbet", "raise": "relance", "allin": "tapis"}
 TURN_NODES = ("barrel", "delayed", "vs_barrel", "probe", "vs_probe")  # (les autres : le flop, ou la river)
 RIVER_NODES = ("barrel3", "vs_barrel3", "river_xx", "vs_river_xx")
+MIN_FAMILY = 0.03  # une famille sous 3 % de sa boîte n'est pas citée parmi celles qui misent d'abord
+EQUITY_WORD = " d'équité"
 
 
 def _loss(x: Optional[float]) -> str:
@@ -478,14 +489,18 @@ def _loss(x: Optional[float]) -> str:
 
 
 def _action(cls: str, sizes: dict) -> str:
-    """« petite (33 %) », « checke », « paie »…"""
-    return ACTION_SHORT[cls] + (f" ({sizes[cls]} %)" if cls in sizes else "")
+    """« petite (33 %) », « relance (×4) », « checke », « paie »…"""
+    size = coach.size_text(cls, sizes)
+    return ACTION_SHORT[cls] + (f" ({size})" if size else "")
+
+
+def _kind(cls: str) -> str:
+    return "down" if cls in ("check", "fold") else "flat" if cls == "call" else "up"
 
 
 def _action_chip(cls: str, sizes: dict, label: str = "") -> str:
-    kind = "down" if cls in ("check", "fold") else "flat" if cls == "call" else "up"
     name = f"<b>{escape(label)}</b> " if label else ""
-    return f'<span class="pl-chip {kind}">{name}{escape(_action(cls, sizes))}</span>'
+    return f'<span class="pl-chip {_kind(cls)}">{name}{escape(_action(cls, sizes))}</span>'
 
 
 def _range_rule(who: str, cls: str, sizes: dict) -> str:
@@ -495,34 +510,116 @@ def _range_rule(who: str, cls: str, sizes: dict) -> str:
     return f"{_cap(who)} mise toute sa range en {coach.class_text(cls, sizes)}"
 
 
-def _hands_of(hands: str) -> list[tuple[str, str]]:
-    """Les colonnes d'une règle : toute la range, les quatre familles de mains ou les onze."""
-    if hands == "range":
-        return [("range", "Toute la range")]
-    if hands == "familles":
-        return [(k, label) for k, label, _, _ in coach.GROUPS]
-    return list(coach.BUCKETS)
-
-
 def _street_of(name: str) -> str:
     return "Turn" if name in TURN_NODES else "River" if name in RIVER_NODES else "Flop"
 
 
-def _level_table(step: dict, sizes: dict, hands: list[tuple[str, str]], first: str = "Flop") -> str:
-    """Une règle par type de flop ou de carte (et par famille de mains) : le tableau, avec la perte de chaque type
-    et le nombre de flops lus qui en ont."""
-    head = "".join(f"<th>{escape(label)}</th>" for _, label in hands)
-    order = ([(c, label) for c, label in coach.CATEGORIES] if first == "Flop" else list(coach.CARDS))
+def _rows_of(rules: dict, first: str) -> list[tuple[str, str]]:
+    """Les lignes d'une règle : les types de flop (ou de carte) qu'elle a, ou une seule pour tous."""
+    if "tous" in rules:
+        return [("tous", "Tous les flops" if first == "Flop" else "Toutes les cartes")]
+    order = list(coach.CATEGORIES) if first == "Flop" else list(coach.CARDS)
+    return [(k, label) for k, label in order if k in rules]
+
+
+def _first_head(first: str) -> str:
+    return "Flop (flops résolus)" if first == "Flop" else f"Carte de la {first.lower()} (flops)"
+
+
+def _level_table(step: dict, sizes: dict, first: str = "Flop") -> str:
+    """Une action pour toute la range, par type de flop : le tableau, avec la perte de chaque type et le nombre de
+    flops lus qui en ont."""
     rows = []
-    for key, label in ((k, label) for k, label in order if k in step["rules"]):
-        rules = step["rules"][key]
-        cells = "".join(f"<td>{_action_chip(rules[k]['class'], sizes) if k in rules else ''}</td>" for k, _ in hands)
+    for key, label in _rows_of(step["rules"], first):
+        rule = step["rules"][key].get("range")
         flops = f'<span class="muted">({step["flops"][key]})</span>'
-        rows.append(f'<tr><td>{escape(label)} {flops}</td>{cells}<td class="num">{escape(_loss(step["by"][key]))}</td>'
-                    "</tr>")
-    what = "Flop (flops résolus)" if first == "Flop" else f"Carte de la {first.lower()} (flops)"
-    return (f'<div class="scroll"><table class="stats pl-lv"><thead><tr><th>{what}</th>{head}'
-            f'<th class="num">Perte</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>')
+        rows.append(f'<tr><td>{escape(label)} {flops}</td><td>{_action_chip(rule["class"], sizes) if rule else ""}</td>'
+                    f'<td class="num">{escape(_loss(step["by"][key]))}</td></tr>')
+    return (f'<div class="scroll"><table class="stats pl-lv"><thead><tr><th>{_first_head(first)}</th>'
+            f'<th>Toute la range</th><th class="num">Perte</th></tr></thead><tbody>{"".join(rows)}</tbody>'
+            "</table></div>")
+
+
+def _fractions(f: dict, facing: bool, sizes: dict) -> str:
+    """Les fractions d'une boîte (ou de toute la range), le reste implicite : « mise 85 % » (le reste checke) ; avec
+    plusieurs tailles, « petite 40 % · grosse 20 % » ; face à une mise, « paie 60 % · relance 15 % » (le reste
+    folde)."""
+    shown = [(c, v) for c, v in sorted(f.items(), key=lambda cv: coach.ORDER.index(cv[0]))
+             if v >= 0.005 and c not in ("check", "fold")]
+    if not shown:
+        return "folde tout" if facing else "checke tout"
+    bets = [c for c, _ in shown if c in coach.AGGRESSIVE]
+    if len(bets) == 1 and not facing:
+        return f"mise {_pct(dict(shown)[bets[0]])}"
+    return " · ".join(f"{ACTION_SHORT[c]} {_pct(v)}" for c, v in shown)
+
+
+def _bar(f: dict) -> str:
+    """Les fractions en barre : mises et relances, call, check ou fold."""
+    up = sum(v for c, v in f.items() if c in coach.AGGRESSIVE)
+    flat = f.get("call", 0.0)
+    return (f'<span class="pl-bar"><i class="up" style="width:{round(100 * up)}%"></i>'
+            f'<i class="flat" style="width:{round(100 * flat)}%"></i></span>')
+
+
+def _families_text(families: list[dict], facing: bool) -> str:
+    """Les familles d'une boîte, de celle qui mise (ou défend) le plus à celle qui le fait le moins."""
+    def share(x: dict) -> float:
+        return sum(v for c, v in x["f"].items() if c not in ("check", "fold"))
+    def name(key: str) -> str:
+        label = coach.BUCKET_LABEL[key]
+        return label[:1].lower() + label[1:]
+    items = [f"{name(x['key'])} {_pct(share(x))}" for x in families if x["r"] >= MIN_FAMILY]
+    return ", ".join(items)
+
+
+def _mix_table(rule: dict, first: str) -> str:
+    """Une décision en fractions : par type de flop (ou de carte), la taille simplifiée, ce que fait toute la range et
+    chaque boîte d'équité (au survol : les familles de mains qui le font d'abord), et la perte ; sous le tableau, qui
+    mise (ou défend) d'abord dans chaque boîte, tous types ensemble."""
+    facing = any(r.get("facing") for r in rule["rules"].values())
+    head = "".join(f'<th>{escape(label)}<br><small class="muted">{escape(text.replace(EQUITY_WORD, ""))}</small></th>'
+                   for _, label, text, _ in coach.EQUITY)
+    rows = []
+    for key, label in _rows_of(rule["rules"], first):
+        r = rule["rules"][key]
+        size = (_action_chip(r["size"], r["sizes"]) if r.get("size") and r["size"] in r["sizes"] or r.get("size")
+                else '<span class="muted">–</span>')
+        if not r.get("size") and r["sizes"]:  # (les tailles du solveur)
+            size = " ".join(_action_chip(c, r["sizes"]) for c in r["sizes"])
+        cells = []
+        for box, _, _, _ in coach.EQUITY:
+            b = r["boxes"].get(box)
+            if not b or b["r"] < 0.005:
+                cells.append('<td class="muted">–</td>')
+                continue
+            tip = (f"{_pct(b['r'])} de la range. "
+                   f"{'Défendent' if facing else 'Misent'} d'abord : {_families_text(b['families'], facing)}")
+            cells.append(f'<td class="pl-mix" title="{escape(tip)}">{_bar(b["f"])}'
+                         f'<span>{escape(_fractions(b["f"], facing, r["sizes"]))}</span></td>')
+        flops = f'<span class="muted">({rule["flops"][key]})</span>'
+        rows.append(f'<tr><td>{escape(label)} {flops}</td><td>{size}</td>'
+                    f'<td class="pl-mix">{_bar(r["freq"])}<span>{escape(_fractions(r["freq"], facing, r["sizes"]))}'
+                    f'</span></td>{"".join(cells)}<td class="num">{escape(_loss(rule["by"][key]))}</td></tr>')
+    prio = []
+    for box, label, text, _ in coach.EQUITY:
+        fams = rule["families"].get(box)
+        if fams:
+            prio.append(f"<li><b>{escape(label)}</b> <span class=\"muted\">({escape(text)})</span> : "
+                        f"{escape(_families_text(fams, facing))}</li>")
+    who = "Qui défend d'abord" if facing else "Qui mise d'abord"
+    more = (f'<details class="pl-prio"><summary>{who}, dans chaque boîte d\'équité</summary>'
+            f'<ul class="rules">{"".join(prio)}</ul></details>' if prio else "")
+    return (f'<div class="scroll"><table class="stats pl-lv pl-mixes"><thead><tr><th>{_first_head(first)}</th>'
+            f'<th>Taille</th><th>Toute la range</th>{head}<th class="num">Perte</th></tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table></div>{more}')
+
+
+def _decision(rule: dict, sizes: dict, first: str) -> str:
+    """Une décision d'un niveau : une action pour toute la range (tableau par type de flop) ou des fractions."""
+    if rule["kind"] == "pure":
+        return _level_table(rule, sizes, first)
+    return _mix_table(rule, first)
 
 
 def _street_titles(plan: dict, side: str) -> dict[str, str]:
@@ -545,41 +642,40 @@ def _street_titles(plan: dict, side: str) -> dict[str, str]:
 
 def _plays(step: dict) -> tuple[bool, bool]:
     """(le niveau mise au flop, il y checke) : ce qui décide de la suite à montrer."""
-    classes = {r["class"] for cell in step["rules"].values() for r in cell.values()}
-    return any(c != "check" for c in classes), "check" in classes
+    if step["kind"] == "pure":
+        classes = {r["class"] for cell in step["rules"].values() for r in cell.values()}
+        return any(c != "check" for c in classes), "check" in classes
+    freq = [r["freq"] for r in step["rules"].values()]
+    return (any(coach.aggressive_share(f) > 0.005 for f in freq),
+            any(f.get("check", 0.0) > 0.005 for f in freq))
 
 
 TAGS = {"flop": "affinée au solveur", "turn": "affinée, flop et turn imposés"}
 
 
 def _suites(levels: dict, side: str) -> list[dict]:
-    """La suite de chaque niveau : {nœud: (règles, tailles, affinage)}, celles affinées au solveur à la place des
-    autres quand il y en a (affinage : None, « flop » ; « turn » pour la river relue après la turn imposée)."""
+    """La suite de chaque niveau : {nœud: (règle, affinage)}, celles affinées au solveur à la place des autres quand il
+    y en a (affinage : None, « flop » ; « turn » pour la river relue après la turn imposée)."""
     out = []
     for step in levels["steps"]:
-        suite = {name: (st, levels["street_sizes"].get(name, {}), None) for name, st in step["streets"].items()}
+        suite = {name: (st, None) for name, st in step["streets"].items() if st}
         for key, mode, names in (("refined", "flop", None), ("refined_turn", "turn", RIVER_NODES)):
             refined = step.get(key) or {}
             if refined.get("flops"):
-                suite.update({name: (st, refined["street_sizes"].get(name, {}), mode)
-                              for name, st in refined["streets"].items() if names is None or name in names})
+                suite.update({name: (st, mode) for name, st in refined["streets"].items()
+                              if st and (names is None or name in names)})
         out.append(suite)
     return out
 
 
-def _street_block(title: str, street: dict, sizes: dict, refined: Optional[str], same: Optional[int], opened: bool,
+def _street_block(title: str, street: dict, refined: Optional[str], same: Optional[int], opened: bool,
                   first: str) -> str:
     tag = f' <span class="pl-tag">{TAGS[refined]}</span>' if refined else ""
     summary = f'{escape(title)} <span class="sub">perte {escape(_loss(street["loss"]))}</span>{tag}'
-    hands = _hands_of(street["hands"])
     if same is not None:
         body = f'<p class="small muted" style="margin:2px 0">Comme au niveau {same}.</p>'
-    elif not street["by_flop"]:
-        rules = street["rules"].get("tous", {})
-        body = '<div class="pl-chips">' + " ".join(
-            _action_chip(rules[k]["class"], sizes, label) for k, label in hands if k in rules) + "</div>"
     else:
-        body = _level_table(street, sizes, hands, first)
+        body = _decision(street, {}, first)
     return (f'<details class="pl-sub pl-street"{" open" if opened else ""}><summary>{summary}</summary>'
             f'<div>{body}</div></details>')
 
@@ -595,15 +691,14 @@ def _suite(plan: dict, levels: dict, side: str, k: int, suites: list[dict]) -> s
     for name in coach.SIDE_NODES[side][1:]:
         if name not in suite or not wanted.get(name, True):
             continue
-        street, sizes, refined = suite[name]
+        street, refined = suite[name]
         before = suites[k - 1].get(name) if k else None
-        same = k if before and before[0]["rules"] == street["rules"] and before[2] == refined else None
-        blocks.append(_street_block(titles[name], street, sizes, refined, same, k == 0, _street_of(name)))
+        same = k if before and before[0]["rules"] == street["rules"] and before[1] == refined else None
+        blocks.append(_street_block(titles[name], street, refined, same, k == 0, _street_of(name)))
     if not blocks:
         return ""
-    more = (" : les autres décisions de la main, une action par famille de mains (sur toutes les cartes, puis selon "
-            "la carte de la turn ou de la river aux niveaux suivants) ; la perte en % du pot de la street" if k == 0
-            else "")
+    more = (" : les autres décisions de la main, selon la carte de la turn ou de la river, une taille par type de "
+            "carte ; la perte en % du pot de la street" if k == 0 else "")
     return f'<p class="small" style="margin:10px 0 0"><b>La suite</b>{more}.</p>{"".join(blocks)}'
 
 
@@ -681,10 +776,22 @@ def _ladder(levels: dict, titles: dict, anchor: str, suites: list[dict]) -> str:
     return f'<div class="pl-ladder">{"".join(tiles)}</div>'
 
 
+def _boxes_note() -> str:
+    boxes = ", ".join(f"<b>{escape(label.lower())}</b> ({escape(text)})" for _, label, text, _ in coach.EQUITY)
+    return ('<p class="note">La range se découpe en boîtes d\'équité, l\'équité de ta main face à la range de '
+            f"l'adversaire à ce moment-là, avant d'agir : {boxes}. Chaque case dit quelle part de la boîte mise (ou "
+            "paie, relance) ; au survol, et sous chaque tableau, les familles de mains qui le font d'abord, de la plus "
+            "souvent à la moins souvent (les tirages avant les hauteurs, les bluffs river sans abattage…). Une seule "
+            "taille de mise par type de flop ou de carte : celle qui coûte le moins. Les parts sont celles du "
+            "solveur : elles gardent son équilibre (des bluffs à la river). Face à un adversaire qui ne s'adapte pas, une seule "
+            "action par case perdrait un peu moins, mais se ferait exploiter ; l'affinage au solveur mesure le coût "
+            "face à un adversaire qui s'adapte.</p>")
+
+
 def _levels_note(plan: dict, levels: dict) -> str:
     older = plan["levels"]["older"]
-    more = (f" {older} flop(s) lu(s) par une version d'avant n'y sont pas encore (ou seulement pour le flop) : "
-            "<b>Préparer le plan</b> les relit." if older else "")
+    more = (f" {older} flop(s) lu(s) par une version d'avant n'y sont pas encore : <b>Préparer le plan</b> les relit."
+            if older else "")
     return (f'<p class="note">Perte : ce que coûte la règle face à la stratégie du solveur, en % du pot par main de la '
             f'range (du pot de la street pour la suite), en moyenne sur les {levels["flops"]} flop(s) résolu(s) et '
             "lu(s), face à un adversaire qui joue la stratégie du solveur sans s'adapter (un adversaire qui s'adapte "
@@ -706,10 +813,10 @@ def _levels_attack(plan: dict) -> str:
     suites = _suites(levels, "attack")
     one = levels["steps"][0]
     rule = one["rules"]["tous"]["range"]["class"]
-    options = " ".join(f'<span class="pl-chip {"down" if c == "check" else "up"}"><b>{escape(_action(c, sizes))}</b> '
+    options = " ".join(f'<span class="pl-chip {_kind(c)}"><b>{escape(_action(c, sizes))}</b> '
                        f'{escape(_loss(x))}</span>' for c, x in levels["options"])
     out = [f'<h2>Du plus simple au plus précis, du flop à la river</h2><div class="card pl-level">'
-           f'{_ladder(levels, LEVEL_TITLES, "lv-" + fam, suites)}']
+           f'{_ladder(levels, LEVEL_TITLES, "lv-" + fam, suites)}{_boxes_note()}']
     for k, step in enumerate(levels["steps"]):
         out.append(f'<h3 id="lv-{fam}-{step["key"]}">Niveau {k + 1} · {LEVEL_TITLES[step["key"]]} : '
                    f'{escape(_loss(step["loss"]))} au flop</h3>')
@@ -717,12 +824,8 @@ def _levels_attack(plan: dict) -> str:
             out.append(f'<p class="pl-rule">{escape(_range_rule(who, rule, sizes))}, sur tous les flops.</p>'
                        '<p class="small" style="margin:0">Ce que coûte chaque action jouée par toute la range :</p>'
                        f'<div class="pl-chips">{options}</div>')
-        elif step["key"] == "detail":
-            out.append('<p class="small">Les onze familles du détail (deux paires et mieux, overpair, top pair bon '
-                       "ou petit kicker…), une action chacune par type de flop ; au-delà, le solveur mélange selon la "
-                       "main exacte : les stratégies ci-dessous, puis l'explorateur.</p>")
         else:
-            out.append(_level_table(step, sizes, _hands_of(step["hands"])))
+            out.append(_decision(step, sizes, "Flop"))
         out.append(_suite(plan, levels, "attack", k, suites) + _refine_box(plan, step, "attack", k == 0))
     out.append(f'{_levels_note(plan, levels)}</div>')
     return "".join(out)
@@ -732,24 +835,17 @@ def _levels_defense(plan: dict) -> str:
     levels = plan["levels"]["defense"]
     if not levels:
         return ""
-    other, sizes, fam = plan["other"], levels["sizes"], plan["family"]
+    other, fam = plan["other"], plan["family"]
     suites = _suites(levels, "defense")
-    hands = _hands_of("familles")
     out = [f'<h2>Face à la c-bet : du plus simple au plus précis, du flop à la river</h2><div class="card pl-level">'
-           f'{_ladder(levels, DEFENSE_TITLES, "lvd-" + fam, suites)}']
+           f'{_ladder(levels, DEFENSE_TITLES, "lvd-" + fam, suites)}{_boxes_note()}']
     for k, step in enumerate(levels["steps"]):
         out.append(f'<h3 id="lvd-{fam}-{step["key"]}">Niveau {k + 1} · {DEFENSE_TITLES[step["key"]]} : '
                    f'{escape(_loss(step["loss"]))} au flop</h3>')
         if step["key"] == "une":
-            rules = step["rules"]["tous"]
-            chips = " ".join(_action_chip(rules[h]["class"], sizes, label) for h, label in hands if h in rules)
-            out.append(f'<p class="small" style="margin:0">{escape(_cap(other))} face à la c-bet, sur tous les flops :'
-                       f'</p><div class="pl-chips">{chips}</div>')
-        elif step["key"] == "detail":
-            out.append('<p class="small">Les onze familles du détail, une action chacune par type de flop ; au-delà, '
-                       "le solveur mélange selon la main exacte.</p>")
-        else:
-            out.append(_level_table(step, sizes, hands))
+            out.append(f'<p class="small" style="margin:0">{escape(_cap(other))} face à la c-bet, sur tous les flops '
+                       ":</p>")
+        out.append(_decision(step, {}, "Flop"))
         out.append(_suite(plan, levels, "defense", k, suites) + _refine_box(plan, step, "defense", k == 0))
     out.append(f'{_levels_note(plan, levels)}</div>')
     return "".join(out)

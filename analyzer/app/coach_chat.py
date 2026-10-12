@@ -497,6 +497,26 @@ class Coach:
                 out.append(row)
             return out
 
+        def fractions(f: dict) -> dict:
+            return {coach.CLASS_LABEL[c]: pct(v) for c, v in f.items() if v >= 0.01}
+
+        def decision(rule: Optional[dict], sizes: dict) -> Optional[dict]:
+            """Une décision d'un niveau : une action pour toute la range, ou par type de flop (de carte) la taille
+            simplifiée et les fractions de chaque boîte d'équité, avec les familles qui misent (défendent) d'abord."""
+            if not rule:
+                return None
+            labels = {**coach.CATEGORY_LABEL, **coach.CARD_LABEL, "tous": "tous"}
+            if rule["kind"] == "pure":
+                return {labels[w]: coach.class_text(r["range"]["class"], sizes) for w, r in rule["rules"].items()}
+            out = {labels[w]: {"taille": coach.class_text(r["size"], r["sizes"]) if r.get("size") else None,
+                               "toute_la_range": fractions(r["freq"]),
+                               "boites": {coach.EQUITY_LABEL[b]: fractions(x["f"]) for b, x in r["boxes"].items()}}
+                   for w, r in rule["rules"].items()}
+            out["d_abord"] = {coach.EQUITY_LABEL[b]: {coach.BUCKET_LABEL[x["key"]]: fractions(x["f"])
+                                                      for x in fams if x["r"] >= 0.03}
+                              for b, fams in rule["families"].items()}
+            return out
+
         def levels(found: Optional[dict]) -> Optional[dict]:
             """Les niveaux du plan (du plus simple au plus précis) : la règle du niveau 1 et sa suite (turn, river), la
             perte de chacun au flop et dans la suite, et ce qu'a donné l'affinage au solveur."""
@@ -505,16 +525,13 @@ class Coach:
             sizes = found["sizes"]
             one = found["steps"][0]
             refined = one.get("refined") or {}
-            streets = dict(one["streets"], **(refined.get("streets") or {}))
-            street_sizes = dict(found["street_sizes"], **(refined.get("street_sizes") or {}))
+            streets = dict(one["streets"], **(refined.get("streets") or {} if refined.get("flops") else {}))
             return {"flops": found["flops"],
-                    "niveau_1": {hk: coach.class_text(r["class"], sizes) for hk, r in one["rules"]["tous"].items()},
-                    "niveau_1_suite": {name: {hk: coach.class_text(r["class"], street_sizes.get(name, {}))
-                                              for hk, r in st["rules"].get("tous", {}).items()}
-                                       for name, st in streets.items()},
+                    "niveau_1": decision(one, sizes),
+                    "niveau_1_suite": {name: decision(st, {}) for name, st in streets.items() if st},
                     "perte_pct_du_pot": {st["key"]: round(100 * st["loss"], 1) for st in found["steps"]},
                     "perte_suite_pct_du_pot_de_la_street": {
-                        st["key"]: {name: round(100 * x["loss"], 1) for name, x in st["streets"].items()}
+                        st["key"]: {name: round(100 * x["loss"], 1) for name, x in st["streets"].items() if x}
                         for st in found["steps"]},
                     "affine_au_solveur": {f"{st['key']} ({what})": {
                         "flops": st[key]["flops"],
@@ -558,11 +575,13 @@ class Coach:
                 "strategies": {st["label"]: {"definition": st["text"], "flops": st["flops"]} for st in plan["strategies"]},
                 "familles_de_mains": {label: text for _, label, _, text in coach.GROUPS},
                 "niveaux": {"definition": "plans simplifiés, du plus simple (une action pour toute la range sur tous les "
-                                          "flops) au plus précis (par type de flop et famille de mains) ; perte : en % "
-                                          "du pot par main, face au solveur ; suite : les décisions suivantes "
-                                          "(barrel : turn après la c-bet payée, barrel3 : river, delayed : turn après "
-                                          "le flop checké, vs_xr : face au check-raise…), une action par famille de "
-                                          "mains",
+                                          "flops) au plus précis ; la range découpée en boîtes d'équité (face à la "
+                                          "range adverse, avant d'agir), chacune avec la part qui mise (paie, "
+                                          "relance) et les familles de mains qui le font d'abord ; une taille par "
+                                          "type de flop ou de carte ; perte : en % du pot par main, face au "
+                                          "solveur ; suite : les décisions suivantes (barrel : turn après la c-bet "
+                                          "payée, barrel3 : river, river_xx : river après la turn checkée, delayed : "
+                                          "turn après le flop checké, vs_xr : face au check-raise…)",
                             "attaque": levels(plan["levels"]["attack"]), "defense": levels(plan["levels"]["defense"])},
                 "groupes": groups}
 

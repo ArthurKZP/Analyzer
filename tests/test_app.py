@@ -121,10 +121,10 @@ class LibraryTest(IsolatedHome):
             postflop._save_cache(studyspots.StudySpot("srp", ["Ks", "7d", "2c"]).request(),
                                  {"root_ev": [2.4, 2.6], "exploit_pct": 1.0})
             with mock.patch.object(studyspots, "spot_studies", lambda families=None: studies):
-                # la durée attendue : chaque résolution verrouillée (une part de celle d'origine), sa relecture, et
-                # l'arbre lu avant pour la turn et la défense
+                # la durée attendue : l'arbre lu avant, chaque résolution verrouillée (une part de celle d'origine)
+                # et sa relecture (deux pour la turn imposée)
                 self.assertEqual(coach.family_plan("srp")["refine"], {"flops": 2, "seconds": {
-                    "attack-flop": 2 * (0.7 * 30 + 60), "attack-turn": 2 * (0.7 * 30 + 60 + 6),
+                    "attack-flop": 2 * (0.7 * 30 + 60 + 6), "attack-turn": 2 * (2 * (0.7 * 30 + 60) + 6),
                     "defense-flop": 2 * (0.9 * 30 + 60 + 6)}})
                 with self.assertRaises(ValueError):
                     lib.plan_refine("srp", "inconnu")
