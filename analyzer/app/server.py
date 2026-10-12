@@ -37,6 +37,7 @@ MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
 MAX_SMALL_BODY = 64 * 1024
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "bluffs", "tables", "mains")
+REFINE_SIDES = {"attaque": "attack", "defense": "defense"}  # affiner un niveau du plan : le côté
 
 
 class AppServer(ThreadingHTTPServer):
@@ -578,12 +579,15 @@ class Handler(BaseHTTPRequestHandler):
         if parts[:3] == ["api", "plan", "affiner"] and len(parts) <= 4 and parts[3:] in ([], ["arreter"]):
             payload = self._small_json()  # affiner un niveau du plan au solveur, ou l'arrêter
             if not (isinstance(payload, dict) and isinstance(payload.get("famille"), str)
-                    and isinstance(payload.get("niveau"), str)):
+                    and isinstance(payload.get("niveau"), str) and payload.get("cote", "attaque") in REFINE_SIDES
+                    and payload.get("mode", "flop") in ("flop", "turn")):
                 return self._error(400, "Requête invalide.")
+            args = (payload["famille"], payload["niveau"], REFINE_SIDES[payload.get("cote", "attaque")],
+                    payload.get("mode", "flop"))
             if parts[3:]:
-                return self._json(library.plan_refine_cancel(payload["famille"], payload["niveau"]))
+                return self._json(library.plan_refine_cancel(*args))
             try:
-                return self._json(library.plan_refine(payload["famille"], payload["niveau"]))
+                return self._json(library.plan_refine(*args))
             except ValueError as exc:
                 return self._error(400, str(exc))
         if parts == ["api", "sauvegarde", "reglages"]:

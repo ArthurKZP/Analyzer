@@ -102,6 +102,7 @@ details.pl-street > summary .sub { font-weight: 400; color: var(--ink-2); margin
 .pl-refine button { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
 .pl-refine .pl-refine-go { background: var(--series-1); border-color: var(--series-1); color: #fff; font-weight: 600; }
+.pl-refine-row + .pl-refine-row { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
 .pl-rule { font-size: 16px; font-weight: 600; margin: 4px 0 6px; }
 .pl-level h3 { margin-top: 16px; }
 table.pl-lv td { vertical-align: middle; font-size: 13px; }
@@ -173,16 +174,17 @@ SCRIPT = """
     });
   });
   // Affiner la suite d'un niveau au solveur : une tâche de la file par niveau, suivie jusqu'au bout
-  var boxes = document.querySelectorAll('.pl-refine'), rtimer = null, seen = {};
+  var boxes = document.querySelectorAll('.pl-refine-row'), rtimer = null, seen = {};
   function rpost(url, box) {
     return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ famille: box.dataset.fam, niveau: box.dataset.level }) })
+      body: JSON.stringify({ famille: box.dataset.fam, niveau: box.dataset.level, cote: box.dataset.cote,
+                             mode: box.dataset.mode }) })
       .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Erreur.'); return j; }); });
   }
   function rshow(s) {
     var busy = false, reload = false;
     boxes.forEach(function (box) {
-      var key = box.dataset.fam + '|' + box.dataset.level, job = s.jobs[key];
+      var key = box.dataset.key, job = s.jobs[key];
       var go = box.querySelector('.pl-refine-go'), stop = box.querySelector('.pl-refine-stop'), st = box.querySelector('.pl-status');
       var active = !!job && (job.state === 'waiting' || job.state === 'running');
       busy = busy || active;
@@ -389,6 +391,7 @@ def _attack(plan: dict, g: dict) -> str:
     summary = (f'<span class="pl-lvl st-{g["strategy"]}">{escape(g["strategy_label"])}</span> {escape(g["size_text"])}'
                f'<span class="sub">c-bet {_pct(g["cbet"])} · {len(g["flops"])} flop(s) : {escape(_categories(g))}</span>')
     delayed = _matrix(at["delayed"], "Turn", "Mise") if at["delayed"] else ""
+    river_xx = _matrix(at["river_xx"], "River", "Mise") if at.get("river_xx") else ""
     return f"""
 <details class="pl-group" id="att-{plan["family"]}-{g["key"]}"><summary>{summary}</summary><div class="pl-body">
 {_links(g["flops"])}
@@ -399,6 +402,7 @@ def _attack(plan: dict, g: dict) -> str:
 {_matrix(at["turn"], "Turn", "Continue")}
 <h3>À la river, après deux mises payées : selon la carte, combien et quelle taille</h3>
 {_matrix(at["river"], "River", "Mise")}
+{_sub("À la river, après la c-bet payée et la turn checkée", river_xx) if river_xx else ""}
 {_sub(f"Quand {who} checke le flop : c-bet retardée à la turn", delayed) if delayed else ""}
 {_sub(_cap(facing_raise), vs_xr) if vs_xr else ""}
 {_sub("Détail par famille de mains (onze familles)", _details_rules(at["flop_detail"]))}
@@ -430,6 +434,8 @@ def _defense(plan: dict, g: dict) -> str:
 {_matrix(de["vs_barrel"], "Turn", "Folde", True)}
 <h3>Face au 3e barrel, selon la river</h3>
 {_matrix(de["vs_barrel3"], "River", "Folde", True)}
+{_sub("Face à la mise river après la turn checkée", _matrix(de["vs_river_xx"], "River", "Folde", True))
+ if de.get("vs_river_xx") else ""}
 {checked}
 {_sub("Détail par famille de mains face à la c-bet (onze familles)", detail)}
 </div></details>"""
@@ -461,7 +467,7 @@ DEFENSE_TITLES = {"une": "Une règle par famille de mains", "flop": "Selon le ty
 ACTION_SHORT = {"fold": "folde", "check": "checke", "call": "paie", "small": "petite", "medium": "moyenne",
                 "big": "grosse", "overbet": "overbet", "raise": "relance", "allin": "tapis"}
 TURN_NODES = ("barrel", "delayed", "vs_barrel", "probe", "vs_probe")  # (les autres : le flop, ou la river)
-RIVER_NODES = ("barrel3", "vs_barrel3")
+RIVER_NODES = ("barrel3", "vs_barrel3", "river_xx", "vs_river_xx")
 
 
 def _loss(x: Optional[float]) -> str:
@@ -528,11 +534,13 @@ def _street_titles(plan: dict, side: str) -> dict[str, str]:
                 "barrel": "Turn · après la c-bet payée",
                 "delayed": "Turn · après le flop checké (c-bet retardée)",
                 "vs_probe": f"Turn · après le flop checké, face à la mise {_de(other)} (probe)",
-                "barrel3": "River · après la c-bet et le 2e barrel payés"}
+                "barrel3": "River · après la c-bet et le 2e barrel payés",
+                "river_xx": "River · après la c-bet payée et la turn checkée"}
     return {"stab": f"Flop · quand {who} checke (stab)",
             "vs_barrel": "Turn · face au 2e barrel",
             "probe": f"Turn · quand {who} checke le flop (probe)",
-            "vs_barrel3": "River · face au 3e barrel"}
+            "vs_barrel3": "River · face au 3e barrel",
+            "vs_river_xx": "River · face à la mise après la turn checkée"}
 
 
 def _plays(step: dict) -> tuple[bool, bool]:
@@ -541,23 +549,27 @@ def _plays(step: dict) -> tuple[bool, bool]:
     return any(c != "check" for c in classes), "check" in classes
 
 
+TAGS = {"flop": "affinée au solveur", "turn": "affinée, flop et turn imposés"}
+
+
 def _suites(levels: dict, side: str) -> list[dict]:
-    """La suite de chaque niveau : {nœud: (règles, tailles, affinée)}, celles affinées au solveur à la place des
-    autres quand il y en a."""
+    """La suite de chaque niveau : {nœud: (règles, tailles, affinage)}, celles affinées au solveur à la place des
+    autres quand il y en a (affinage : None, « flop » ; « turn » pour la river relue après la turn imposée)."""
     out = []
     for step in levels["steps"]:
-        refined = step.get("refined") or {}
-        suite = {name: (st, levels["street_sizes"].get(name, {}), False) for name, st in step["streets"].items()}
-        if refined.get("flops"):
-            suite.update({name: (st, refined["street_sizes"].get(name, {}), True)
-                          for name, st in refined["streets"].items()})
+        suite = {name: (st, levels["street_sizes"].get(name, {}), None) for name, st in step["streets"].items()}
+        for key, mode, names in (("refined", "flop", None), ("refined_turn", "turn", RIVER_NODES)):
+            refined = step.get(key) or {}
+            if refined.get("flops"):
+                suite.update({name: (st, refined["street_sizes"].get(name, {}), mode)
+                              for name, st in refined["streets"].items() if names is None or name in names})
         out.append(suite)
     return out
 
 
-def _street_block(title: str, street: dict, sizes: dict, refined: bool, same: Optional[int], opened: bool,
+def _street_block(title: str, street: dict, sizes: dict, refined: Optional[str], same: Optional[int], opened: bool,
                   first: str) -> str:
-    tag = ' <span class="pl-tag">affinée au solveur</span>' if refined else ""
+    tag = f' <span class="pl-tag">{TAGS[refined]}</span>' if refined else ""
     summary = f'{escape(title)} <span class="sub">perte {escape(_loss(street["loss"]))}</span>{tag}'
     hands = _hands_of(street["hands"])
     if same is not None:
@@ -578,7 +590,7 @@ def _suite(plan: dict, levels: dict, side: str, k: int, suites: list[dict]) -> s
     titles = _street_titles(plan, side)
     bets, checks = _plays(step) if side == "attack" else (True, True)
     wanted = {"vs_xr": bets, "vs_stab": checks, "barrel": bets, "delayed": checks, "vs_probe": checks,
-              "barrel3": bets}
+              "barrel3": bets, "river_xx": bets}
     blocks = []
     for name in coach.SIDE_NODES[side][1:]:
         if name not in suite or not wanted.get(name, True):
@@ -595,38 +607,60 @@ def _suite(plan: dict, levels: dict, side: str, k: int, suites: list[dict]) -> s
     return f'<p class="small" style="margin:10px 0 0"><b>La suite</b>{more}.</p>{"".join(blocks)}'
 
 
-def _refine_box(plan: dict, step: dict, first: bool = False) -> str:
-    """Affiner la suite de ce niveau au solveur : le bouton, son coût, et ce que l'affinage a donné (first : le
-    premier niveau, qui dit pourquoi)."""
-    info, done = plan.get("refine") or {}, step.get("refined") or {}
-    if not info.get("flops"):
-        return ""
+# Affiner au solveur, par côté et façon : (ce qui est imposé, ce qui se relit, ce dont on mesure le coût, bouton)
+REFINE_TEXT = {
+    ("attack", "flop"): ("ce flop imposé", "la turn et la river relues", "ce flop simplifié", "Affiner au solveur"),
+    ("attack", "turn"): ("ce flop et cette turn imposés", "la river relue", "ce flop et cette turn simplifiés",
+                         "Imposer aussi la turn"),
+    ("defense", "flop"): ("cette défense face à la c-bet imposée", "la suite relue", "cette défense simplifiée",
+                          "Affiner au solveur"),
+}
+
+
+def _refine_row(plan: dict, step: dict, side: str, mode: str) -> str:
+    """Une façon d'affiner ce niveau : ce qu'elle a donné, son coût, le bouton."""
+    info = plan["refine"]
+    done = step.get("refined_turn" if mode == "turn" else "refined") or {}
+    imposed, reread, simplified, label = REFINE_TEXT[(side, mode)]
     parts = []
     if done.get("flops"):
         boards = " ".join(cards_html(b) for b in done["boards"])
-        text = (f"Suite affinée au solveur sur {done['flops']} flop(s) {boards} résolu(s) de nouveau avec ce flop "
-                "imposé, l'adversaire s'y adaptant.")
+        text = (f"Affiné sur {done['flops']} flop(s) {boards}, résolu(s) de nouveau avec {imposed}, l'adversaire s'y "
+                "adaptant.")
         if done.get("loss") is not None:
             margin = (f" ; précision des résolutions : ± {num(100 * done['margin'], 1)} % du pot"
                       if done.get("margin") else "")
-            text += (" Ce que coûte vraiment ce flop simplifié face à un adversaire qui s'adapte : "
+            text += (f" Ce que coûte vraiment {simplified} face à un adversaire qui s'adapte : "
                      f"<b>{escape(_loss(max(done['loss'], 0.0)))}</b>{margin}.")
         parts.append(text)
     if done.get("stale"):
-        parts.append(f"{done['stale']} flop(s) affiné(s) avec une règle du flop d'avant (des flops lus depuis l'ont "
-                     "changée) : à affiner de nouveau.")
-    if first and not done.get("flops"):
-        parts.append("La suite est lue aux nœuds du solveur, après sa propre stratégie du flop : avec un flop "
-                     "simplifié, les ranges qui arrivent à la turn ne sont plus tout à fait les mêmes.")
-    minutes = f", environ {max(1, round(info['seconds'] / 60))} min" if info.get("seconds") else ""
-    what = (" (dans la file des résolutions), puis la turn et la river relues" if first else "")
-    parts.append(f"Affiner : {info['flops']} flop(s) résolu(s) de nouveau avec ce flop imposé{minutes}{what}.")
-    label = "Affiner de nouveau" if done.get("flops") else "Affiner au solveur"
-    return (f'<div class="pl-refine" data-fam="{escape(plan["family"])}" data-level="{escape(step["key"])}">'
-            f'<p class="small" style="margin:0 0 6px">{" ".join(parts)}</p>'
+        parts.append(f"{done['stale']} flop(s) affiné(s) avec des règles d'avant (des flops lus ou affinés depuis les "
+                     "ont changées) : à affiner de nouveau.")
+    seconds = (info.get("seconds") or {}).get(f"{side}-{mode}")
+    minutes = f", environ {max(1, round(seconds / 60))} min" if seconds else ""
+    parts.append(f"{info['flops']} flop(s) résolu(s) de nouveau avec {imposed}{minutes}, puis {reread}.")
+    if done.get("flops"):
+        label = "Affiner de nouveau" if mode == "flop" else "Imposer la turn de nouveau"
+    key = f'{plan["family"]}|{side}|{mode}|{step["key"]}'
+    return (f'<div class="pl-refine-row" data-key="{escape(key)}" data-fam="{escape(plan["family"])}" '
+            f'data-cote="{"attaque" if side == "attack" else "defense"}" data-mode="{mode}" '
+            f'data-level="{escape(step["key"])}"><p class="small" style="margin:0 0 6px">{" ".join(parts)}</p>'
             f'<button type="button" class="pl-refine-go">{label}</button> '
             '<button type="button" class="pl-refine-stop" hidden>Arrêter</button> '
             '<span class="pl-status"></span></div>')
+
+
+def _refine_box(plan: dict, step: dict, side: str, first: bool = False) -> str:
+    """Affiner ce niveau au solveur, de chaque façon (en attaque : le flop imposé, puis le flop et la turn ; en
+    défense : la réponse à la c-bet) ; first : le premier niveau, qui dit pourquoi."""
+    if not (plan.get("refine") or {}).get("flops"):
+        return ""
+    intro = ('<p class="small" style="margin:0 0 6px">La suite est lue aux nœuds du solveur, après sa propre '
+             "stratégie : avec un jeu simplifié, les ranges qui arrivent ensuite ne sont plus tout à fait les mêmes. "
+             "Affiner résout de nouveau quelques flops avec une partie du niveau imposée (dans la file des "
+             "résolutions), et mesure ce qu'elle coûte vraiment.</p>" if first else "")
+    modes = ("flop", "turn") if side == "attack" else ("flop",)
+    return f'<div class="pl-refine">{intro}{"".join(_refine_row(plan, step, side, m) for m in modes)}</div>'
 
 
 def _ladder(levels: dict, titles: dict, anchor: str, suites: list[dict]) -> str:
@@ -689,7 +723,7 @@ def _levels_attack(plan: dict) -> str:
                        "main exacte : les stratégies ci-dessous, puis l'explorateur.</p>")
         else:
             out.append(_level_table(step, sizes, _hands_of(step["hands"])))
-        out.append(_suite(plan, levels, "attack", k, suites) + _refine_box(plan, step, k == 0))
+        out.append(_suite(plan, levels, "attack", k, suites) + _refine_box(plan, step, "attack", k == 0))
     out.append(f'{_levels_note(plan, levels)}</div>')
     return "".join(out)
 
@@ -716,7 +750,7 @@ def _levels_defense(plan: dict) -> str:
                        "le solveur mélange selon la main exacte.</p>")
         else:
             out.append(_level_table(step, sizes, hands))
-        out.append(_suite(plan, levels, "defense", k, suites))
+        out.append(_suite(plan, levels, "defense", k, suites) + _refine_box(plan, step, "defense", k == 0))
     out.append(f'{_levels_note(plan, levels)}</div>')
     return "".join(out)
 

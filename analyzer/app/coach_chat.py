@@ -516,11 +516,13 @@ class Coach:
                     "perte_suite_pct_du_pot_de_la_street": {
                         st["key"]: {name: round(100 * x["loss"], 1) for name, x in st["streets"].items()}
                         for st in found["steps"]},
-                    "affine_au_solveur": {st["key"]: {"flops": st["refined"]["flops"],
-                                                      "perte_reelle_pct": (round(100 * st["refined"]["loss"], 1)
-                                                                           if st["refined"].get("loss") is not None
-                                                                           else None)}
-                                          for st in found["steps"] if (st.get("refined") or {}).get("flops")} or None,
+                    "affine_au_solveur": {f"{st['key']} ({what})": {
+                        "flops": st[key]["flops"],
+                        "perte_reelle_pct": (round(100 * st[key]["loss"], 1) if st[key].get("loss") is not None
+                                             else None)}
+                        for st in found["steps"] for key, what in (("refined", "flop imposé"),
+                                                                   ("refined_turn", "flop et turn imposés"))
+                        if (st.get(key) or {}).get("flops")} or None,
                     "actions_de_toute_la_range": ({coach.class_text(c, sizes): round(100 * x, 1)
                                                    for c, x in found.get("options", [])} or None)}
         groups = []
@@ -535,6 +537,7 @@ class Coach:
                 "attaque": {
                     "flop": rules(at["flop"]), "flop_detail": dict(at["flop_detail"]),
                     "turn_2e_barrel": cards(at["turn"]), "river_3e_barrel": cards(at["river"]),
+                    "river_apres_turn_checkee": cards(at.get("river_xx") or []),
                     "cbet_retardee": cards(at["delayed"]),
                     "face_relance": ({"fold_pct": pct(at["vs_xr"]["fold"]), "regles": rules(at["vs_xr"]["rules"], True)}
                                      if at["vs_xr"] else None)},
@@ -548,6 +551,7 @@ class Coach:
                                    "detail": dict(d["vs_cbet"]["detail"])} if d["vs_cbet"] else None),
                     "stab": {"mise_pct": pct(d["stab"]["aggr"]), "regles": rules(d["stab"]["rules"])} if d["stab"] else None,
                     "face_2e_barrel": cards(d["vs_barrel"], True), "face_3e_barrel": cards(d["vs_barrel3"], True),
+                    "face_mise_river_apres_turn_checkee": cards(d.get("vs_river_xx") or [], True),
                     "probe": cards(d["probe"])}})
         return {"famille": plan["title"], "description": plan["label"], "flops_lus": plan["count"],
                 "attaquant": plan["who"], "defenseur": plan["other"],

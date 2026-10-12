@@ -2058,22 +2058,24 @@ class Library:
                 self.solves.cancel(view["job"])
         return self.plan_state()
 
-    REFINE = "affiner|"  # tâches « affiner un niveau du plan » de la file : « affiner|famille|niveau »
+    REFINE = "affiner|"  # tâches « affiner un niveau du plan » de la file : « affiner|famille|côté|façon|niveau »
 
     def plan_refine_state(self) -> dict:
-        """Les niveaux du plan en cours d'affinage au solveur (ou affinés depuis le lancement) : {"famille|niveau":
-        tâche}."""
+        """Les niveaux du plan en cours d'affinage au solveur (ou affinés depuis le lancement) :
+        {"famille|côté|façon|niveau": tâche}."""
         return {"ready": postflop.status()["ready"],
                 "jobs": {k[len(self.REFINE):]: v for k, v in self.solves.views(self.REFINE).items()}}
 
-    def plan_refine(self, family: str, level: str) -> dict:
-        """Affine la suite d'un niveau d'attaque du plan au solveur (coach.refine_spots) : quelques flops résolus de
-        nouveau avec le flop du niveau imposé, à la précision de leur résolution d'origine, en une tâche de la file."""
-        if family not in coach.plan_families() or level not in {key for key, _, _ in coach.STEPS["attack"]}:
+    def plan_refine(self, family: str, level: str, side: str = "attack", mode: str = "flop") -> dict:
+        """Affine un niveau du plan au solveur (coach.refine_spots) : quelques flops résolus de nouveau avec une partie
+        du niveau imposée (side, mode : coach.REFINE_MODES), à la précision de leur résolution d'origine, en une
+        tâche de la file."""
+        if (family not in coach.plan_families() or (side, mode) not in coach.REFINE_MODES
+                or level not in {key for key, _, _ in coach.STEPS[side]}):
             raise ValueError("Niveau inconnu.")
         if not postflop.status()["ready"]:
             raise ValueError("Installe d'abord le solveur : python -m analyzer gtopen --installer")
-        items = coach.refine_spots(family, level)
+        items = coach.refine_spots(family, level, side, mode)
         if not items:
             raise ValueError("Pas encore de flop lu pour ce niveau : clique d'abord sur « Préparer le plan ».")
 
@@ -2086,12 +2088,12 @@ class Library:
             iterations, target = ((base["max_iterations"], base["target_exploit_pct"]) if base
                                   else self.solves.precision())
             coach.refine_one(item, iterations, target, on_progress=job.progress.update, on_start=started)
-        self.solves.batch(f"{self.REFINE}{family}|{level}", items, run_one,
+        self.solves.batch(f"{self.REFINE}{family}|{side}|{mode}|{level}", items, run_one,
                           lambda item: studyspots.board_text(item["spot"].board))
         return self.plan_refine_state()
 
-    def plan_refine_cancel(self, family: str, level: str) -> dict:
-        self.solves.cancel(f"{self.REFINE}{family}|{level}")
+    def plan_refine_cancel(self, family: str, level: str, side: str = "attack", mode: str = "flop") -> dict:
+        self.solves.cancel(f"{self.REFINE}{family}|{side}|{mode}|{level}")
         return self.plan_refine_state()
 
     def plan_field(self, band: Optional[str] = None) -> dict:

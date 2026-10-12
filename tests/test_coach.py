@@ -105,7 +105,7 @@ class ExtractTest(unittest.TestCase):
             data = coach.extract(make_query(), spot, "cle")
         nodes = data["nodes"]
         self.assertEqual(set(nodes), {"cbet", "vs_cbet", "vs_xr", "barrel", "vs_barrel", "delayed", "probe",
-                                      "vs_probe", "barrel3", "vs_barrel3"})
+                                      "vs_probe", "barrel3", "vs_barrel3", "river_xx", "vs_river_xx"})
         cbet = nodes["cbet"]["groups"]["flop"]
         self.assertEqual((nodes["cbet"]["actor"], cbet["n"]), (1, 1))
         self.assertAlmostEqual(sum(cbet["f"].values()), 1.0, places=3)
@@ -128,6 +128,9 @@ class ExtractTest(unittest.TestCase):
         self.assertEqual({k: g["n"] for k, g in turn.items()}, {"over": 1, "paired": 1, "brick": 2})
         self.assertAlmostEqual(sum(g["r"] for g in turn["brick"]["b"].values()), 1.0, places=3)
         self.assertEqual(sum(g["n"] for g in nodes["barrel3"]["evs"].values()), len(TURNS) * len(RIVERS))
+        # la river après une turn checkée (le bouton, puis la BB face à sa mise)
+        self.assertEqual(sum(g["n"] for g in nodes["river_xx"]["evs"].values()), len(TURNS) * len(RIVERS))
+        self.assertEqual((nodes["river_xx"]["actor"], nodes["vs_river_xx"]["actor"]), (1, 0))
         self.assertEqual(data["version"], coach.VERSION)
 
         coach.save_plan(data)
@@ -316,19 +319,40 @@ class RefineTest(unittest.TestCase):
                 "rules": {"tous": {"range": {"class": "small", "share": 1.0}}}}
         turn = dict(ev_of({"nuts": (0.3, {"check": 0.10, "big": 0.20}), "air": (0.7, {"check": 0.02, "big": 0.00})},
                           {"big": 75}), n=20)
-        fresh = {"category": "haut-sec", "board": ["Ks", "7d", "2c"], "aggressor": 1, "pot": 5.0,
+        fresh = {"category": "haut-sec", "board": ["Ks", "7d", "2c"], "player": 1, "pot": 5.0,
                  "signature": coach.refine_signature(step, "haut-sec", {"small": 33}), "root_ev": [2.0, 3.0],
                  "base_ev": [1.9, 3.1], "exploit": [1.0, 1.2], "nodes": {"barrel": {"evs": {"brick": turn}}}}
         stale = dict(fresh, signature="avant", board=["9s", "8d", "6c"])
-        found = coach._refined_step(step, [fresh, stale], {"small": 33})
+        signature = lambda category: coach.refine_signature(step, category, {"small": 33})  # noqa: E731
+        found = coach._refined_step(step, [fresh, stale], signature, "attack")
         self.assertEqual((found["flops"], found["stale"], found["boards"]), (1, 1, [["Ks", "7d", "2c"]]))
         self.assertAlmostEqual(found["loss"], 0.1 / 5)  # l'écart d'EV à la racine, en part du pot
         self.assertAlmostEqual(found["margin"], 0.012)
         rules = found["streets"]["barrel"]["rules"]["tous"]
         self.assertEqual({k: r["class"] for k, r in rules.items()}, {"fortes": "big", "rien": "check"})
         self.assertEqual(found["street_sizes"], {"barrel": {"big": 75}})
-        self.assertIsNone(coach._refined_step(step, [], {"small": 33}))
-        self.assertEqual(coach._refined_step(step, [stale], {"small": 33}), {"flops": 0, "stale": 1, "boards": []})
+        self.assertIsNone(coach._refined_step(step, [], signature, "attack"))
+        self.assertEqual(coach._refined_step(step, [stale], signature, "attack"),
+                         {"flops": 0, "stale": 1, "boards": []})
+
+    def test_locks_on_the_tree(self):
+        # un nœud de l'arbre lu avant : chaque main y joue l'action de sa case, à l'indice de l'arbre
+        node = {"type": "action", "player": 1, "pot": 10.0, "board": list(BOARD),
+                "actions": [{"kind": "check", "amount": 0.0}, {"kind": "bet", "amount": 3.3},
+                            {"kind": "bet", "amount": 7.0}, {"kind": "bet", "amount": 7.9}],
+                "hands": [[], [["AhAd", 1.0], ["8h8c", 1.0], ["QhJh", 0.0]]]}
+        self.assertEqual(coach._class_index(node, "medium", {"medium": 75}), 3)  # la plus proche de 75 % du pot
+        self.assertEqual(coach._class_index(node, "medium", {}), 2)
+        self.assertEqual(coach._class_index(node, "big", {}), 2)  # (pas de grosse mise : la taille la plus proche)
+        self.assertEqual(coach._class_index(node, "call", {}), 0)  # (pas de call ici : check)
+        play = {"overpair": "small", "midpair": "check"}
+        lock = coach._node_lock(node, [{"type": "action", "index": 0}], lambda key: play.get(key, "medium"), {})
+        self.assertEqual(lock["combos"], {"AhAd": [0, 1, 0, 0], "8h8c": [1, 0, 0, 0], "QhJh": [0, 0, 1, 0]})
+        self.assertIsNone(coach._node_lock(dict(node, actions=node["actions"][:1]), [], lambda key: "check", {}))
+        facing = {"type": "action", "player": 0, "pot": 10.0, "board": list(BOARD),
+                  "actions": [{"kind": "fold", "amount": 0.0}, {"kind": "call", "amount": 3.3},
+                              {"kind": "raise", "amount": 90.0, "allin": True}], "hands": [[], []]}
+        self.assertEqual(coach._class_index(facing, "raise", {}), 2)  # relancer : ici, le tapis
 
 
 class PlanPageTest(unittest.TestCase):
@@ -390,6 +414,9 @@ class PlanPageTest(unittest.TestCase):
                          "Niveau 1 · Une seule règle", "Le bouton checke toute sa range, sur tous les flops.",
                          "Face à la c-bet : du plus simple au plus précis", "Taille préférée", "Contre le field",
                          "C-bet un peu plus souvent", "Respecte leurs c-bets, attaque leurs checks",
+                         "À la river, après la c-bet payée et la turn checkée",
+                         "Face à la mise river après la turn checkée",
+                         "River · après la c-bet payée et la turn checkée",
                          'href="?limites=micro#famille=srp&amp;cote=field"', "Les réguliers en heads-up, hautes limites"):
                 self.assertIn(text, page)
             self.assertEqual(page.count("Respecte leurs c-bets"), 1)  # la c-bet hors de position : pas en SRP

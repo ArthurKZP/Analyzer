@@ -33,10 +33,11 @@ from ..db import documents
 from . import postflop, preflop_tree, sizing, studyspots
 from .handclass import DRAW_BIT, MADE, MADE_INDEX, classify
 
-VERSION = 3  # change quand l'extraction change : les plans plus anciens sont relus (« Préparer le plan »)
+VERSION = 4  # change quand l'extraction change : les plans plus anciens sont relus (« Préparer le plan »)
 # Versions encore affichées en attendant : la version 1 n'a pas l'EV des actions (pas de niveaux), la version 2
-# seulement celle du flop (« ev » de la c-bet et de la réponse à la c-bet : les niveaux sans la turn ni la river).
-READABLE = (1, 2, 3)
+# seulement celle du flop (« ev » de la c-bet et de la réponse à la c-bet : les niveaux sans la turn ni la river), la
+# version 3 pas la river après une turn checkée.
+READABLE = (1, 2, 3, 4)
 ORDER = ("fold", "check", "call", "small", "medium", "big", "overbet", "raise", "allin")
 
 BUCKETS = (
@@ -74,6 +75,10 @@ LINES_IP = (  # le bouton à l'initiative : SRP, pot 4bet
     ("vs_probe", "Bouton face au probe", ["check", "check", "*", "bet"]),
     ("barrel3", "3e barrel du bouton", ["check", "bet", "call", "*", "check", "bet", "call", "*", "check"]),
     ("vs_barrel3", "BB face au 3e barrel", ["check", "bet", "call", "*", "check", "bet", "call", "*", "check", "bet"]),
+    ("river_xx", "River du bouton après la turn checkée",
+     ["check", "bet", "call", "*", "check", "check", "*", "check"]),
+    ("vs_river_xx", "BB face à la mise river après la turn checkée",
+     ["check", "bet", "call", "*", "check", "check", "*", "check", "bet"]),
 )
 LINES_OOP = (  # la BB à l'initiative : pot 3bet
     ("cbet", "C-bet de la BB", []),
@@ -86,8 +91,11 @@ LINES_OOP = (  # la BB à l'initiative : pot 3bet
     ("delayed", "C-bet retardée de la BB", ["check", "check", "*"]),
     ("barrel3", "3e barrel de la BB", ["bet", "call", "*", "bet", "call", "*"]),
     ("vs_barrel3", "Bouton face au 3e barrel", ["bet", "call", "*", "bet", "call", "*", "bet"]),
+    ("river_xx", "River de la BB après la turn checkée", ["bet", "call", "*", "check", "check", "*"]),
+    ("vs_river_xx", "Bouton face à la mise river après la turn checkée",
+     ["bet", "call", "*", "check", "check", "*", "bet"]),
 )
-RIVER_TURNS = 12  # turns gardées pour les nœuds de river (toutes les rivers de chacune)
+RIVER_TURNS = 8  # turns gardées pour les nœuds de river (9 sur 49 : toutes les rivers de chacune)
 
 
 def lines(family: str) -> tuple:
@@ -729,8 +737,8 @@ STEPS = {
                 ("detail", (True, "detail"), (True, "detail"))),
 }
 # Les décisions de chaque côté, dans l'ordre de la main : la première (au flop), puis la suite (celles de la famille).
-SIDE_NODES = {"attack": ("cbet", "vs_xr", "vs_stab", "barrel", "delayed", "vs_probe", "barrel3"),
-              "defense": ("vs_cbet", "stab", "vs_barrel", "probe", "vs_barrel3")}
+SIDE_NODES = {"attack": ("cbet", "vs_xr", "vs_stab", "barrel", "delayed", "vs_probe", "barrel3", "river_xx"),
+              "defense": ("vs_cbet", "stab", "vs_barrel", "probe", "vs_barrel3", "vs_river_xx")}
 
 
 def _substitute(cls: Optional[str], available: Iterable[str]) -> Optional[str]:
@@ -950,11 +958,9 @@ def family_plan(family: str) -> dict:
     out["levels"] = dict(plan_levels(data), read=sum(1 for d in data if node_evs(d, "cbet")),
                          older=sum(1 for d in data if d.get("version") != VERSION))
     sample = refine_sample(data)
-    out["refine"] = {"flops": len(sample), "seconds": refine_seconds(family, sample)}
-    if out["levels"]["attack"]:
-        found = refined(family)
-        for step in out["levels"]["attack"]["steps"]:
-            step["refined"] = _refined_step(step, found.get(step["key"], []), out["levels"]["attack"]["sizes"])
+    out["refine"] = {"flops": len(sample), "seconds": {f"{side}-{mode}": refine_seconds(family, sample, side, mode)
+                                                       for side, mode in REFINE_MODES}}
+    attach_refined(out["levels"], family)
     out["baseline"] = baseline(out)
     return out
 
@@ -995,6 +1001,7 @@ def _group(members: list[tuple[dict, dict]], strategy: str, size: str, who: str,
             "flop": simple_rules(cbet), "flop_detail": bettor_rules(cbet),
             "turn": card_rules(gather("barrel"), sizes=sizes_of("barrel")),
             "river": card_rules(gather("barrel3"), river=True, sizes=sizes_of("barrel3")),
+            "river_xx": card_rules(gather("river_xx"), river=True, sizes=sizes_of("river_xx")),
             "delayed": card_rules(gather("delayed"), sizes=sizes_of("delayed")),
             "vs_xr": _facing(merge(gather("vs_xr").get("flop", []))),
         },
@@ -1003,6 +1010,7 @@ def _group(members: list[tuple[dict, dict]], strategy: str, size: str, who: str,
             "text": defense_text(facing["fold"], facing["raise"], limit, other, SIZE_LABEL[size]) if facing else None,
             "vs_barrel": card_rules(gather("vs_barrel"), defender=True),
             "vs_barrel3": card_rules(gather("vs_barrel3"), defender=True, river=True),
+            "vs_river_xx": card_rules(gather("vs_river_xx"), defender=True, river=True),
             "probe": card_rules(gather("probe"), sizes=sizes_of("probe")),
             "stab": {"aggr": aggression(stab["f"]), "rules": simple_rules(stab), "detail": bettor_rules(stab)}
             if stab["flops"] else None,
@@ -1010,21 +1018,32 @@ def _group(members: list[tuple[dict, dict]], strategy: str, size: str, who: str,
     }
 
 
-# --- Affiner la suite d'un niveau au solveur ------------------------------------------------------------------
-# La suite d'un niveau (turn, river) est lue aux nœuds du solveur, après sa propre stratégie du flop : avec le flop
-# simplifié, les ranges qui arrivent à la turn ne sont plus tout à fait les mêmes (en misant toute sa range, on y
-# arrive avec plus de mains faibles). Pour l'affiner, quelques flops résolus le sont de nouveau avec le flop du niveau
-# imposé : l'arbre n'a plus que les tailles de c-bet du niveau, et un verrou sur la c-bet y fait jouer à chaque main
-# l'action de sa case. L'adversaire s'y adapte (face à la c-bet comme ensuite) ; la turn et la river se relisent
-# (extract), et l'écart d'EV à la racine avec la résolution d'origine dit ce que coûte vraiment le flop simplifié face
-# à un adversaire qui s'adapte. Gardé dans la base (documents « plan-simple », clé « famille|niveau|flop »).
+# --- Affiner un niveau au solveur -----------------------------------------------------------------------------
+# La suite d'un niveau (turn, river) est lue aux nœuds du solveur, après sa propre stratégie : avec un jeu simplifié,
+# les ranges qui arrivent ensuite ne sont plus tout à fait les mêmes (en misant toute sa range au flop, on arrive à la
+# turn avec plus de mains faibles). Pour l'affiner, quelques flops résolus le sont de nouveau avec une partie du niveau
+# imposée par des verrous (nodelock), chaque main y jouant l'action de sa case. L'adversaire s'y adapte ; la suite se
+# relit (extract), et l'écart d'EV à la racine avec la résolution d'origine dit ce que coûte vraiment la partie
+# imposée face à un adversaire qui s'adapte. Trois façons (REFINE_MODES) :
+# - en attaque, « flop » : la c-bet du niveau (l'arbre réduit à ses tailles de c-bet) ; la turn et la river se
+#   relisent ;
+# - en attaque, « turn » : la c-bet et la turn du niveau (2e barrel et c-bet retardée, telles que la page les montre) ;
+#   la river se relit, après une turn jouée simplement ;
+# - en défense, « flop » : la réponse à la c-bet du niveau, à chaque taille de c-bet de l'arbre ; la suite de la défense
+#   se relit.
+# Les verrous de la turn et de la défense se posent sur les nœuds de l'arbre lui-même, lu avant (une résolution d'une
+# itération : l'arbre seul, ses actions et ses mains). Gardé dans la base (documents « plan-simple », clé
+# « famille|côté|façon|niveau|flop »).
 REFINE_KIND = "plan-simple"
+REFINE_MODES = (("attack", "flop"), ("attack", "turn"), ("defense", "flop"))
 REFINE_FLOPS = 6  # flops résolus de nouveau par niveau : un par type de flop, les plus fréquents d'abord
 DEFAULT_PCT = {"small": 33, "medium": 66, "big": 100, "overbet": 150}  # une taille que les flops lus n'ont pas
-# Durée d'un flop affiné (mesurée sur 4 cœurs) : la résolution verrouillée, 70 % environ de celle d'origine, puis la
-# relecture de la turn et de la river (une vingtaine de secondes en pot 4bet, une minute environ ailleurs).
-LOCKED_SPEED = 0.7
-READ_SECONDS = {"short": 20, "deep": 60}  # selon le rapport tapis / pot au flop : sous 3, ou plus
+TURN_LOCKS = ("barrel", "delayed")  # la turn imposée (« turn ») : 2e barrel après la c-bet payée, c-bet retardée
+# Durée d'un flop affiné (mesurée sur 4 cœurs) : la résolution verrouillée, une part de celle d'origine ; l'arbre lu
+# avant (pour la turn et la défense) ; la relecture de la suite. Selon le rapport tapis / pot au flop : sous 3, ou plus.
+LOCKED_SPEED = {("attack", "flop"): 0.7, ("attack", "turn"): 0.7, ("defense", "flop"): 0.9}
+READ_SECONDS = {"short": 20, "deep": 60}
+TREE_SECONDS = {"short": 2, "deep": 6}
 
 
 def refine_sample(data: list[dict], n: int = REFINE_FLOPS) -> list[dict]:
@@ -1040,10 +1059,11 @@ def refine_sample(data: list[dict], n: int = REFINE_FLOPS) -> list[dict]:
     return out[:n]
 
 
-def step_class(step: dict, category: str, key: str) -> str:
-    """L'action au flop de ce niveau d'une main de la famille key (BUCKETS) sur un flop de cette catégorie ; une
-    famille sans règle (absente des flops lus) joue l'action de la plus grande case."""
-    rules = step["rules"].get(category if step["by_flop"] else "tous") or {}
+def step_class(step: dict, where: str, key: str) -> str:
+    """L'action d'une règle (un niveau, ou une décision de sa suite) pour une main de la famille key (BUCKETS), sur un
+    flop de cette catégorie ou à une carte de ce type (where) ; une famille sans règle (absente des flops lus) joue
+    l'action de la plus grande case."""
+    rules = step["rules"].get(where if step["by_flop"] else "tous") or {}
     rule = rules.get(_hand_key(key, step["hands"]))
     if rule is None:
         rule = max(rules.values(), key=lambda r: r["share"], default={"class": "check"})
@@ -1058,6 +1078,26 @@ def refine_signature(step: dict, category: str, sizes: dict[str, int]) -> str:
     used = sorted({c for c in rules.values() if c != "check"}, key=ORDER.index)
     return json.dumps({"hands": step["hands"], "rules": rules, "sizes": {c: sizes.get(c) for c in used}},
                       sort_keys=True)
+
+
+def turn_rules(step: dict, levels: dict) -> dict[str, tuple[dict, dict]]:
+    """La turn d'un niveau d'attaque telle que la page la montre : {nœud: (règles, tailles)} du 2e barrel et de la
+    c-bet retardée, affinées au solveur (flop imposé) s'il y en a."""
+    refined = step.get("refined") or {}
+    out = {}
+    for name in TURN_LOCKS:
+        if refined.get("flops") and name in refined.get("streets", {}):
+            out[name] = (refined["streets"][name], refined["street_sizes"].get(name, {}))
+        elif name in step["streets"]:
+            out[name] = (step["streets"][name], levels["street_sizes"].get(name, {}))
+    return out
+
+
+def _turn_signature(turn: dict[str, tuple[dict, dict]]) -> str:
+    def rules(st: dict) -> dict:
+        return {w: {hk: r["class"] for hk, r in cell.items()} for w, cell in st["rules"].items()}
+    return json.dumps({name: {"by": st["by_flop"], "hands": st["hands"], "sizes": sizes, "rules": rules(st)}
+                       for name, (st, sizes) in turn.items()}, sort_keys=True)
 
 
 def refine_edits(spot: studyspots.StudySpot, step: dict, sizes: dict[str, int]) -> dict:
@@ -1098,42 +1138,158 @@ def refine_edits(spot: studyspots.StudySpot, step: dict, sizes: dict[str, int]) 
     return edits
 
 
-def refine_spots(family: str, level: str) -> list[dict]:
-    """Les flops à résoudre de nouveau pour affiner la suite de ce niveau d'attaque : chacun avec son spot (le flop du
-    niveau imposé : spot.edits), la requête de sa résolution d'origine (base, ou None) et sa signature."""
+def _class_index(node: dict, cls: str, sizes: dict[str, int]) -> int:
+    """L'action d'un nœud de l'arbre qui joue cette classe : la taille (ou la relance) la plus proche s'il ne l'a pas,
+    sinon check ou call ; parmi plusieurs actions de la classe, la mise la plus proche de sa taille (sizes, % du pot),
+    ou la plus petite."""
+    classes = [action_class(node, a) for a in node["actions"]]
+    chosen = _substitute(cls, classes) or next((c for c in ("check", "call") if c in classes), classes[0])
+    found = [i for i, c in enumerate(classes) if c == chosen]
+    if len(found) > 1 and chosen in sizes and node["pot"]:
+        return min(found, key=lambda i: abs(100 * node["actions"][i]["amount"] / node["pot"] - sizes[chosen]))
+    return found[0]
+
+
+def _node_lock(node: dict, path: list, play: Callable[[str], str], sizes: dict[str, int]) -> Optional[dict]:
+    """Le verrou d'un nœud de l'arbre (format de custom_tree) : chaque main du joueur qui agit y joue l'action de sa
+    case (play : famille BUCKETS -> classe) ; None pour un nœud sans choix."""
+    if node.get("type") != "action" or len(node["actions"]) < 2:
+        return None
+    na, index = len(node["actions"]), {}
+    combos = {}
+    for row in node["hands"][node["player"]]:
+        cls = play(bucket(row[0], node["board"]))
+        if cls not in index:
+            index[cls] = _class_index(node, cls, sizes)
+        combos[row[0]] = [1 if k == index[cls] else 0 for k in range(na)]
+    return {"path": path, "combos": combos}
+
+
+def _walk_all(query: Callable[[list], dict], steps: list[str], path: list, node: dict) -> Iterable[tuple[dict, list]]:
+    """Comme _walk, sans échantillon : toutes les mises d'une étape « bet » et toutes les cartes ; les nœuds au bout,
+    avec leur chemin."""
+    if not steps:
+        if node["type"] == "action" and len(node["actions"]) > 1:
+            yield node, path
+        return
+    head, rest = steps[0], steps[1:]
+    if head == "*":
+        if node["type"] == "chance":
+            for card in sorted(node["cards"] or []):
+                p = path + [{"type": "card", "card": card}]
+                yield from _walk_all(query, rest, p, query(p))
+        return
+    if node["type"] != "action":
+        return
+    for i, a in enumerate(node["actions"]):
+        if a["kind"] == head:
+            p = path + [{"type": "action", "index": i}]
+            yield from _walk_all(query, rest, p, query(p))
+
+
+def _tree(spot: studyspots.StudySpot, on_start: Optional[Callable] = None) -> postflop.Session:
+    """L'arbre du spot (avec ses modifications), lu sans le résoudre : une itération, ni étude ni cache."""
+    session = postflop.Session(spot.request(1, 100.0), save=False)
+    try:
+        session.start(on_start=on_start)
+    except BaseException:
+        session.close()
+        raise
+    return session
+
+
+def _turn_locks(spot: studyspots.StudySpot, turn: dict, on_start: Optional[Callable] = None) -> list[dict]:
+    """Les verrous de la turn du niveau, sur l'arbre du flop imposé : à chaque turn du 2e barrel (après la c-bet payée)
+    et de la c-bet retardée (après le flop checké), chaque main jouée là joue l'action de sa case."""
+    session = _tree(spot, on_start)
+    try:
+        steps = {name: st for name, _, st in lines(spot.family)}
+        out = []
+        for name, (street, sizes) in turn.items():
+            for node, path in _walk_all(session.node, steps[name], [], session.node([])):
+                if not any(row[1] > 0 for row in node["hands"][node["player"]]):
+                    continue  # (une ligne que le flop imposé ne joue pas)
+                card = card_class(spot.board, next(s["card"] for s in path if s["type"] == "card"))
+                lock = _node_lock(node, path, lambda key, c=card, st=street: step_class(st, c, key), sizes)
+                if lock:
+                    out.append(lock)
+        return out
+    finally:
+        session.close()
+
+
+def _defense_locks(spot: studyspots.StudySpot, step: dict, on_start: Optional[Callable] = None) -> list[dict]:
+    """Les verrous de la défense du niveau : face à chaque taille de c-bet de l'arbre, chaque main joue l'action de sa
+    case (la relance la plus petite quand l'arbre en a plusieurs)."""
+    session = _tree(spot, on_start)
+    try:
+        path = _flop_path(session.node, spot.family)
+        cbet, category = session.node(path), board_category(spot.board)
+        out = []
+        for i, a in enumerate(cbet["actions"]):
+            if a["kind"] == "bet":
+                p = path + [{"type": "action", "index": i}]
+                lock = _node_lock(session.node(p), p, lambda key: step_class(step, category, key), {})
+                if lock:
+                    out.append(lock)
+        return out
+    finally:
+        session.close()
+
+
+def refine_spots(family: str, level: str, side: str = "attack", mode: str = "flop") -> list[dict]:
+    """Les flops à résoudre de nouveau pour affiner ce niveau (side, mode : REFINE_MODES) : chacun avec son spot (le
+    flop du niveau imposé en attaque : spot.edits), la requête de sa résolution d'origine (base, ou None), sa
+    signature, et ce qu'il faut imposer en plus une fois l'arbre lu (la turn : « turn » ; la défense : « step »)."""
+    if (side, mode) not in REFINE_MODES:
+        return []
     data = plans(family)
-    found = plan_levels(data)["attack"]
+    view = plan_levels(data)
+    attach_refined(view, family)
+    found = view[side]
     step = next((st for st in (found or {}).get("steps", []) if st["key"] == level), None)
     if step is None:
         return []
+    turn = turn_rules(step, found) if mode == "turn" else None
     out = []
     for d in refine_sample(data):
         spot = studyspots.StudySpot(family, list(d["board"]))
-        base = postflop.solved_request(spot.request())
-        spot.edits = refine_edits(spot, step, found["sizes"])
         category = board_category(spot.board)
-        out.append({"spot": spot, "base": base, "level": level, "category": category, "id": d["id"],
-                    "signature": refine_signature(step, category, found["sizes"])})
+        item = {"spot": spot, "base": postflop.solved_request(spot.request()), "side": side, "mode": mode,
+                "level": level, "category": category, "id": d["id"]}
+        if side == "defense":
+            item.update(step=step, signature=refine_signature(step, category, {}))
+        else:
+            spot.edits = refine_edits(spot, step, found["sizes"])
+            item["signature"] = refine_signature(step, category, found["sizes"])
+            if turn is not None:
+                item.update(turn=turn, signature=item["signature"] + "|" + _turn_signature(turn))
+        out.append(item)
     return out
 
 
-def refine_seconds(family: str, items: list[dict]) -> Optional[float]:
-    """La durée attendue de l'affinage de ces flops : chaque résolution verrouillée (d'après celle d'origine) et sa
-    relecture."""
+def refine_seconds(family: str, items: list[dict], side: str = "attack", mode: str = "flop") -> Optional[float]:
+    """La durée attendue de l'affinage de ces flops : l'arbre lu avant (turn, défense), chaque résolution verrouillée
+    (d'après celle d'origine) et sa relecture."""
     metas = studyspots.spot_studies((family,))
     found = [metas.get(it["id"], {}).get("seconds") for it in items]
     if not found or not all(found):
         return None
     info = studyspots.family_info(family)
-    read = READ_SECONDS["short" if info["stack"] < 3 * info["pot"] else "deep"]
-    return sum(LOCKED_SPEED * x + read for x in found)
+    kind = "short" if info["stack"] < 3 * info["pot"] else "deep"
+    tree = TREE_SECONDS[kind] if (side, mode) != ("attack", "flop") else 0
+    return sum(LOCKED_SPEED[(side, mode)] * x + READ_SECONDS[kind] + tree for x in found)
 
 
 def refine_one(item: dict, iterations: int, target: float, on_progress: Optional[Callable[[dict], None]] = None,
                on_start: Optional[Callable] = None) -> dict:
-    """Résout un flop avec le flop du niveau imposé (une résolution de travail : ni étude ni cache), en tire la suite
-    (extract) et la garde avec l'EV à la racine des deux résolutions."""
-    spot = item["spot"]
+    """Résout un flop avec la partie imposée du niveau (une résolution de travail : ni étude ni cache), en tire la
+    suite (extract) et la garde avec l'EV à la racine des deux résolutions."""
+    spot, side = item["spot"], item["side"]
+    if side == "defense":
+        spot.edits = {"plan": {}, "locks": _defense_locks(spot, item["step"], on_start), "auto": {}}
+    elif item.get("turn"):
+        spot.edits = dict(spot.edits, locks=spot.edits["locks"] + _turn_locks(spot, item["turn"], on_start))
     request = spot.request(iterations, target)
     session = postflop.Session(request, save=False)
     try:
@@ -1142,38 +1298,42 @@ def refine_one(item: dict, iterations: int, target: float, on_progress: Optional
     finally:
         session.close()
     base = postflop.cached(item["base"]) if item["base"] else None
+    a = aggressor_of(spot.family)
     payload = {
-        "version": VERSION, "family": spot.family, "level": item["level"], "board": spot.board,
-        "category": item["category"], "signature": item["signature"], "aggressor": aggressor_of(spot.family),
-        "pot": spot.pot_bb, "root_ev": raw.get("root_ev"), "base_ev": (base or {}).get("root_ev"),
-        "exploit": [raw.get("exploit_pct"), (base or {}).get("exploit_pct")], "seconds": raw.get("seconds"),
+        "version": VERSION, "family": spot.family, "side": side, "mode": item["mode"], "level": item["level"],
+        "board": spot.board, "category": item["category"], "signature": item["signature"],
+        "player": a if side == "attack" else 1 - a, "pot": spot.pot_bb, "root_ev": raw.get("root_ev"),
+        "base_ev": (base or {}).get("root_ev"), "exploit": [raw.get("exploit_pct"), (base or {}).get("exploit_pct")],
+        "seconds": raw.get("seconds"), "locks": len(spot.edits["locks"]),
         "nodes": {name: {"evs": node["evs"]} for name, node in data["nodes"].items()
-                  if name in SIDE_NODES["attack"][1:] and node.get("evs")},
+                  if name in SIDE_NODES[side][1:] and node.get("evs")},
     }
-    documents.put(db.current(), REFINE_KIND, f"{spot.family}|{item['level']}|{''.join(spot.board)}", payload)
+    key = "|".join((spot.family, side, item["mode"], item["level"], "".join(spot.board)))
+    documents.put(db.current(), REFINE_KIND, key, payload)
     return payload
 
 
-def refined(family: str) -> dict[str, list[dict]]:
-    """Les flops affinés de chaque niveau de cette famille : {niveau: [résultats de refine_one]}."""
-    out: dict[str, list[dict]] = {}
-    for key, value in documents.items(db.current(), REFINE_KIND, family + "|"):
+def refined(family: str) -> dict[tuple[str, str, str], list[dict]]:
+    """Les flops affinés de cette famille : {(côté, façon, niveau): [résultats de refine_one]}."""
+    out: dict[tuple[str, str, str], list[dict]] = {}
+    for _, value in documents.items(db.current(), REFINE_KIND, family + "|"):
         if isinstance(value, dict) and value.get("version") == VERSION and value.get("family") == family:
-            out.setdefault(value["level"], []).append(value)
+            out.setdefault((value["side"], value["mode"], value["level"]), []).append(value)
     return out
 
 
-def _refined_step(step: dict, found: list[dict], sizes: dict[str, int]) -> Optional[dict]:
-    """La suite d'un niveau d'attaque affinée au solveur : ses règles lues sur les flops affinés à jour, et ce que
-    coûte vraiment le flop simplifié (écart d'EV à la racine, en part du pot) ; None sans flop affiné."""
-    fresh = [r for r in found if r["signature"] == refine_signature(step, r["category"], sizes)]
+def _refined_step(step: dict, found: list[dict], signature: Callable[[str], str], side: str) -> Optional[dict]:
+    """Un niveau affiné au solveur : la suite lue sur les flops affinés à jour (signature : celle attendue pour une
+    catégorie de flop), et ce que coûte vraiment la partie imposée (écart d'EV à la racine, en part du pot) ; None
+    sans flop affiné."""
     if not found:
         return None
+    fresh = [r for r in found if r["signature"] == signature(r["category"])]
     out = {"flops": len(fresh), "stale": len(found) - len(fresh),
            "boards": [r["board"] for r in sorted(fresh, key=lambda r: r["board"])]}
     if not fresh:
         return out
-    losses = [((r["base_ev"][r["aggressor"]] - r["root_ev"][r["aggressor"]]) / r["pot"], 1) for r in fresh
+    losses = [((r["base_ev"][r["player"]] - r["root_ev"][r["player"]]) / r["pot"], 1) for r in fresh
               if r.get("base_ev") and r.get("root_ev")]
     margins = [(max(x for x in r["exploit"] if x is not None) / 100, 1) for r in fresh
                if any(x is not None for x in r["exploit"])]
@@ -1182,10 +1342,29 @@ def _refined_step(step: dict, found: list[dict], sizes: dict[str, int]) -> Optio
         for name, node in r["nodes"].items():
             later.setdefault(name, []).extend((r["category"] if group == "flop" else group, ev)
                                               for group, ev in node["evs"].items())
-    rest = next(rest for key, _, rest in STEPS["attack"] if key == step["key"])
+    rest = next(rest for key, _, rest in STEPS[side] if key == step["key"])
     out.update(loss=_mean(losses), margin=_mean(margins), streets=_streets(later, *rest),
                street_sizes={name: class_sizes(e) for name, e in later.items()})
     return out
+
+
+def attach_refined(view: dict, family: str) -> None:
+    """Les affinages au solveur de chaque niveau (view : plan_levels) : « refined » (en attaque le flop imposé, en
+    défense la réponse à la c-bet imposée) et, en attaque, « refined_turn » (le flop et la turn imposés)."""
+    found = refined(family)
+    for side in ("attack", "defense"):
+        levels = view.get(side)
+        if not levels:
+            continue
+        sizes = levels["sizes"] if side == "attack" else {}
+        for step in levels["steps"]:
+            def flop(category: str, st: dict = step) -> str:
+                return refine_signature(st, category, sizes)
+            step["refined"] = _refined_step(step, found.get((side, "flop", step["key"]), []), flop, side)
+            if side == "attack":
+                turn = "|" + _turn_signature(turn_rules(step, levels))
+                step["refined_turn"] = _refined_step(step, found.get(("attack", "turn", step["key"]), []),
+                                                     lambda category, st=step: flop(category, st) + turn, side)
 
 
 # --- Lecture d'un nœud, pour le coach conversationnel --------------------------------------------------

@@ -1004,16 +1004,16 @@ flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de fl
   fois tes charts 6-max chargés ; une famille que tes charts ne couvrent pas dit pourquoi.
 
 - **Lecture des études** : chaque étude est ouverte une fois pour lire ses stratégies aux nœuds clés : c-bet,
-  réponse à la c-bet et au check-raise, 2e barrel à chaque turn, 3e barrel sur un échantillon de rivers (13 turns,
-  toutes leurs rivers), c-bet retardée et probe après un flop checké, et la réponse au probe et au stab. Les mains y
-  sont regroupées par famille (deux paires et mieux, overpair, top pair bon ou petit kicker, paire moyenne, petite
-  paire, tirage couleur, tirage quinte, gutshot ou backdoor, hauteur As ou Roi, rien), les turns et rivers par effet
-  sur le board (overcard, brique, board pairé, couleur possible, quinte possible). À chacun de ces nœuds, ce que
-  vaut chaque action pour chaque famille de mains (par type de carte à la turn et à la river) : de quoi chiffrer les
-  niveaux du plan, du flop à la river. Une étude résolue est lue tout de suite ; les anciennes, avec **Préparer le
-  plan** (une vingtaine de secondes en pot 4bet, une à deux minutes en SRP) ; une étude lue par une version d'avant
-  reste affichée, et se relit de même pour avoir ses niveaux (la turn et la river depuis cette version). Résultats
-  dans la base (sauvegardée).
+  réponse à la c-bet et au check-raise, 2e barrel à chaque turn, 3e barrel et river après une turn checkée sur un
+  échantillon de rivers (9 turns, toutes leurs rivers), c-bet retardée et probe après un flop checké, et la réponse
+  au probe et au stab. Les mains y sont regroupées par famille (deux paires et mieux, overpair, top pair bon ou
+  petit kicker, paire moyenne, petite paire, tirage couleur, tirage quinte, gutshot ou backdoor, hauteur As ou Roi,
+  rien), les turns et rivers par effet sur le board (overcard, brique, board pairé, couleur possible, quinte
+  possible). À chacun de ces nœuds, ce que vaut chaque action pour chaque famille de mains (par type de carte à la
+  turn et à la river) : de quoi chiffrer les niveaux du plan, du flop à la river. Une étude résolue est lue tout de
+  suite ; les anciennes, avec **Préparer le plan** (une vingtaine de secondes en pot 4bet, un peu plus d'une minute
+  en SRP) ; une étude lue par une version d'avant reste affichée, et se relit de même pour avoir ses niveaux (la
+  turn et la river, et la river après une turn checkée, depuis ces versions). Résultats dans la base (sauvegardée).
 - **Du plus simple au plus précis, du flop à la river** (en tête de l'attaque, et de la défense face à la c-bet) :
   des plans de plus en plus fins, chacun avec ce qu'il coûte face à la stratégie du solveur (en % du pot par main,
   en moyenne sur les flops lus, face à un adversaire qui ne s'adapte pas). En attaque : *niveau 1*, une seule règle
@@ -1026,27 +1026,32 @@ flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de fl
   ses flops ont dans leur arbre (pas de « grosse mise » là où l'arbre n'a qu'une petite mise). **Chaque niveau
   couvre toute la main** : sa suite donne les autres décisions, une action par famille de mains. Quand le niveau
   mise au flop : face au check-raise, à la turn après la c-bet payée (2e barrel), à la river après deux mises payées
-  (3e barrel) ; quand il checke : à la turn après le flop checké (c-bet retardée) et face à la mise de l'autre
-  (probe à la turn, ou stab au flop quand celui qui a l'initiative est hors de position). En défense : face aux 2e
-  et 3e barrels, et quand l'attaquant checke. Au niveau 1, une action par famille de mains sur toutes les cartes ;
-  aux niveaux suivants, selon la carte de la turn ou de la river (overcard, brique, board pairé, couleur ou quinte
-  possible), puis en onze familles au dernier. La perte de la suite est en % du pot de la street (chaque carte
-  compte autant) ; chaque niveau montre celle du flop, de la turn et de la river. La suite est lue aux nœuds du
-  solveur, après sa propre stratégie du flop : une approximation, que l'option suivante affine. Code :
-  `coach.levels`.
-- **Affiner au solveur** (option, sous chaque niveau d'attaque) : avec un flop simplifié, les ranges qui arrivent à
-  la turn ne sont plus tout à fait celles du solveur (en misant toute sa range, on y arrive avec plus de mains
-  faibles). Le bouton résout de nouveau quelques flops lus (6 au plus, un par type de flop, les plus fréquents
-  d'abord), à la précision de leur résolution d'origine, avec le flop du niveau imposé : l'arbre n'a plus que les
-  tailles de c-bet du niveau, et un verrou (nodelock) sur la c-bet fait jouer à chaque main l'action de sa case.
-  L'adversaire s'y adapte (face à la c-bet comme ensuite) ; la turn et la river se relisent, et leurs règles
-  remplacent celles d'avant (« affinée au solveur »). L'écart d'EV à la racine avec la résolution d'origine dit ce
-  que coûte vraiment le flop simplifié face à un adversaire qui s'adapte, avec la marge de précision des
-  résolutions. Durée annoncée : celle des résolutions d'origine de ces flops ; une résolution verrouillée va un peu
-  plus vite (8 minutes au lieu de 12 pour un SRP sur K♠7♦2♣ à 1 % du pot, sur 4 cœurs ; quelques secondes en pot
-  4bet). Les calculs passent dans la file des résolutions, l'un après l'autre, et s'arrêtent au bouton. Des flops
-  lus depuis qui changent la règle du flop rendent l'affinage périmé (« à affiner de nouveau »). Ces résolutions ne
-  sont pas gardées en études : leurs résultats, dans la base. Code : `coach.refine_spots`, `coach.refine_one`.
+  (3e barrel) ou après la c-bet payée et la turn checkée ; quand il checke : à la turn après le flop checké (c-bet
+  retardée) et face à la mise de l'autre (probe à la turn, ou stab au flop quand celui qui a l'initiative est hors
+  de position). En défense : face aux 2e et 3e barrels, à la mise river après la turn checkée, et quand l'attaquant
+  checke. Au niveau 1, une action par famille de mains sur toutes les cartes ; aux niveaux suivants, selon la carte
+  de la turn ou de la river (overcard, brique, board pairé, couleur ou quinte possible), puis en onze familles au
+  dernier. La perte de la suite est en % du pot de la street (chaque carte compte autant) ; chaque niveau montre
+  celle du flop, de la turn et de la river. La suite est lue aux nœuds du solveur, après sa propre stratégie : une
+  approximation, que l'option suivante affine. Code : `coach.levels`.
+- **Affiner au solveur** (option sous chaque niveau, en attaque comme en défense) : avec un jeu simplifié, les
+  ranges qui arrivent ensuite ne sont plus tout à fait celles du solveur (en misant toute sa range au flop, on
+  arrive à la turn avec plus de mains faibles). L'option résout de nouveau quelques flops lus (6 au plus, un par
+  type de flop, les plus fréquents d'abord), à la précision de leur résolution d'origine, avec une partie du niveau
+  imposée par des verrous (nodelock) : chaque main y joue l'action de sa case, l'adversaire s'y adapte, et la suite
+  se relit. Trois façons : en attaque, *le flop imposé* (l'arbre réduit aux tailles de c-bet du niveau, un verrou
+  sur la c-bet ; la turn et la river se relisent) ; en attaque, *le flop et la turn imposés* (en plus, le 2e barrel
+  et la c-bet retardée à chaque turn, telles que la page les montre ; la river se relit après une turn jouée
+  simplement) ; en défense, *la réponse à la c-bet imposée*, face à chaque taille de c-bet de l'arbre (la suite de
+  la défense se relit). Les règles relues remplacent celles d'avant (« affinée au solveur », « affinée, flop et turn
+  imposés ») ; l'écart d'EV à la racine avec la résolution d'origine dit ce que coûte vraiment la partie imposée
+  face à un adversaire qui s'adapte, avec la marge de précision des résolutions. Les verrous de la turn et de la
+  défense se posent sur l'arbre lui-même, lu avant par une résolution d'une itération (quelques secondes). Durée
+  annoncée : celle des résolutions d'origine de ces flops, qu'un verrou accélère (8 minutes au lieu de 12 pour un
+  SRP sur K♠7♦2♣ à 1 % du pot, sur 4 cœurs), et la relecture. Les calculs passent dans la file des résolutions, l'un
+  après l'autre, et s'arrêtent au bouton. Des flops lus ou affinés depuis qui changent les règles imposées rendent
+  l'affinage périmé (« à affiner de nouveau »). Ces résolutions ne sont pas gardées en études : leurs résultats,
+  dans la base. Code : `coach.refine_spots`, `coach.refine_one`.
 - **En attaque** (celui qui a l'initiative) : au flop, **trois stratégies de c-bet**, chacune précisée par sa
   **taille** (petite, moyenne, grosse mise ou tapis, avec le % du pot de l'arbre) : *miser range* (c-bet de 70 % et
   plus : une mise avec presque toute la range), *stratégie mixte* (de 35 à 70 % : on mise une partie des mains, on
@@ -1059,13 +1064,13 @@ flop à la river, par type de pot (SRP, pots 3bet, pots 4bet). Plus il y a de fl
   moyennes et petites), *tirages* (couleur, quinte) et *rien* (hauteur, gutshots, backdoors), puis à la turn et à la
   river selon la carte (overcard, brique, board pairé, couleur ou quinte possible), avec la fréquence de mise et la
   **taille préférée** (la plus jouée à cette carte, en % du pot de l'arbre, et sa part des mises, puis les autres ;
-  chaque famille de mains avec sa taille la plus jouée) ; repliés : la c-bet retardée, le jeu face au check-raise et
-  le détail en onze familles.
-- **En défense** (l'autre joueur), le même découpage vu d'en face : pour chaque groupe, ce que fait la défense
-  face à la c-bet (fold, call, relance, et le fold au-delà duquel la mise rapporte d'elle-même : 25 % face à une
-  mise de 33 % du pot), la règle par famille de mains, la défense face au 2e barrel selon la turn et au 3e barrel
-  selon la river, et ce qu'elle fait quand l'attaquant checke (probe à la turn quand elle est hors de position,
-  stab au flop quand elle est en position).
+  chaque famille de mains avec sa taille la plus jouée) ; repliés : la river après la c-bet payée et la turn
+  checkée, la c-bet retardée, le jeu face au check-raise et le détail en onze familles.
+- **En défense** (l'autre joueur), le même découpage vu d'en face : pour chaque groupe, ce que fait la défense face
+  à la c-bet (fold, call, relance, et le fold au-delà duquel la mise rapporte d'elle-même : 25 % face à une mise de
+  33 % du pot), la règle par famille de mains, la défense face au 2e barrel selon la turn et au 3e barrel selon la
+  river (et à la mise river après une turn checkée), et ce qu'elle fait quand l'attaquant checke (probe à la turn
+  quand elle est hors de position, stab au flop quand elle est en position).
 - **Les flops résolus** : chacun avec sa catégorie, sa stratégie, sa c-bet et sa taille, le fold de la défense face
   à la c-bet et les deux avantages ; un clic l'ouvre dans l'explorateur.
 - **Contre le field** (troisième onglet de chaque famille) : le plan suggéré, avec quelques ajustements légers pour
