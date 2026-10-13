@@ -1044,6 +1044,7 @@ charts qui les jugent, et *Importer…* (un fichier JSON) ou *Retirer*. En ligne
 ```bash
 python -m analyzer ranges --importer hu_hautes.json --limites hautes            # heads-up (format lu dans le fichier)
 python -m analyzer ranges --importer 6max_milieu.json --limites milieu --format 6-max
+python -m analyzer ranges --importer opens.txt defense.txt --limites hautes    # export texte de GTO Wizard (6-max)
 python -m analyzer ranges --retirer --limites hautes --format HU
 ```
 
@@ -1062,7 +1063,16 @@ absent garde celui de la référence. Les fréquences de chaque nœud se calcule
  "sizes": {"sb_open": {"raise": 2.5}, "bb_vs_open": {"raise": 11.5}}}
 ```
 
-Aux tables à plusieurs, le fichier est une solution par lignes, au format de *Pots à deux joueurs au flop* (plus bas).
+Aux tables à plusieurs, le fichier est une solution par lignes, au format de *Pots à deux joueurs au flop* (plus bas),
+ou **l'export texte de GTO Wizard**, combo par combo (`AcKd: 0.5, …`, le poids de chaque combo ; les absents à 0) :
+un titre de position (`UTG`, `HJ`, `CO`, `BU`, `SB`) avant chaque range ; les opens d'abord, puis `VS OPEN … UTG`
+ouvre la défense face à l'open de l'UTG, où chaque range est un 3bet (« 3bet or fold ») sauf si `3b :` ou `Call :`
+la précède (la BB). Les tailles et les autres titres sont ignorés. Plusieurs fichiers se complètent (les opens d'un
+côté, la défense de l'autre ; *Importer…* en accepte plusieurs à la fois, `--importer` aussi). Un open de plus de 90 %
+des mains est refusé : c'est la range de départ copiée à la place de celle de l'action Raise. Ce que tes charts ne
+donnent pas (un open, la réponse au 3bet…) reste jugé avec la référence ; quand ils donnent l'open d'une position
+mais pas sa réponse au 3bet, celle de la référence, faite pour un autre open, n'est plus lue. Les Paramètres disent ce
+qu'ils couvrent.
 
 **Ce qui change** : chaque main est jugée avec les charts de **son** niveau (ceux importés pour lui, sinon ceux de la
 référence) — les décisions préflop du Leakfinding, les mains de départ, la vérification en jeu, le suivi dans le temps ;

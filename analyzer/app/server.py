@@ -576,11 +576,14 @@ class Handler(BaseHTTPRequestHandler):
             fmt = payload.get("format") if isinstance(payload, dict) else None
             band = payload.get("limites") if isinstance(payload, dict) else None
             charts = payload.get("charts") if isinstance(payload, dict) else None
-            if not (isinstance(fmt, str) and isinstance(band, str) and (parts[3:] or isinstance(charts, dict))):
+            text = payload.get("texte") if isinstance(payload, dict) else None
+            if not (isinstance(fmt, str) and isinstance(band, str)
+                    and (parts[3:] or isinstance(charts, dict) or isinstance(text, str))):
                 return self._error(400, "Requête invalide.")
             try:
                 return self._json(library.delete_stake_charts(fmt, band) if parts[3:] else
-                                  library.save_stake_charts(fmt, band, charts))
+                                  library.save_stake_charts(fmt, band, charts if isinstance(charts, dict) else None,
+                                                            text if isinstance(text, str) else None))
             except ValueError as exc:
                 return self._error(400, str(exc))
         if parts == ["api", "ranges", "hand2note"]:  # charts 6-max de Hand2Note Guide, sur ta machine

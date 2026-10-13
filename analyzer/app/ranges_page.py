@@ -11,6 +11,7 @@ STYLE = """
 .rp-opt input { margin: 0; flex: none; }
 .rp-status { font-size: 12px; min-height: 1.2em; margin-top: 6px; color: var(--muted); }
 .rp-status.err, .rp-err { color: var(--alert); font-size: 12px; }
+.rp-covers { display: block; font-size: 12px; color: var(--muted); }
 table.rp-lines td { vertical-align: middle; }
 table.rp-lines tr.group td { font-size: 12px; font-weight: 600; color: var(--muted); padding-top: 14px;
   border-bottom: 1px solid var(--axis); }
@@ -349,21 +350,29 @@ SCRIPT = r"""
         const out = el('span', { class: 'rp-err' });
         const status = c
           ? el('span', {}, el('b', {}, 'Importés'), c.source ? ' · ' + c.source : '',
-            c.rake ? ' · rake : ' + c.rake : '')
+            c.rake ? ' · rake : ' + c.rake : '', c.covers ? el('span', { class: 'rp-covers' }, c.covers) : '')
           : el('span', { class: 'muted' }, f.reference ? 'Ceux de la référence (micro limites, rake élevé)'
             : 'Pas de charts de référence (charge ceux de Hand2Note Guide, plus bas)');
-        const input = el('input', { type: 'file', accept: '.json,application/json', hidden: true });
+        // un JSON, ou l'export texte des tables à plusieurs (plusieurs fichiers se complètent)
+        const input = el('input', { type: 'file', accept: '.json,.txt,application/json,text/plain', hidden: true,
+          multiple: f.format !== 'HU' });
         input.addEventListener('change', async () => {
-          const file = input.files[0];
+          const files = Array.from(input.files);
           input.value = '';
-          if (!file) return;
+          if (!files.length) return;
           out.textContent = 'Import…';
           try {
-            const charts = JSON.parse(await file.text());
-            await api('/api/ranges/limites', { format: f.format, limites: b.band, charts });
+            for (const file of files) {
+              const text = await file.text();
+              const json = /\.json$/i.test(file.name) || /^\s*\{/.test(text);
+              const body = { format: f.format, limites: b.band };
+              if (json) body.charts = JSON.parse(text);
+              else body.texte = text;
+              await api('/api/ranges/limites', body);
+            }
             loadStakes();
           } catch (err) {
-            out.textContent = err instanceof SyntaxError ? 'Fichier illisible : il faut du JSON.' : err.message;
+            out.textContent = err instanceof SyntaxError ? 'Fichier illisible : JSON invalide.' : err.message;
           }
         });
         const pick = el('button', { type: 'button', class: 'rp-btn', onclick: () => input.click() },
@@ -398,11 +407,13 @@ plusieurs), le solveur part des tiennes dans tous tes coups de la ligne.</div>
 <div class="card">
 <p style="margin-top:0">Le rake change la théorie : plus il pèse, plus on ouvre et on défend serré, moins on paie et on
 limpe. Les charts de la référence (la solution heads-up, les charts 6-max) sont ceux des micro limites, au rake élevé.
-Importe, pour un niveau de limites, des charts faits pour lui (fichier JSON : en heads-up, une range par action à chaque
-nœud — open du bouton, BB face à l'open, bouton face au 3bet, BB face au 4bet — ; aux tables à plusieurs, une solution
-par lignes, voir le README) : tes mains de ce niveau sont jugées avec eux dans le Leakfinding, les mains de départ, le
-préflop et le suivi. Les coups résolus au solveur gardent leurs ranges (celles de la référence, ou les tiennes plus
-bas) : rien n'est à résoudre à nouveau.</p>
+Importe, pour un niveau de limites, des charts faits pour lui (en heads-up, un fichier JSON : une range par action à
+chaque nœud — open du bouton, BB face à l'open, bouton face au 3bet, BB face au 4bet ; aux tables à plusieurs, l'export
+texte de GTO Wizard, combo par combo — les opens, la défense face à chaque open —, plusieurs fichiers se complètent, ou
+une solution par lignes en JSON ; voir le README) : tes mains de ce niveau sont jugées avec eux dans le Leakfinding,
+les mains de départ, le préflop et le suivi ; ce qu'ils ne donnent pas reste jugé avec la référence. Les coups
+résolus au solveur gardent leurs ranges (celles de la référence, ou les tiennes plus bas) : rien n'est à résoudre à
+nouveau.</p>
 <div id="rp-stakes"><p class="muted">Chargement…</p></div>
 </div>
 <h2>Tes ranges, ligne par ligne : où elles s'appliquent</h2>

@@ -1595,8 +1595,14 @@ class Library:
             out.append({"format": fmt, "label": label, "bands": bands, "reference": reference})
         return {"formats": out}
 
-    def save_stake_charts(self, table_format: str, band: str, data: dict) -> dict:
-        stake_charts.save(table_format, band, data)
+    def save_stake_charts(self, table_format: str, band: str, data: Optional[dict] = None,
+                          text: Optional[str] = None) -> dict:
+        """Garde des charts pour ce format et ce niveau : un JSON (data), ou l'export texte des tables à plusieurs
+        (text), qui complète ceux déjà là."""
+        if text is not None:
+            stake_charts.import_text(text, band, table_format)
+        else:
+            stake_charts.save(table_format, band, data or {})
         return self.stake_charts_view()
 
     def delete_stake_charts(self, table_format: str, band: str) -> dict:

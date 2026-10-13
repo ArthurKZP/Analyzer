@@ -747,6 +747,14 @@ class ServerTest(unittest.TestCase):
                     {"format": "HU", "limites": "hautes", "charts": {"nodes": {"sb_open": {"raise": "ZZ"}}}},
                     {"format": "HU", "limites": "hautes"}, {"format": 3, "limites": "hautes", "charts": {}}):
             self.assertEqual(self.request("POST", "/api/ranges/limites", json.dumps(bad), headers)[0], 400, bad)
+        # l'export texte des tables à plusieurs (GTO Wizard), combo par combo
+        text = {"format": "6-max", "limites": "hautes", "texte": "VS OPEN 2.5x UTG\nHJ\nAcAd: 1,AhAs: 1,KcKd: 0.5"}
+        status, _, data = self.request("POST", "/api/ranges/limites", json.dumps(text), headers)
+        six = next(f for f in json.loads(data)["formats"] if f["format"] == "6-max")
+        self.assertEqual((status, six["bands"][2]["charts"]["covers"]),
+                         (200, "pas d'open (ceux de la référence) ; défense face à l'open : UTG"))
+        self.request("POST", "/api/ranges/limites/retirer", json.dumps({"format": "6-max", "limites": "hautes"}),
+                     headers)
         self.assertIn("Charts selon les limites", self.request("GET", "/parametres/ranges")[2].decode())
 
     def test_tree_builder_routes(self):

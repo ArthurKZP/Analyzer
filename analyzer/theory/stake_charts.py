@@ -16,7 +16,9 @@ Gardés dans la base (documents « charts-limites », clé « <format>|<niveau> 
 
   (le poids d'une main dans une range : la part de ses combos qui prend l'action ; le reste folde ; tailles
   facultatives : "sizes": {"sb_open": {"raise": 2.5}}) ;
-- aux tables à plusieurs (« 6-max », « 3-max »…), au format des solutions de theory/ring_ranges.py.
+- aux tables à plusieurs (« 6-max », « 3-max »…), au format des solutions de theory/ring_ranges.py, ou en texte,
+  combo par combo, comme les exporte GTO Wizard (parse_text) : les opens de chaque position, puis la défense face à
+  chaque open (3bet, call) ; plusieurs fichiers se complètent.
 
 Ce qui en dépend : le jugement préflop de chaque main (handplay.Theory, avec les charts de son niveau : Leakfinding,
 mains de départ, vérification en jeu, suivi), les repères préflop du Leakfinding heads-up (la théorie de chaque niveau,
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
@@ -156,6 +159,146 @@ def _hu_solution_data(data: dict) -> dict:
     return hu_from_ranges(data)
 
 
+# --- Tables à plusieurs : des ranges en texte, combo par combo -----------------------------------------------------
+#
+# L'export texte de GTO Wizard : un titre de position (« UTG », « BU »…) avant chaque range, la range en
+# « AcKd: 0.5, … » (le poids de chaque combo, les absents à 0). Les opens d'abord ; « VS OPEN … UTG » ouvre la défense
+# face à l'open de l'UTG, où chaque range est un 3bet (« 3bet or fold ») sauf si « 3b : » ou « Call : » la précède
+# (la BB, qui paie aussi). Les tailles et les autres lignes de titre sont ignorées.
+
+POSITION_NAMES = {"UTG": "UTG", "LJ": "LJ", "HJ": "HJ", "CO": "CO", "BTN": "BTN", "BU": "BTN", "SB": "SB", "BB": "BB"}
+RANKS = "23456789TJQKA"
+_COMBO_RE = re.compile(r"\b([2-9TJQKA][cdhs])([2-9TJQKA][cdhs])\s*:\s*(\d+(?:\.\d+)?)")
+_ACTION_RE = re.compile(r"^(3b|3bet|call|flat)\s*:?$", re.I)
+MAX_OPEN = 0.90  # un open de plus de 90 % des mains : la range de départ copiée à la place de celle de l'open
+
+
+def _class_of(a: str, b: str) -> str:
+    """« Kc », « Qd » -> « KQo »."""
+    if a[0] == b[0]:
+        return a[0] + b[0]
+    hi, lo = sorted((a, b), key=lambda c: RANKS.index(c[0]), reverse=True)
+    return hi[0] + lo[0] + ("s" if a[1] == b[1] else "o")
+
+
+def class_range(line: str) -> str:
+    """« AcKd: 0.5, AhKh: 1, … » (le poids de chaque combo) -> « AKo:0.0833,AKs:0.25,… » : le poids moyen de chaque
+    main sur ses combos (les combos absents à 0)."""
+    sums: dict[str, float] = defaultdict(float)
+    for a, b, weight in _COMBO_RE.findall(line):
+        if a == b:
+            raise ValueError(f"Combo impossible : {a}{b}.")
+        sums[_class_of(a, b)] += float(weight)
+    items = []
+    for hand, total in sums.items():
+        weight = round(min(1.0, total / _combos(hand)), 4)
+        if weight > 0:
+            items.append(hand if weight >= 1 else f"{hand}:{weight:g}")
+    return ",".join(items)
+
+
+def share(text: str) -> float:
+    """La part des 1 326 combos dans une range par main (0 à 1)."""
+    return sum(_combos(h) * w for h, w in ring_ranges.parse_range(text).items()) / 1326
+
+
+def _position(line: str) -> Optional[str]:
+    """La position d'un titre (« UTG », « BB (3b et call) »), ou None."""
+    found = re.match(r"([A-Za-z]+)\b", line)
+    return POSITION_NAMES.get(found.group(1).upper()) if found and len(line) <= 40 else None
+
+
+def parse_text(text: str) -> dict[str, str]:
+    """Les ranges d'un export texte : {"open:UTG": range, "3bet:UTG:HJ": range, "call:UTG:BB": range…} (ranges par
+    main, ring_ranges.parse_range)."""
+    parts: dict[str, str] = {}
+    opener: Optional[str] = None  # None : les opens ; sinon, la défense face à l'open de cette position
+    who: Optional[str] = None
+    action: Optional[str] = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if len(_COMBO_RE.findall(line)) >= 2:  # une range
+            if who is None:
+                raise ValueError("Une range sans titre de position avant elle.")
+            if opener is None:
+                key = f"open:{who}"
+                found = class_range(line)
+                if share(found) > MAX_OPEN:
+                    raise ValueError(f"L'open {who} couvre {round(100 * share(found))} % des mains : c'est la range de "
+                                     "départ, pas celle de l'open (dans GTO Wizard, copie la range de l'action Raise).")
+            elif action is None and who == "BB":
+                raise ValueError(f"Face à l'open {opener}, la BB : « 3b : » ou « Call : » avant chaque range.")
+            else:
+                key = f"{action or '3bet'}:{opener}:{who}"
+            parts[key] = class_range(line)
+            action = None
+            continue
+        upper = line.upper()
+        if upper.startswith("VS OPEN") or upper.startswith("VS "):
+            opener = next((POSITION_NAMES[t] for t in re.findall(r"[A-Z]+", upper)[1:] if t in POSITION_NAMES), None)
+            if opener is None:
+                raise ValueError(f"Face à quel open ? « {line[:60]} »")
+            who, action = None, None
+        elif _ACTION_RE.match(line):
+            action = "call" if _ACTION_RE.match(line).group(1).lower() in ("call", "flat") else "3bet"
+        elif _position(line):
+            who, action = _position(line), None
+    if not parts:
+        raise ValueError("Aucune range lue : il faut des combos « AcKd: 0.5 » sous un titre de position.")
+    return parts
+
+
+def lines_from_parts(parts: dict[str, str]) -> dict[str, dict]:
+    """Les lignes d'une solution des tables à plusieurs (ring_ranges) depuis les ranges lues : open puis call de la BB
+    (pot simple ; l'open seul s'il manque la défense), open puis 3bet (pot 3bet, la range du 3bettor)."""
+    lines: dict[str, dict] = {}
+
+    def line(key: str, pot_type: str) -> dict:
+        return lines.setdefault(key, {"pot_type": pot_type, "ranges": {}})["ranges"]
+
+    for key, text in parts.items():
+        kind, *who = key.split(":")
+        if kind == "open":
+            line(f"{who[0]}:raise BB:call", "SRP")[who[0]] = text
+        elif kind == "call":
+            opener, caller = who
+            ranges = line(f"{opener}:raise {caller}:call", "SRP")
+            ranges[caller] = text
+            if f"open:{opener}" in parts:
+                ranges[opener] = parts[f"open:{opener}"]
+        elif kind == "3bet":
+            opener, raiser = who
+            line(f"{opener}:raise {raiser}:raise {opener}:call", "pot 3bet")[raiser] = text
+    for (opener, defender) in {tuple(k.split(":")[1:]) for k in parts if not k.startswith("open:")}:
+        total = defaultdict(float)  # 3bet et call d'une même main : au plus 100 %
+        for kind in ("3bet", "call"):
+            for hand, weight in ring_ranges.parse_range(parts.get(f"{kind}:{opener}:{defender}", "")).items():
+                total[hand] += weight
+        over = next((h for h, w in total.items() if w > 1.0001), None)
+        if over:
+            raise ValueError(f"{defender} face à l'open {opener} : {over} dépasse 100 % (3bet et call).")
+    return lines
+
+
+def import_text(text: str, band: str, table_format: str = "6-max") -> dict:
+    """Ajoute les ranges d'un export texte aux charts de ce format pour ce niveau (les fichiers se complètent : opens
+    d'un côté, défense de l'autre) ; renvoie ce qui est gardé."""
+    _check(table_format, band)
+    if table_format == HU:
+        raise ValueError("En heads-up, importe un fichier JSON (une range par action à chaque nœud, voir le README).")
+    parts = parse_text(text)
+    old = stored(table_format, band) or {}
+    merged = dict(old.get("parts") or {}, **parts)
+    title = next((t.strip() for t in text.splitlines() if t.strip() and not _COMBO_RE.search(t)), "")[:150]
+    sources = [x for x in (old.get("source") or "").split(" · ") if x and old.get("parts")]
+    source = " · ".join(dict.fromkeys(sources + ([title] if title else [])))[:300]
+    doc = {"format": table_format, "band": band, "source": source, "parts": merged, "lines": lines_from_parts(merged)}
+    documents.put(db.current(), KIND, _key(table_format, band), doc)
+    return summary(table_format, band)
+
+
 # --- Enregistrer, retirer ---------------------------------------------------------------------------------------
 
 def save(table_format: str, band: str, data: dict) -> dict:
@@ -182,8 +325,14 @@ def delete(table_format: str, band: str) -> bool:
 
 
 def import_file(path: Path, band: str, table_format: Optional[str] = None) -> str:
-    """Importe des charts d'un fichier JSON pour ce niveau de limites ; renvoie leur format de table."""
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    """Importe des charts d'un fichier pour ce niveau de limites (JSON, ou l'export texte des tables à plusieurs) ;
+    renvoie leur format de table."""
+    text = Path(path).read_text(encoding="utf-8-sig")
+    try:
+        data = json.loads(text)
+    except ValueError:
+        import_text(text, band, table_format or "6-max")
+        return table_format or "6-max"
     if not isinstance(data, dict):
         raise ValueError("Charts illisibles : il faut un objet JSON.")
     table_format = table_format or data.get("format") or (HU if "nodes" in data else Path(path).stem)
@@ -198,7 +347,20 @@ def summary(table_format: str, band: str) -> Optional[dict]:
         return None
     size = len(data.get("nodes") or {}) if table_format == HU else len(data.get("lines") or {})
     return {"format": table_format, "band": band, "label": stakes.label(band), "source": data.get("source") or "",
-            "rake": data.get("rake") or "", "size": size}
+            "rake": data.get("rake") or "", "size": size, "covers": covers(data)}
+
+
+def covers(data: dict) -> str:
+    """Ce que donnent des charts importés en texte (« opens de l'UTG, du HJ… ; défense face à l'open de… »), ou vide."""
+    parts = data.get("parts") or {}
+    order = list(dict.fromkeys(POSITION_NAMES.values()))
+    opens = sorted({k.split(":")[1] for k in parts if k.startswith("open:")}, key=order.index)
+    faced = sorted({k.split(":")[1] for k in parts if not k.startswith("open:")}, key=order.index)
+    out = []
+    if parts:
+        out.append(f"opens : {', '.join(opens)}" if opens else "pas d'open (ceux de la référence)")
+        out.append(f"défense face à l'open : {', '.join(faced)}" if faced else "pas de défense (celle de la référence)")
+    return " ; ".join(out)
 
 
 # --- La théorie de chaque main ----------------------------------------------------------------------------------
@@ -218,9 +380,28 @@ def hu_solution(band: Optional[str]) -> Solution:
     return _SOLUTIONS[key]
 
 
+def _merge(reference: dict, mine: dict) -> dict:
+    """Les lignes de la référence, avec tes ranges à la place des siennes (ligne par ligne, position par position) :
+    ce que tes charts ne donnent pas reste celui de la référence. Quand tes charts donnent l'open d'une position mais
+    pas sa réponse au 3bet, celle de la référence (faite pour un autre open) n'est plus lue."""
+    out = {key: dict(ranges) for key, ranges in reference.items()}
+    opens = set()
+    for key, ranges in mine.items():
+        out.setdefault(key, {}).update(ranges)
+        steps = key.split()
+        opener = steps[0].split(":")[0]
+        if len(steps) == 2 and steps[0].endswith(":raise") and opener in ranges:
+            opens.add(opener)
+    for key, ranges in out.items():
+        opener = key.split()[0].split(":")[0]
+        if len(key.split()) >= 3 and opener in opens and opener not in mine.get(key, {}):
+            ranges.pop(opener, None)
+    return out
+
+
 def ring_lines(band: Optional[str]) -> dict[str, dict]:
-    """Les charts des tables à plusieurs pour ce niveau : ceux importés pour lui, format par format, sinon ceux de la
-    référence (handplay.ring_lines)."""
+    """Les charts des tables à plusieurs pour ce niveau : ceux importés pour lui à la place de ceux de la référence
+    (handplay.ring_lines), là où ils en donnent (_merge)."""
     from .. import handplay
     lines = handplay.ring_lines()
     for fmt in available():
@@ -228,9 +409,10 @@ def ring_lines(band: Optional[str]) -> dict[str, dict]:
             continue
         data = stored(fmt, band)
         if data:
-            lines[fmt] = {key: {pos: ring_ranges.parse_range(text) for pos, text in entry["ranges"].items()}
-                          for key, entry in data["lines"].items()
-                          if isinstance(entry, dict) and isinstance(entry.get("ranges"), dict)}
+            mine = {key: {pos: ring_ranges.parse_range(text) for pos, text in entry["ranges"].items()}
+                    for key, entry in data["lines"].items()
+                    if isinstance(entry, dict) and isinstance(entry.get("ranges"), dict)}
+            lines[fmt] = _merge(lines.get(fmt, {}), mine)
     return lines
 
 

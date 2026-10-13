@@ -47,7 +47,100 @@ class RangesTest(unittest.TestCase):
         self.assertEqual(set(only["nodes"]["sb_vs_3bet"]["hands"]), {"AA", "KK"})  # seules les mains ouvertes
 
 
+SUITS = "cdhs"
+
+
+def combos(hand: str, weight: float = 1) -> str:
+    """Les combos d'une main au format texte de GTO Wizard (« AcKd: 1 »)."""
+    a, b = hand[0], hand[1]
+    if a == b:
+        pairs = [(a + s1, b + s2) for i, s1 in enumerate(SUITS) for s2 in SUITS[i + 1:]]
+    elif hand.endswith("s"):
+        pairs = [(a + s1, b + s1) for s1 in SUITS]
+    else:
+        pairs = [(a + s1, b + s2) for s1 in SUITS for s2 in SUITS if s1 != s2]
+    return ",".join(f"{x}{y}: {weight:g}" for x, y in pairs)
+
+
+OPENS = """Open raise 2.5x, essai
+UTG
+{utg}
+
+BU
+{btn}
+""".format(utg=combos("AA") + "," + combos("AKs"), btn=combos("AA") + "," + combos("72o", 0.5))
+
+DEFENSE = """Ranges de défense, essai
+Size ip : 7.5bb
+
+VS OPEN 2.5x UTG
+
+HJ
+{hj}
+
+BB (3b et call)
+\t3b :
+{bb3}
+\tCall :
+{bbc}
+""".format(hj=combos("AA") + "," + combos("KK"), bb3=combos("AA") + "," + combos("AKs", 0.5),
+           bbc=combos("AKs", 0.5) + "," + combos("22"))
+
+
+class TextTest(unittest.TestCase):
+    def test_parse(self):
+        self.assertEqual(stake_charts.parse_text(OPENS), {"open:UTG": "AA,AKs", "open:BTN": "AA,72o:0.5"})
+        self.assertEqual(stake_charts.parse_text(DEFENSE), {"3bet:UTG:HJ": "AA,KK", "3bet:UTG:BB": "AA,AKs:0.5",
+                                                            "call:UTG:BB": "AKs:0.5,22"})
+        self.assertEqual(stake_charts.class_range("AcKd: 1, AhKh: 0.5"), "AKo:0.0833,AKs:0.125")
+        lines = stake_charts.lines_from_parts({**stake_charts.parse_text(OPENS), **stake_charts.parse_text(DEFENSE)})
+        self.assertEqual(lines["UTG:raise BB:call"], {"pot_type": "SRP", "ranges": {"UTG": "AA,AKs",
+                                                                                    "BB": "AKs:0.5,22"}})
+        self.assertEqual(lines["UTG:raise HJ:raise UTG:call"]["ranges"], {"HJ": "AA,KK"})
+        for bad in (combos("AA"),  # une range sans titre de position
+                    "VS OPEN 2.5x UTG\nBB\n" + combos("AA"),  # la BB : 3b ou call ?
+                    "VS OPEN 2.5x\nHJ\n" + combos("AA"),  # face à quel open ?
+                    "rien du tout"):
+            with self.assertRaises(ValueError, msg=bad[:40]):
+                stake_charts.parse_text(bad)
+        everything = "UTG\n" + ",".join(combos(a + b + ("" if a == b else k)) for i, a in enumerate("AKQJT98765432")
+                                         for b in "AKQJT98765432"[i:] for k in (("",) if a == b else ("s", "o")))
+        with self.assertRaises(ValueError) as found:  # toute la range de départ, pas l'open
+            stake_charts.parse_text(everything)
+        self.assertIn("100 %", str(found.exception))
+        with self.assertRaises(ValueError):  # 3bet et call d'une même main : plus de 100 %
+            stake_charts.lines_from_parts({"3bet:UTG:BB": "AA", "call:UTG:BB": "AA"})
+
+
 class StoreTest(IsolatedHome):
+    def test_text_import_completes_reference(self):
+        """L'export texte se complète fichier par fichier ; ce qu'il ne donne pas reste celui de la référence."""
+        from analyzer.handplay import _chart_open, _chart_vs_open
+        from analyzer.theory import ring_ranges
+        ring_ranges.save_solution("6-max", {"lines": {
+            "UTG:raise BB:call": {"pot_type": "SRP", "ranges": {"UTG": "AA,KK,QQ", "BB": "QQ,JJ"}},
+            "UTG:raise BB:raise UTG:call": {"pot_type": "pot 3bet", "ranges": {"BB": "KK", "UTG": "QQ"}}}})
+        summary = stake_charts.import_text(DEFENSE, "hautes")
+        self.assertEqual(summary["covers"], "pas d'open (ceux de la référence) ; défense face à l'open : UTG")
+        lines = stake_charts.ring_lines("hautes")["6-max"]
+        self.assertEqual(_chart_open(lines, "UTG", "KK"), {"raise": 1.0, "fold": 0.0})  # l'open de la référence
+        self.assertEqual(_chart_vs_open(lines, "UTG", "BB", "22"), {"raise": 0.0, "call": 1.0, "fold": 0.0})
+        reference = stake_charts.ring_lines("milieu")["6-max"]  # un autre niveau : la référence
+        self.assertEqual(reference["UTG:raise BB:call"]["BB"], {"QQ": 1.0, "JJ": 1.0})
+        # l'open arrive : il remplace celui de la référence ; sa réponse au 3bet (faite pour un autre open)
+        # n'est plus lue
+        path = self.home.parent / "opens.txt"
+        path.write_text(OPENS, encoding="utf-8")
+        self.assertEqual(stake_charts.import_file(path, "hautes"), "6-max")
+        lines = stake_charts.ring_lines("hautes")["6-max"]
+        self.assertEqual(_chart_open(lines, "UTG", "KK"), {"raise": 0.0, "fold": 1.0})
+        self.assertNotIn("UTG", lines["UTG:raise BB:raise UTG:call"])
+        self.assertIn("opens : UTG, BTN", stake_charts.summary("6-max", "hautes")["covers"])
+        self.assertEqual(stake_charts.summary("6-max", "hautes")["source"],
+                         "Ranges de défense, essai · Open raise 2.5x, essai")
+        with self.assertRaises(ValueError):
+            stake_charts.import_text(OPENS, "hautes", "HU")
+
     def test_save_and_validate(self):
         self.assertEqual(stake_charts.available(), {})
         self.assertEqual(stake_charts.save("HU", "hautes", reference_ranges())["size"], 4)
