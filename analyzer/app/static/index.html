@@ -22,7 +22,10 @@
       <a href="#/sauvegarde" data-view="sauvegarde">Sauvegarde</a>
       <a href="#/parametres" data-view="parametres">Paramètres</a>
     </nav>
-    <div class="opp-head">Adversaires <span id="opp-count"></span></div>
+    <button type="button" class="opp-head" id="opp-toggle" aria-expanded="false" aria-controls="opp-panel"
+      title="Afficher ou masquer la liste de tes adversaires"><span>Adversaires <span id="opp-count"></span></span>
+      <span class="opp-caret" aria-hidden="true">▸</span></button>
+    <div class="opp-panel" id="opp-panel" hidden>
     <div class="opp-fmt" id="opp-fmt" role="group" aria-label="Format des adversaires" hidden>
       <button type="button" data-fmt="HU" aria-pressed="true">Heads-up</button>
       <button type="button" data-fmt="ring" aria-pressed="false">À plusieurs</button>
@@ -38,6 +41,7 @@
       </select>
     </div>
     <ul class="opps" id="opps"></ul>
+    </div>
   </aside>
   <div class="backdrop" id="backdrop"></div>
   <div class="main">

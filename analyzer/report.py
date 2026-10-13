@@ -978,6 +978,7 @@ td.strong .v { font-weight: 700; }
 .lk-fmt a span { color: var(--muted); font-size: 12px; margin-left: 2px; }
 .lk-fmt a[aria-current="page"] { background: var(--ink); color: var(--page); border-color: var(--ink); font-weight: 600; }
 .lk-fmt a[aria-current="page"] span { color: var(--page); opacity: .75; }
+.bl-all + .lk-fmt { margin-top: 16px; }
 .legend-dev { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); margin: 0 0 12px; }
 .legend-dev i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
 .findings { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }

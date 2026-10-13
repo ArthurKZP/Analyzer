@@ -37,6 +37,7 @@ class PeriodTest(unittest.TestCase):
         self.assertEqual(period.clean({}), {"kind": "all"})
         self.assertEqual(period.clean({"kind": "last", "n": "500"}), {"kind": "last", "n": 500})
         self.assertEqual(period.clean({"kind": "days", "days": 30}), {"kind": "days", "days": 30})
+        self.assertEqual(period.clean({"kind": "quarter", "days": 30}), {"kind": "quarter"})
         self.assertEqual(period.clean({"kind": "range", "from": "2026-02-01", "to": "2026-01-01"}),
                          {"kind": "range", "from": "2026-01-01", "to": "2026-02-01"})  # remises dans l'ordre
         self.assertEqual(period.clean({"kind": "range", "to": "2026-01-31"}),
@@ -55,11 +56,23 @@ class PeriodTest(unittest.TestCase):
         self.assertEqual(period.select(hands, {"kind": "days", "days": 1}, today=date(2026, 1, 12)), [])
         self.assertEqual(period.select(hands, {"kind": "range", "from": "2026-01-02", "to": "2026-01-04"}), hands[1:4])
         self.assertEqual(period.select(hands, {"kind": "range", "from": "2026-01-09", "to": None}), hands[8:])
+        # ce mois, ce trimestre, cette année : du premier jour à aujourd'hui
+        months = ((2025, 12), (2026, 1), (2026, 4), (2026, 5))
+        spread = [SimpleNamespace(date=datetime(y, m, 15, 20)) for y, m in months]
+        today = date(2026, 5, 20)
+        self.assertEqual(period.select(spread, {"kind": "month"}, today=today), spread[3:])
+        self.assertEqual(period.select(spread, {"kind": "quarter"}, today=today), spread[2:])
+        self.assertEqual(period.select(spread, {"kind": "year"}, today=today), spread[1:])
+        self.assertEqual(period.bounds({"kind": "quarter"}, date(2026, 12, 31)),
+                         (date(2026, 10, 1), date(2026, 12, 31)))
 
     def test_labels(self):
         self.assertEqual(period.label({"kind": "all"}), "Toutes les mains")
         self.assertEqual(period.label({"kind": "last", "n": 1000}), "1\u202f000 dernières mains")
         self.assertEqual(period.label({"kind": "days", "days": 30}), "30 derniers jours")
+        self.assertEqual([period.label({"kind": k}) for k in ("month", "quarter", "year")],
+                         ["Ce mois", "Ce trimestre", "Cette année"])
+        self.assertEqual(period.describe({"kind": "year"}), "Période : cette année.")
         self.assertEqual(period.label({"kind": "range", "from": "2026-01-01", "to": "2026-01-31"}),
                          "Du 01/01/2026 au 31/01/2026")
         self.assertEqual(period.label({"kind": "range", "from": None, "to": "2026-01-31"}), "Jusqu'au 31/01/2026")

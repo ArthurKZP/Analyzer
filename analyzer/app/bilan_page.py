@@ -171,9 +171,9 @@ def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, 
     period = f"{res['first']:%d/%m/%Y} → {res['last']:%d/%m/%Y}"
     tools = len(opponents) > 1
     body = f"""<style>{OPP_STYLE}{REVIEW_STYLE}{LEAK_STYLE}</style>{RING_STYLE}
+{head}
 <div class="meta">{res['hands']} mains aux tables à plusieurs ({escape(', '.join(formats))}) · {len(opponents)} adversaire(s)
 · {period}</div>
-{head}
 {result_tiles(res)}
 
 <h2>Résultat cumulé (bb)</h2>

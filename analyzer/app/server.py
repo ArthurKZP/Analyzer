@@ -373,7 +373,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _period(self, owner: Library):
         """Choisir la période d'analyse (la tienne, ou celle d'un élève) : {"kind": "all" | "last" (n) | "days" (days)
-        | "range" (from, to)}."""
+        | "month" | "quarter" | "year" | "range" (from, to)}."""
         try:
             return self._json(owner.set_period(self._small_json()))
         except ValueError as exc:

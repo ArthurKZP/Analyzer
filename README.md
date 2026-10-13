@@ -27,12 +27,13 @@ python -m analyzer app
 L'application s'ouvre dans ton navigateur (http://127.0.0.1:8765). Tout reste sur ton ordinateur :
 le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
 
-- **Menu latéral** : « Mon jeu », « Étude du field », « Joueurs de référence », « Études du solveur », « Entraîneur »,
-  « Élèves », « Importer des mains », « Sauvegarde », « Paramètres » et la liste de tes adversaires (recherche sans tenir compte des accents,
-  tri par mains jouées, meilleur ou pire résultat, plus récents ou nom, filtre réguliers / récréatifs ; le tri et le
-  filtre sont gardés d'une visite à l'autre), avec le nombre de mains et ton résultat contre chacun : ceux du
-  heads-up (leur fiche) ou, au choix *Heads-up* / *À plusieurs*, ceux des tables à plusieurs vus au moins 10 mains
-  (leur fiche de l'Étude du field).
+- **Menu latéral** : « Mon jeu », « Étude du field », « Joueurs de référence », « Études du solveur »,
+  « Entraîneur », « Élèves », « Importer des mains », « Sauvegarde », « Paramètres » et, repliée sous
+  **Adversaires** (un clic l'ouvre ou la referme ; le choix est gardé), la liste de tes adversaires (recherche sans
+  tenir compte des accents, tri par mains jouées, meilleur ou pire résultat, plus récents ou nom, filtre réguliers /
+  récréatifs ; le tri et le filtre sont gardés d'une visite à l'autre), avec le nombre de mains et ton résultat
+  contre chacun : ceux du heads-up (leur fiche) ou, au choix *Heads-up* / *À plusieurs*, ceux des tables à plusieurs
+  vus au moins 10 mains (leur fiche de l'Étude du field).
 - **Lecture des pages** : chaque onglet commence par l'essentiel — les chiffres clés, puis ce qu'il faut en retenir
   (les leaks à travailler, tes écarts les plus importants, le plan de jeu, ce qui ressort de ses bluffs…). Le détail
   est replié en sections dont le titre et une ligne de résumé restent visibles : un clic les ouvre, et elles restent
@@ -81,10 +82,11 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
 - **Entraîneur** : joue des mains sur les spots résolus, le solveur juge chaque décision (voir plus bas).
 - **Sauvegarde** : tes calculs vers un dossier synchronisé ou un stockage en ligne (voir plus bas).
 - **Période d'analyse** (en haut de *Mon jeu*, de l'*Étude du field*, d'une fiche d'adversaire ou d'un élève) :
-  toutes les mains, les N dernières (de chaque format : heads-up, tables à plusieurs), les N derniers jours, ou
-  d'une date à une autre. Toutes les analyses de l'espace s'y limitent — bilan, Leakfinding, préflop, mains de
-  départ, adversaires et rapports (le rapport téléchargé la rappelle) ; chacun a la sienne (toi, chaque élève),
-  gardée dans la base. Une main hors de la période reste ouvrable dans l'explorateur.
+  toutes les mains, *ce mois*, *ce trimestre* ou *cette année* (du premier jour du mois, du trimestre ou de l'année
+  à aujourd'hui), les N dernières (de chaque format : heads-up, tables à plusieurs), les N derniers jours, ou d'une
+  date à une autre. Toutes les analyses de l'espace s'y limitent — bilan, Leakfinding, préflop, mains de départ,
+  adversaires et rapports (le rapport téléchargé la rappelle) ; chacun a la sienne (toi, chaque élève), gardée dans
+  la base. Une main hors de la période reste ouvrable dans l'explorateur.
 - **Importer des mains** : glisse tes historiques ou choisis-les — des fichiers `.txt`, un dossier (avec ses
   sous-dossiers) ou une **archive `.zip`** avec ses dossiers (et les archives qu'elle contient). Chaque historique
   qui apporte des mains entre dans la base de données (son texte d'origine compris, voir « Base de données ») ; les

@@ -290,8 +290,8 @@ def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: st
                   f'dans <a href="{escape(leaks_href)}">Leaks › À travailler</a> ; leur évolution se suit dans '
                   '<a href="suivi">Leaks › Suivi dans le temps</a>.</p>' if leaks_href else "")
     body = f"""{heading}<style>{OPP_STYLE}</style>
-<div class="meta">{len(hands)} mains · {len(results)} adversaire(s) · {period}{spots}</div>
 {head}
+<div class="meta">{len(hands)} mains · {len(results)} adversaire(s) · {period}{spots}</div>
 {tiles(h)}
 
 <h2>Résultat cumulé (bb)</h2>

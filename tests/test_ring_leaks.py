@@ -413,6 +413,9 @@ class AppTest(IsolatedHome):
         for text in ('aria-current="page">Heads-up', 'href="?format=ring"', "Tous formats confondus", "En heads-up",
                      "Aux tables à plusieurs", "Résultats par adversaire"):
             self.assertIn(text, heads_up)
+        # tes résultats tous formats confondus d'abord, puis le choix du format et son bilan
+        order = [heads_up.index(t) for t in ("Tous formats confondus", 'class="lk-fmt"', "Résultat cumulé (bb)")]
+        self.assertEqual(order, sorted(order))
         ring_bilan = self.lib.self_page("bilan", table_format="ring")
         for text in ("3 mains aux tables à plusieurs (3-max, 6-max)", 'aria-current="page">Tables à plusieurs',
                      "Tous formats confondus", "Ton résultat", "Résultat cumulé (bb)", "Tes écarts les plus importants",

@@ -1,5 +1,6 @@
 """Période d'analyse : toutes les mains, les N dernières (de chaque format : heads-up, tables à plusieurs), les N
-derniers jours, ou d'une date à une autre.
+derniers jours, ce mois, ce trimestre, cette année (du premier jour du mois, du trimestre ou de l'année à aujourd'hui),
+ou d'une date à une autre.
 
 Elle se choisit pour chaque espace (toi, chaque élève) et reste gardée dans la base (réglage « periode:<espace> ») ;
 toutes les analyses de l'espace s'y limitent : bilan, Leakfinding, préflop, adversaires, rapports.
@@ -13,6 +14,8 @@ from . import db
 from .models import Hand
 
 ALL = {"kind": "all"}
+CALENDAR = {"month": "Ce mois", "quarter": "Ce trimestre", "year": "Cette année"}  # jusqu'à aujourd'hui
+RELATIVE = ("days", *CALENDAR)  # périodes qui suivent le jour qu'il est
 MAX_HANDS = 10_000_000
 MAX_DAYS = 36_500
 
@@ -39,13 +42,16 @@ def _day(value: object) -> Optional[str]:
 
 
 def clean(raw: object) -> dict:
-    """La période demandée, vérifiée : {"kind": "all"}, {"kind": "last", "n"}, {"kind": "days", "days"} ou
-    {"kind": "range", "from", "to"} (dates aaaa-mm-jj, l'une des deux peut manquer) ; ValueError sinon."""
+    """La période demandée, vérifiée : {"kind": "all"}, {"kind": "last", "n"}, {"kind": "days", "days"},
+    {"kind": "month" | "quarter" | "year"} ou {"kind": "range", "from", "to"} (dates aaaa-mm-jj, l'une des deux peut
+    manquer) ; ValueError sinon."""
     if not isinstance(raw, dict):
         raise ValueError("Période invalide.")
     kind = raw.get("kind") or "all"
     if kind == "all":
         return dict(ALL)
+    if kind in CALENDAR:
+        return {"kind": kind}
     if kind == "last":
         return {"kind": "last", "n": _int(raw.get("n"), MAX_HANDS)}
     if kind == "days":
@@ -81,6 +87,10 @@ def bounds(period: dict, today: Optional[date] = None) -> tuple[Optional[date], 
     if period["kind"] == "days":
         today = today or date.today()
         return today - timedelta(days=period["days"] - 1), today
+    if period["kind"] in CALENDAR:
+        today = today or date.today()
+        month = {"month": today.month, "quarter": 3 * ((today.month - 1) // 3) + 1, "year": 1}[period["kind"]]
+        return date(today.year, month, 1), today
     if period["kind"] == "range":
         return tuple(date.fromisoformat(d) if d else None for d in (period["from"], period["to"]))  # type: ignore
     return None, None
@@ -105,8 +115,11 @@ def _fr(day: str) -> str:
 
 
 def label(period: dict) -> str:
-    """« Toutes les mains », « 1 000 dernières mains », « 30 derniers jours », « Du 01/09/2026 au 30/09/2026 »…"""
+    """« Toutes les mains », « 1 000 dernières mains », « 30 derniers jours », « Ce mois », « Du 01/09/2026 au
+    30/09/2026 »…"""
     kind = period["kind"]
+    if kind in CALENDAR:
+        return CALENDAR[kind]
     if kind == "last":
         return "La dernière main" if period["n"] == 1 else f"{_num(period['n'])} dernières mains"
     if kind == "days":

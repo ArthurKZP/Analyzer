@@ -380,8 +380,9 @@
   function closeDrawer() { $('app').classList.remove('drawer-open'); }
 
   // ---------- période d'analyse ----------
-  // Toutes les mains, les N dernières (de chaque format), les N derniers jours ou d'une date à une autre : le choix
-  // vaut pour toutes les analyses de l'espace (toi, ou l'élève affiché) et reste gardé.
+  // Toutes les mains, ce mois, ce trimestre, cette année, les N dernières (de chaque format), les N derniers jours ou
+  // d'une date à une autre : le choix vaut pour toutes les analyses de l'espace (toi, ou l'élève affiché) et reste
+  // gardé.
   const PERIOD_VIEWS = ['moi', 'field', 'adv', 'eleve'];
 
   function periodOwner() {
@@ -445,6 +446,8 @@
     pop.append(
       el('div', { class: 'period-title' }, 'Analyser'),
       choice('all', 'Toutes les mains', el('span', { class: 'muted small' }, '(' + counts + ')')),
+      el('div', { class: 'period-cal' }, choice('month', 'Ce mois'), choice('quarter', 'Ce trimestre'),
+        choice('year', 'Cette année')),
       choice('last', 'Les', n, 'dernières mains',
         el('span', { class: 'muted small period-hint' }, 'de chaque format (heads-up, tables à plusieurs)')),
       choice('days', 'Les', days, 'derniers jours'),
@@ -1169,6 +1172,17 @@
     markActive();
   });
 
+  // La liste des adversaires : repliée par défaut, ouverte d'un clic sur « Adversaires » (le choix est gardé).
+  function showOpponents(open) {
+    $('opp-panel').hidden = !open;
+    $('opp-toggle').setAttribute('aria-expanded', String(open));
+  }
+  showOpponents(pref('opp-open') === '1');
+  $('opp-toggle').addEventListener('click', () => {
+    const open = $('opp-panel').hidden;
+    pref('opp-open', open ? '1' : null);
+    showOpponents(open);
+  });
   $('opp-search').addEventListener('input', renderSidebar);
   $('opp-fmt').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { pref('opp-fmt', b.dataset.fmt); renderSidebar(); }));
   [['opp-sort', 'hands'], ['opp-kind', '']].forEach(([id, fallback]) => {  // tri et type gardés d'une visite à l'autre

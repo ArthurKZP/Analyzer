@@ -466,7 +466,7 @@ class Library:
 
     def period_view(self) -> dict:
         """La période et de quoi la choisir : toutes tes mains (par format) et leurs dates."""
-        if self.period["kind"] == "days" and self._period_day != date.today():  # « 30 derniers jours » : un jour a passé
+        if self.period["kind"] in periods.RELATIVE and self._period_day != date.today():  # un jour a passé
             with self._lock:
                 self._select()
         every = self._all_hands + self._all_ring
@@ -786,10 +786,12 @@ class Library:
                                ranges=ring_ranges.available())
 
     def _bilan_head(self, fmt: str) -> str:
-        """En tête du bilan : le choix du format, et tes résultats tous formats confondus."""
+        """En tête du bilan : tes résultats tous formats confondus (puis en heads-up et aux tables à plusieurs), puis le
+        choix du format qui suit."""
         hero = self.hero or ""
-        return format_switch(self.leak_formats(), fmt) + bilan_page.overall_html(
-            bilan_page.results(self.hands, hero), bilan_page.results(ring_leaks.mine(self.ring, hero), hero))
+        return bilan_page.overall_html(bilan_page.results(self.hands, hero),
+                                       bilan_page.results(ring_leaks.mine(self.ring, hero), hero)) + format_switch(
+            self.leak_formats(), fmt)
 
     def _ring_bilan(self) -> str:
         """Ton bilan aux tables à plusieurs, sur le plan de celui du heads-up."""
