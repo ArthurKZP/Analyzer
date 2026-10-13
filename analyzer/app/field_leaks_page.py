@@ -19,7 +19,7 @@ from .. import field, stakes
 from ..field import BLUFF, INTENT_LABELS, STYLES, Study
 from ..lines import BOARD_SIZE
 from ..models import POSTFLOP
-from ..report import PASSIVE_LABELS, cards_html, composition_html, html_page, num
+from ..report import PASSIVE_LABELS, cards_html, composition_html, fold, html_page, num
 from .leaks_page import KIND_SCRIPT
 
 STYLE = """
@@ -419,6 +419,12 @@ def build_player_page(row: dict, study: Study, fmt: str, info: dict, switch: str
             f'<a href="{escape(fiche)}" target="_top">ouvrir</a>.</p>' if fiche else "")
     hands = f"{num(study.hands, 0)} mains {'à la même table' if fmt != 'HU' else 'contre toi'}"
     where = FORMAT_WORDS[fmt] + _band_words(band)
+    value_part = (f'<div class="card"><h3 style="margin-top:0">Ce qui distingue sa value de ses bluffs</h3>'
+                  f'{differences_html(study)}</div><div class="card" style="margin-top:12px"><h3 style="margin-top:0">'
+                  f'Ses lignes</h3>{lines_html(study)}{shown_examples(study)}</div>')
+    checks_part = (f'<div class="card">{checks_html(study)}<p class="note">Ce qu\'il montre à l\'abattage après avoir '
+                   "checké une street (sans y miser ensuite) : des mains fortes cachées dans ses checks, ou rien.</p>"
+                   "</div>")
     body = f"""<div class="meta">{escape(name)} {escape(where)} · {hands} · {kind}{escape(style)}</div>
 {switch}
 <div class="card" style="display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center">{_kind_select(name, info)}{more}</div>
@@ -428,15 +434,10 @@ def build_player_page(row: dict, study: Study, fmt: str, info: dict, switch: str
 <p class="note">Ses fréquences nettement hors des repères d'un régulier solide, de la plus marquée à la moins marquée,
 et ce qu'il faut en faire. « À confirmer » : l'écart est net, l'échantillon encore petit.
 {escape(_band_note(band))}</p></div>
-<h2>Value ou bluff ?</h2>
-<div class="card"><h3 style="margin-top:0">Ce qui distingue sa value de ses bluffs</h3>{differences_html(study)}</div>
-<div class="card" style="margin-top:12px"><h3 style="margin-top:0">Ses lignes</h3>{lines_html(study)}{shown_examples(study)}</div>
-<h2>Quand il checke</h2>
-<div class="card">{checks_html(study)}
-<p class="note">Ce qu'il montre à l'abattage après avoir checké une street (sans y miser ensuite) : des mains fortes
-cachées dans ses checks, ou rien.</p></div>
-<h2>Ses mains montrées avant le flop</h2>
-<div class="card">{preflop_html(study)}</div>
+{fold("Value ou bluff ?", value_part, "ce qui distingue sa value de ses bluffs, ligne par ligne", "value")}
+{fold("Quand il checke", checks_part, "ce qu'il montre à l'abattage après avoir checké", "checks")}
+{fold("Ses mains montrées avant le flop", f'<div class="card">{preflop_html(study)}</div>',
+      "ses mains vues à l'abattage, par ligne préflop", "preflop")}
 """
     return html_page(f"{name} — field", f"<style>{STYLE}</style>{body}", embed, script=KIND_SCRIPT)
 
@@ -459,6 +460,10 @@ def build_group_page(style_key: str, fmt: str, study: Study, members: list[tuple
              '<th class="num">Fold vs mises</th><th class="num">Abattage</th><th>Pourquoi ce style</th></tr></thead><tbody>'
              + "".join(rows) + "</tbody></table></div>")
     where = FORMAT_WORDS[fmt] + _band_words(band)
+    value_part = (f'<div class="card"><h3 style="margin-top:0">Ce qui distingue leur value de leurs bluffs</h3>'
+                  f'{differences_html(study, True)}</div><div class="card" style="margin-top:12px">'
+                  f'<h3 style="margin-top:0">Leurs lignes</h3>{lines_html(study, plural=True)}{shown_examples(study)}'
+                  '</div>')
     body = f"""<div class="meta">{escape(style.title)} {escape(where)} : {len(members)} joueur(s), leurs mains
 réunies.</div>
 {switch}
@@ -466,12 +471,10 @@ réunies.</div>
 <h2>Comment les jouer</h2>
 <div class="card"><ul class="fl-plan">{plan}</ul>
 <h3 style="margin-top:14px">Leurs leaks, ensemble</h3>{leaks_list(study, 6)}</div>
-<h2>Les joueurs du groupe</h2>
-<div class="card">{table}</div>
-<h2>Value ou bluff ?</h2>
-<div class="card"><h3 style="margin-top:0">Ce qui distingue leur value de leurs bluffs</h3>{differences_html(study, True)}</div>
-<div class="card" style="margin-top:12px"><h3 style="margin-top:0">Leurs lignes</h3>{lines_html(study, plural=True)}{shown_examples(study)}</div>
-<h2>Quand ils checkent</h2>
-<div class="card">{checks_html(study, plural=True)}</div>
+{fold("Les joueurs du groupe", f'<div class="card">{table}</div>',
+      f"{len(members)} joueur{'s' if len(members) > 1 else ''} : leurs stats et pourquoi ce style", "joueurs")}
+{fold("Value ou bluff ?", value_part, "ce qui distingue leur value de leurs bluffs, ligne par ligne", "value")}
+{fold("Quand ils checkent", f'<div class="card">{checks_html(study, plural=True)}</div>',
+      "ce qu'ils montrent à l'abattage après avoir checké", "checks")}
 """
     return html_page(f"{style.name} — field", f"<style>{STYLE}</style>{body}", embed)

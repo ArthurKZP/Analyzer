@@ -272,6 +272,10 @@ def _kept(flow: Flow) -> None:
             flow.paragraph(f"• {x.title} ({x.check.badge}) : {x.check.summary}", color=INK2)
 
 
+SIZED_NOTE = ("* Ramené à ta taille : à volume de mise égal quand tu mises ou relances plus gros ou plus petit que le "
+              "solveur ; face aux mises que tu affrontes quand tu foldes.")
+
+
 def _gaps(flow: Flow) -> None:
     s = flow.s
     found = s.gaps()
@@ -288,7 +292,8 @@ def _gaps(flow: Flow) -> None:
         check = leaks._checked(stat, scope)
         if check is not None and check.verdict == "fuite" and check.measured:
             advice += f" ({check.badge})"
-        reference = (f"{round(100 * stat.reference)} %" if stat.reference is not None else
+        reference = (f"{round(100 * stat.reference)} %" + (" *" if stat.sizing else "")
+                     if stat.reference is not None else
                      f"{round(100 * stat.band[0])}–{round(100 * stat.band[1])} %" if stat.band else "–")
         gap = round(100 * stat.gap(scope))
         rows.append([
@@ -301,6 +306,8 @@ def _gaps(flow: Flow) -> None:
         ])
     table(flow, [("Situation", 158, "left"), (s.solver_who, 72, "right"), ("Théorie", 50, "right"),
                  ("Écart", 44, "right"), ("Confiance", 58, "left"), ("À faire", CW - 382, "left")], rows, size=8.2)
+    if any(stat.sizing for stat, _, _ in found):
+        flow.paragraph(SIZED_NOTE, size=7.5, color=MUTED)
 
 
 def _solver(flow: Flow) -> None:

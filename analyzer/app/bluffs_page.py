@@ -8,7 +8,7 @@ from typing import Optional
 from .. import bluffs
 from ..lines import INTENT_LABELS, INTENTS
 from ..models import POSTFLOP
-from ..report import cards_html, html_page
+from ..report import cards_html, fold, html_page, more
 
 STYLE = """
 .bl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -52,18 +52,25 @@ def _pattern_items(patterns: list, plural: bool = False) -> str:
         f'<div class="bl-a">→ {escape(p.advice)}</div></li>' for p in patterns)
 
 
-def patterns_html(report: bluffs.Report, top: int = 8) -> str:
+def patterns_html(report: bluffs.Report, top: int = 4) -> str:
+    """Ce qui ressort : les patterns solides les plus nets d'abord (top), les autres solides et les pistes à confirmer
+    repliés."""
     plural = len(report.names) > 1
-    solid = [p for p in report.patterns if p.confidence == "solide"][:top]
-    rest = [p for p in report.patterns if p not in solid]
+    solid = [p for p in report.patterns if p.confidence == "solide"]
+    shown, more_solid = solid[:top], solid[top:]
+    rest = [p for p in report.patterns if p.confidence != "solide"]
     if not report.patterns:
         return ('<p class="note">Rien de net pour l\'instant : pas assez de mains, ou un jeu proche de la théorie dans '
                 'les situations mesurées.</p>')
     out = ""
-    if solid:
-        out += f'<ul class="bl-list">{_pattern_items(solid, plural)}</ul>'
+    if shown:
+        out += f'<ul class="bl-list">{_pattern_items(shown, plural)}</ul>'
     else:
         out += '<p class="note">Aucun pattern solide pour l\'instant : les pistes ci-dessous restent à confirmer.</p>'
+    if more_solid:
+        out += (f'<details style="margin-top:12px"><summary>Les {len(more_solid)} autres patterns solides</summary>'
+                f'<div style="padding:10px 16px"><ul class="bl-list">{_pattern_items(more_solid, plural)}</ul>'
+                '</div></details>')
     if rest:
         out += (f'<details style="margin-top:12px"><summary>Pistes à confirmer ({len(rest)})</summary>'
                 f'<div style="padding:10px 16px"><ul class="bl-list">{_pattern_items(rest, plural)}</ul></div></details>')
@@ -252,31 +259,40 @@ def build_bluffs_page(report: bluffs.Report, who: str, embed: bool = True, note:
     w = ({"ses": "leurs", "Ses": "Leurs", "sa": "leur", "il": "ils", "s'il mise": "s'ils misent",
           "lui donne": "leur donne"} if plural else
          {"ses": "ses", "Ses": "Ses", "sa": "sa", "il": "il", "s'il mise": "s'il mise", "lui donne": "lui donne"})
+    bets = w["s'il mise"]
+    sources_note = (
+        f"Deux sources. <b>{w['Ses']} fréquences</b>, sur toutes {w['ses']} mains : une carte ne {w['lui donne']} pas "
+        f"plus de bonnes mains qu'à la théorie ; {bets} nettement plus que le solveur quand elle tombe, le surplus "
+        f"est fait de bluffs (ou de value fine). <b>{w['Ses']} mains montrées</b> : à la river, la part de bluffs est "
+        "comparée à l'équité qu'il te faut pour payer (la part de bluffs de la théorie pour cette taille) ; au flop "
+        f"et à la turn, à {w['sa']} propre moyenne. « Solide » : le hasard l'explique mal (intervalle de confiance à "
+        f"90 %, au moins 10 occasions) ; « à confirmer » : écart net, peu de mains.{weighting}")
+    cards_note = (
+        f"À chaque situation, {w['sa']} fréquence de mise selon la carte qui vient de tomber (ou la texture du flop), "
+        "face à celle du solveur dans les mêmes situations : moyenne des plans de jeu des flops résolus de ce type "
+        f"de pot. Sans repère du solveur, on compare à {w['ses']} autres cartes. Seules les mains de pots SRP, 3bet "
+        "et 4bet ont un repère.")
+    shown_note = (
+        "Chaque mise ou relance vue à l'abattage, classée par son intention au moment de miser : value (top paire ou "
+        "mieux), value fine (paire moyenne ou faible), semi-bluff (rien de fait mais au moins 25 % d'équité contre "
+        "ta main), bluff. Biais : une mise n'est vue que si le coup va à l'abattage. À la river, ta décision de "
+        "payer ne dépend pas des cartes adverses : l'échantillon est honnête. Au flop et à la turn, il manque les "
+        "coups où tu as payé puis foldé plus tard.")
     body = f"""
 <div class="meta">Les bluffs {escape(who)} : dans quelles lignes, sur quelles cartes, avec quelles tailles.</div>
 {note}
 {tiles}
 <h2>Ce qui ressort</h2>
 <div class="card">{patterns_html(report)}
-<p class="note">Deux sources. <b>{w["Ses"]} fréquences</b>, sur toutes {w["ses"]} mains : une carte ne {w["lui donne"]} pas
-plus de bonnes mains qu'à la théorie ; {w["s'il mise"]} nettement plus que le solveur quand elle tombe, le surplus est fait
-de bluffs (ou de value fine). <b>{w["Ses"]} mains montrées</b> : à la river, la part de bluffs est comparée à l'équité qu'il
-te faut pour payer (la part de bluffs de la théorie pour cette taille) ; au flop et à la turn, à {w["sa"]} propre moyenne.
-« Solide » : le hasard l'explique mal (intervalle de confiance à 90 %, au moins 10 occasions) ; « à confirmer » : écart
-net, peu de mains.{weighting}</p></div>
+{more("Comment c'est mesuré", sources_note)}</div>
 {clusters_html(report, groups or [])}
-<h2>{w["Ses"]} mises selon la carte</h2>
-<div class="card">{frequencies_html(report)}
-<p class="note">À chaque situation, {w["sa"]} fréquence de mise selon la carte qui vient de tomber (ou la texture du flop),
-face à celle du solveur dans les mêmes situations : moyenne des plans de jeu des flops résolus de ce type de pot. Sans
-repère du solveur, on compare à {w["ses"]} autres cartes. Seules les mains de pots SRP, 3bet et 4bet ont un repère.</p></div>
-<h2>{w["Ses"]} mains montrées</h2>
-<div class="card">{shown_html(report)}{examples_html(report)}
-<p class="note">Chaque mise ou relance vue à l'abattage, classée par son intention au moment de miser : value (top paire
-ou mieux), value fine (paire moyenne ou faible), semi-bluff (rien de fait mais au moins 25 % d'équité contre ta main),
-bluff. Biais : une mise n'est vue que si le coup va à l'abattage. À la river, ta décision de payer ne dépend pas des
-cartes adverses : l'échantillon est honnête. Au flop et à la turn, il manque les coups où tu as payé puis foldé plus
-tard.</p></div>
+{fold(f"{w['Ses']} mises selon la carte",
+      f'<div class="card">{frequencies_html(report)}<p class="note">{cards_note}</p></div>',
+      "à chaque situation, selon la carte qui tombe, face au solveur", "cartes")}
+{fold(f"{w['Ses']} mains montrées", f'<div class="card">{shown_html(report)}{examples_html(report)}'
+      f'<p class="note">{shown_note}</p></div>', f"{len(report.shown)} mise{'s' if len(report.shown) > 1 else ''} ou "
+      f"relance{'s' if len(report.shown) > 1 else ''} vue{'s' if len(report.shown) > 1 else ''} à l'abattage, par "
+      "intention", "montrees")}
 {players_html(players or [])}
 """
     return html_page(f"Bluffs {who}", f"<style>{STYLE}</style>{body}", embed)

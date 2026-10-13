@@ -8,7 +8,7 @@ from typing import Optional
 from urllib.parse import quote
 
 from .. import ring
-from ..report import cards_html, format_query, html_page, num, pct_cell
+from ..report import cards_html, fold, format_query, html_page, num, pct_cell
 
 STYLE = """<style>
 .rg-switch { display: flex; gap: 6px; margin-top: 14px; }
@@ -65,7 +65,7 @@ def _table(fs: ring.FormatStats, keys: tuple[str, ...], with_result: bool) -> st
             f'<tbody>{"".join(rows)}</tbody></table></div>')
 
 
-def _refs(fs: ring.FormatStats) -> str:
+def _refs(fs: ring.FormatStats, scope: str = "") -> str:
     rows = []
     for key, label in ring.STATS:
         stat = ring.stat_def(fs.table_format, key)
@@ -75,8 +75,10 @@ def _refs(fs: ring.FormatStats) -> str:
                         f'<td class="num muted">{stat.ref[0]:.0f}–{stat.ref[1]:.0f}&nbsp;%</td></tr>')
     if not rows:
         return ""
-    return ('<h2>Toutes positions face aux repères</h2><div class="card"><table class="stats"><thead><tr><th></th>'
-            f'<th class="num">Toi</th><th class="num">Repère</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>')
+    return fold("Toutes positions face aux repères", (
+        '<div class="card"><table class="stats"><thead><tr><th></th><th class="num">Toi</th><th class="num">Repère</th>'
+        f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'),
+        "tes stats d'ensemble, face aux repères d'un régulier", f"reperes-{scope}")
 
 
 MAX_SPOTS = 60
@@ -110,14 +112,17 @@ def _spots(rows: list[dict], ready: bool) -> str:
         note += ('<p><button type="button" class="rg-load">Charger les charts 100 bb de Hand2Note Guide (6-max et 3-max)'
                  '</button> <span class="muted small">pots simples, 3bet et 4bet ; téléchargés sur ta machine, pour ton '
                  "usage personnel (conditions du site)</span> <span class=\"rg-load-msg small\"></span></p>")
-    more = f" Les {MAX_SPOTS} plus gros pots sur {len(mine)}." if len(mine) > MAX_SPOTS else ""
-    return (f"<h2>Coups à deux joueurs au flop</h2>{note}"
-            '<div class="card scroll"><table class="stats"><thead><tr><th>Date</th><th>Table</th><th>Ligne préflop</th>'
-            '<th>Toi</th><th>Main</th><th>Flop</th><th class="num">Pot (bb)</th><th class="num">Résultat</th>'
-            f"<th>Solveur</th></tr></thead><tbody>{body}</tbody></table></div>"
-            f'<p class="note">Résolus comme un coup heads-up à partir du flop, avec les ranges de ta solution préflop '
-            "pour la ligne jouée (à une table sans solution à elle, les charts 6-max à même nombre de joueurs derrière) "
-            f"; le pot compte l'argent mort des joueurs qui ont foldé.{more}</p>")
+    extra = f" Les {MAX_SPOTS} plus gros pots sur {len(mine)}." if len(mine) > MAX_SPOTS else ""
+    table = ('<div class="card scroll"><table class="stats"><thead><tr><th>Date</th><th>Table</th>'
+             '<th>Ligne préflop</th><th>Toi</th><th>Main</th><th>Flop</th><th class="num">Pot (bb)</th>'
+             '<th class="num">Résultat</th>'
+             f"<th>Solveur</th></tr></thead><tbody>{body}</tbody></table></div>"
+             f'<p class="note">Résolus comme un coup heads-up à partir du flop, avec les ranges de ta solution préflop '
+             "pour la ligne jouée (à une table sans solution à elle, les charts 6-max à même nombre de joueurs "
+             f"derrière) ; le pot compte l'argent mort des joueurs qui ont foldé.{extra}</p>")
+    return fold("Coups à deux joueurs au flop", note + table,
+                f"{len(mine)} coup{'s' if len(mine) > 1 else ''} à ouvrir au solveur, les plus gros pots d'abord",
+                "coups", opened=not ready)
 
 
 def _gaps(found: Optional[list]) -> str:
@@ -154,9 +159,11 @@ def _section(fs: ring.FormatStats, scope: str, shown: bool) -> str:
     tables = f" · {', '.join(fs.formats)}" if fs.formats else ""
     return (f'<section class="rg-fmt" data-scope="{escape(scope)}"{"" if shown else " hidden"}>'
             f'<div class="meta">{period}{escape(tables)}</div>{tiles_html}'
-            f"<h2>Préflop par position</h2>{_table(fs, PREFLOP, True)}"
-            f"<h2>Après le flop</h2>{_table(fs, POSTFLOP, False)}"
-            f"{_refs(fs)}</section>")
+            + fold("Préflop par position", _table(fs, PREFLOP, True), "open, défense, 3bet et vols, position par "
+                   "position, face aux repères", f"preflop-{scope}")
+            + fold("Après le flop", _table(fs, POSTFLOP, False), "c-bet, barrels, folds et relances, position par "
+                   "position", f"postflop-{scope}")
+            + f"{_refs(fs, scope)}</section>")
 
 
 def build_ring_page(scopes: list[tuple[str, str, list]], hero: str, embed: bool = True,

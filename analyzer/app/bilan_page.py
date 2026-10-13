@@ -9,7 +9,7 @@ from typing import Optional
 from .. import ring
 from ..models import FOLD, Hand
 from ..rake import paid as rake_paid
-from ..report import SCRIPT, chart_svg, html_page, legend, num, pct_cell, rake_tile
+from ..report import SCRIPT, chart_svg, fold, html_page, legend, more, num, pct_cell, rake_tile
 from ..selfreport import OPP_SCRIPT, OPP_STYLE, opponent_row_data, opponent_tools
 from ..stats import allin_ev
 from .leaks_page import STYLE as LEAK_STYLE
@@ -145,6 +145,15 @@ def opponents_table(opponents: list[dict]) -> str:
             "Paramètres › Joueurs et alias.</p></div>")
 
 
+RING_CURVE_NOTE = ("« EV all-in » remplace le résultat réel des tapis payés avant la river, quand il ne reste que deux "
+                   "joueurs, par ton espérance : l'écart mesure la chance. « À l'abattage » : les mains où tu es "
+                   "allé jusqu'à l'abattage. Rake payé : ta part du rake de chaque pot, au prorata de ce que tu y as "
+                   "mis (la méthode des sites pour le rakeback) ; tes résultats en sont déjà nets, « avant rake » le "
+                   "leur rajoute.")
+RING_NOTE = ('<p class="note">Toutes tes tables de 3 joueurs et plus ensemble. Une main compte contre les récréatifs '
+             "quand un récréatif a mis de l'argent dans le pot pendant que tu y étais encore.</p>")
+
+
 def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, Optional[ring.FormatStats]]],
                      opponents: list[dict], gaps: Optional[list], head: str = "", embed: bool = True) -> str:
     """hands : tes mains aux tables à plusieurs ; scopes : [(portée, libellé, ring.analyze(…, merge=True)[0])] ;
@@ -167,21 +176,14 @@ def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, 
 
 <h2>Résultat cumulé (bb)</h2>
 <div class="card">{legend(res['curve'])}{chart_svg(res['curve'])}
-<p class="note">« EV all-in » remplace le résultat réel des tapis payés avant la river, quand il ne reste que deux
-joueurs, par ton espérance : l'écart mesure la chance. « À l'abattage » : les mains où tu es allé jusqu'à
-l'abattage. Rake payé : ta part du rake de chaque pot, au prorata de ce que tu y as mis (la méthode des sites pour
-le rakeback) ; tes résultats en sont déjà nets, « avant rake » le leur rajoute.</p></div>
+{more("Comment c'est calculé", RING_CURVE_NOTE)}</div>
 
 {_gaps(gaps) if gaps is not None else ""}
 
-<h2>Tes statistiques</h2>
-{stats_table(shown)}
+{fold("Tes statistiques", stats_table(shown), "préflop et après le flop, contre les réguliers et les récréatifs",
+      "stats")}
 
-<h2>Résultats par adversaire</h2>
-{_by_scope(shown)}
-{opponents_table(opponents)}
-
-<p class="note">Toutes tes tables de 3 joueurs et plus ensemble. Une main compte contre les récréatifs quand un récréatif
-a mis de l'argent dans le pot pendant que tu y étais encore.</p>
+{fold("Résultats par adversaire", _by_scope(shown) + opponents_table(opponents) + RING_NOTE,
+      f"{len(opponents)} adversaire{'s' if len(opponents) > 1 else ''}", "adversaires")}
 """
     return html_page(f"Mon jeu — {hero}", body, embed, script=SCRIPT + (OPP_SCRIPT if tools else ""))

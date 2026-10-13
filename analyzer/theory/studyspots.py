@@ -642,6 +642,17 @@ def sizes_for(family: str, board: list[str]) -> Optional[tuple[dict, str, bool]]
     return (dict(found[0]["plan"]), found[1], found[2]) if found else None
 
 
+def tree_plan(family: str, board: list[str]) -> dict:
+    """Les tailles de l'arbre d'une étude de ce flop, comme StudySpot les prend : son propre choix, sinon (hors de la
+    série) celui du flop choisi le plus proche ; {} : les tailles par défaut (postflop.default_sizes)."""
+    text = "".join(board[:3])
+    chosen = load_selection(family, text)
+    if chosen is None and text not in flop_set(family):
+        near = closest_selection(family, board[:3])
+        chosen = near[1] if near else None
+    return dict(chosen["plan"]) if chosen and chosen.get("plan") else {}
+
+
 def hand_sizes_for(family: str, board: list[str]) -> Optional[tuple[dict, str, bool]]:
     """Les tailles théoriques pour l'arbre d'un coup joué : celles du flop (sizes_for), avec une seule taille par
     situation à la river (la plus employée des deux choisies) et sans relance à la river, sauf jouée, comme dans

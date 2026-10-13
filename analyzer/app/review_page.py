@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 from .. import players
 from ..models import Hand
-from ..report import cards_html, html_page, num
+from ..report import cards_html, fold, html_page, more, num
 from ..theory import review, studyspots
 
 FAMILY_NAME = {"srp": "SRP", "3bet": "3bet", "4bet": "4bet"}
@@ -241,31 +241,34 @@ voir ses cartes, toutes ses décisions comptent.</p></div>
 <p class="note">Quand ses cartes ont été montrées : l'EV qu'il a laissée, décision par décision.</p></div>
 """
         return html_page(f"Face au solveur — {villain}", f"<style>{STYLE}</style>{body}", embed, script=SCRIPT)
+    costly_note = more("Comment c'est mesuré", (
+        "EV perdue : ce que l'action jouée rapporte de moins que la meilleure action pour ta main, à ce moment du coup "
+        "(en bb). Une action que le solveur joue au moins 10 % du temps avec cette main ne coûte rien. « ≈ » : la "
+        "taille jouée diffère de celle de l'arbre. <b>Revoir ↗</b> ouvre la main dans l'explorateur, à cette "
+        "décision."))
+    recurring = fold("Les erreurs récurrentes", f'<div class="card">{_situations_table(digests, "H", False)}'
+                     '<p class="note">Par situation de la ligne : combien de fois tu l\'as jouée, tes erreurs et l\'EV '
+                     "perdue, puis tes fréquences (fold / check ou call / mise ou relance) face à celles "
+                     "qu'aurait eues le solveur avec toute sa range dans les mêmes coups. Un écart s'affiche dès 8 "
+                     "occurrences et 10 points d'écart ; « solide » quand le hasard l'explique très mal.</p></div>",
+                     "situation par situation : tes erreurs, l'EV perdue et tes fréquences face au solveur",
+                     "recurrentes")
     body = f"""
 <div class="meta">Tes mains allées au flop {who}, comparées au solveur (pots simples, 3bet et 4bet).</div>
-<div class="card">{head}{kind_line}</div>
 {tiles}
+<div class="card">{head}{kind_line}</div>
 <h2>Les erreurs qui coûtent le plus</h2>
 <div class="card">{_costly_table(digests, "H", villain is None)}
-<p class="note">EV perdue : ce que l'action jouée rapporte de moins que la meilleure action pour ta main, à ce moment
-du coup (en bb). Une action que le solveur joue au moins 10 % du temps avec cette main ne coûte rien. « ≈ » : la taille jouée diffère de celle de
-l'arbre. <b>Revoir ↗</b> ouvre la main dans l'explorateur, à cette décision.</p></div>
-<h2>Les erreurs récurrentes</h2>
-<div class="card">{_situations_table(digests, "H", False)}
-<p class="note">Par situation de la ligne : combien de fois tu l'as jouée, tes erreurs et l'EV perdue, puis tes
-fréquences (fold / check ou call / mise ou relance) face à celles qu'aurait eues le solveur avec toute sa range
-dans les mêmes coups. Un écart s'affiche dès 8 occurrences et 10 points d'écart ; « solide » quand le hasard
-l'explique très mal.</p></div>
+{costly_note}</div>
+{recurring}
 """
     if villain:
-        body += f"""
-<h2>Ses écarts à exploiter</h2>
-<div class="card">{_exploits_table(digests)}
-<p class="note">Ses fréquences dans chaque situation, face à celles du solveur dans les mêmes coups : pas besoin de
-voir ses cartes, toutes ses décisions comptent.</p></div>
-<h2>Ses erreurs connues</h2>
-<div class="card">{_costly_table(digests, "V", False)}
-<p class="note">Quand ses cartes ont été montrées : l'EV qu'il a laissée, décision par décision.</p></div>
-"""
+        body += fold("Ses écarts à exploiter", f'<div class="card">{_exploits_table(digests)}<p class="note">Ses '
+                     "fréquences dans chaque situation, face à celles du solveur dans les mêmes coups : pas besoin de "
+                     "voir ses cartes, toutes ses décisions comptent.</p></div>",
+                     "ses fréquences face au solveur, situation par situation", "ecarts")
+        body += fold("Ses erreurs connues", f'<div class="card">{_costly_table(digests, "V", False)}<p class="note">'
+                     "Quand ses cartes ont été montrées : l'EV qu'il a laissée, décision par décision.</p></div>",
+                     "quand ses cartes ont été montrées", "ses-erreurs")
     title = f"Face au solveur — {villain}" if villain else "Face au solveur"
     return html_page(title, f"<style>{STYLE}</style>{body}", embed, script=SCRIPT)

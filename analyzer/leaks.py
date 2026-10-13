@@ -28,6 +28,7 @@ analyzer/ring_leaks.py, avec les mêmes briques (Stat, Leak, Pick, Report, rank)
 """
 from __future__ import annotations
 
+import fnmatch
 from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urlencode
@@ -83,6 +84,9 @@ class Stat:
     refs: Optional[dict] = None  # portée -> repère, quand il change d'une portée à l'autre (mêmes cartes) ; reference
     # est celui de la portée comparée à la théorie
     check: Optional[leakcheck.Check] = None  # l'écart vérifié en jeu, contre les réguliers (leakcheck)
+    raw: Optional[float] = None  # le repère du solveur à sa taille, quand reference est ramené à la sienne (sizing)
+    sizing: Optional[tuple[float, float, int]] = None  # (taille du solveur, la sienne, décisions mesurées), en part du
+    # pot (exploit.size_of) : ses mises ou relances, ou la mise affrontée quand il folde
 
     def ref_for(self, scope: str) -> Optional[float]:
         return self.refs.get(scope, self.reference) if self.refs else self.reference
@@ -138,12 +142,49 @@ class Stat:
         return 0.0
 
     def ref_text(self) -> str:
-        """« 17 % pour tes charts », « un repère de 18 à 23 % »."""
+        """« 17 % pour tes charts », « un repère de 18 à 23 % », « 19 % pour le solveur à ta taille » (size_note dit
+        pourquoi)."""
         if self.reference is not None:
-            return f"{round(100 * self.reference)} % pour {self.versus}"
+            sized = f" {self.size_text()}" if self.sizing else ""
+            return f"{round(100 * self.reference)} % pour {self.versus}{sized}"
         if self.band is not None:
             return f"un repère de {round(100 * self.band[0])} à {round(100 * self.band[1])} %"
         return "pas de repère"
+
+    def size_text(self) -> str:
+        """« à ta taille », « face aux mises que tu affrontes » : le repère est ramené à sa taille (sizing) ;
+        "" sinon."""
+        if not self.sizing or self.raw is None:
+            return ""
+        return "face aux mises que tu affrontes" if self.kind == "fold" else "à ta taille"
+
+    def size_note(self) -> str:
+        """Pourquoi et comment le repère est ramené à sa taille, en une phrase ; "" sinon."""
+        if not self.sizing or self.raw is None:
+            return ""
+        theory, mine, n = self.sizing
+        raw, ref = round(100 * self.raw), round(100 * self.reference)
+        if self.kind == "fold":
+            return (f"Repère ramené aux mises que tu affrontes : {self.versus} folde {raw} % face à une mise de "
+                    f"{round(100 * theory)} % du pot ; celles que tu affrontes font {round(100 * mine)} % du pot en "
+                    f"moyenne ({n} fois) : face à une mise plus {'grosse' if mine > theory else 'petite'}, il folde "
+                    f"{'plus' if mine > theory else 'moins'} ({ref} %), comme le veut la défense minimale.")
+        what = "relances" if self.kind == "raise" else "mises"
+        return (f"Repère ramené à ta taille : {self.versus} le fait {raw} % du temps à {round(100 * theory)} % du "
+                f"pot ; tes {what} font {round(100 * mine)} % du pot en moyenne ({n} fois). Plus gros et moins "
+                "souvent, ou plus petit et plus souvent, sont deux stratégies théoriques : à volume de mise égal "
+                f"(fréquence × taille, mesuré sur le solveur), {ref} %.")
+
+
+def sized(stat: Stat, theory: Optional[float], mine: list[float], measure: str) -> None:
+    """Ramène le repère du solveur à sa taille (exploit.at_size) quand elle s'en écarte assez, sur assez de décisions :
+    une autre stratégie théorique (plus petit et plus souvent, ou plus gros et moins souvent) n'est pas une fuite ; et
+    face à des mises plus grosses, le solveur folde plus."""
+    size = exploit.comparable(theory, mine, measure)
+    if stat.reference is None or size is None:
+        return
+    stat.raw, stat.sizing = stat.reference, (theory, size, len(mine))
+    stat.reference = exploit.at_size(stat.reference, measure, theory, size, stat.key.rsplit(":", 1)[-1])
 
 
 @dataclass
@@ -161,11 +202,17 @@ class Leak:
     confirmed: bool = False          # la perte est mesurée (en jeu, face au fold, au solveur) ou confirmée par leurs
     # réponses : ces leaks passent devant les écarts encore à vérifier
     note: str = ""                   # une réserve (une perte face au solveur qui vient d'un écart qui rapporte…)
+    key: str = ""                    # la stat de l'écart (Stat.key), pour relier les leaks entre eux
+    direction: str = ""              # « plus », « moins »
+    causes: list = field(default_factory=list)   # les écarts qui l'expliquent sans doute (Link) : à corriger d'abord
+    effects: list = field(default_factory=list)  # ceux qu'il entraîne sans doute (leur titre)
 
     @property
     def verified(self) -> str:
-        """La preuve, puis ce qu'en dit la vérification en jeu et l'éventuelle réserve (rapports PDF et PowerPoint)."""
-        parts = [self.evidence] + ([self.check.summary] if self.check else []) + ([self.note] if self.note else [])
+        """La preuve, puis ce qu'en dit la vérification en jeu, l'éventuelle réserve et les écarts liés (rapports PDF et
+        PowerPoint)."""
+        parts = ([self.evidence] + ([self.check.summary] if self.check else []) + ([self.note] if self.note else [])
+                 + [x.text() for x in self.causes])
         return " ".join(t if t.endswith((".", "!", "?")) else t + "." for t in (x.strip() for x in parts) if t)
 
 
@@ -249,6 +296,8 @@ def postflop_stats(hands: dict, hero: str) -> list[Stat]:
         for role, seat in (("agresseur", aggressor), ("defenseur", defender)):
             base = exploit.baselines(family, role)
             counts = {scope: exploit.observed(hands[scope], [hero], family, role)[0] for scope, _ in SCOPES}
+            theory = exploit.size_baselines(family, role)
+            mine = exploit.observed_sizes(hands["all"], [hero], family, role)
             for s in exploit.situations(family, role):
                 hits, opps = counts["all"].get(s.key, (0, 0))
                 if not opps:
@@ -258,11 +307,13 @@ def postflop_stats(hands: dict, hero: str) -> list[Stat]:
                 note = (f"repère du solveur tiré de {flops} flop(s) résolu(s)" if ref is not None and flops < exploit.MIN_FLOPS
                         else "" if ref is not None else "pas encore de repère du solveur (aucun plan de jeu lu)")
                 kind = "bet" if s.measure == "bet" else s.measure
-                out.append(Stat(f"{family}:{s.key}", studyspots.FAMILIES[family]["name"], f"{seat} : {s.label}", kind,
-                                ratios, ref, note, per100=100 * opps / total,
-                                fragile=ref is not None and flops < exploit.MIN_FLOPS,
-                                stake=street_stake(s.stats[0]) * POT_STAKE[family],
-                                link=(f"plan#famille={family}", "Voir le plan de jeu")))
+                stat = Stat(f"{family}:{s.key}", studyspots.FAMILIES[family]["name"], f"{seat} : {s.label}", kind,
+                            ratios, ref, note, per100=100 * opps / total,
+                            fragile=ref is not None and flops < exploit.MIN_FLOPS,
+                            stake=street_stake(s.stats[0]) * POT_STAKE[family],
+                            link=(f"plan#famille={family}", "Voir le plan de jeu"))
+                sized(stat, theory.get(s.key, (None, 0))[0], mine.get(s.key, []), s.measure)
+                out.append(stat)
     return out
 
 
@@ -368,7 +419,8 @@ def _stat_leak(stat: Stat, scope: str = "reg") -> Optional[Leak]:
                 f"{round(100 * p)} % sur {r.opps} occasions{SCOPE_WORDS.get(scope, '')}, contre {stat.ref_text()}"
                 + (f" ({stat.note})" if stat.note else ""),
                 _cap(advice) + ".", "préflop" if preflop_stat else "postflop", conf, importance(stat, scope),
-                link[0], link[1], check=check, confirmed=check is not None and check.verdict == "fuite")
+                link[0], link[1], check=check, confirmed=check is not None and check.verdict == "fuite",
+                note=stat.size_note(), key=stat.key, direction=direction)
 
 
 KEPT_ADVICE = {
@@ -395,7 +447,8 @@ def _kept_leak(stat: Stat, scope: str = "reg") -> Optional[Leak]:
                 f"{round(100 * r.hits / r.opps)} % sur {r.opps} occasions{SCOPE_WORDS.get(scope, '')}, contre "
                 f"{stat.ref_text()}" + (f" ({stat.note})" if stat.note else ""),
                 KEPT_ADVICE["justifié" if check.verdict == "exploit" and not check.measured else check.verdict],
-                check.verdict, v[1], gain, link[0], link[1], check=check, confirmed=True)
+                check.verdict, v[1], gain, link[0], link[1], check=check, confirmed=True, note=stat.size_note(),
+                key=stat.key, direction=v[0])
 
 
 OPPORTUNITY_ADVICE = {
@@ -423,7 +476,7 @@ def _chance_leak(stat: Stat, scope: str = "reg") -> Optional[Leak]:
     return Leak(f"{stat.section} · {stat.label}",
                 f"{round(100 * r.hits / r.opps)} % sur {r.opps} occasions{SCOPE_WORDS.get(scope, '')}, proche de "
                 f"{stat.ref_text()}", advice, "opportunité", "solide", check.bb100, link[0], link[1], check=check,
-                confirmed=True)
+                confirmed=True, note=stat.size_note(), key=stat.key)
 
 
 def chances(stats: list[Stat], scope: str = "reg") -> list[Leak]:
@@ -575,6 +628,110 @@ def _hand_leak(x: "handplay.Loser", hands: int, scope: str = "reg", fmt: str = "
                 link, "Voir d'où vient la perte", example, confirmed=True)
 
 
+# --- Leaks liés -----------------------------------------------------------------------------------------------------
+#
+# Un écart en entraîne souvent un autre : une BB qui défend trop large avant le flop arrive au flop avec plus de mains
+# faibles, et folde plus face à la c-bet sans que ce fold soit une fuite à part ; payer trop la c-bet amène plus de
+# mains faibles à la turn… L'écart qui explique l'autre passe devant, l'autre le rappelle (« Lié à »).
+
+WHY = {  # (situation de la cause, sens) -> ce que l'écart change pour la suite du coup
+    "defend_wide": "ta range est plus faible à la street suivante : folder plus en découle",
+    "defend_tight": "ta range est plus forte à la street suivante : folder moins en découle",
+    "range_weak": "ta range est plus faible ensuite (plus de mains marginales) : miser moins souvent et folder plus "
+                  "face aux relances en découlent",
+    "range_strong": "ta range est plus forte ensuite : miser plus souvent et folder moins face aux relances en "
+                    "découlent",
+    "checks_more": "les mains que tu ne mises pas renforcent ta range de check : miser plus ensuite en découle",
+}
+# (situation de la cause, sens, situation de la conséquence, sens, pourquoi) : d'une street à la suivante, dans un même
+# type de pot et un même rôle (la clé de la stat, sa situation remplacée)
+CHAINS = (
+    ("fold_flop", "moins", "fold_turn", "plus", "defend_wide"),
+    ("fold_flop", "plus", "fold_turn", "moins", "defend_tight"),
+    ("fold_turn", "moins", "fold_river", "plus", "defend_wide"),
+    ("fold_turn", "plus", "fold_river", "moins", "defend_tight"),
+    ("cbet", "plus", "barrel", "moins", "range_weak"),
+    ("cbet", "plus", "fold_raise", "plus", "range_weak"),
+    ("cbet", "moins", "barrel", "plus", "range_strong"),
+    ("cbet", "moins", "fold_raise", "moins", "range_strong"),
+    ("cbet", "moins", "delayed", "plus", "checks_more"),
+    ("barrel", "plus", "barrel3", "moins", "range_weak"),
+    ("barrel", "moins", "barrel3", "plus", "range_strong"),
+)
+# Du préflop au flop : (stat de la cause, sens, stat de la conséquence, sens, pourquoi) ; les tables à plusieurs
+# s'écrivent avec des jokers (fnmatch : toutes les positions, toutes les structures de ce type de pot).
+PREFLOP_LINKS = (
+    ("bb_vs_open.fold", "moins", "srp:fold_flop", "plus", "defend_wide"),
+    ("bb_vs_open.fold", "plus", "srp:fold_flop", "moins", "defend_tight"),
+    ("sb_first.raise", "plus", "srp:cbet", "moins", "range_weak"),
+    ("sb_first.raise", "plus", "srp:fold_raise", "plus", "range_weak"),
+    ("sb_first.raise", "moins", "srp:cbet", "plus", "range_strong"),
+    ("sb_first.raise", "moins", "srp:fold_raise", "moins", "range_strong"),
+    ("bb_vs_open.raise", "plus", "3bet:cbet", "moins", "range_weak"),
+    ("bb_vs_open.raise", "plus", "3bet:fold_raise", "plus", "range_weak"),
+    ("bb_vs_open.raise", "moins", "3bet:cbet", "plus", "range_strong"),
+    ("sb_vs_3bet.fold", "moins", "3bet:fold_flop", "plus", "defend_wide"),
+    ("sb_vs_3bet.fold", "plus", "3bet:fold_flop", "moins", "defend_tight"),
+    ("sb_vs_3bet.raise", "plus", "4bet:cbet", "moins", "range_weak"),
+    ("sb_vs_3bet.raise", "plus", "4bet:fold_raise", "plus", "range_weak"),
+    ("bb_vs_4bet.fold", "moins", "4bet:fold_flop", "plus", "defend_wide"),
+    ("bb_vs_4bet.fold", "plus", "4bet:fold_flop", "moins", "defend_tight"),
+    ("pre:vs_open:*:fold", "moins", "srp_*:defenseur:fold_flop", "plus", "defend_wide"),
+    ("pre:vs_open:*:call", "plus", "srp_*:defenseur:fold_flop", "plus", "defend_wide"),
+    ("pre:vs_open:*:fold", "plus", "srp_*:defenseur:fold_flop", "moins", "defend_tight"),
+    ("pre:open:*:open", "plus", "srp_*:agresseur:cbet", "moins", "range_weak"),
+    ("pre:open:*:open", "plus", "srp_*:agresseur:fold_raise", "plus", "range_weak"),
+    ("pre:open:*:open", "moins", "srp_*:agresseur:cbet", "plus", "range_strong"),
+    ("pre:open:*:open", "moins", "srp_*:agresseur:fold_raise", "moins", "range_strong"),
+    ("pre:vs_open:*:3bet", "plus", "3bet_*:agresseur:cbet", "moins", "range_weak"),
+    ("pre:vs_open:*:3bet", "plus", "3bet_*:agresseur:fold_raise", "plus", "range_weak"),
+    ("pre:vs_open:*:3bet", "moins", "3bet_*:agresseur:cbet", "plus", "range_strong"),
+    ("pre:vs_3bet:*:fold", "moins", "3bet_*:defenseur:fold_flop", "plus", "defend_wide"),
+    ("pre:vs_3bet:*:fold", "plus", "3bet_*:defenseur:fold_flop", "moins", "defend_tight"),
+    ("pre:vs_3bet:*:4bet", "plus", "4bet_*:agresseur:cbet", "moins", "range_weak"),
+)
+DIRECTION_WORDS = {"plus": "plus que la théorie", "moins": "moins que la théorie"}
+
+
+@dataclass(frozen=True)
+class Link:
+    """Un écart (cause) qui en explique sans doute un autre."""
+    cause: Stat
+    direction: str      # le sens de l'écart de la cause
+    why: str            # WHY
+
+    def text(self) -> str:
+        kept = self.cause.check is not None and self.cause.check.verdict in KEPT  # la cause est un écart justifié
+        return (f"Lié à « {self.short()} » ({DIRECTION_WORDS[self.direction]}) : {WHY[self.why]} ; "
+                + ("ce n'est sans doute pas une fuite à part." if kept else "corrige d'abord celui-là."))
+
+    def short(self) -> str:
+        return f"{self.cause.section} · {self.cause.label}"
+
+
+def links(stats: list[Stat], scope: str = "reg") -> dict[str, list[Link]]:
+    """Les écarts de ces stats qui en expliquent sans doute d'autres : stat de la conséquence -> ses causes (Link)."""
+    seen = {s.key: (s, v[0]) for s in stats for v in [s.verdict(scope)] if v}
+    out: dict[str, list[Link]] = {}
+
+    def add(effect: str, direction: str, cause: Stat, cause_direction: str, why: str) -> None:
+        found = seen.get(effect)
+        if found and found[1] == direction and all(x.cause.key != cause.key for x in out.get(effect, [])):
+            out.setdefault(effect, []).append(Link(cause, cause_direction, why))
+
+    for key, (stat, direction) in seen.items():
+        base, _, situation = key.rpartition(":")
+        for cause, cause_dir, effect, effect_dir, why in CHAINS:
+            if base and situation == cause and direction == cause_dir:
+                add(f"{base}:{effect}", effect_dir, stat, direction, why)
+        for cause, cause_dir, effect, effect_dir, why in PREFLOP_LINKS:
+            if direction == cause_dir and fnmatch.fnmatchcase(key, cause):
+                for other in seen:
+                    if fnmatch.fnmatchcase(other, effect):
+                        add(other, effect_dir, stat, direction, why)
+    return out
+
+
 def rank(stats: list[Stat], groups: list[dict], analyzed: int, top: int = TOP,
          digests: Optional[list[dict]] = None, extra: Optional[list[Leak]] = None, scope: str = "reg") -> list[Leak]:
     """Les leaks à travailler, les grosses erreurs d'abord : les pertes confirmées (mesurées en jeu, face au fold ou au
@@ -583,7 +740,14 @@ def rank(stats: list[Stat], groups: list[dict], analyzed: int, top: int = TOP,
     by_key = {s.key: s for s in stats}
     leaks = [x for x in (_stat_leak(s, scope) for s in stats) if x] + list(extra or [])
     leaks += [x for x in (_solver_leak(g, analyzed, digests, by_key) for g in groups) if x]
-    leaks.sort(key=lambda x: (not x.confirmed, x.confidence != "solide", -x.weight))
+    found = links(stats, scope)
+    for x in leaks:
+        if x.key:
+            x.causes = found.get(x.key, [])
+            x.effects = [f"{by_key[effect].section} · {by_key[effect].label}" for effect, causes in found.items()
+                         if any(link.cause.key == x.key for link in causes)]
+    # un écart qui en explique sans doute un autre passe devant : corrigé, il corrige l'autre
+    leaks.sort(key=lambda x: (not x.confirmed, bool(x.causes), x.confidence != "solide", -x.weight))
     return leaks[:top]
 
 
@@ -657,7 +821,9 @@ def summary(report: Report) -> dict:
         "leaks": [{"titre": x.title, "preuve": x.evidence, "conseil": x.advice, "source": x.source,
                    "confiance": x.confidence, "main_la_plus_chere": x.example[0] if x.example else None,
                    **({"verifie_en_jeu": _check_summary(x.check)} if x.check else {}),
-                   **({"reserve": x.note} if x.note else {})}
+                   **({"reserve": x.note} if x.note else {}),
+                   **({"lie_a": [link.text() for link in x.causes]} if x.causes else {}),
+                   **({"entraine_sans_doute": x.effects} if x.effects else {})}
                   for x in report.leaks],
         "ecarts_qui_rapportent": [{"titre": x.title, "preuve": x.evidence, "conseil": x.advice,
                                    "verifie_en_jeu": _check_summary(x.check)} for x in report.exploits],
@@ -665,6 +831,10 @@ def summary(report: Report) -> dict:
                                      "verifie_en_jeu": _check_summary(x.check)} for x in report.opportunities],
         "stats": [{"section": s.section, "stat": s.label, "solveur_pct": None if s.reference is None else round(100 * s.reference),
                    **({"repere_pct": [round(100 * x) for x in s.band]} if s.band else {}),
+                   **({"a_ta_taille": {"solveur_a_sa_taille_pct": round(100 * s.raw),
+                                       "taille_du_solveur_pct_du_pot": round(100 * s.sizing[0]),
+                                       "ta_taille_pct_du_pot": round(100 * s.sizing[1]), "decisions": s.sizing[2],
+                                       "lecture": s.size_note()}} if s.sizing and s.raw is not None else {}),
                    **{f"{scope}_pct": pct(s.ratios[scope]) for scope, _ in scopes},
                    **{f"{scope}_n": s.ratios[scope].opps for scope, _ in scopes},
                    "ecart" if report.solver_scope == "all" else "ecart_reguliers":

@@ -216,7 +216,8 @@ class ReportRoutesTest(IsolatedHome):
         self.assertIn('filename="leakfinding.pdf"', resp.getheader("Content-Disposition"))
         self.assertTrue(data.startswith(b"%PDF"))
         self.assertEqual(self.get("/moi/rapport.pdf?format=ring")[0].status, 404)  # pas de table à plusieurs
-        self.assertIn(b'/moi/rapport.pdf" download>Synth', self.get("/moi/leaks")[1])
+        self.assertIn('/moi/rapport.pdf" download title="Deux pages : chiffres, leaks, écarts, mains à revoir">la '
+                      'synthèse PDF</a>', self.get("/moi/leaks")[1].decode())
 
     def test_pptx_route(self):
         resp, data = self.get("/moi/presentation.pptx")

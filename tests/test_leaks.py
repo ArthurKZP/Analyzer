@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from analyzer import leaks, students
-from analyzer.app.leaks_page import build_leaks_page
+from analyzer.app.leaks_page import _items, build_leaks_page
 from analyzer.parsers import load_hands
 from analyzer.stats import Ratio
 
@@ -72,6 +72,23 @@ class StatTest(unittest.TestCase):
         self.assertIsNone(band(16).verdict("all"))
         self.assertEqual((band(30).gap("all"), band(30).ref_text()), (0.12, "un repère de 14 à 18 %"))
 
+    def test_sized_reference(self):
+        """Une autre stratégie théorique n'est pas une fuite : sur-relancer gros et rarement, quand le solveur
+        sur-relance petit et souvent."""
+        def reraise():
+            return leaks.Stat("srp:reraise", "SRP", "BTN : Sur-relance face à une relance", "raise",
+                              {"all": Ratio(5, 50), "reg": Ratio(5, 50), "rec": Ratio()}, 0.47)
+        stat = reraise()
+        self.assertEqual(stat.verdict(), ("moins", "solide"))
+        leaks.sized(stat, 0.33, [1.64] * 4, "raise")  # ses sur-relances : 164 % du pot après le call, le solveur 33 %
+        self.assertIsNone(stat.verdict())  # à sa taille, le solveur sur-relance 9 % : comme lui
+        self.assertEqual((stat.raw, stat.ref_text()), (0.47, "9 % pour le solveur à ta taille"))
+        self.assertIn("le solveur le fait 47 % du temps à 33 % du pot ; tes relances font 164 % du pot en moyenne "
+                      "(4 fois)", stat.size_note())
+        few = reraise()
+        leaks.sized(few, 0.33, [1.64] * 2, "raise")  # deux sur-relances : trop peu pour dire sa taille
+        self.assertEqual((few.reference, few.sizing, few.ref_text()), (0.47, None, "47 % pour le solveur"))
+
     def test_top_gaps(self):
         flop = leaks.Stat("a", "SRP", "BTN : C-bet flop", "bet", {"reg": Ratio(30, 40)}, 0.5, per100=10, stake=2.0)
         river = leaks.Stat("b", "SRP", "BB : Fold face au 3e barrel", "fold", {"reg": Ratio(30, 40)}, 0.5, per100=10,
@@ -99,6 +116,49 @@ class StatTest(unittest.TestCase):
         self.assertIn("Tu foldes trop ici", solver.advice)
         preflop = next(x for x in ranked if x.source == "préflop")
         self.assertEqual(preflop.advice, "Trop large : resserre (onglet Préflop, les mains concernées).")
+
+
+class LinksTest(unittest.TestCase):
+    @staticmethod
+    def stat(key, section, label, kind, hits, ref):
+        return leaks.Stat(key, section, label, kind, {"all": Ratio(hits, 100), "reg": Ratio(hits, 100), "rec": Ratio()},
+                          ref, per100=20)
+
+    def test_preflop_explains_the_flop(self):
+        defend = self.stat("bb_vs_open.fold", "Préflop", "BB : fold face à l'open", "fold", 20, 0.40)  # trop large
+        folds = self.stat("srp:fold_flop", "SRP", "BB : Fold face à la c-bet", "fold", 50, 0.33)  # folde trop
+        turn = self.stat("srp:fold_turn", "SRP", "BB : Fold face au 2e barrel", "fold", 40, 0.40)  # comme la théorie
+        folds.per100 = 80  # plus lourd : passerait devant sans le lien
+        ranked = leaks.rank([folds, defend, turn], [], analyzed=0)
+        self.assertEqual([x.key for x in ranked], ["bb_vs_open.fold", "srp:fold_flop"])  # la cause d'abord
+        effect = ranked[1]
+        self.assertEqual([link.cause.key for link in effect.causes], ["bb_vs_open.fold"])
+        self.assertEqual(effect.causes[0].text(),
+                         "Lié à « Préflop · BB : fold face à l'open » (moins que la théorie) : ta range est plus "
+                         "faible à la street suivante : folder plus en découle ; corrige d'abord celui-là.")
+        self.assertEqual(ranked[0].effects, ["SRP · BB : Fold face à la c-bet"])
+        self.assertIn("Lié à « Préflop", effect.verified)
+        page = _items(ranked, "/moi", True)
+        self.assertIn("↳ Sans doute une conséquence de « Préflop · BB : fold face à l&#x27;open » : corrige d'abord "
+                      "celui-là.", page)
+        self.assertIn('<summary>Pourquoi ? Les preuves</summary>', page)  # le détail, replié
+        self.assertIn("Entraîne sans doute aussi : « SRP · BB : Fold face à la c-bet ».", page)
+        # dans l'autre sens (défend trop serré, folde trop face à la c-bet), rien ne les relie
+        tight = self.stat("bb_vs_open.fold", "Préflop", "BB : fold face à l'open", "fold", 60, 0.40)
+        self.assertEqual(leaks.links([tight, folds]), {})
+
+    def test_streets_and_ring(self):
+        calls = self.stat("srp_ip:defenseur:fold_flop", "SRP", "En défense : Fold face à la c-bet", "fold", 20, 0.33)
+        turn = self.stat("srp_ip:defenseur:fold_turn", "SRP", "En défense : Fold face au 2e barrel", "fold", 60, 0.40)
+        other = self.stat("srp_oop:defenseur:fold_turn", "SRP", "En défense : Fold face au 2e barrel", "fold", 60, 0.40)
+        wide = self.stat("pre:vs_open:BB:call", "Préflop · face à une ouverture", "BB : call", "call", 50, 0.30)
+        found = leaks.links([calls, turn, other, wide])
+        # même structure seulement d'une street à la suivante ; le call préflop trop large, dans toutes les structures
+        self.assertEqual({k: [x.cause.key for x in v] for k, v in found.items()},
+                         {"srp_ip:defenseur:fold_turn": ["srp_ip:defenseur:fold_flop"]})
+        folds = self.stat("srp_oop:defenseur:fold_flop", "SRP", "En défense : Fold face à la c-bet", "fold", 60, 0.33)
+        found = leaks.links([wide, folds])
+        self.assertEqual([x.cause.key for x in found["srp_oop:defenseur:fold_flop"]], ["pre:vs_open:BB:call"])
 
 
 class ReportTest(unittest.TestCase):
@@ -140,7 +200,8 @@ class ReportTest(unittest.TestCase):
         page = build_leaks_page(report, api="/api/leaks", pages="/moi", name="Paul", opponents=opponents,
                                 formats=[("HU", 4)])
         for text in ("Leakfinding de Paul", "Les leaks à travailler", "Ses stats face à la théorie", "Mains à revoir",
-                     "Télécharger le rapport", 'data-api="/api/leaks"', 'data-name="Villain"', 'data-query=""',
+                     "Exporter : ", ">la synthèse PDF</a>", 'class="fold" data-fold="stats"', 'data-api="/api/leaks"',
+                     'data-name="Villain"', 'data-query=""',
                      "Le détail : toutes ses stats", 'class="opp-q"', 'data-kind="rec" data-hands="2" data-net="-3.00"',
                      'data-last="2026-10-02"'):
             self.assertIn(text, page)

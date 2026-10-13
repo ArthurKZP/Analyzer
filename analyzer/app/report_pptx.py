@@ -332,7 +332,8 @@ def gaps_slide(deck: px.Presentation, s: Synthesis, number: int) -> bool:
     rows, heights = [head], [0.5]
     for stat, direction, confidence in found:
         r = stat.ratios[scope]
-        reference = (f"{round(100 * stat.reference)} %" if stat.reference is not None else
+        reference = (f"{round(100 * stat.reference)} %" + (" *" if stat.sizing else "")
+                     if stat.reference is not None else
                      f"{round(100 * stat.band[0])}–{round(100 * stat.band[1])} %" if stat.band else "–")
         label, size, _ = fit(stat.label, widths[0] - 0.2, 14, True, 1, 12)
         rows.append([
@@ -347,7 +348,8 @@ def gaps_slide(deck: px.Presentation, s: Synthesis, number: int) -> bool:
     slide.table(LEFT, 1.6, widths, rows, heights)
     who = "contre les réguliers" if scope == "reg" else "sur toutes tes mains"
     slide.text(LEFT, 1.6 + sum(heights) + 0.15, WIDTH, 0.3, [para(
-        f"Ta fréquence {who} (et le nombre d'occasions), face à la théorie. Orange : trop souvent ; bleu : pas assez.",
+        f"Ta fréquence {who} (et le nombre d'occasions), face à la théorie. Orange : trop souvent ; bleu : pas assez."
+        + (" * Ramené à ta taille (même volume de mise)." if any(st.sizing for st, _, _ in found) else ""),
         12, MUTED)], name="Légende")
     slide.notes = "\n".join(
         f"{st.label} ({st.section}) : {round(100 * st.ratios[scope].hits / st.ratios[scope].opps)} % contre "

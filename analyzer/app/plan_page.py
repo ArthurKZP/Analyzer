@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 from .. import field_plan, stakes
 from ..field import STYLES
-from ..report import cards_html, html_page, num
+from ..report import cards_html, fold, html_page, more, num
 from ..theory import coach, postflop, ring_ranges, studyspots
 
 STYLE = """
@@ -30,12 +30,15 @@ STYLE = """
   background: var(--surface); color: var(--ink); cursor: pointer; }
 .pl-fams button:last-child { border-right: 0; }
 .pl-fams button[aria-pressed="true"] { background: var(--series-1); color: #fff; }
-.pl-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.pl-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 10px 0; font-size: 14px; }
+.pl-head.pl-quiet { color: var(--muted); font-size: 12px; }
 .pl-head button { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
 .pl-head button.go { background: var(--series-1); border-color: var(--series-1); color: #fff; font-weight: 600; }
 .pl-status { font-size: 12px; color: var(--ink-2); }
 details.pl-chat > summary { cursor: pointer; margin-bottom: 8px; }
+details.pl-chat:not([open]) { padding-top: 10px; padding-bottom: 10px; }
+details.pl-chat:not([open]) > summary { margin-bottom: 0; padding: 0; }
 details.pl-group { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); margin: 10px 0; }
 details.pl-group > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; display: flex; gap: 10px;
   align-items: baseline; flex-wrap: wrap; }
@@ -608,11 +611,11 @@ def _mix_table(rule: dict, first: str) -> str:
             prio.append(f"<li><b>{escape(label)}</b> <span class=\"muted\">({escape(text)})</span> : "
                         f"{escape(_families_text(fams, facing))}</li>")
     who = "Qui défend d'abord" if facing else "Qui mise d'abord"
-    more = (f'<details class="pl-prio"><summary>{who}, dans chaque boîte d\'équité</summary>'
-            f'<ul class="rules">{"".join(prio)}</ul></details>' if prio else "")
+    box = (f'<details class="pl-prio"><summary>{who}, dans chaque boîte d\'équité</summary>'
+           f'<ul class="rules">{"".join(prio)}</ul></details>' if prio else "")
     return (f'<div class="scroll"><table class="stats pl-lv pl-mixes"><thead><tr><th>{_first_head(first)}</th>'
             f'<th>Taille</th><th>Toute la range</th>{head}<th class="num">Perte</th></tr></thead>'
-            f'<tbody>{"".join(rows)}</tbody></table></div>{more}')
+            f'<tbody>{"".join(rows)}</tbody></table></div>{box}')
 
 
 def _decision(rule: dict, sizes: dict, first: str) -> str:
@@ -697,9 +700,9 @@ def _suite(plan: dict, levels: dict, side: str, k: int, suites: list[dict]) -> s
         blocks.append(_street_block(titles[name], street, refined, same, k == 0, _street_of(name)))
     if not blocks:
         return ""
-    more = (" : les autres décisions de la main, selon la carte de la turn ou de la river, une taille par type de "
+    rest = (" : les autres décisions de la main, selon la carte de la turn ou de la river, une taille par type de "
             "carte ; la perte en % du pot de la street" if k == 0 else "")
-    return f'<p class="small" style="margin:10px 0 0"><b>La suite</b>{more}.</p>{"".join(blocks)}'
+    return f'<p class="small" style="margin:10px 0 0"><b>La suite</b>{rest}.</p>{"".join(blocks)}'
 
 
 # Affiner au solveur, par côté et façon : (ce qui est imposé, ce qui se relit, ce dont on mesure le coût, bouton)
@@ -790,13 +793,13 @@ def _boxes_note() -> str:
 
 def _levels_note(plan: dict, levels: dict) -> str:
     older = plan["levels"]["older"]
-    more = (f" {older} flop(s) lu(s) par une version d'avant n'y sont pas encore : <b>Préparer le plan</b> les relit."
+    extra = (f" {older} flop(s) lu(s) par une version d'avant n'y sont pas encore : <b>Préparer le plan</b> les relit."
             if older else "")
     return (f'<p class="note">Perte : ce que coûte la règle face à la stratégie du solveur, en % du pot par main de la '
             f'range (du pot de la street pour la suite), en moyenne sur les {levels["flops"]} flop(s) résolu(s) et '
             "lu(s), face à un adversaire qui joue la stratégie du solveur sans s'adapter (un adversaire qui s'adapte "
             "ferait payer un peu plus : l'affinage au solveur le mesure). Commence par le niveau 1 et passe au suivant "
-            f"quand il est acquis.{more}</p>")
+            f"quand il est acquis.{extra}</p>")
 
 
 def _levels_missing(plan: dict) -> str:
@@ -906,10 +909,11 @@ def _field_side(plan: dict, info: Optional[dict]) -> str:
 
 def _legend() -> str:
     groups = " ; ".join(f"<b>{escape(label)}</b> : {escape(text)}" for _, label, _, text in coach.GROUPS)
-    return (f'<p class="note">Les mains en quatre familles : {groups}. « Mélange » : le solveur joue les deux selon la '
-            'main exacte ; le pourcentage est sa fréquence de mise, suivie de sa taille la plus jouée. Taille préférée '
-            "(turn et river) : la taille la plus jouée à cette carte et sa part des mises, puis les autres. Un flop en "
-            "exemple ouvre son étude dans l'explorateur, pour entrer dans le détail.</p>")
+    return more("Comment lire ces règles", (
+        f"Les mains en quatre familles : {groups}. « Mélange » : le solveur joue les deux selon la main exacte ; le "
+        "pourcentage est sa fréquence de mise, suivie de sa taille la plus jouée. Taille préférée (turn et river) : la "
+        "taille la plus jouée à cette carte et sa part des mises, puis les autres. Un flop en exemple ouvre son étude "
+        "dans l'explorateur, pour entrer dans le détail."))
 
 
 def _family(plan: dict, field_info: Optional[dict] = None) -> str:
@@ -929,6 +933,10 @@ def _family(plan: dict, field_info: Optional[dict] = None) -> str:
     who, other = plan["who"], plan["other"]
     attack = "".join(_attack(plan, g) for g in plan["groups"])
     defense = "".join(_defense(plan, g) for g in plan["groups"])
+    flops = (f'<div class="card">{_table(plan)}<p class="note">Fold face à la c-bet : la défense '
+             f"{escape(_de(other))} ; équité : écart d'équité moyenne entre les deux ranges au flop, pour celui qui a "
+             "l'initiative ; nuts : écart de part de deux paires et mieux. Un clic ouvre le flop dans "
+             "l'explorateur.</p></div>")
     return f"""
 <p class="note">{escape(plan["label"])}. D'après <b>{plan["count"]}</b> flop(s) résolu(s) sur {total} dans la série ; plus
 il y en a, plus le plan est précis. {escape(_cap(who))} a l'initiative et attaque, {escape(other)} défend.</p>
@@ -953,11 +961,8 @@ il y en a, plus le plan est précis. {escape(_cap(who))} a l'initiative et attaq
 <div class="pl-side" data-side="field" hidden>
 {_field_side(plan, field_info)}
 </div>
-<h2>Les flops résolus</h2>
-<div class="card">{_table(plan)}
-<p class="note">Fold face à la c-bet : la défense {escape(_de(other))} ; équité : écart d'équité moyenne entre les deux
-ranges au flop, pour celui qui a l'initiative ; nuts : écart de part de deux paires et mieux. Un clic ouvre le flop dans
-l'explorateur.</p></div>
+{fold("Les flops résolus", flops, f"{plan['count']} flop(s) : stratégie, c-bet et taille, défense, avantages "
+                                   "d'équité et de nuts", "flops-" + plan["family"])}
 """
 
 
@@ -991,13 +996,12 @@ def build_coach_page(state: dict, embed: bool = True, villains: tuple = (), fiel
     missing = state.get("missing", 0)
     todo = (f"<b>{missing}</b> étude(s) à lire (ou à relire, pour chiffrer les niveaux du plan)" if missing
             else "Toutes les études sont lues.")
-    head = (f'<div class="card"><div class="pl-head" data-missing="{missing}">'
+    how = ("Chaque étude est ouverte une fois pour lire ses stratégies (une vingtaine de secondes en pot 4bet, un peu "
+           "plus d'une minute en SRP sur 4 cœurs) ; une étude résolue à partir de maintenant est lue tout de suite.")
+    head = (f'<div class="pl-head{"" if missing else " pl-quiet"}" data-missing="{missing}" title="{escape(how)}">'
             f'<span>{todo}</span>'
             f'<button type="button" class="go pl-run"{" hidden" if not missing else ""}>Préparer le plan</button>'
-            '<button type="button" class="pl-stop" hidden>Arrêter</button><span class="pl-status"></span></div>'
-            '<p class="note">Chaque étude est ouverte une fois pour lire ses stratégies (une vingtaine de secondes en '
-            'pot 4bet, un peu plus d\'une minute en SRP sur 4 cœurs) ; une étude résolue à partir de maintenant est '
-            'lue tout de suite.</p></div>')
+            '<button type="button" class="pl-stop" hidden>Arrêter</button><span class="pl-status"></span></div>')
     field = field or {}
     sections = "".join(f'<section class="pl-fam" data-fam="{p["family"]}" hidden>'
                        f'{_family(p, field.get("ring" if p["ring"] else "HU"))}</section>' for p in plans)
@@ -1008,16 +1012,16 @@ def build_coach_page(state: dict, embed: bool = True, villains: tuple = (), fiel
         suggestions.insert(1, f"Résume-moi le plan de jeu {ring['title']}")
     suggestions += [q.format(v=v) for v in villains[:1] for q in ("Comment exploiter {v} ?",
                                                                     "Dans quelles lignes {v} bluffe-t-il ?")]
-    chat = (f'<details class="card pl-chat" open><summary><b>Discuter avec le coach</b> '
+    chat = (f'<details class="card pl-chat"><summary><b>Discuter avec le coach</b> '
             '<span class="muted">· il lit tes études, ton plan de jeu et les écarts de tes adversaires</span></summary>'
             f'<div id="coach-box" data-suggestions="{escape(json.dumps(suggestions, ensure_ascii=False))}"></div></details>'
             '<link rel="stylesheet" href="/static/coach.css"><script src="/static/coach.js"></script>')
     body = f"""
 <div class="meta">Un plan de jeu simple, du flop à la river, tiré des études résolues : ce que le solveur fait, regroupé
-en règles qu'un humain peut appliquer. En heads-up et aux tables à plusieurs (6-max, avec tes charts).</div>
+en règles qu'un humain peut appliquer.</div>
+<div class="pl-switch" role="group" aria-label="Format et type de pot">{tabs}</div>
 {head}
 {chat}
-<div class="pl-switch" role="group" aria-label="Format et type de pot">{tabs}</div>
 {sections}
 """
     return html_page("Plan de jeu suggéré", f"<style>{STYLE}</style>{body}", embed, script=SCRIPT)

@@ -28,7 +28,8 @@ from typing import Optional
 from urllib.parse import urlencode
 
 from . import handplay, leakcheck, ring
-from .leaks import HAND_LEAKS, POT_STAKE, SCOPES, Pick, Report, Stat, _hand_leak, chances, kept, rank, street_stake
+from .leaks import (HAND_LEAKS, POT_STAKE, SCOPES, Pick, Report, Stat, _hand_leak, chances, kept, rank, sized,
+                    street_stake)
 from .models import BET, CALL, FOLD, RAISE, VOLUNTARY, Hand
 from .stats import HandReader, Ratio
 from .theory import coach, exploit, postflop, review, studyspots
@@ -211,11 +212,12 @@ def preflop_stats(plays: list[handplay.Played], scope_of: dict[str, str], totals
 
 # --- 2. Après le flop, face aux plans de jeu des flops 6-max -----------------------------------------------------
 
-def _baselines(families: list[str], role: str) -> dict[str, tuple[float, int]]:
-    """Le repère du solveur de chaque situation : la moyenne des plans de jeu des flops résolus de ces familles."""
+def _baselines(families: list[str], role: str, read=None) -> dict[str, tuple[float, int]]:
+    """Le repère du solveur de chaque situation : la moyenne des plans de jeu des flops résolus de ces familles (read :
+    exploit.size_baselines pour ses tailles ; par défaut, exploit.baselines)."""
     sums: dict[str, list[float]] = {}
     for family in families:
-        for key, (value, flops) in exploit.baselines(family, role).items():
+        for key, (value, flops) in (read or exploit.baselines)(family, role).items():
             acc = sums.setdefault(key, [0.0, 0])
             acc[0] += value * flops
             acc[1] += flops
@@ -226,12 +228,18 @@ def postflop_stats(hands: list[Hand], hero: str, pots: dict[str, Pot], scope_of:
     """Ses fréquences dans les pots à deux au flop, par structure de pot et par rôle, dans chaque portée, face aux plans
     de jeu des flops 6-max résolus de même structure."""
     seen: dict[tuple[str, str, str], exploit.Ratios] = {}
+    sizes: dict[tuple[str, str], dict[str, list[float]]] = {}  # ses tailles (toutes ses mains), par structure et rôle
     for h in hands:
         pot = pots.get(h.hand_id)
         if pot is None:
             continue
         role = "agresseur" if hero == pot.aggressor else "defenseur"
-        events = HandReader(_view(h, pot)).events.get(hero, [])
+        reader = HandReader(_view(h, pot))
+        events = reader.events.get(hero, [])
+        families = _families(pot.structure)
+        if families:
+            exploit.sizes(reader.spots.get(hero, []), exploit.situations(families[0], role),
+                          sizes.setdefault((pot.structure, role), {}))
         for scope in ("all", scope_of.get(h.hand_id, "reg")):
             st = seen.setdefault((pot.structure, role, scope), exploit.Ratios())
             for key, made in events:
@@ -244,6 +252,8 @@ def postflop_stats(hands: list[Hand], hero: str, pots: dict[str, Pot], scope_of:
             if (structure, role, "all") not in seen:
                 continue
             base = _baselines(families, role)
+            theory = _baselines(families, role, exploit.size_baselines)
+            mine = sizes.get((structure, role), {})
             for s in exploit.situations(families[0], role):
                 ratios = {scope: Ratio(*exploit.tally(seen.get((structure, role, scope), exploit.Ratios()), s))
                           for scope, _ in SCOPES}
@@ -254,12 +264,14 @@ def postflop_stats(hands: list[Hand], hero: str, pots: dict[str, Pot], scope_of:
                     note = f"pas encore de repère du solveur : résous des flops 6-max ({pairs})"
                 else:
                     note = f"repère tiré de {flops} flop(s) résolu(s) : {pairs}" if flops < exploit.MIN_FLOPS else ""
-                out.append(Stat(f"{structure}:{role}:{s.key}", title, f"{ROLES[role]} : {s.label}",
-                                "bet" if s.measure == "bet" else s.measure, ratios, ref, note,
-                                per100=100 * ratios["all"].opps / max(len(hands), 1),
-                                fragile=ref is not None and flops < exploit.MIN_FLOPS,
-                                stake=street_stake(s.stats[0]) * POT_STAKE[structure.split("_")[0]],
-                                link=(f"plan#famille={families[0]}", "Voir le plan de jeu 6-max")))
+                stat = Stat(f"{structure}:{role}:{s.key}", title, f"{ROLES[role]} : {s.label}",
+                            "bet" if s.measure == "bet" else s.measure, ratios, ref, note,
+                            per100=100 * ratios["all"].opps / max(len(hands), 1),
+                            fragile=ref is not None and flops < exploit.MIN_FLOPS,
+                            stake=street_stake(s.stats[0]) * POT_STAKE[structure.split("_")[0]],
+                            link=(f"plan#famille={families[0]}", "Voir le plan de jeu 6-max"))
+                sized(stat, theory.get(s.key, (None, 0))[0], mine.get(s.key, []), s.measure)
+                out.append(stat)
     return out
 
 

@@ -11,7 +11,7 @@ from typing import Optional
 from urllib.parse import quote
 
 from .. import leaks
-from ..report import cards_html, format_query, format_switch, html_page, num
+from ..report import cards_html, fold, format_query, format_switch, html_page, more, num
 from ..selfreport import OPP_SCRIPT, OPP_STYLE, opponent_row_data, opponent_tools
 from ..theory import review, studyspots
 from .review_page import STYLE as REVIEW_STYLE
@@ -32,6 +32,7 @@ table.lk td.dim, table.lk span.n { color: var(--muted); font-size: 12px; }
 table.lk td.small { font-size: 12px; color: var(--ink-2); }
 table.lk .where { display: block; font-size: 11px; color: var(--muted); }
 .lk-dl { font-weight: 600; }
+.lk-exp { margin: 10px 0 0; color: var(--muted); }
 details.lk-all { margin: 14px 0 0; }
 details.lk-all > summary { font-weight: 600; }
 details.lk-all > .inner-body { padding: 12px 16px; }
@@ -42,6 +43,7 @@ details.lk-all > .inner-body { padding: 12px 16px; }
 .lk-v.exploit { color: var(--good); font-weight: 600; }
 .lk-v.plan { color: var(--series-1); font-weight: 600; }
 .lk-v.lk-n { font-style: italic; }
+.lk-l { font-size: 13px; margin-top: 4px; color: var(--series-1); }
 .lk-p { margin: 2px 0 0; padding-left: 18px; font-size: 12px; color: var(--ink-2); }
 .lk-p li { margin: 1px 0; }
 .lk-b { display: inline-block; font-size: 11px; border-radius: 999px; padding: 0 7px; border: 1px solid var(--axis);
@@ -139,7 +141,8 @@ def _example(leak: leaks.Leak, standalone: bool) -> str:
 
 
 def _verified(leak: leaks.Leak) -> str:
-    """Ce que la vérification en jeu en dit (leakcheck), ses preuves, et une éventuelle réserve."""
+    """Ce que la vérification en jeu en dit (leakcheck), ses preuves, une éventuelle réserve et pourquoi l'écart est lié
+    à un autre : le détail d'un leak, replié sous « Pourquoi ? »."""
     out = ""
     if leak.check is not None:
         out += f'<div class="lk-v {_class(leak.check)}">{escape(leak.check.summary)}</div>'
@@ -147,18 +150,37 @@ def _verified(leak: leaks.Leak) -> str:
             out += '<ul class="lk-p">' + "".join(f"<li>{escape(p)}</li>" for p in leak.check.proofs) + "</ul>"
     if leak.note:
         out += f'<div class="lk-v lk-n">{escape(leak.note)}</div>'
+    for link in leak.causes:
+        out += f'<div class="lk-v">{escape(link.text())}</div>'
     return out
 
 
-def _items(found: list[leaks.Leak], pages: str, standalone: bool, badge: bool = False) -> str:
+def _related(leak: leaks.Leak) -> str:
+    """Les leaks liés, en une ligne chacun : ce qui l'explique sans doute, ce qu'il entraîne sans doute."""
+    out = ""
+    for link in leak.causes:
+        kept = link.cause.check is not None and link.cause.check.verdict in leaks.KEPT
+        then = "ce n'est sans doute pas une fuite à part" if kept else "corrige d'abord celui-là"
+        out += f'<div class="lk-l">↳ Sans doute une conséquence de « {escape(link.short())} » : {then}.</div>'
+    if leak.effects:
+        out += ('<div class="lk-l">Entraîne sans doute aussi : '
+                + escape(", ".join(f"« {x} »" for x in leak.effects)) + '.</div>')
+    return out
+
+
+def _items(found: list[leaks.Leak], pages: str, standalone: bool, badge: bool = True) -> str:
+    """Les leaks, l'essentiel visible (le titre, la preuve en une ligne, le conseil) ; la vérification en jeu, ses
+    preuves et la main la plus chère sous « Pourquoi ? »."""
     drills = {} if standalone else _drills()
-    return "".join(
-        f'<li><div class="lk-t">{escape(x.title)} {_conf(x.confidence)}'
-        f'{f" {_badge(x.check)}" if badge and x.check else ""}</div>'
-        f'<div class="lk-e">{escape(x.evidence)}</div>{_verified(x)}'
-        f'<div class="lk-a">→ {escape(x.advice)}{_leak_link(x, pages, drills, standalone)}</div>'
-        f'{_example(x, standalone)}</li>'
-        for x in found)
+    out = []
+    for x in found:
+        detail = _verified(x) + _example(x, standalone)
+        out.append(f'<li><div class="lk-t">{escape(x.title)} {_conf(x.confidence)}'
+                   f'{f" {_badge(x.check)}" if badge and x.check else ""}</div>'
+                   f'<div class="lk-e">{escape(x.evidence)}</div>'
+                   f'<div class="lk-a">→ {escape(x.advice)}{_leak_link(x, pages, drills, standalone)}</div>'
+                   f'{_related(x)}{more("Pourquoi ? Les preuves", detail) if detail else ""}</li>')
+    return "".join(out)
 
 
 def leaks_html(report: leaks.Report, pages: str, standalone: bool) -> str:
@@ -177,8 +199,12 @@ def kept_html(report: leaks.Report, pages: str, standalone: bool) -> str:
             "ses mises, ce que ses mains jouées en plus ont rapporté), que les réponses de ses adversaires justifient, "
             "ou qui suivent le plan de jeu suggéré : ce ne sont pas des fuites. À surveiller : si ses adversaires "
             "s'adaptent, la théorie redevient la référence.")
-    return (f'<h2>Les écarts justifiés</h2><div class="card"><ul class="lk-list">'
-            f'{_items(report.exploits, pages, standalone, badge=True)}</ul><p class="note">{escape(note)}</p></div>')
+    n = len(report.exploits)
+    how = more("Comment c'est vérifié", escape(note))
+    items = _items(report.exploits, pages, standalone)
+    return fold("Les écarts justifiés", f'<div class="card"><ul class="lk-list">{items}</ul>{how}</div>',
+                f"{n} écart{'s' if n > 1 else ''} à la théorie qui rapporte{'nt' if n > 1 else ''} ou suit le plan "
+                "de jeu : à garder", "justifies")
 
 
 def chances_html(report: leaks.Report, pages: str, standalone: bool) -> str:
@@ -189,9 +215,12 @@ def chances_html(report: leaks.Report, pages: str, standalone: bool) -> str:
             "relances, comparé à celui de la théorie, rend un écart rentable. Le gain est chiffré pour 10 points de "
             "fréquence en plus (ou en moins) ; il baisse à mesure qu'on s'écarte, les mains ajoutées étant les plus "
             "faibles.")
-    return (f'<h2>Les exploitations possibles</h2><div class="card"><ul class="lk-list">'
-            f'{_items(report.opportunities, pages, standalone, badge=True)}</ul><p class="note">{escape(note)}</p>'
-            '</div>')
+    n = len(report.opportunities)
+    how = more("Comment c'est chiffré", escape(note))
+    items = _items(report.opportunities, pages, standalone)
+    return fold("Les exploitations possibles", f'<div class="card"><ul class="lk-list">{items}</ul>{how}</div>',
+                f"{n} situation{'s' if n > 1 else ''} où ses adversaires réagissent mal à son jeu théorique",
+                "exploitations")
 
 
 CLASSES = {"exploit": "exploit", "fuite": "fuite", "plan": "plan", "opportunité": "chance"}
@@ -209,6 +238,9 @@ def _badge(check) -> str:
 
 def _reference(s: leaks.Stat) -> str:
     if s.reference is not None:
+        if s.sizing:  # ramené à sa taille : le détail au survol
+            return (f'{round(100 * s.reference)} % <span class="n" title="{escape(s.size_note())}">'
+                    f'{escape(s.size_text())}</span>')
         return f"{round(100 * s.reference)} %"
     if s.band is not None:
         return f"{round(100 * s.band[0])}–{round(100 * s.band[1])} %"
@@ -221,10 +253,10 @@ def _shows_verdict(report: leaks.Report, scope: str) -> bool:
     return scope != "all" or report.solver_scope == "all"
 
 
-def gaps_table(found: list, scope: str, who: str) -> str:
+def gaps_table(found: list, scope: str, who: str, related: Optional[dict] = None) -> str:
     """Le tableau des écarts les plus importants (leaks.top_stat_gaps) : sa fréquence, la théorie, l'écart, la
     confiance, ce qu'en dit la vérification en jeu (quand elle a été faite) et ce qu'il faut faire ; who : l'en-tête de
-    sa colonne."""
+    sa colonne ; related : les écarts qui en expliquent d'autres (leaks.links)."""
     checked = any(leaks._checked(s, scope) is not None for s, _, _ in found)
     rows = []
     for s, direction, confidence in found:
@@ -232,6 +264,9 @@ def gaps_table(found: list, scope: str, who: str) -> str:
         gap = round(100 * s.gap(scope))
         check = leaks._checked(s, scope)
         advice = leaks.gap_advice(s, direction, scope)
+        causes = (related or {}).get(s.key)
+        if causes:
+            advice += " — lié à « " + " », « ".join(x.short() for x in causes) + " » : corrige d'abord celui-là"
         note = f' <span class="n" title="{escape(s.note)}">*</span>' if s.note else ""
         played = f'<td>{_badge(check) if check is not None else ""}</td>' if checked else ""
         rows.append(f'<tr><td>{escape(s.label)}<span class="where">{escape(s.section)}</span></td>'
@@ -252,7 +287,8 @@ def gaps_html(report: leaks.Report) -> str:
         return ('<p class="muted">Aucun écart net à la théorie pour l\'instant : pas assez d\'occasions, ou des fréquences '
                 'proches de la théorie. Le détail de ses stats est plus bas.</p>')
     who = "Contre réguliers" if report.solver_scope == "reg" else "Ses mains"
-    return f'<h3>Les écarts les plus importants</h3>{gaps_table(found, report.solver_scope, who)}'
+    related = leaks.links(report.stats, report.solver_scope)
+    return f'<h3>Les écarts les plus importants</h3>{gaps_table(found, report.solver_scope, who, related)}'
 
 
 def stats_html(report: leaks.Report) -> str:
@@ -341,12 +377,12 @@ def _head(report: leaks.Report, api: str) -> str:
 
 def opponents_html(opponents: list[dict], ring: bool = False, title: str = "Tes adversaires",
                    result: str = "Ton résultat", pick: bool = False,
-                   groups: Optional[dict[str, list[str]]] = None) -> str:
+                   groups: Optional[dict[str, list[str]]] = None, folded: bool = False) -> str:
     """Les adversaires du joueur et leur type, réglable : il décide quelles mains comptent pour les leaks. Recherche par
     nom, filtre par type, tri par mains, résultat ou date. ring : ceux des tables à plusieurs (mains à la même table,
     résultat dans les pots disputés ensemble) ; result : la colonne du résultat du joueur contre chacun (« Ton
     résultat », « Résultat de Paul ») ; pick : une case à cocher par joueur (pour les regrouper sous un alias) ;
-    groups : les alias et leurs pseudos ({alias: [pseudos]}), signalés à côté du nom."""
+    groups : les alias et leurs pseudos ({alias: [pseudos]}), signalés à côté du nom ; folded : une section repliée."""
     if not opponents:
         return ""
     names = {"reg": "Régulier", "rec": "Récréatif"}
@@ -379,9 +415,14 @@ def opponents_html(opponents: list[dict], ring: bool = False, title: str = "Tes 
             "Le type décide quelles mains comptent pour les leaks (seulement contre les réguliers). Sans choix, une "
             "suggestion d'après les stats de l'adversaire.")
     first = '<th class="al-cell"></th>' if pick else ""
-    return (f'<h2>{escape(title)}</h2><div class="card opp-box">{tools}<div class="scroll"><table class="stats opp-table">'
+    card = (f'<div class="card opp-box">{tools}<div class="scroll"><table class="stats opp-table">'
             f'<thead><tr>{first}<th data-sort="name">Adversaire</th>{head}<th>Type</th></tr></thead><tbody>'
             + "".join(rows) + f'</tbody></table></div><p class="note">{escape(note)}</p></div>')
+    if folded:
+        recs = sum(o.get("kind") == "rec" for o in opponents)
+        return fold(title, card, f"{len(opponents)} adversaire{'s' if len(opponents) > 1 else ''}, dont {recs} "
+                    f"récréatif{'s' if recs > 1 else ''} : leur type décide quelles mains comptent", "adversaires")
+    return f'<h2>{escape(title)}</h2>{card}'
 
 
 def _tiles(report: leaks.Report) -> str:
@@ -432,12 +473,13 @@ def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = T
     fmt = report.table_format
     query = escape(format_query(fmt))
     download = "" if standalone else (
-        f'<p><a class="lk-dl" href="{escape(pages)}/rapport{query}" download>Télécharger le rapport</a> '
-        '<span class="muted small">(page autonome à envoyer, sans les boutons de l\'application)</span> · '
-        f'<a class="lk-dl" href="{escape(pages)}/rapport.pdf{query}" download>Synthèse PDF</a> '
-        '<span class="muted small">(deux pages : chiffres, leaks, écarts, mains à revoir)</span>'
-        + (f' · <a class="lk-dl" href="{escape(pages)}/presentation.pptx{query}" download>Présentation PowerPoint</a> '
-           '<span class="muted small">(pour la séance avec l\'élève, avec les notes du coach)</span>'
+        '<p class="lk-exp small">Exporter : '
+        f'<a class="lk-dl" href="{escape(pages)}/rapport{query}" download '
+        'title="Page autonome à envoyer, sans les boutons de l\'application">le rapport</a> · '
+        f'<a class="lk-dl" href="{escape(pages)}/rapport.pdf{query}" download '
+        'title="Deux pages : chiffres, leaks, écarts, mains à revoir">la synthèse PDF</a>'
+        + (f' · <a class="lk-dl" href="{escape(pages)}/presentation.pptx{query}" download '
+           'title="Pour la séance avec l\'élève, avec les notes du coach">la présentation PowerPoint</a>'
            if name is not None else "") + '</p>')
     solver = (_situations_table(report.review["digests"], "H", False) + "<h3>Ses décisions les plus chères</h3>"
               + _costly_table(report.review["digests"], "H", True))
@@ -489,30 +531,47 @@ def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = T
                  'son avis ; contre les récréatifs, elles sont à revoir à la main.</p></div>')
     rec = "".join(f"<li>{escape(n)}</li>" for n in report.rec_notes)
     count = len(report.stats)
+    gaps = leaks.top_gaps(report)
+    solid = sum(conf == "solide" for _, _, conf in gaps)
+    rv = report.review
+    reviewed = {scope: len(report.picks.get(scope, [])) for scope in ("reg", "rec")}
+    s_ = lambda n: "s" if n > 1 else ""  # noqa: E731  (le pluriel)
+    stats_part = fold(
+        "Ses stats face à la théorie",
+        f'<div class="card">{gaps_html(report)}<details class="lk-all"><summary>Le détail : toutes ses stats '
+        f'({count} situation{s_(count)})</summary><div class="inner-body">{info_html(report)}{stats_html(report)}'
+        f'</div></details><p class="note">{theory_note}</p></div>',
+        f"{len(gaps)} écart{s_(len(gaps))} net{s_(len(gaps))}, dont {solid} solide{s_(solid)}, sur {count} "
+        f"situation{s_(count)} mesurée{s_(count)}", "stats")
+    solver_part = fold(
+        solver_title,
+        f'<div class="card">{"" if standalone else _head(report, api)}{solver}<p class="note">{solver_note}</p></div>',
+        f"{rv['analyzed']} main{s_(rv['analyzed'])} analysée{s_(rv['analyzed'])}, {escape(num(rv['lost'], 1))} bb "
+        f"perdus en {rv['decisions']} décision{s_(rv['decisions'])}", "solveur")
+    picks_part = fold("Mains à revoir", picks, f"{reviewed['reg']} contre les réguliers, {reviewed['rec']} contre les "
+                      "récréatifs : les plus gros pots de chaque ligne", "mains")
+    notes = len(report.rec_notes)
+    rec_part = fold("Contre les récréatifs", f'<div class="card"><ul>{rec}</ul></div>',
+                    f"{notes} piste{s_(notes)} d'exploitation", "recreatifs") if rec else ""
+    opponents_part = "" if standalone else opponents_html(
+        opponents or [], ring, *(("Tes adversaires", "Ton résultat") if name is None else
+                                 ("Ses adversaires", f"Résultat de {who}")), folded=True)
     body = f"""
 <div class="meta">{meta}{f" <b>{escape(period)}</b>" if period else ""}</div>
 {"" if standalone else format_switch(formats or [], fmt)}
-{download}
 {_tiles(report)}
 {_hints(report, standalone)}
 <h2>Les leaks à travailler</h2>
 <div class="card">{leaks_html(report, pages, standalone)}
-<p class="note">{escape(leaks_note)}</p></div>
+{more("Comment ils sont classés et vérifiés", escape(leaks_note))}</div>
+{download}
 {kept_html(report, pages, standalone)}
 {chances_html(report, pages, standalone)}
-<h2>Ses stats face à la théorie</h2>
-<div class="card">{gaps_html(report)}
-<details class="lk-all"><summary>Le détail : toutes ses stats ({count} situation{"s" if count > 1 else ""})</summary>
-<div class="inner-body">{info_html(report)}{stats_html(report)}</div></details>
-<p class="note">{theory_note}</p></div>
-<h2>{solver_title}</h2>
-<div class="card">{"" if standalone else _head(report, api)}{solver}
-<p class="note">{solver_note}</p></div>
-<h2>Mains à revoir</h2>
-{picks}
-{f'<h2>Contre les récréatifs</h2><div class="card"><ul>{rec}</ul></div>' if rec else ""}
-{"" if standalone else opponents_html(opponents or [], ring, *(("Tes adversaires", "Ton résultat") if name is None
-                                                                else ("Ses adversaires", f"Résultat de {who}")))}
+{stats_part}
+{solver_part}
+{picks_part}
+{rec_part}
+{opponents_part}
 """
     style = f"<style>{REVIEW_STYLE}{STYLE}{OPP_STYLE}</style>"
     title = f"Leakfinding tables à plusieurs — {who}" if ring else f"Leakfinding — {who}"

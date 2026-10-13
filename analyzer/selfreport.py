@@ -11,7 +11,8 @@ from .leaks import street_stake
 from .lines import hero_fold_holdings
 from .models import Hand
 from .players import KINDS
-from .report import SCRIPT, chart_svg, findings_html, html_page, legend, nonshowdown_html, num, pct_cell, tiles
+from .report import (SCRIPT, chart_svg, findings_html, fold, html_page, legend, more, nonshowdown_html, num, pct_cell,
+                     tiles)
 from .stats import PlayerStats, allin_ev
 
 TOP_FINDINGS = 5  # écarts mis en avant ; les autres viennent ensuite, repliés
@@ -240,6 +241,18 @@ def self_stat_tables(ps: PlayerStats) -> str:
     return '<div class="grid2">' + "".join(out) + "</div>"
 
 
+CURVE_NOTE = ("« EV all-in » remplace le résultat réel des all-in payés avant la river par ton espérance : l'écart "
+              "mesure la chance. Rake payé : ta part du rake de chaque pot, au prorata de ce que tu y as mis (la "
+              "méthode des sites pour le rakeback) ; tes résultats en sont déjà nets, « avant rake » le leur rajoute.")
+GAPS_NOTE = (f"Les {TOP_FINDINGS} écarts aux repères qui comptent le plus : les nets d'abord (le hasard ne les "
+             "explique pas), puis selon la taille de l'écart, la fréquence de la situation et ce qu'elle met en jeu "
+             "(le pot grossit à chaque street). Le détail de toutes tes stats suit. Repères indicatifs pour un "
+             "régulier HU solide à 100bb+, tous adversaires confondus.")
+STATS_LEGEND = ('<div class="legend-dev"><span><i style="background:var(--hi-bg)"></i>au-dessus du repère</span>'
+                '<span><i style="background:var(--lo-bg)"></i>en dessous du repère</span>'
+                '<span><b>gras</b> = écart net</span></div>')
+
+
 def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str,
                       embed: bool = False, spots_href: str = "spots", kinds: Optional[dict] = None,
                       head: str = "") -> str:
@@ -267,6 +280,11 @@ def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: st
     heading = "" if embed else f"<h1>Mon jeu — {escape(hero)}</h1>"
     spots = f' · <a href="{escape(spots_href)}">Mes spots</a>' if spots_href else ""
     tools = opponent_tools(with_kind=bool(kinds)) if len(results) > 1 else ""
+    opponents_box = (f'<div class="card opp-box">{tools}<div class="scroll"><table class="stats opp-table"><thead><tr>'
+                     '<th data-sort="name">Adversaire</th><th>Type</th><th class="num" data-sort="hands">Mains</th>'
+                     '<th class="num" data-sort="net">Résultat (bb)</th><th class="num" data-sort="bb100">bb/100</th>'
+                     '<th class="num">EV all-in (bb)</th><th class="num">€</th><th data-sort="last">Période</th></tr>'
+                     f'</thead><tbody>{rows}</tbody></table></div></div>')
     body = f"""{heading}<style>{OPP_STYLE}</style>
 <div class="meta">{len(hands)} mains · {len(results)} adversaire(s) · {period}{spots}</div>
 {head}
@@ -274,29 +292,20 @@ def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: st
 
 <h2>Résultat cumulé (bb)</h2>
 <div class="card">{legend(h.curve)}{chart_svg(h.curve)}
-<p class="note">« EV all-in » remplace le résultat réel des all-in payés avant la river par ton espérance : l'écart mesure la chance.
-Rake payé : ta part du rake de chaque pot, au prorata de ce que tu y as mis (la méthode des sites pour le rakeback) ;
-tes résultats en sont déjà nets, « avant rake » le leur rajoute.</p></div>
+{more("Comment c'est calculé", CURVE_NOTE)}</div>
 
 <h2>Tes écarts les plus importants</h2>
 <div class="card">{priorities_html(h, len(hands), folds=hero_fold_holdings(hands, hero))}
-<p class="note">Les {TOP_FINDINGS} écarts aux repères qui comptent le plus : les nets d'abord (le hasard ne les explique pas),
-puis selon la taille de l'écart, la fréquence de la situation et ce qu'elle met en jeu (le pot grossit à chaque street).
-Le détail de toutes tes stats suit.</p></div>
+{more("Comment ils sont choisis", GAPS_NOTE)}</div>
 
-<h2>Tes statistiques</h2>
-<div class="legend-dev"><span><i style="background:var(--hi-bg)"></i>au-dessus du repère</span><span><i style="background:var(--lo-bg)"></i>en dessous du repère</span><span><b>gras</b> = écart net</span></div>
-{self_stat_tables(h)}
+{fold("Tes statistiques", STATS_LEGEND + self_stat_tables(h), "préflop, postflop et abattage, face aux repères",
+      "stats")}
 
-<h2>Résultats par adversaire</h2>
-{by_kind_html(results, kinds)}
-<div class="card opp-box">{tools}<div class="scroll"><table class="stats opp-table"><thead><tr><th data-sort="name">Adversaire</th><th>Type</th>
-<th class="num" data-sort="hands">Mains</th><th class="num" data-sort="net">Résultat (bb)</th><th class="num" data-sort="bb100">bb/100</th>
-<th class="num">EV all-in (bb)</th><th class="num">€</th><th data-sort="last">Période</th></tr></thead><tbody>{rows}</tbody></table></div></div>
+{fold("Résultats par adversaire", by_kind_html(results, kinds) + opponents_box,
+      f"{len(results)} adversaire{'s' if len(results) > 1 else ''}", "adversaires")}
 
-<h2>Où partent tes bb sans abattage</h2>
-{nonshowdown_html(hands, hero)}
+{fold("Où partent tes bb sans abattage", nonshowdown_html(hands, hero),
+      "les mains finies sans abattage, ce que tu as quand tu checkes, tes folds turn et river", "sans-abattage")}
 
-<p class="note">Tous adversaires confondus. Repères indicatifs pour un régulier HU solide à 100bb+.</p>
 """
     return html_page(f"Mon jeu — {hero}", body, embed, script=SCRIPT + (OPP_SCRIPT if tools else ""))

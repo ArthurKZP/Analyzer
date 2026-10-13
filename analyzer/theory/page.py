@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 from urllib.parse import quote
 
 from ..models import Hand
-from ..report import cards_html, html_page, num
+from ..report import cards_html, fold, html_page, num
 from ..stats import PlayerStats
 from .extract import RANKS, hand_at
 from .preflop import (
@@ -370,15 +370,15 @@ def build_preflop_page(hands: list[Hand], hero: str, villain: Optional[str] = No
     for s in summaries:
         if not s.decisions:
             continue
-        nodes_html.append(f"""
-<h2>{escape(s.node.label)} <span class="muted" style="font-size:14px;font-weight:400">— {len(s.decisions)} décisions</span></h2>
-<div class="node-grid">
+        n, bad = len(s.decisions), s.verdicts[DEVIATION]
+        count = f"{n} décision{'s' if n > 1 else ''}" + (f", {bad} écart{'s' if bad > 1 else ''}" if bad else "")
+        nodes_html.append(fold(s.node.label, f"""<div class="node-grid">
   <div class="card">{grid_html(s.node, solution, s.by_hand())}</div>
   <div class="card"><h3>Fréquences</h3>{frequency_table(s)}
     <p class="note">« Mêmes mains » : ce qu'aurait fait le solveur avec exactement les mains que tu avais ici.
     Les mains hors range (que le solveur n'amène jamais ici) sont exclues.</p>
     <h3 style="margin-top:16px">Écarts</h3>{deviations_html(s, spots_href)}</div>
-</div>""")
+</div>""", count + " : la grille, tes fréquences et tes écarts main par main", s.node.key))
 
     note_html = f'<div class="card"><p class="note" style="margin:0">{escape(note)}</p></div>' if note else ""
     if not compare_hero:

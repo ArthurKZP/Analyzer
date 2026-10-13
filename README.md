@@ -33,6 +33,11 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   filtre sont gardés d'une visite à l'autre), avec le nombre de mains et ton résultat contre chacun : ceux du
   heads-up (leur fiche) ou, au choix *Heads-up* / *À plusieurs*, ceux des tables à plusieurs vus au moins 10 mains
   (leur fiche de l'Étude du field).
+- **Lecture des pages** : chaque onglet commence par l'essentiel — les chiffres clés, puis ce qu'il faut en retenir
+  (les leaks à travailler, tes écarts les plus importants, le plan de jeu, ce qui ressort de ses bluffs…). Le détail
+  est replié en sections dont le titre et une ligne de résumé restent visibles : un clic les ouvre, et elles restent
+  ouvertes ou fermées d'une visite à l'autre. Les explications de méthode se déplient sous un petit lien (« Comment
+  c'est calculé », « Pourquoi ? Les preuves »).
 - **Adversaire** : onglets *Plan de jeu*, *Préflop* (tes décisions et ses fréquences face au solveur),
   *Rapport*, *Spots* et *Face au solveur* (tes mains postflop contre lui comparées au solveur, et ses écarts
   à exploiter). En haut de la fiche, son type : régulier ou récréatif (voir « Face au solveur »). Les liens « voir les mains » et « rejouer » ouvrent directement l'onglet Spots
@@ -665,14 +670,23 @@ sauvegardés ; son dossier `~/.analyzer/eleves/<élève>/` sert de boîte d'arri
 Merlin), et son rapport se construit. **Deux rapports** : *Heads-up* et *Tables à plusieurs* (toutes ses tables de 3 à 9 joueurs
 ensemble ; les boutons en haut de la page, le dernier choisi est gardé), voir plus bas pour les tables à plusieurs.
 
-- **Les leaks à travailler** : les cinq plus importants, avec leur preuve chiffrée, leur confiance, ce qu'en dit la
-  vérification en jeu (voir plus bas) et la façon de les travailler (entraîneur sur la situation, onglet Préflop,
-  plan de jeu) ; pour une perte face au solveur, la main la plus chère à revoir. **Les grosses erreurs d'abord** : les
-  pertes confirmées (mesurées sur ses mains, face au fold ou au solveur, ou confirmées par les réponses de ses
-  adversaires) passent devant les écarts encore à vérifier ; puis par confiance et par poids — ce qu'elles coûtent en
-  bb/100 quand c'est mesuré, sinon fréquence de la situation × écart × ce que la décision met en jeu (le pot double à
-  peu près à chaque street et grossit dans les pots 3bet et 4bet : la même erreur pèse plus à la river qu'à l'open),
-  jamais plus que ce que la mesure en jeu lui permet de coûter. Seules les mains contre les réguliers comptent :
+- **Les leaks à travailler** : les cinq plus importants, l'essentiel d'abord — le titre, la confiance et le verdict
+  en jeu, la preuve en une ligne, puis quoi faire et où (entraîneur sur la situation, onglet Préflop, plan de jeu) ;
+  **Pourquoi ? Les preuves** déplie la vérification en jeu (voir plus bas), ses preuves et, pour une perte face au
+  solveur, la main la plus chère à revoir. **Les grosses erreurs d'abord** : les pertes confirmées (mesurées sur ses
+  mains, face au fold ou au solveur, ou confirmées par les réponses de ses adversaires) passent devant les écarts
+  encore à vérifier ; puis par confiance et par poids — ce qu'elles coûtent en bb/100 quand c'est mesuré, sinon
+  fréquence de la situation × écart × ce que la décision met en jeu (le pot double à peu près à chaque street et
+  grossit dans les pots 3bet et 4bet : la même erreur pèse plus à la river qu'à l'open), jamais plus que ce que la
+  mesure en jeu lui permet de coûter. **Les leaks liés** : un écart en entraîne souvent un autre. Une BB qui défend
+  trop large avant le flop arrive au flop avec plus de mains faibles, et folde plus face à la c-bet sans que ce soit
+  une fuite à part ; payer trop la c-bet amène plus de mains faibles à la turn ; c-better trop souvent affaiblit la
+  range qui continue (moins de 2es barrels, plus de folds face aux relances) ; ouvrir trop large au bouton fait
+  c-better moins et folder plus face au check-raise ; 3bet ou payer le 3bet trop large, de même dans les pots 3bet.
+  L'écart qui en explique un autre (dans un même type de pot d'une street à la suivante, ou du préflop au flop ; aux
+  tables à plusieurs, toutes positions et structures du type de pot) passe devant ; l'autre le rappelle (« Sans
+  doute une conséquence de … : corrige d'abord celui-là », ou « ce n'est sans doute pas une fuite à part » quand la
+  cause est un écart justifié) et le tableau des écarts le signale. Seules les mains contre les réguliers comptent :
   contre un récréatif, l'exploitation prime.
 - **Les écarts justifiés** : les écarts à la théorie qui, vérifiés en jeu, rapportent contre ses adversaires (ou que
   leurs réponses justifient), et ceux qui suivent le plan de jeu suggéré. Ils sortent des leaks : ce ne sont pas des
@@ -687,6 +701,20 @@ ensemble ; les boutons en haut de la page, le dernier choisi est gardé), voir p
   folds face aux mises, relances, probes), par type de pot et par position. Écart « solide » (le hasard l'explique
   mal : intervalle de confiance à 90 % hors d'une marge de 4 points autour de la théorie) ou « indicatif » (8 points
   d'écart) ; près de 0 % ou de 100 %, la marge rétrécit (un open à 23 % au lieu de 16 % est un gros écart).
+- **Le repère à sa taille** (après le flop) : une même stratégie théorique peut miser petit et souvent, ou gros et
+  moins souvent ; comparer les seules fréquences prendrait l'une pour une fuite de l'autre (un check-raise à 33 % du
+  pot, joué souvent, face à un check-raise au pot, joué moins souvent). Quand ses mises ou ses relances ont une
+  autre taille que celles du solveur (20 % d'écart au moins, sur 10 mises ou 3 relances au moins), le repère est
+  ramené à sa taille, à **volume de mise égal** (fréquence × taille), tel que le solveur le fait vraiment : sur des
+  flops résolus avec des tailles imposées, sa fréquence suit à peu près taille^-0,6 pour la c-bet, les barrels et le
+  check-raise (68 % de c-bet à 33 % du pot, 39 % à 75 % sur un flop sec ; 71 et 52 % sur un flop connecté), et
+  taille^-1,1 pour la sur-relance (55 % à 33 % du pot, 16 % à 66 %), sans changer le repère de plus d'un facteur 5.
+  Face à une mise, son fold est ramené à la taille des mises qu'il affronte : plus grosses, il folde plus, comme le
+  veut la défense minimale (taille / (pot + taille)). Les tailles se lisent en part du pot : une mise, ce qu'elle
+  ajoute au pot ; une relance, ce qu'elle ajoute au-delà du call, rapporté au pot après le call (comme l'arbre du
+  solveur) ; celles du solveur sont ses tailles pondérées par leur fréquence, sur les flops résolus. Les tableaux
+  l'écrivent « à ta taille » ou « face aux mises que tu affrontes », et « Pourquoi ? » donne le repère d'origine et
+  les deux tailles. Aux tables à plusieurs, de même.
 - **Face au solveur** : ses décisions dans les mains choisies contre les réguliers, comparées à la meilleure action
   pour sa main exacte (EV perdue par situation, décisions les plus chères). Un bouton les fait toutes résoudre
   (environ 2 à 3 minutes par main).
@@ -694,9 +722,9 @@ ensemble ; les boutons en haut de la page, le dernier choisi est gardé), voir p
   ligne, contre les réguliers (avec l'avis du solveur) et contre les récréatifs (à revoir à la main).
 - **Ses adversaires** : leur type (régulier ou récréatif), suggéré d'après leurs stats et réglable ; il décide quelles
   mains comptent pour les leaks. Recherche par nom, filtre par type, tri par mains, résultat ou nom.
-- **Télécharger le rapport** : la même page en fichier autonome, sans les boutons de l'application, à envoyer à
-  l'élève. Le coach a l'outil *leakfinding* : « Écris le rapport de coaching de Paul » dans l'application Claude
-  rédige un rapport à partir de ces données.
+- **Exporter** (sous les leaks) : *le rapport*, la même page en fichier autonome, sans les boutons de l'application,
+  à envoyer à l'élève. Le coach a l'outil *leakfinding* : « Écris le rapport de coaching de Paul » dans
+  l'application Claude rédige un rapport à partir de ces données.
 - **Synthèse PDF** : l'essentiel en deux pages environ (A4) — les chiffres clés, la courbe des résultats (réel et EV
   all-in), les leaks à travailler (avec ce qu'en dit la vérification en jeu), les écarts justifiés, les écarts les
   plus importants, ce que dit le solveur, les mains à revoir (cartes en quatre couleurs) et, s'il y a lieu, quoi
@@ -1374,12 +1402,13 @@ analyzer/
   bluffs.py            où un adversaire bluffe : fréquences par carte face au solveur, mains montrées, patterns
   plan.py              plan de jeu généré à partir de l'analyse
   spots.py             fiches des mains pour le visualiseur (tags de spot, lignes, équités)
-  report.py            rapport HTML
+  report.py            rapport HTML, styles communs et sections repliables (fold, more)
   viewer.py            visualiseur de spots (HTML + JavaScript, sans dépendance)
   selfreport.py        « Mon jeu » : ton bilan contre tous tes adversaires
   theory/              préflop vs solveur : solution (data/), comparaison (preflop.py), page (page.py),
                        arbre préflop pour l'explorateur (preflop_tree.py), plan de jeu suggéré
-                       (coach.py), profil d'un adversaire réel et node-lock (exploit.py),
+                       (coach.py), profil d'un adversaire réel et node-lock, tailles et volume de mise
+                       (exploit.py),
                        catégories de mains pour les filtres (handclass.py),
                        lecture de captures de ranges (extract.py) ; postflop avec GTOpen : spots,
                        installation et lecture des résultats (postflop.py), pont Rust (native/main.rs, avec
@@ -1421,7 +1450,8 @@ analyzer/
   period.py            période d'analyse : toutes les mains, les N dernières, les N derniers jours, d'une date à une autre
   pdfwriter.py         PDF sans dépendance : pages A4, texte Helvetica (accents), symboles des cartes, formes, courbes
   pptxwriter.py        PowerPoint sans dépendance : diapositives 16:9, textes, formes, tableaux, courbes, notes
-  leaks.py             leakfinding : stats face à la théorie, revue du solveur, mains à revoir, leaks prioritaires
+  leaks.py             leakfinding : stats face à la théorie (repère ramené à sa taille), revue du solveur, mains à
+                       revoir, leaks prioritaires et leaks liés
   leakcheck.py         leakfinding : chaque écart vérifié en jeu (ce qu'il rapporte ou coûte, la réponse des
                        adversaires, le plan de jeu) : fuite ou exploitation
   ring_leaks.py        leakfinding aux tables à plusieurs : réguliers et récréatifs, préflop face aux charts, après le
