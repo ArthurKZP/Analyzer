@@ -200,8 +200,8 @@ def charts() -> dict:
     """Les lignes de tes charts 6-max ; NoCharts sans elles."""
     lines = handplay.ring_lines((TABLE,)).get(TABLE)
     if not lines:
-        raise NoCharts("Pas encore de charts 6-max : charge-les dans Mon jeu › Tables à plusieurs (« Charger les "
-                       "charts »), ou en ligne de commande : python -m analyzer ranges --hand2note.")
+        raise NoCharts("Pas encore de charts 6-max : charge-les dans Paramètres › Ranges préflop (« Charger les "
+                       "charts 6-max »), ou en ligne de commande : python -m analyzer ranges --hand2note.")
     return lines
 
 

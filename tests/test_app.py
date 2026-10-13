@@ -486,6 +486,12 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/resoudre/inconnu/arreter", "{}", headers)[0], 404)
         foreign = {"Origin": "http://evil.example", **headers}
         self.assertEqual(self.request("POST", "/api/resoudre", json.dumps({"hand": "HAND02"}), foreign)[0], 403)
+        # n'analyser qu'une partie des mains : combien, et lesquelles (sans solveur installé, rien ne part)
+        for path in ("/api/revue/lancer", "/api/leaks/lancer"):
+            status, _, body = self.request("POST", path, json.dumps({"ordre": "pertes", "limite": 5}), headers)
+            self.assertEqual((status, json.loads(body)["busy"]), (200, 0))
+            for wrong in ({"ordre": "toutes"}, {"limite": -1}, {"limite": True}, {"leak": 3}):
+                self.assertEqual(self.request("POST", path, json.dumps(wrong), headers)[0], 400)
 
     def test_explorer(self):
         status, ctype, body = self.request("GET", "/explorateur/HAND02")
@@ -699,6 +705,23 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/eleves/inconnu/import", body, headers)[0], 404)
         self.assertEqual(self.request("POST", "/api/eleves", json.dumps({"name": ""}), headers)[0], 400)
         self.assertEqual(self.request("GET", "/moi/leaks")[0], 200)
+
+    def test_tracking_routes(self):
+        """Suivre un leak dans le temps : depuis quand, puis ne plus le suivre ; la page Suivi."""
+        headers = {"Content-Type": "application/json"}
+        follow = {"leak": "pf:btn:open", "depuis": "2026-03-01", "titre": "Bouton : open"}
+        status, _, data = self.request("POST", "/api/suivi", json.dumps(follow), headers)
+        self.assertEqual((status, json.loads(data)["suivis"]["pf:btn:open"]["since"]), (200, "2026-03-01"))
+        status, _, page = self.request("GET", "/moi/suivi")
+        self.assertEqual(status, 200)
+        self.assertIn("Bouton : open", page.decode())
+        status, _, data = self.request("POST", "/api/suivi", json.dumps({"leak": "pf:btn:open", "depuis": None}),
+                                       headers)
+        self.assertEqual((status, json.loads(data)["suivis"]), (200, {}))
+        for bad in ({"leak": "", "depuis": "2026-03-01"}, {"leak": "k", "depuis": "hier"}, {"leak": "k", "depuis": 3},
+                    {"leak": "k", "depuis": "2026-03-01", "titre": 4}, ["k"]):
+            self.assertEqual(self.request("POST", "/api/suivi", json.dumps(bad), headers)[0], 400, bad)
+        self.assertEqual(self.request("POST", "/api/eleves/inconnu/suivi", json.dumps(follow), headers)[0], 404)
 
     def test_tree_builder_routes(self):
         headers = {"Content-Type": "application/json"}

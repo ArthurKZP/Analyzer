@@ -10,6 +10,7 @@ from analyzer import leaks, students
 from analyzer.app.leaks_page import _items, build_leaks_page
 from analyzer.parsers import load_hands
 from analyzer.stats import Ratio
+from analyzer.theory import review
 
 try:
     from .base import isolate_module, release_module
@@ -159,6 +160,28 @@ class LinksTest(unittest.TestCase):
         folds = self.stat("srp_oop:defenseur:fold_flop", "SRP", "En défense : Fold face à la c-bet", "fold", 60, 0.33)
         found = leaks.links([wide, folds])
         self.assertEqual([x.cause.key for x in found["srp_oop:defenseur:fold_flop"]], ["pre:vs_open:BB:call"])
+
+
+class SolveOrderTest(unittest.TestCase):
+    def test_hand_keys_and_orders(self):
+        hands = {h.hand_id: h for h in load_hands([FIXTURES]) if len(h.seats) == 2}
+        # HAND01 : c-bet du bouton (Hero), check-raise de la BB, fold
+        self.assertEqual(leaks.hand_keys(hands["HAND01"], "Hero"), {"srp:cbet", "srp:fold_raise", "srp:reraise"})
+        self.assertEqual(leaks.hand_keys(hands["HAND01"], "Villain"), {"srp:fold_flop", "srp:raise"})
+        chosen = [hands["HAND01"], hands["HAND02"]]
+        todo = review.PendingSpots(chosen, "Hero", ["SRP", "pot 3bet"])
+        cbet = leaks.Leak("SRP · BTN : C-bet flop", "", "", "postflop", "solide", 1.0, key="srp:cbet",
+                          focus=frozenset({"srp:cbet"}))
+        preflop = leaks.Leak("Préflop · Bouton : open", "", "", "préflop", "solide", 2.0, key="sb_first.raise")
+        orders = leaks.solve_orders(todo, "Hero", lambda h: leaks.hand_keys(h, "Hero"), [preflop, cbet], [])
+        self.assertEqual(cbet.targets, [("HAND01", 3)])  # la seule main où se joue sa c-bet ; une résolution de SRP
+        self.assertEqual((preflop.targets, orders["leaks"]), ([], [("HAND01", 3)]))
+        losses = [h.net("Hero") / h.bb for h in chosen]
+        expected = [h.hand_id for _, h in sorted(zip(losses, chosen), key=lambda t: t[0])]
+        self.assertEqual([hand_id for hand_id, _ in orders["pertes"]], expected)  # les plus chères d'abord
+        report = leaks.Report("Hero", 2, {}, {}, {}, [], {}, {}, [cbet, preflop], solve_orders=orders)
+        self.assertEqual(leaks.solve_candidates(report, leak="srp:cbet"), [("HAND01", 3)])
+        self.assertEqual(leaks.solve_candidates(report, "pertes"), orders["pertes"])
 
 
 class ReportTest(unittest.TestCase):

@@ -1,6 +1,7 @@
 """Page « Face au solveur » : les mains jouées comparées à la théorie (voir theory/review.py)."""
 from __future__ import annotations
 
+import json
 from html import escape
 from typing import Optional
 from urllib.parse import quote
@@ -16,7 +17,7 @@ FAMILY_NAME = {"srp": "SRP", "3bet": "3bet", "4bet": "4bet"}
 def family_tag(family: str) -> str:
     """L'étiquette du type de pot : « 3bet » ; à une table à plusieurs, avec les positions (« SRP BB c. CO »)."""
     return escape(FAMILY_NAME.get(family) or studyspots.pot_name(family))
-MINUTES = {"SRP": 3, "pot 3bet": 2, "pot 4bet": 0.3}  # durée d'une résolution sur 4 cœurs (mesurée)
+MINUTES = review.MINUTES
 
 STYLE = """
 .rv-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 4px 0 6px; }
@@ -41,16 +42,65 @@ table.review a.open { font-weight: 600; text-decoration: none; white-space: nowr
 .conf.indicatif { background: var(--lo-bg); }
 """
 
-SCRIPT = """
+LIMITS = (5, 10, 20, 0)  # mains passées au solveur d'un clic (0 : toutes)
+ORDER_LABELS = {"leaks": "liées à tes leaks, les plus chères d'abord", "pertes": "les plus chères",
+                "pots": "les plus gros pots", "lignes": "les mains à revoir (une par ligne)"}
+
+
+def solve_picker(orders: list[tuple[str, list]], default: Optional[str] = None, limit: int = 10) -> str:
+    """Le choix des mains à passer au solveur : combien (LIMITS) et lesquelles (orders : [(clé, [(main, minutes)])],
+    dans l'ordre de chacune), avec la durée estimée ; rien quand il n'y a rien à résoudre."""
+    shown = [(key, items) for key, items in orders if items]
+    if not shown:
+        return ""
+    default = default if any(key == default for key, _ in shown) else shown[0][0]
+    data = {key: [round(m, 2) for _, m in items] for key, items in shown}
+    options = "".join(f'<option value="{key}"{" selected" if key == default else ""}>'
+                      f'{escape(ORDER_LABELS.get(key, key))} ({len(items)})</option>' for key, items in shown)
+    limits = "".join(f'<option value="{n}"{" selected" if n == limit else ""}>'
+                     f'{f"{n} mains" if n else "toutes"}</option>' for n in LIMITS)
+    return (f'<span class="rv-pick" data-orders="{escape(json.dumps(data))}"><select class="rv-limit" '
+            f'aria-label="Combien de mains">{limits}</select> <select class="rv-order" aria-label="Lesquelles">'
+            f'{options}</select> <span class="rv-eta"></span></span>')
+
+
+# Le sélecteur : la durée estimée suit le choix ; lancer envoie l'ordre et le nombre de mains.
+PICKER_SCRIPT = """
+function rvDuration(m) {
+  if (m < 90) return Math.max(1, Math.round(m)) + ' min';
+  var h = m / 60;
+  return h < 48 ? Math.round(h) + ' h' : (h / 24).toFixed(1).replace('.', ',') + ' jours';
+}
+function rvPicker(root) {
+  var pick = root.querySelector('.rv-pick');
+  if (!pick) return null;
+  var orders = JSON.parse(pick.dataset.orders), limit = pick.querySelector('.rv-limit');
+  var order = pick.querySelector('.rv-order');
+  var eta = pick.querySelector('.rv-eta');
+  function update() {
+    var list = orders[order.value] || [], n = Number(limit.value) || list.length;
+    var minutes = list.slice(0, n).reduce(function (a, b) { return a + b; }, 0);
+    eta.textContent = '≈ ' + rvDuration(minutes) + ' sur 4 cœurs';
+  }
+  limit.addEventListener('change', update);
+  order.addEventListener('change', update);
+  update();
+  return { el: pick, choice: function () { return { ordre: order.value, limite: Number(limit.value) }; } };
+}
+"""
+
+
+SCRIPT = PICKER_SCRIPT + """
 (function () {
   var box = document.querySelector('.rv-head');
   if (!box) return;
   var who = box.dataset.villain, done = Number(box.dataset.done), timer = null, api = box.dataset.api || '/api/revue';
   var run = box.querySelector('.rv-run'), stop = box.querySelector('.rv-stop'), status = box.querySelector('.rv-status');
-  var query = who ? '?adversaire=' + encodeURIComponent(who) : '';
-  function post(url) {
+  var query = who ? '?adversaire=' + encodeURIComponent(who) : '', picker = rvPicker(box);
+  function post(url, extra) {
+    var body = Object.assign({ adversaire: who || null }, extra || {});
     return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ adversaire: who || null }) }).then(function (r) { return r.json(); });
+      body: JSON.stringify(body) }).then(function (r) { return r.json(); });
   }
   function show(s) {
     if (s.done > done + 4 || (s.done !== done && !s.busy)) { location.reload(); return; }
@@ -58,6 +108,7 @@ SCRIPT = """
     stop.hidden = !s.busy;
     run.disabled = !s.ready;
     run.hidden = !!s.busy || s.done === s.total;
+    if (picker) picker.el.hidden = run.hidden;
     if (!s.ready) { status.append('Installe d\\'abord le solveur : python -m analyzer gtopen --installer'); return; }
     if (s.current) {
       var p = s.current.progress || {}, frac = p.iteration ? Math.min(1, p.iteration / s.current.max_iterations) : 0;
@@ -70,7 +121,10 @@ SCRIPT = """
     if (s.busy) timer = setTimeout(refresh, 3000);
   }
   function refresh() { fetch(api + query).then(function (r) { return r.json(); }).then(show); }
-  run.addEventListener('click', function () { run.disabled = true; post(api + '/lancer').then(show); });
+  run.addEventListener('click', function () {
+    run.disabled = true;
+    post(api + '/lancer', picker ? picker.choice() : null).then(show);
+  });
   stop.addEventListener('click', function () { post(api + '/arreter').then(show); });
   refresh();
 })();
@@ -189,8 +243,10 @@ def _exploits_table(digests: list[dict]) -> str:
 
 
 def build_review_page(hands: list[Hand], hero: str, villain: Optional[str] = None, embed: bool = True,
-                      excluded: Optional[dict] = None, kind: Optional[dict] = None, api: str = "/api/revue") -> str:
-    """excluded : mains contre des récréatifs laissées de côté (Mon jeu) ; kind : type de l'adversaire.
+                      excluded: Optional[dict] = None, kind: Optional[dict] = None, api: str = "/api/revue",
+                      orders: Optional[dict] = None) -> str:
+    """excluded : mains contre des récréatifs laissées de côté (Mon jeu) ; kind : type de l'adversaire ; orders : les
+    mains encore à résoudre dans chaque ordre (Library.review_orders), pour n'en résoudre qu'une partie.
     Face à un récréatif, seuls ses écarts comptent : tes décisions ne sont pas comparées à la théorie."""
     rec = bool(kind and kind["kind"] == "rec")
     digests, todo = review.collect(hands, hero)
@@ -208,16 +264,20 @@ def build_review_page(hands: list[Hand], hero: str, villain: Optional[str] = Non
         f'<div class="tile"><div class="label">EV perdue</div><div class="value">−{num(lost, 1)} bb</div>'
         f'<div class="sub">{num(lost / len(digests), 2) if digests else "–"} bb par main analysée</div></div>'
         '</div>')
-    eta = sum(MINUTES.get(pot_type, 3) for pot_type in todo.pot_types)
+    eta = sum(review.minutes(pot_type) for pot_type in todo.pot_types)
+    orders = orders if orders is not None else {"pots": [(h.hand_id, review.minutes(t))
+                                                         for h, t in zip(todo.hands, todo.pot_types)]}
+    picker = solve_picker([(key, orders.get(key) or []) for key in ("leaks", "pertes", "pots")],
+                          "leaks" if orders.get("leaks") else "pertes")
     head = (f'<div class="rv-head" data-villain="{escape(villain or "")}" data-done="{len(digests)}" '
             f'data-api="{escape(api)}">'
-            f'<span><b>{len(digests)} / {total}</b> mains analysées</span>'
-            f'<button type="button" class="go rv-run"{" hidden" if not todo else ""}>Analyser les {len(todo)} mains '
-            'restantes</button><button type="button" class="rv-stop" hidden>Arrêter</button>'
-            '<span class="rv-status"></span></div>'
-            + (f'<p class="note">Chaque main se résout une fois (les plus gros pots d\'abord) : compte environ {_duration(eta)} '
-               'sur 4 cœurs pour les restantes. La page se complète au fur et à mesure ; tu peux la fermer. '
-               'En ligne de commande : <code>python -m analyzer gtopen --analyser</code>.</p>' if todo else ""))
+            f'<span><b>{len(digests)} / {total}</b> mains analysées</span>{picker}'
+            f'<button type="button" class="go rv-run"{" hidden" if not todo else ""}>Analyser</button>'
+            '<button type="button" class="rv-stop" hidden>Arrêter</button><span class="rv-status"></span></div>'
+            + (f'<p class="note">Toutes les {len(todo)} mains qui restent prendraient environ {_duration(eta)} sur 4 '
+               "cœurs : choisis-en une partie, celles où se jouent tes leaks ou les plus chères d'abord. Chaque main "
+               "se résout une fois ; la page se complète au fur et à mesure, tu peux la fermer. En ligne de commande : "
+               '<code>python -m analyzer gtopen --analyser</code>.</p>' if todo else ""))
     who = f"face à {escape(villain)}" if villain else "contre les réguliers"
     kind_line = ""
     if excluded and excluded["hands"]:

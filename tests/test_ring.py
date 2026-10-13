@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from analyzer import ring
-from analyzer.app.ring_page import build_ring_page
+from analyzer.app.ring_page import build_ring_page, positions_html
 from analyzer.parsers import load_hands, parse_text
 from analyzer.theory import postflop, ring_ranges
 
@@ -77,11 +77,16 @@ class AnalyzeTest(unittest.TestCase):
         self.assertEqual([p.position for p in merged[0].positions], ["HJ", "BB"])
         self.assertEqual(ring.ref(ring.MERGED, "open", "HJ"), (18, 23))
         scopes = [("all", "Toutes", merged), ("reg", "Réguliers", merged), ("rec", "Récréatifs", [])]
-        page = build_ring_page(scopes, "Hero")
+        shown = [(scope, label, found[0]) for scope, label, found in scopes if found]
+        positions = positions_html(shown)  # dans le bilan des tables à plusieurs
         for text in ("Préflop par position", "Après le flop", "Toutes tes mains (3)", "Contre les réguliers (3)",
-                     "repère 18–23&nbsp;%", "3-max, 6-max"):
+                     "repère 18–23&nbsp;%"):
+            self.assertIn(text, positions)
+        self.assertNotIn("Contre les récréatifs (", positions)  # aucune main contre eux : pas de bouton
+        page = build_ring_page(scopes, "Hero")  # la page des coups : ses stats sont dans le bilan
+        for text in ("3 mains aux tables à plusieurs (3-max, 6-max)", 'href="bilan?format=ring"',
+                     "Aucun coup à deux joueurs au flop"):
             self.assertIn(text, page)
-        self.assertNotIn("Contre les récréatifs (", page)  # aucune main contre eux : pas de bouton
         self.assertIn("Aucune main", build_ring_page([], "Hero"))
         # un pot à deux au flop sans ranges : de quoi charger les charts de Hand2Note Guide
         row = {"id": "X1", "date": stats[0].first, "format": "6-max", "hero": "CO", "villain": "BB",

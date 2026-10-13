@@ -33,6 +33,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--analyser", action="store_true",
                         help="résout les mains allées au flop pas encore analysées (onglet « Face au solveur »)")
     parser.add_argument("--max", type=int, help="avec --analyser : nombre de mains au plus (les plus gros pots)")
+    parser.add_argument("--plus-cheres", action="store_true",
+                        help="avec --analyser : les mains les plus chères d'abord (ce que tu y as perdu)")
     parser.add_argument("--recreatifs", action="store_true",
                         help="avec --analyser : aussi les mains contre les récréatifs (pour lire leurs écarts)")
     parser.add_argument("--hero", help="ton pseudo (détecté automatiquement)")
@@ -89,7 +91,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                       "pour les inclure.")
             hands = [h for h in hands if not (hero in h.seats and len(h.seats) == 2 and h.opponent_of(hero) in recs)]
         try:
-            n = analyze(hands, hero, limit=args.max)
+            n = analyze(hands, hero, limit=args.max, costly=args.plus_cheres)
         except postflop.SolverError as exc:
             print(exc, file=sys.stderr)
             return 1

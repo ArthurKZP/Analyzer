@@ -255,9 +255,10 @@ STATS_LEGEND = ('<div class="legend-dev"><span><i style="background:var(--hi-bg)
 
 def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str,
                       embed: bool = False, spots_href: str = "spots", kinds: Optional[dict] = None,
-                      head: str = "") -> str:
+                      head: str = "", leaks_href: str = "") -> str:
     """kinds : type de chaque adversaire (players.classify), pour séparer réguliers et récréatifs ; head : en tête,
-    le choix du format et tes résultats tous formats confondus (l'application)."""
+    le choix du format et tes résultats tous formats confondus (l'application) ; leaks_href : le Leakfinding, où ces
+    écarts se lisent face à la théorie (l'application), et son suivi dans le temps à côté."""
     h = stats[hero]
     results = opponent_results(hands, hero)
     kinds = kinds or {}
@@ -285,6 +286,9 @@ def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: st
                      '<th class="num" data-sort="net">Résultat (bb)</th><th class="num" data-sort="bb100">bb/100</th>'
                      '<th class="num">EV all-in (bb)</th><th class="num">€</th><th data-sort="last">Période</th></tr>'
                      f'</thead><tbody>{rows}</tbody></table></div></div>')
+    leaks_note = (f'<p class="note">Face à la théorie (solveur et solution préflop), ces écarts sont vérifiés et classés '
+                  f'dans <a href="{escape(leaks_href)}">Leaks › À travailler</a> ; leur évolution se suit dans '
+                  '<a href="suivi">Leaks › Suivi dans le temps</a>.</p>' if leaks_href else "")
     body = f"""{heading}<style>{OPP_STYLE}</style>
 <div class="meta">{len(hands)} mains · {len(results)} adversaire(s) · {period}{spots}</div>
 {head}
@@ -296,7 +300,7 @@ def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: st
 
 <h2>Tes écarts les plus importants</h2>
 <div class="card">{priorities_html(h, len(hands), folds=hero_fold_holdings(hands, hero))}
-{more("Comment ils sont choisis", GAPS_NOTE)}</div>
+{leaks_note}{more("Comment ils sont choisis", GAPS_NOTE)}</div>
 
 {fold("Tes statistiques", STATS_LEGEND + self_stat_tables(h), "préflop, postflop et abattage, face aux repères",
       "stats")}

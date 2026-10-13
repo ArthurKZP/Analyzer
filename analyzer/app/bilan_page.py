@@ -14,7 +14,9 @@ from ..selfreport import OPP_SCRIPT, OPP_STYLE, opponent_row_data, opponent_tool
 from ..stats import allin_ev
 from .leaks_page import STYLE as LEAK_STYLE
 from .review_page import STYLE as REVIEW_STYLE
-from .ring_page import _gaps
+from .ring_page import SCRIPT as RING_SCRIPT
+from .ring_page import STYLE as RING_STYLE
+from .ring_page import _gaps, positions_html
 
 
 def results(hands: list[Hand], hero: str) -> dict:
@@ -105,8 +107,8 @@ def stats_table(scopes: list[tuple[str, str, ring.FormatStats]]) -> str:
         rows.append(f'<tr><td>{escape(label)}</td>{cells}<td class="num muted">{ref}</td></tr>')
     return (f'<div class="card scroll"><table class="stats"><thead><tr><th></th>{head}<th class="num">Repère</th></tr>'
             f'</thead><tbody>{"".join(rows)}</tbody></table>'
-            '<p class="note">Toutes positions confondues ; le détail par position est dans l\'onglet <a href="tables">'
-            "Tables à plusieurs</a>. Repères indicatifs d'un régulier 6-max à 100 bb.</p></div>")
+            '<p class="note">Toutes positions confondues (le détail : « Par position », plus bas). Repères indicatifs '
+            "d'un régulier 6-max à 100 bb.</p></div>")
 
 
 def _by_scope(scopes: list[tuple[str, str, ring.FormatStats]]) -> str:
@@ -168,7 +170,7 @@ def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, 
     formats = sorted({h.table_format for h in hands}, key=lambda f: (ring.h_size(f), f))
     period = f"{res['first']:%d/%m/%Y} → {res['last']:%d/%m/%Y}"
     tools = len(opponents) > 1
-    body = f"""<style>{OPP_STYLE}{REVIEW_STYLE}{LEAK_STYLE}</style>
+    body = f"""<style>{OPP_STYLE}{REVIEW_STYLE}{LEAK_STYLE}</style>{RING_STYLE}
 <div class="meta">{res['hands']} mains aux tables à plusieurs ({escape(', '.join(formats))}) · {len(opponents)} adversaire(s)
 · {period}</div>
 {head}
@@ -183,7 +185,10 @@ def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, 
 {fold("Tes statistiques", stats_table(shown), "préflop et après le flop, contre les réguliers et les récréatifs",
       "stats")}
 
+{fold("Par position", positions_html(shown), "open, défense, 3bet, vols, c-bet et barrels, position par position",
+      "positions")}
+
 {fold("Résultats par adversaire", _by_scope(shown) + opponents_table(opponents) + RING_NOTE,
       f"{len(opponents)} adversaire{'s' if len(opponents) > 1 else ''}", "adversaires")}
 """
-    return html_page(f"Mon jeu — {hero}", body, embed, script=SCRIPT + (OPP_SCRIPT if tools else ""))
+    return html_page(f"Mon jeu — {hero}", body, embed, script=SCRIPT + RING_SCRIPT + (OPP_SCRIPT if tools else ""))

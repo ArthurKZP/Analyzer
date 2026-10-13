@@ -3,17 +3,20 @@
 
   const $ = (id) => document.getElementById(id);
   const frame = $('frame');
+  // Les onglets de chaque vue : une page [page, libellé], ou un groupe de pages proches [libellé, [[page, libellé], …]]
+  // dont les pages forment une seconde barre (sous-onglets). Les adresses restent celles des pages (#/moi/suivi).
+  const LEAKS_GROUP = ['Leaks', [['leaks', 'À travailler'], ['suivi', 'Suivi dans le temps'], ['solveur', 'Face au solveur']]];
+  const PREFLOP_GROUP = ['Préflop', [['preflop', 'Face à la théorie'], ['mains', 'Mains de départ']]];
   const TABS = {
-    moi: [['bilan', 'Bilan'], ['leaks', 'Leakfinding'], ['mains', 'Mains de départ'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots'],
-      ['solveur', 'Face au solveur'], ['tables', 'Tables à plusieurs']],
+    moi: [['bilan', 'Bilan'], LEAKS_GROUP, PREFLOP_GROUP, ['Mes mains', [['spots', 'Heads-up'], ['tables', 'Tables à plusieurs']]]],
     // étude du field : le leakfinding de tes adversaires (réguliers, récréatifs), les bluffs des réguliers en heads-up
     field: [['regs', 'Réguliers'], ['recs', 'Récréatifs'], ['bluffs', 'Bluffs des réguliers']],
     parametres: [['general', 'Général'], ['joueurs', 'Joueurs et alias'], ['ranges', 'Ranges préflop']],
-    eleve: [['leaks', 'Leakfinding'], ['mains', 'Mains de départ'], ['preflop', 'Préflop'], ['solveur', 'Face au solveur'], ['spots', 'Mains'],
-      ['tables', 'Tables à plusieurs'], ['importer', 'Importer']],
+    eleve: [LEAKS_GROUP, PREFLOP_GROUP, ['Ses mains', [['spots', 'Heads-up'], ['tables', 'Tables à plusieurs']]],
+      ['importer', 'Importer']],
     // un joueur de référence : la comparaison avec toi, sa value et ses bluffs, puis son jeu analysé comme le tien
-    reference: [['comparaison', 'Toi et lui'], ['lignes', 'Value et bluffs'], ['bilan', 'Bilan'], ['tables', 'Tables à plusieurs'],
-      ['preflop', 'Préflop'], ['mains', 'Mains de départ']],
+    reference: [['comparaison', 'Toi et lui'], ['lignes', 'Value et bluffs'], ['bilan', 'Bilan'], PREFLOP_GROUP,
+      ['tables', 'Ses coups à plusieurs']],
     adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
       ['solveur', 'Face au solveur'], ['bluffs', 'Ses bluffs']],
     // L'explorateur part du préflop ; les séries heads-up (SRP, pots 3bet et 4bet), les séries 6-max et les coups joués
@@ -21,15 +24,18 @@
     etudes: [['explorateur', 'Explorateur'], ['plan', 'Plan de jeu suggéré'], ['hu', 'Heads-up'], ['6max', '6-max'],
       ['coups', 'Coups joués']],
   };
-  const FORMAT_TABS = ['bilan', 'leaks', 'preflop', 'comparaison', 'lignes'];  // pages qui ont un choix heads-up / tables à plusieurs
+  const FORMAT_TABS = ['bilan', 'leaks', 'suivi', 'preflop', 'comparaison', 'lignes'];  // pages qui ont un choix heads-up / tables à plusieurs
   // Les formats que tu joues (Paramètres) : sans choix, tous. Un format que tu ne joues pas sort des menus.
   const plays = (fmt) => !state || !state.settings || !state.settings.plays || state.settings.plays.includes(fmt);
   const HIDDEN_TABS = { HU: { moi: ['spots', 'solveur'], field: ['bluffs'], etudes: ['hu'] },
     ring: { moi: ['tables'], etudes: ['6max'] } };
-  function tabsOf(view) {
+  function groupsOf(view) {  // [{ label, tabs: [[page, libellé], …] }] : les groupes dont une page au moins est jouée
     const hidden = ['HU', 'ring'].filter((f) => !plays(f)).flatMap((f) => HIDDEN_TABS[f][view] || []);
-    return (TABS[view] || []).filter(([id]) => !hidden.includes(id));
+    return (TABS[view] || []).map(([a, b]) => (Array.isArray(b) ? { label: a, tabs: b } : { label: b, tabs: [[a, b]] }))
+      .map((g) => Object.assign(g, { tabs: g.tabs.filter(([id]) => !hidden.includes(id)) }))
+      .filter((g) => g.tabs.length);
   }
+  const tabsOf = (view) => groupsOf(view).flatMap((g) => g.tabs);
   const HU_SERIES = ['srp', '3bet', '4bet'];  // anciens onglets des études : l'onglet Heads-up
   let state = null;
   let route = null;
@@ -286,14 +292,29 @@
     };
   }
 
+  // La barre des onglets et, pour un groupe de pages, celle de ses sous-onglets ; un groupe rouvre sa dernière page.
   function renderTabs() {
-    const tabs = $('tabs');
+    const tabs = $('tabs'), subtabs = $('subtabs');
     tabs.textContent = '';
-    const list = tabsOf(route.view);
-    tabs.hidden = !list.length || (!hasHands() && !hasAnyHands() && !['etudes', 'eleve', 'parametres', 'reference'].includes(route.view));
-    for (const [id, label] of list) {
-      const r = Object.assign({}, route, { tab: id });
-      tabs.append(el('a', { href: hashFor(r), 'aria-current': id === route.tab ? 'page' : null }, label));
+    subtabs.textContent = '';
+    const groups = groupsOf(route.view);
+    tabs.hidden = !groups.length || (!hasHands() && !hasAnyHands() && !['etudes', 'eleve', 'parametres', 'reference'].includes(route.view));
+    subtabs.hidden = true;
+    for (const g of groups) {
+      const current = g.tabs.some(([id]) => id === route.tab);
+      const key = 'onglet:' + route.view + ':' + g.label;
+      if (current && g.tabs.length > 1) pref(key, route.tab);
+      const last = pref(key);
+      const tab = current ? route.tab : g.tabs.some(([id]) => id === last) ? last : g.tabs[0][0];
+      tabs.append(el('a', { href: hashFor(Object.assign({}, route, { tab })), 'aria-current': current ? 'page' : null },
+        g.label));
+      if (!current || g.tabs.length < 2 || tabs.hidden) continue;
+      subtabs.hidden = false;
+      subtabs.setAttribute('aria-label', g.label);
+      for (const [id, label] of g.tabs) {
+        const r = Object.assign({}, route, { tab: id });
+        subtabs.append(el('a', { href: hashFor(r), 'aria-current': id === route.tab ? 'page' : null }, label));
+      }
     }
   }
 

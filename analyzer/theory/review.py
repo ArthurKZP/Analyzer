@@ -258,6 +258,14 @@ def _pot_size(hand: Hand) -> float:
     return sum(a.amount for a in hand.actions) / hand.bb
 
 
+MINUTES = {"SRP": 3, "pot 3bet": 2, "pot 4bet": 0.3}  # durée d'une résolution sur 4 cœurs (mesurée)
+
+
+def minutes(pot_type: str) -> float:
+    """La durée d'une résolution (minutes, sur 4 cœurs) selon le type de pot ; 3 par défaut."""
+    return MINUTES.get(pot_type, 3)
+
+
 class PendingSpots:
     """Les mains à analyser, les plus gros pots d'abord : leurs spots se construisent quand on les parcourt.
     pot_types : le type de pot de chacune (SRP, pot 3bet…), connu sans construire le spot."""
@@ -311,9 +319,17 @@ def collect(hands: list[Hand], hero: str) -> tuple[list[dict], PendingSpots]:
     return done, PendingSpots([h for h, _ in todo], hero, [t for _, t in todo])
 
 
-def analyze(hands: list[Hand], hero: str, log=print, limit: Optional[int] = None) -> int:
-    """Résout les mains pas encore analysées (les plus gros pots d'abord) ; renvoie leur nombre."""
+def by_loss(todo: PendingSpots) -> PendingSpots:
+    """Les mains à résoudre, les plus chères d'abord (ce que le joueur y a perdu, en bb)."""
+    order = sorted(range(len(todo)), key=lambda k: todo.hands[k].net(todo.hero) / todo.hands[k].bb)
+    return PendingSpots([todo.hands[k] for k in order], todo.hero, [todo.pot_types[k] for k in order])
+
+
+def analyze(hands: list[Hand], hero: str, log=print, limit: Optional[int] = None, costly: bool = False) -> int:
+    """Résout les mains pas encore analysées (les plus gros pots d'abord ; costly : les plus chères d'abord) ; renvoie
+    leur nombre."""
     _, todo = collect(hands, hero)
+    todo = by_loss(todo) if costly else todo
     todo = todo[:limit] if limit else todo
     for k, spot in enumerate(todo, 1):
         log(f"[{k}/{len(todo)}] main {spot.hand.hand_id} ({spot.pot_type}, {spot.villain}) : résolution…")

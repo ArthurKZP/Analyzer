@@ -143,6 +143,29 @@ class AnalyzeTest(unittest.TestCase):
         self.assertIn("Ses écarts à exploiter", villain_page)
         self.assertNotIn("Ses écarts à exploiter", page)
 
+    def test_library_partial_queue(self):
+        """N'analyser qu'une partie des mains : les plus chères d'abord, une seule ici."""
+        lib = Library(FIXTURES)
+        try:
+            orders = lib.review_orders()
+            self.assertEqual(set(orders), {"leaks", "pertes", "pots"})
+            costliest = min(self.hands, key=lambda h: h.net("Hero") / h.bb if h.hand_id in ("HAND01", "HAND02")
+                            else 0).hand_id
+            self.assertEqual(orders["pertes"][0][0], costliest)
+            self.assertTrue(all(minutes > 0 for _, minutes in orders["pertes"]))
+            lib.review_state(start=True, order="pertes", limit=1)
+            import time
+            deadline = time.time() + 30
+            while lib.review_state()["busy"] and time.time() < deadline:
+                time.sleep(0.05)
+            done, todo = review.collect(self.hands, "Hero")
+            self.assertEqual(([g["hand"] for g in done], len(todo)), ([costliest], 1))
+            page = lib.self_page("solveur")
+            for text in ('class="rv-pick"', '<option value="pertes"', "les plus chères (1)", "1 / 2</b>"):
+                self.assertIn(text, page)
+        finally:
+            lib.solves.shutdown()
+
     def test_library_queue(self):
         lib = Library(FIXTURES)
         try:

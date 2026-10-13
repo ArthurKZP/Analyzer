@@ -205,6 +205,9 @@ class Leak:
     key: str = ""                    # la stat de l'écart (Stat.key), pour relier les leaks entre eux
     direction: str = ""              # « plus », « moins »
     causes: list = field(default_factory=list)   # les écarts qui l'expliquent sans doute (Link) : à corriger d'abord
+    focus: frozenset = frozenset()   # les situations après le flop (clés de Stat) où il se joue : ses mains au solveur
+    targets: list = field(default_factory=list)  # ses mains pas encore analysées, les plus chères d'abord
+    # (main, minutes de résolution)
     effects: list = field(default_factory=list)  # ceux qu'il entraîne sans doute (leur titre)
 
     @property
@@ -248,6 +251,8 @@ class Report:
     context: dict = field(default_factory=dict)  # tables à plusieurs : charts présents, flops 6-max résolus…
     exploits: list = field(default_factory=list)  # les écarts qui rapportent ou suivent le plan de jeu (Leak)
     opportunities: list = field(default_factory=list)  # là où il joue comme la théorie, un écart qui rapporterait (Leak)
+    solve_orders: dict = field(default_factory=dict)   # les mains à passer au solveur, par façon de les choisir
+    # (SOLVE_ORDERS -> [(main, minutes)])
 
 
 # --- Découpage par type d'adversaire ---------------------------------------------------------------------
@@ -315,6 +320,14 @@ def postflop_stats(hands: dict, hero: str) -> list[Stat]:
                 sized(stat, theory.get(s.key, (None, 0))[0], mine.get(s.key, []), s.measure)
                 out.append(stat)
     return out
+
+
+def stats_for(hands: list[Hand], hero: str, kinds: dict) -> list[Stat]:
+    """Ses stats face à la théorie sur ces mains, dans chaque portée (comme build, sans le solveur ni la vérification
+    en jeu) : pour les suivre période par période (analyzer/tracking.py)."""
+    parts = split(hands, hero, kinds)
+    stats = {scope: analyze(parts[scope]) for scope, _ in SCOPES}
+    return preflop_stats(stats, hero, parts) + postflop_stats(parts, hero)
 
 
 # --- 2. Face au solveur -----------------------------------------------------------------------------------
@@ -420,7 +433,8 @@ def _stat_leak(stat: Stat, scope: str = "reg") -> Optional[Leak]:
                 + (f" ({stat.note})" if stat.note else ""),
                 _cap(advice) + ".", "préflop" if preflop_stat else "postflop", conf, importance(stat, scope),
                 link[0], link[1], check=check, confirmed=check is not None and check.verdict == "fuite",
-                note=stat.size_note(), key=stat.key, direction=direction)
+                note=stat.size_note(), key=stat.key, direction=direction,
+                focus=frozenset() if preflop_stat else frozenset({stat.key}))
 
 
 KEPT_ADVICE = {
@@ -580,9 +594,12 @@ def _solver_leak(group: dict, analyzed: int, digests: Optional[list[dict]] = Non
         note = (f"À relativiser : le solveur suppose des adversaires qui jouent bien ; contre les tiens, l'écart « "
                 f"{exploited.label} » est justifié (vérifié en jeu, voir « Les écarts justifiés ») : une partie de ces "
                 "bb n'est pas perdue.")
+    focus = frozenset(x for x in (leakcheck.solver_stat(group["family"], group["key"], c)
+                                  for c in ("fold", "passive", "aggressive")) if x)
     return Leak(f"{family_name(group['family'])} · {group['label']}", evidence, advice, "solveur", conf,
                 100 * group["lost"] / max(analyzed, 1), f"drill:{group['family']}:{group['key']}", "S'entraîner",
-                _worst(digests or [], group), confirmed=exploited is None, note=note)
+                _worst(digests or [], group), confirmed=exploited is None, note=note,
+                key=f"solveur:{group['family']}:{group['key']}", focus=focus)
 
 
 def _hand_leak(x: "handplay.Loser", hands: int, scope: str = "reg", fmt: str = "HU") -> Leak:
@@ -751,6 +768,55 @@ def rank(stats: list[Stat], groups: list[dict], analyzed: int, top: int = TOP,
     return leaks[:top]
 
 
+# --- 5. Les mains à passer au solveur ----------------------------------------------------------------------
+#
+# Résoudre toutes ses mains prend des heures : on en choisit une partie. Les plus chères d'abord (ce qu'il y a perdu),
+# celles où se joue un leak d'abord (ses situations après le flop), ou une par ligne (les mains à revoir).
+
+SOLVE_ORDERS = (("leaks", "liées à ses leaks, les plus chères d'abord"), ("pertes", "les plus chères"),
+                ("lignes", "les mains à revoir (les plus gros pots de chaque ligne)"))
+LEAK_SOLVES = 10  # les mains d'un leak passées au solveur d'un clic
+
+
+def hand_keys(hand: Hand, hero: str) -> set[str]:
+    """Les situations après le flop où il a décidé dans cette main (clés de Stat : « srp:cbet »…)."""
+    reader = HandReader.of(hand)
+    family = exploit.hand_family(reader)
+    spots = reader.spots.get(hero) if family else None
+    if not spots:
+        return set()
+    role = "agresseur" if reader.pfa == hero else "defenseur"
+    seen = {ctx for ctx, _ in spots}
+    return {f"{family}:{s.key}" for s in exploit.situations(family, role) if seen.intersection(s.stats)}
+
+
+def solve_orders(todo: review.PendingSpots, hero: str, keys_of, found: list[Leak], picks: list[Pick]) -> dict:
+    """Les mains encore à résoudre, dans chaque ordre (SOLVE_ORDERS) : [(main, minutes)] ; et, pour chaque leak qui se
+    joue après le flop, les siennes (Leak.targets), les plus chères d'abord. keys_of : main -> ses situations."""
+    entries = sorted(zip(todo.hands, todo.pot_types),
+                     key=lambda e: (e[0].net(hero) / e[0].bb, -sum(a.amount for a in e[0].actions)))
+    keys = {h.hand_id: keys_of(h) for h, _ in entries}
+    merged, seen = [], set()
+    for leak in found:
+        if not leak.focus:
+            continue
+        leak.targets = [(h.hand_id, review.minutes(t)) for h, t in entries if keys[h.hand_id] & leak.focus]
+        for target in leak.targets:
+            if target[0] not in seen:
+                seen.add(target[0])
+                merged.append(target)
+    lines = [(p.hand.hand_id, review.minutes(getattr(p.spot, "pot_type", "SRP"))) for p in picks
+             if p.digest is None and p.spot is not None]
+    return {"leaks": merged, "pertes": [(h.hand_id, review.minutes(t)) for h, t in entries], "lignes": lines}
+
+
+def solve_candidates(report: Report, order: str = "leaks", leak: Optional[str] = None) -> list[tuple[str, float]]:
+    """Les mains à passer au solveur pour cet ordre (ou ce leak : sa clé), dans l'ordre : [(main, minutes)]."""
+    if leak is not None:
+        return next((x.targets for x in report.leaks if x.key == leak), [])
+    return report.solve_orders.get(order, [])
+
+
 def rec_notes(stats: list[Stat]) -> list[str]:
     """Contre les récréatifs : où il joue comme contre les réguliers alors que l'exploitation paie."""
     notes = []
@@ -794,10 +860,11 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     opponents: dict = {"reg": [], "rec": []}
     for name, info_k in kinds.items():
         opponents["rec" if info_k.get("kind") == "rec" else "reg"].append(name)
+    found = rank(rows, solver["groups"], solver["analyzed"], digests=solver["digests"], extra=hand_leaks)
     return Report(hero, len(hands), {s: len(parts[s]) for s, _ in SCOPES}, winrate, info, rows, solver, picks,
-                  rank(rows, solver["groups"], solver["analyzed"], digests=solver["digests"], extra=hand_leaks),
-                  rec_notes(rows),
-                  opponents, exploits=kept(rows), opportunities=chances(rows))
+                  found, rec_notes(rows), opponents, exploits=kept(rows), opportunities=chances(rows),
+                  solve_orders=solve_orders(solver["todo"], hero, lambda h: hand_keys(h, hero), found,
+                                            picks.get("reg", [])))
 
 
 def selection_spots(report: Report) -> list:

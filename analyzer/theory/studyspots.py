@@ -148,7 +148,7 @@ def ring_spot_ranges(family: str) -> dict[str, dict[str, float]]:
     found = ring_ranges.lookup(RING_FORMAT, list(info["steps"]))
     if found is None or any(p not in found[1] for p in (info["oop"], info["ip"])):
         raise postflop.Unsupported(f"Pas de ranges 6-max pour « {ring_ranges.describe(list(info['steps']))} » : "
-                                   "charge les charts 6-max (onglet Tables à plusieurs de Mon jeu) ou "
+                                   "charge les charts 6-max (Paramètres › Ranges préflop) ou "
                                    f"{ring_ranges.missing_hint(RING_FORMAT)}.")
     return {p: dict(found[1][p]) for p in (info["oop"], info["ip"])}
 

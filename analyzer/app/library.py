@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import re
 import secrets
 import sys
@@ -18,7 +19,7 @@ from typing import Callable, Optional
 from urllib.parse import quote
 
 from .. import (aliases, bluffs, db, field, handplay, leaks, memory, players, ring, ring_leaks, settings, spots, stakes,
-               store, students)
+               store, students, tracking)
 from .. import period as periods
 from .. import reference as refstudy
 from ..db import analyses as db_analyses
@@ -48,6 +49,7 @@ from .ranges_page import build_ranges_page
 from .settings_page import build_settings_page
 from .hands_page import build_hands_page
 from .leaks_page import build_leaks_page
+from .tracking_page import build_tracking_page
 from .reference_page import build_comparison_page, build_lines_page
 from .ring_page import MAX_SPOTS as MAX_RING_SPOTS
 from .ring_page import build_ring_page
@@ -59,9 +61,9 @@ from .solves import NeedSession, SolveQueue
 
 PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur", "bluffs")
 HEADS_UP_ONLY = ('<p class="note">Aucune main heads-up : cette page analyse tes parties en heads-up. Tes tables à '
-                 'plusieurs (3 à 9 joueurs, ensemble) ont leur Leakfinding, leur préflop, leurs mains de départ et leurs '
-                 'stats par position (onglet Tables à plusieurs).</p>')
-SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks", "tables", "mains")
+                 'plusieurs (3 à 9 joueurs, ensemble) ont leur bilan (avec leurs stats par position), leur Leakfinding, '
+                 'leur préflop et leurs mains de départ : choisis « Tables à plusieurs » en haut de ces pages.</p>')
+SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks", "tables", "mains", "suivi")
 REFERENCE_PAGES = ("comparaison", "lignes", "bilan", "tables", "preflop", "mains")  # un joueur de référence
 REFERENCE_PREFIX = "ref:"  # sa période d'analyse se garde sous cette clé
 FIELD_PAGES = ("regs", "recs", "bluffs", "joueurs")  # Étude du field (« joueurs » : aussi dans Paramètres)
@@ -685,7 +687,7 @@ class Library:
         hands = self.hands_against(player)  # 404 si le joueur est inconnu
         kind = self.kinds()[player]
         if page == "solveur":  # change au fil des analyses : jamais en cache
-            return build_review_page(hands, self.hero, player, kind=kind)
+            return build_review_page(hands, self.hero, player, kind=kind, orders=self.review_orders(player))
 
         def build():
             hands, stats, lines = self._analysis(player)
@@ -717,6 +719,8 @@ class Library:
             return self._cached(key, self._hands_page)
         if page == "leaks":  # change au fil des analyses : le rapport a son propre cache
             return self.leaks_page(table_format=table_format)
+        if page == "suivi":
+            return self.tracking_page(table_format)
         if page == "preflop" and self._leak_format(table_format) != "HU":
             return self._ring_preflop_page()
         if page == "bilan" and self._leak_format(table_format) != "HU":
@@ -727,12 +731,14 @@ class Library:
             raise UnknownPlayer("moi")
         regular, excluded = self.regular_hands()
         if page == "solveur":
-            return build_review_page(regular, self.hero, excluded=excluded, api=f"{self.api}/revue")
+            return build_review_page(regular, self.hero, excluded=excluded, api=f"{self.api}/revue",
+                                     orders=self.review_orders())
 
         def build():
             if page == "bilan":
                 return build_self_report(self.hands, self.all_stats(), self.hero, embed=True, spots_href="",
-                                         kinds=self.kinds(), head=self._bilan_head("HU"))
+                                         kinds=self.kinds(), head=self._bilan_head("HU"),
+                                         leaks_href="" if self.pages.startswith("/reference/") else "leaks")
             if page == "preflop":
                 return build_preflop_page(regular, self.hero, embed=True, spots_href="spots",
                                           note=_excluded_note(excluded), switch=format_switch(self.leak_formats(), "HU"))
@@ -766,11 +772,10 @@ class Library:
         return self._cached(("ring_found",) + self._ring_kinds_key(), build)
 
     def _ring_page(self) -> str:
-        """Tes stats par position aux tables à plusieurs (toutes ensemble), sur toutes tes mains, contre les réguliers
-        et contre les récréatifs, après tes écarts les plus importants contre les réguliers."""
-        scopes, gaps = self._ring_overview()
+        """Tes coups à deux joueurs au flop aux tables à plusieurs, à ouvrir au solveur."""
+        scopes, _ = self._ring_overview()
         return build_ring_page(scopes, self.hero or "", spots=self.ring_spots(MAX_RING_SPOTS),
-                               ranges=ring_ranges.available(), gaps=gaps)
+                               ranges=ring_ranges.available())
 
     def _bilan_head(self, fmt: str) -> str:
         """En tête du bilan : le choix du format, et tes résultats tous formats confondus."""
@@ -803,7 +808,7 @@ class Library:
             return build_ring_preflop_page(
                 ring_preflop.collect(parts["reg"], hero), hero, embed=True, note=note,
                 switch=format_switch(self.leak_formats(), ring_leaks.FORMAT), replay=_ring_replay,
-                load_hint=" Charge-les dans Mon jeu › Tables à plusieurs (« Charger les charts »).")
+                load_hint=" Charge-les dans Paramètres › Ranges préflop (« Charger les charts 6-max »).")
         key = ("self", "preflop", "ring") + documents.revision(db.current(), "ranges")[2:] + self._ring_kinds_key()
         return self._cached(key, build)
 
@@ -1302,7 +1307,41 @@ class Library:
         return build_leaks_page(self.leaks_report(fmt), api=f"{self.api}/leaks", pages=self.pages,
                                 embed=not standalone, standalone=standalone, name=self.display_name,
                                 opponents=self.summary()["opponents"] if fmt == "HU" else self.ring_opponents_view(),
-                                formats=self.leak_formats(), period=periods.describe(self.period))
+                                formats=self.leak_formats(), period=periods.describe(self.period),
+                                follows=None if standalone else tracking.followed(self.pages, fmt))
+
+    def tracking(self, table_format: Optional[str] = None) -> tracking.Tracking:
+        """Le suivi de ses leaks dans le temps (analyzer/tracking.py), dans ce format : ceux qu'il suit, et ceux du
+        Leakfinding à suivre."""
+        fmt = self._leak_format(table_format)
+        report = self.leaks_report(fmt)
+        follow_list = tracking.followed(self.pages, fmt)
+        current = [(x.key, x.title, x.direction) for x in report.leaks
+                   if x.key and x.direction and not x.key.startswith("solveur:")]
+        hero = self.hero or ""
+        changes = documents.revision(db.current(), "plan", "ranges")[2:]
+        if fmt == "HU":
+            kinds = self.kinds()
+            hands = self.hands
+            stats_of = lambda part: leaks.stats_for(part, hero, kinds)  # noqa: E731
+            kinds_key = self._kinds_key()
+        else:
+            kinds, plays = self.ring_kinds(), self._plays().get("ring")
+            hands = ring_leaks.mine(self.ring, hero)
+            stats_of = lambda part: ring_leaks.stats(part, hero, kinds, plays)  # noqa: E731
+            kinds_key = self._ring_kinds_key()
+        key = ("suivi", fmt, json.dumps(follow_list, sort_keys=True), tuple(current)) + changes + kinds_key
+        return self._cached(key, lambda: tracking.build(hands, stats_of, follow_list, current))
+
+    def tracking_page(self, table_format: Optional[str] = None) -> str:
+        fmt = self._leak_format(table_format)
+        return build_tracking_page(self.tracking(fmt), api=f"{self.api}/suivi", table_format=fmt,
+                                   formats=self.leak_formats())
+
+    def follow_leak(self, key: str, since: Optional[date], title: str = "", table_format: Optional[str] = None) -> dict:
+        """Suit ce leak (la clé de sa stat) à partir de cette date, ou ne le suit plus (since None)."""
+        fmt = self._leak_format(table_format)
+        return {"suivis": tracking.follow(self.pages, fmt, key, since, title)}
 
     def report_synthesis(self, table_format: Optional[str] = None) -> synthesis.Synthesis:
         """L'essentiel du Leakfinding d'un format, sur la période (pour le rapport PDF et la présentation)."""
@@ -1321,31 +1360,46 @@ class Library:
         """La présentation PowerPoint du Leakfinding, pour la séance du coach avec l'élève."""
         return build_pptx(self.report_synthesis(table_format))
 
-    def leaks_state(self, start: bool = False, table_format: Optional[str] = None) -> dict:
-        """Les mains choisies (contre les réguliers en heads-up) : analysées, à analyser, en cours ; start=True les
-        met en file."""
+    def _queue_hands(self, hand_ids: list[str]) -> None:
+        """Met ces mains en file au solveur (celles déjà résolues ou en cours n'y retournent pas)."""
+        if not postflop.status()["ready"]:
+            return
+        for hand_id in hand_ids:
+            found = self.by_id.get(hand_id)
+            if found is None or not self.hero:
+                continue
+            try:
+                spot = postflop.build_spot(found, self.hero)
+            except postflop.Unsupported:
+                continue
+            if self.solves.lookup(spot)["state"] not in ("waiting", "running", "done"):
+                self.solves.analyze(spot, review.save_digest)
+
+    def _solve_view(self, all_ids: list[str], done: int) -> dict:
+        """L'avancement des résolutions de ces mains (toutes celles qui restent à résoudre) : en file, en cours."""
+        jobs = self.solves.active_for(all_ids)
+        running = next((v for v in jobs if v["state"] == "running"), None)
+        current = None if running is None else {"hand": running["hand"], "progress": running.get("progress"),
+                                                "max_iterations": running.get("max_iterations"), "job": running["job"]}
+        return {"total": done + len(all_ids), "done": done, "busy": len({v["hand"] for v in jobs}),
+                "current": current, "ready": postflop.status()["ready"]}
+
+    def leaks_state(self, start: bool = False, table_format: Optional[str] = None, order: str = "leaks",
+                    limit: Optional[int] = None, leak: Optional[str] = None) -> dict:
+        """Les mains de ses pots contre les réguliers passées au solveur : analysées, à analyser, en cours ; start=True
+        met en file les limit premières (toutes sans limit) dans cet ordre (leaks.SOLVE_ORDERS), ou celles d'un leak
+        (sa clé)."""
         report = self.leaks_report(self._leak_format(table_format))
-        picks = report.picks.get(report.solver_scope, [])
-        ready = postflop.status()["ready"]
-        busy, current = 0, None
-        for spot in leaks.selection_spots(report):
-            view = self.solves.lookup(spot)
-            if start and ready and view["state"] not in ("waiting", "running", "done"):
-                view = self.solves.analyze(spot, review.save_digest)
-            if view["state"] in ("waiting", "running"):
-                busy += 1
-                if view["state"] == "running":
-                    current = {"hand": spot.hand.hand_id, "progress": view.get("progress"),
-                               "max_iterations": view.get("max_iterations")}
-        done = sum(1 for p in picks if p.digest is not None)
-        return {"total": sum(1 for p in picks if p.digest is not None or p.spot is not None), "done": done,
-                "busy": busy, "current": current, "ready": ready}
+        if start:
+            chosen = leaks.solve_candidates(report, order, leak)
+            self._queue_hands([hand_id for hand_id, _ in (chosen[:limit] if limit else chosen)])
+        return self._solve_view([hand_id for hand_id, _ in report.solve_orders.get("pertes", [])],
+                                report.review["analyzed"])
 
     def leaks_cancel(self, table_format: Optional[str] = None) -> dict:
-        for spot in leaks.selection_spots(self.leaks_report(self._leak_format(table_format))):
-            view = self.solves.lookup(spot)
-            if view["state"] in ("waiting", "running"):
-                self.solves.cancel(view["job"])
+        report = self.leaks_report(self._leak_format(table_format))
+        for view in self.solves.active_for([hand_id for hand_id, _ in report.solve_orders.get("pertes", [])]):
+            self.solves.cancel(view["job"])
         return self.leaks_state(table_format=table_format)
 
     # --- résolution postflop ----------------------------------------------------
@@ -2133,23 +2187,30 @@ class Library:
                                 field=self.plan_field(band))
 
     # --- analyse des mains jouées ---------------------------------------------------
-    def review_state(self, villain: Optional[str] = None, start: bool = False) -> dict:
-        """Mains allées au flop (toutes, ou face à cet adversaire) : analysées, à analyser, en cours ;
-        start=True met en file celles qui restent (les plus gros pots d'abord)."""
+    def review_orders(self, villain: Optional[str] = None) -> dict:
+        """Les mains encore à résoudre (toutes, ou face à cet adversaire), dans chaque ordre : « pots » (les plus gros
+        pots d'abord), « pertes » (les plus chères d'abord) et, pour tes mains contre les réguliers, « leaks »
+        (celles où se joue un de tes leaks, les plus chères d'abord) : [(main, minutes)]."""
+        hands = self.hands_against(villain) if villain else self.regular_hands()[0]
+        _, todo = review.collect(hands, self.hero)
+        pots = [(h.hand_id, review.minutes(t)) for h, t in zip(todo.hands, todo.pot_types)]
+        costly = review.by_loss(todo)
+        out = {"pertes": [(h.hand_id, review.minutes(t)) for h, t in zip(costly.hands, costly.pot_types)], "pots": pots}
+        if not villain and self.hands:
+            wanted = {h for h, _ in pots}
+            out["leaks"] = [x for x in self.leaks_report("HU").solve_orders.get("leaks", []) if x[0] in wanted]
+        return out
+
+    def review_state(self, villain: Optional[str] = None, start: bool = False, order: str = "pots",
+                     limit: Optional[int] = None) -> dict:
+        """Mains allées au flop (toutes, ou face à cet adversaire) : analysées, à analyser, en cours ; start=True met en
+        file les limit premières de celles qui restent (toutes sans limit), dans cet ordre (review_orders)."""
         hands = self.hands_against(villain) if villain else self.regular_hands()[0]
         done, todo = review.collect(hands, self.hero)
-        ready = postflop.status()["ready"]
-        if start and ready:  # les spots ne se construisent qu'ici, pour les mettre en file
-            active = {v["hand"] for v in self.solves.active_for(todo.hand_ids)}
-            for spot in todo:
-                if spot.ident not in active:
-                    self.solves.analyze(spot, review.save_digest)
-        jobs = self.solves.active_for(todo.hand_ids)
-        running = next((v for v in jobs if v["state"] == "running"), None)
-        current = None if running is None else {"hand": running["hand"], "progress": running.get("progress"),
-                                                "max_iterations": running.get("max_iterations"), "job": running["job"]}
-        return {"total": len(done) + len(todo), "done": len(done), "busy": len({v["hand"] for v in jobs}),
-                "current": current, "ready": ready}
+        if start:
+            chosen = self.review_orders(villain).get(order) or []
+            self._queue_hands([hand_id for hand_id, _ in (chosen[:limit] if limit else chosen)])
+        return self._solve_view(todo.hand_ids, len(done))
 
     def review_cancel(self, villain: Optional[str] = None) -> dict:
         hands = self.hands_against(villain) if villain else self.regular_hands()[0]

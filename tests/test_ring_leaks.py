@@ -400,9 +400,9 @@ class AppTest(IsolatedHome):
         self.assertEqual(status, 200)
         self.assertIn('"total"', body)
         self.assertEqual(self.request("POST", "/api/leaks/arreter?format=ring", "{}")[0], 200)
-        status, _, page = self.request("GET", "/moi/tables")  # les écarts en tête de la page des tables
+        status, _, page = self.request("GET", "/moi/tables")  # les coups ; les écarts sont dans le bilan
         self.assertEqual(status, 200)
-        self.assertIn("Tes écarts les plus importants", page)
+        self.assertIn("Coups à deux joueurs au flop", page)
         self.assertIn('href="leaks?format=ring"', page)
         self.assertEqual(self.lib.summary()["ring_hands"], 3)
 
@@ -456,7 +456,8 @@ class RingOnlyTest(IsolatedHome):
         self.assertIn("2 mains aux tables à plusieurs (6-max)", bilan)
         self.assertNotIn('class="lk-fmt"', bilan)  # un seul format : pas de choix
         self.assertIn("Aucune main heads-up", lib.self_page("solveur"))
-        self.assertIn("Tes écarts les plus importants", lib.self_page("tables"))
+        self.assertIn("Tes écarts les plus importants", bilan)
+        self.assertIn("Par position", bilan)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+from datetime import date
 import re
 import sys
 import traceback
@@ -36,7 +37,7 @@ MAX_PATH = 40  # étapes d'un chemin dans l'arbre (bien plus qu'un coup réel)
 MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
 MAX_SMALL_BODY = 64 * 1024
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "bluffs", "tables", "mains")
+STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "bluffs", "tables", "mains", "suivi")
 REFINE_SIDES = {"attaque": "attack", "defense": "defense"}  # affiner un niveau du plan : le côté
 
 
@@ -603,12 +604,14 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) == 3 and parts[:2] == ["api", "revue"] and parts[2] in ("lancer", "arreter"):
             payload = self._small_json()
             villain = payload.get("adversaire") if isinstance(payload, dict) else None
-            if villain is not None and not isinstance(villain, str):
+            choice = self._solve_choice(payload)
+            if (villain is not None and not isinstance(villain, str)) or choice is None:
                 return self._error(400, "Requête invalide.")
             try:
                 if parts[2] == "arreter":
                     return self._json(library.review_cancel(villain))
-                return self._json(library.review_state(villain, start=True))
+                return self._json(library.review_state(villain, start=True, order=choice["order"] or "pots",
+                                                       limit=choice["limit"]))
             except UnknownPlayer:
                 return self._error(404, "Adversaire inconnu.")
         if (parts[:2] == ["api", "spots"] and len(parts) == 4 and parts[2] in library.SPOT_GROUPS
@@ -652,10 +655,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.set_alias(alias, pseudos) if len(parts) == 2 else library.remove_alias(alias))
             except ValueError as exc:
                 return self._error(400, str(exc))
+        if parts == ["api", "suivi"] or len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] == "suivi":
+            follow = self._follow_choice(self._small_json())
+            if follow is None:
+                return self._error(400, "Requête invalide.")
+            try:
+                owner = library if parts == ["api", "suivi"] else library.student(parts[2])
+                return self._json(owner.follow_leak(follow["leak"], follow["since"], follow["title"], self._format()))
+            except UnknownPlayer:
+                return self._error(404, "Élève ou format de table inconnu.")
         if len(parts) == 3 and parts[:2] == ["api", "leaks"] and parts[2] in ("lancer", "arreter"):
+            choice = self._solve_choice(self._small_json())
+            if choice is None:
+                return self._error(400, "Requête invalide.")
             try:
                 return self._json(library.leaks_cancel(self._format()) if parts[2] == "arreter"
-                                  else library.leaks_state(start=True, table_format=self._format()))
+                                  else library.leaks_state(start=True, table_format=self._format(),
+                                                           order=choice["order"] or "leaks", limit=choice["limit"],
+                                                           leak=choice["leak"]))
             except UnknownPlayer:
                 return self._error(404, "Format de table inconnu.")
         if parts == ["api", "eleves"]:
@@ -699,15 +716,55 @@ class Handler(BaseHTTPRequestHandler):
                 return self._pseudo_action(student, parts[4])
             if parts[3:] == ["periode"]:
                 return self._period(student)
-            if len(parts) == 5 and parts[3] == "leaks" and parts[4] in ("lancer", "arreter"):
+            if len(parts) == 5 and parts[3] in ("leaks", "revue") and parts[4] in ("lancer", "arreter"):
+                choice = self._solve_choice(self._small_json())
+                if choice is None:
+                    return self._error(400, "Requête invalide.")
+                if parts[3] == "revue":
+                    return self._json(student.review_cancel() if parts[4] == "arreter" else
+                                      student.review_state(start=True, order=choice["order"] or "pots",
+                                                           limit=choice["limit"]))
                 try:
                     return self._json(student.leaks_cancel(self._format()) if parts[4] == "arreter"
-                                      else student.leaks_state(start=True, table_format=self._format()))
+                                      else student.leaks_state(start=True, table_format=self._format(),
+                                                               order=choice["order"] or "leaks",
+                                                               limit=choice["limit"], leak=choice["leak"]))
                 except UnknownPlayer:
                     return self._error(404, "Format de table inconnu.")
-            if len(parts) == 5 and parts[3] == "revue" and parts[4] in ("lancer", "arreter"):
-                return self._json(student.review_cancel() if parts[4] == "arreter" else student.review_state(start=True))
         return self._error(404, "Page introuvable.")
+
+    @staticmethod
+    def _follow_choice(payload) -> Optional[dict]:
+        """Un leak à suivre, d'après la requête : {"leak", "since" (date ou None : ne plus le suivre), "title"}, ou None
+        si elle est invalide."""
+        if not isinstance(payload, dict):
+            return None
+        leak, since, title = payload.get("leak"), payload.get("depuis"), payload.get("titre") or ""
+        if not (isinstance(leak, str) and 0 < len(leak) <= 200) or not isinstance(title, str):
+            return None
+        if since is not None:
+            try:
+                since = date.fromisoformat(since) if isinstance(since, str) else None
+            except ValueError:
+                since = None
+            if since is None:
+                return None
+        return {"leak": leak, "since": since, "title": title[:200]}
+
+    @staticmethod
+    def _solve_choice(payload) -> Optional[dict]:
+        """Les mains à passer au solveur, d'après la requête : {"order", "limit", "leak"} (None : par défaut), ou None
+        si la requête est invalide. « ordre » : leaks, pertes, lignes ou pots ; « limite » : un nombre de mains (0 :
+        toutes) ; « leak » : la clé d'un leak."""
+        payload = payload if isinstance(payload, dict) else {}
+        order, limit, leak = payload.get("ordre"), payload.get("limite"), payload.get("leak")
+        if order is not None and order not in ("leaks", "pertes", "lignes", "pots"):
+            return None
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= 5000):
+            return None
+        if leak is not None and not (isinstance(leak, str) and len(leak) <= 200):
+            return None
+        return {"order": order, "limit": limit or None, "leak": leak}
 
     def _import_files(self) -> Optional[list]:
         """Les fichiers d'un import (ou None, la réponse d'erreur déjà envoyée)."""

@@ -29,7 +29,7 @@ from urllib.parse import urlencode
 
 from . import handplay, leakcheck, ring
 from .leaks import (HAND_LEAKS, POT_STAKE, SCOPES, Pick, Report, Stat, _hand_leak, chances, kept, rank, sized,
-                    street_stake)
+                    solve_orders, street_stake)
 from .models import BET, CALL, FOLD, RAISE, VOLUNTARY, Hand
 from .stats import HandReader, Ratio
 from .theory import coach, exploit, postflop, review, studyspots
@@ -275,6 +275,18 @@ def postflop_stats(hands: list[Hand], hero: str, pots: dict[str, Pot], scope_of:
     return out
 
 
+def hand_keys(hand: Hand, hero: str, pot: Optional[Pot]) -> set[str]:
+    """Les situations après le flop où il a décidé dans ce pot à deux (clés de Stat : « srp_ip:agresseur:cbet »…)."""
+    families = _families(pot.structure) if pot is not None else []
+    if not families:
+        return set()
+    spots = HandReader(_view(hand, pot)).spots.get(hero) or []
+    role = "agresseur" if hero == pot.aggressor else "defenseur"
+    seen = {ctx for ctx, _ in spots}
+    return {f"{pot.structure}:{role}:{s.key}" for s in exploit.situations(families[0], role)
+            if seen.intersection(s.stats)}
+
+
 # --- 3. Face au solveur ---------------------------------------------------------------------------------------------
 
 def _relabel(digest: dict, hand: Hand, pot: Pot, hero: str) -> dict:
@@ -398,10 +410,12 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     opponents: dict = {"reg": [], "rec": []}
     for name, info_k in kinds.items():
         opponents["rec" if info_k.get("kind") == "rec" else "reg"].append(name)
-    return Report(hero, len(hands), {s: len(parts[s]) for s, _ in SCOPES}, winrate, info, rows, solver,
-                  interesting(parts, hero, pots, solver["digests"]),
-                  rank(rows, solver["groups"], solver["analyzed"], digests=solver["digests"], extra=hand_leaks),
-                  [], opponents, table_format=FORMAT,
+    picks = interesting(parts, hero, pots, solver["digests"])
+    found_leaks = rank(rows, solver["groups"], solver["analyzed"], digests=solver["digests"], extra=hand_leaks)
+    orders = solve_orders(solver["todo"], hero, lambda h: hand_keys(h, hero, pots.get(h.hand_id)), found_leaks,
+                          picks.get("reg", []))
+    return Report(hero, len(hands), {s: len(parts[s]) for s, _ in SCOPES}, winrate, info, rows, solver, picks,
+                  found_leaks, [], opponents, table_format=FORMAT, solve_orders=orders,
                   context={"charts": bool(lines), "plans": plans, "pots": len(pots),
                            "formats": sorted({h.table_format for h in hands}, key=lambda f: (len(f), f))},
                   exploits=kept(rows), opportunities=chances(rows))

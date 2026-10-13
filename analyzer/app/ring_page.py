@@ -1,6 +1,6 @@
-"""Page « Tables à plusieurs » de Mon jeu : tes stats par position à toutes tes tables de 3 joueurs et plus
-(analyzer/ring.py), sur toutes tes mains, contre les réguliers et contre les récréatifs, après tes écarts à la théorie
-les plus importants contre les réguliers (analyzer/ring_leaks.py, le détail dans le Leakfinding)."""
+"""Page « Tables à plusieurs » de Mon jeu › Mes mains : tes coups à deux joueurs au flop, à ouvrir au solveur ; et tes
+stats position par position à toutes tes tables de 3 joueurs et plus (analyzer/ring.py), sur toutes tes mains, contre
+les réguliers et contre les récréatifs, pour le bilan des tables à plusieurs (positions_html)."""
 from __future__ import annotations
 
 from html import escape
@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from .. import ring
 from ..report import cards_html, fold, format_query, html_page, num, pct_cell
+from ..ring_leaks import FORMAT
 
 STYLE = """<style>
 .rg-switch { display: flex; gap: 6px; margin-top: 14px; }
@@ -65,22 +66,6 @@ def _table(fs: ring.FormatStats, keys: tuple[str, ...], with_result: bool) -> st
             f'<tbody>{"".join(rows)}</tbody></table></div>')
 
 
-def _refs(fs: ring.FormatStats, scope: str = "") -> str:
-    rows = []
-    for key, label in ring.STATS:
-        stat = ring.stat_def(fs.table_format, key)
-        r = fs.total.ratios[key]
-        if stat.ref and r.opps:
-            rows.append(f"<tr><td>{escape(label)}</td>{pct_cell(r, stat=stat)}"
-                        f'<td class="num muted">{stat.ref[0]:.0f}–{stat.ref[1]:.0f}&nbsp;%</td></tr>')
-    if not rows:
-        return ""
-    return fold("Toutes positions face aux repères", (
-        '<div class="card"><table class="stats"><thead><tr><th></th><th class="num">Toi</th><th class="num">Repère</th>'
-        f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'),
-        "tes stats d'ensemble, face aux repères d'un régulier", f"reperes-{scope}")
-
-
 MAX_SPOTS = 60
 WHY = (("Pas de range", "pas de range préflop"), ("Ta solution ne donne pas", "range manquante"),
        ("Un troisième joueur", "argent mort d'un 3e joueur"), ("Tapis préflop", "tapis préflop"))
@@ -91,7 +76,7 @@ def _why(status: str) -> str:
     return f'<span class="muted" title="{escape(status)}">{escape(short)}</span>'
 
 
-def _spots(rows: list[dict], ready: bool) -> str:
+def _spots(rows: list[dict], ready: bool, opened: bool = False) -> str:
     """Les coups à deux joueurs au flop (toutes tables), à ouvrir au solveur postflop."""
     mine = rows
     if not mine:
@@ -122,7 +107,7 @@ def _spots(rows: list[dict], ready: bool) -> str:
              f"derrière) ; le pot compte l'argent mort des joueurs qui ont foldé.{extra}</p>")
     return fold("Coups à deux joueurs au flop", note + table,
                 f"{len(mine)} coup{'s' if len(mine) > 1 else ''} à ouvrir au solveur, les plus gros pots d'abord",
-                "coups", opened=not ready)
+                "coups", opened=opened or not ready)
 
 
 def _gaps(found: Optional[list]) -> str:
@@ -130,7 +115,6 @@ def _gaps(found: Optional[list]) -> str:
     tête de page ; le détail est dans le Leakfinding des tables à plusieurs."""
     if found is None:
         return ""
-    from ..ring_leaks import FORMAT
     from .leaks_page import gaps_table
     link = (f'<a href="leaks{escape(format_query(FORMAT))}">Le Leakfinding des tables à plusieurs</a> donne le détail de '
             "toutes tes stats, les mains à passer au solveur et les leaks à travailler.")
@@ -146,32 +130,33 @@ def _gaps(found: Optional[list]) -> str:
     return f'<h2>Tes écarts les plus importants</h2><div class="card">{body}</div>'
 
 
-def _section(fs: ring.FormatStats, scope: str, shown: bool) -> str:
-    t = fs.total
-    tiles = [("Mains", str(t.hands), " · ".join(fs.sites)),
-             ("Résultat", f"{num(t.net_bb, 1, sign=True)} bb", f"{num(t.bb100, 1, sign=True)} bb/100"),
-             ("VPIP / PFR", f"{num(t.ratios['vpip'].pct, 0)} / {num(t.ratios['pfr'].pct, 0)}", "%"),
-             ("3bet", f"{num(t.ratios['threebet'].pct, 1)}&nbsp;%", f"sur {t.ratios['threebet'].opps} occasions")]
-    tiles_html = '<div class="tiles">' + "".join(
-        f'<div class="tile"><div class="label">{label}</div><div class="value">{value}</div><div class="sub">{escape(sub)}</div></div>'
-        for label, value, sub in tiles) + "</div>"
-    period = f"{fs.first:%d/%m/%Y} → {fs.last:%d/%m/%Y}" if fs.first else ""
-    tables = f" · {', '.join(fs.formats)}" if fs.formats else ""
-    return (f'<section class="rg-fmt" data-scope="{escape(scope)}"{"" if shown else " hidden"}>'
-            f'<div class="meta">{period}{escape(tables)}</div>{tiles_html}'
-            + fold("Préflop par position", _table(fs, PREFLOP, True), "open, défense, 3bet et vols, position par "
-                   "position, face aux repères", f"preflop-{scope}")
-            + fold("Après le flop", _table(fs, POSTFLOP, False), "c-bet, barrels, folds et relances, position par "
-                   "position", f"postflop-{scope}")
-            + f"{_refs(fs, scope)}</section>")
+LABELS = {"all": "Toutes tes mains", "reg": "Contre les réguliers", "rec": "Contre les récréatifs"}
+
+
+def positions_html(shown: list[tuple[str, str, ring.FormatStats]]) -> str:
+    """Tes stats position par position (avant et après le flop), une portée à la fois : shown, [(portée, libellé,
+    stats de toutes tes tables ensemble)] — toutes tes mains, contre les réguliers, contre les récréatifs. Avec STYLE et
+    SCRIPT."""
+    switch = ('<div class="rg-switch" role="group" aria-label="Adversaires">' + "".join(
+        f'<button type="button" data-scope="{escape(scope)}" aria-pressed="{str(k == 0).lower()}">'
+        f"{escape(LABELS.get(scope, label))} ({fs.total.hands})</button>" for k, (scope, label, fs) in enumerate(shown))
+        + "</div>") if len(shown) > 1 else ""
+    sections = "".join(
+        f'<section class="rg-fmt" data-scope="{escape(scope)}"{"" if k == 0 else " hidden"}>'
+        f'<h3>Préflop par position</h3>{_table(fs, PREFLOP, True)}'
+        f'<h3>Après le flop</h3>{_table(fs, POSTFLOP, False)}</section>' for k, (scope, _, fs) in enumerate(shown))
+    note = ('<p class="note">Une position compte ses mains de chaque taille de table. Repères indicatifs d\'un régulier '
+            "en 6-max à 100 bb ; chiffres en gris : moins de 15 occasions. Open : tu parles le premier. Vol : ouverture "
+            "du CO, du bouton ou de la SB sans caller ; la défense se lit en SB et BB. C-bet : tu étais le dernier "
+            "relanceur préflop et on te laisse miser au flop.</p>")
+    return switch + sections + note
 
 
 def build_ring_page(scopes: list[tuple[str, str, list]], hero: str, embed: bool = True,
-                    spots: Optional[list[dict]] = None, ranges: Optional[dict[str, int]] = None,
-                    gaps: Optional[list] = None) -> str:
-    """scopes : [(portée, libellé, ring.analyze(…, merge=True))] — toutes tes mains, contre les réguliers, contre les
-    récréatifs ; spots : Library.ring_spots() ; ranges : formats dont la solution préflop est là (ring_ranges.available) ;
-    gaps : tes écarts les plus importants contre les réguliers (leaks.top_stat_gaps)."""
+                    spots: Optional[list[dict]] = None, ranges: Optional[dict[str, int]] = None) -> str:
+    """Tes coups à deux joueurs au flop aux tables à plusieurs, à ouvrir au solveur. scopes : [(portée, libellé,
+    ring.analyze(…, merge=True))] — toutes tes mains, contre les réguliers, contre les récréatifs ; spots :
+    Library.ring_spots() ; ranges : formats dont la solution préflop est là (ring_ranges.available)."""
     shown = [(scope, label, stats[0]) for scope, label, stats in scopes if stats]
     if not shown:
         body = ('<p class="note">Aucune main à une table de 3 joueurs ou plus. Importe des historiques 3-max, 6-max ou de '
@@ -182,25 +167,15 @@ def build_ring_page(scopes: list[tuple[str, str, list]], hero: str, embed: bool 
                      'téléchargés sur ta machine, pour ton usage personnel (conditions du site)</span> '
                      '<span class="rg-load-msg small"></span></p>')
         return html_page("Tables à plusieurs", body, embed, script=SCRIPT)
-    labels = {"all": "Toutes tes mains", "reg": "Contre les réguliers", "rec": "Contre les récréatifs"}
-    switch = ('<div class="rg-switch" role="group" aria-label="Adversaires">' + "".join(
-        f'<button type="button" data-scope="{escape(scope)}" aria-pressed="{str(k == 0).lower()}">'
-        f"{escape(labels.get(scope, label))} ({fs.total.hands})</button>" for k, (scope, label, fs) in enumerate(shown))
-        + "</div>") if len(shown) > 1 else ""
     heading = "" if embed else f"<h1>Tables à plusieurs — {escape(hero)}</h1>"
-    style = ""
-    if gaps is not None:
-        from .leaks_page import STYLE as LEAK_STYLE
-        from .review_page import STYLE as REVIEW_STYLE
-        style = f"<style>{REVIEW_STYLE}{LEAK_STYLE}</style>"
-    sections = "".join(_section(fs, scope, k == 0) for k, (scope, _, fs) in enumerate(shown))
-    note = ("Toutes tes tables de 3 joueurs et plus ensemble (3-max, 6-max, 7 à 9 joueurs) ; une position compte ses "
-            "mains de chaque taille de table. Une main compte contre les récréatifs quand un récréatif a mis de l'argent "
-            "dans le pot pendant que tu y étais encore (le type de chaque adversaire se règle dans le Leakfinding des "
-            "tables à plusieurs, ou dans Étude du field). Repères indicatifs d'un régulier en 6-max à 100 bb (stats de "
-            "tracker courantes). Chiffres en gris : moins de 15 occasions. Open : tu parles le premier (personne n'est "
-            "entré avant toi). Vol : ouverture du CO, du bouton ou de la SB sans caller ; la défense se lit en SB et BB. "
-            "C-bet : tu étais le dernier relanceur préflop et on te laisse miser au flop.")
-    body = (STYLE + style + heading + _gaps(gaps) + switch + sections
-            + _spots(spots or [], bool(ranges)) + f'<p class="note">{note}</p>')
-    return html_page(f"Tables à plusieurs — {hero}", body, embed, script=SCRIPT)
+    fs = shown[0][2]
+    period = f"{fs.first:%d/%m/%Y} → {fs.last:%d/%m/%Y} · " if fs.first else ""
+    meta = (f'<div class="meta">{fs.total.hands} mains aux tables à plusieurs ({escape(", ".join(fs.formats))}) · '
+            f"{period}tes stats position par position et tes écarts à la théorie sont dans le "
+            f'<a href="bilan{escape(format_query(FORMAT))}">bilan des tables à plusieurs</a> et le '
+            f'<a href="leaks{escape(format_query(FORMAT))}">Leakfinding</a>.</div>')
+    found = _spots(spots or [], bool(ranges), opened=True)
+    if not found:
+        found = ('<p class="note">Aucun coup à deux joueurs au flop pour l\'instant : tes pots à plusieurs joueurs au '
+                 "flop ne se résolvent pas.</p>")
+    return html_page(f"Tables à plusieurs — {hero}", STYLE + heading + meta + found, embed, script=SCRIPT)

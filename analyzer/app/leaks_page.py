@@ -15,7 +15,7 @@ from ..report import cards_html, fold, format_query, format_switch, html_page, m
 from ..selfreport import OPP_SCRIPT, OPP_STYLE, opponent_row_data, opponent_tools
 from ..theory import review, studyspots
 from .review_page import STYLE as REVIEW_STYLE
-from .review_page import _costly_table, _drills, _duration, _situations_table
+from .review_page import PICKER_SCRIPT, _costly_table, _drills, _duration, _situations_table, solve_picker
 from .ring_page import _why
 
 STYLE = """
@@ -33,6 +33,16 @@ table.lk td.small { font-size: 12px; color: var(--ink-2); }
 table.lk .where { display: block; font-size: 11px; color: var(--muted); }
 .lk-dl { font-weight: 600; }
 .lk-exp { margin: 10px 0 0; color: var(--muted); }
+button.lk-solve { display: block; font: inherit; font-size: 12px; margin-top: 4px; padding: 2px 10px;
+  border-radius: 6px; cursor: pointer; border: 1px solid var(--series-1); background: var(--surface);
+  color: var(--series-1); }
+button.lk-solve:disabled { opacity: .5; cursor: default; }
+button.lk-follow { display: block; font: inherit; font-size: 12px; margin-top: 4px; padding: 2px 10px;
+  border-radius: 6px; cursor: pointer; border: 1px solid var(--border); background: var(--surface);
+  color: var(--ink-2); }
+a.lk-track { display: inline-block; font-size: 12px; margin-top: 4px; font-weight: 600; }
+.rv-pick select { font: inherit; font-size: 13px; }
+.rv-eta { font-size: 12px; color: var(--muted); }
 details.lk-all { margin: 14px 0 0; }
 details.lk-all > summary { font-weight: 600; }
 details.lk-all > .inner-body { padding: 12px 16px; }
@@ -55,19 +65,25 @@ details.lk-all > .inner-body { padding: 12px 16px; }
 .lk-v.chance { color: var(--good); font-weight: 600; }
 """
 
-SCRIPT = """
+SCRIPT = PICKER_SCRIPT + """
 (function () {
   var box = document.querySelector('.lk-head');
   if (!box) return;
   var api = box.dataset.api, query = box.dataset.query || '', done = Number(box.dataset.done), timer = null;
   var run = box.querySelector('.lk-run'), stop = box.querySelector('.lk-stop'), status = box.querySelector('.rv-status');
-  function post(url) { return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(function (r) { return r.json(); }); }
+  var picker = rvPicker(box), solves = document.querySelectorAll('.lk-solve');
+  function post(url, body) {
+    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}) }).then(function (r) { return r.json(); });
+  }
   function show(s) {
     if (s.done !== done && (!s.busy || s.done > done + 2)) { location.reload(); return; }
     status.textContent = '';
     stop.hidden = !s.busy;
     run.disabled = !s.ready;
     run.hidden = !!s.busy || s.done >= s.total;
+    if (picker) picker.el.hidden = run.hidden;
+    solves.forEach(function (b) { b.disabled = !s.ready || !!s.busy; });
     if (!s.ready) status.textContent = 'Installe d\\'abord le solveur : python -m analyzer gtopen --installer';
     else if (s.current) {
       var p = s.current.progress || {};
@@ -78,8 +94,28 @@ SCRIPT = """
     if (s.busy) timer = setTimeout(refresh, 2500);
   }
   function refresh() { fetch(api + query).then(function (r) { return r.json(); }).then(show); }
-  run.addEventListener('click', function () { run.disabled = true; post(api + '/lancer' + query).then(show); });
+  run.addEventListener('click', function () {
+    run.disabled = true;
+    post(api + '/lancer' + query, picker ? picker.choice() : null).then(show);
+  });
   stop.addEventListener('click', function () { post(api + '/arreter' + query).then(show); });
+  document.querySelectorAll('.lk-follow').forEach(function (b) {  // suivre un leak dans le temps, dès aujourd'hui
+    b.addEventListener('click', function () {
+      b.disabled = true;
+      var today = new Date();
+      var iso = new Date(today.getTime() - today.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+      post(api.replace(/\/leaks$/, '/suivi') + query, { leak: b.dataset.leak, depuis: iso, titre: b.dataset.title })
+        .then(function () { location.reload(); });
+    });
+  });
+  solves.forEach(function (b) {  // les mains d'un leak, les plus chères d'abord
+    b.addEventListener('click', function () {
+      solves.forEach(function (x) { x.disabled = true; });
+      post(api + '/lancer' + query, { leak: b.dataset.leak, limite: Number(b.dataset.limit) }).then(show);
+      var section = document.querySelector('details.fold[data-fold="solveur"]');
+      if (section) { section.open = true; box.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    });
+  });
   refresh();
 })();
 """
@@ -168,27 +204,58 @@ def _related(leak: leaks.Leak) -> str:
     return out
 
 
-def _items(found: list[leaks.Leak], pages: str, standalone: bool, badge: bool = True) -> str:
+def _solve_button(leak: leaks.Leak) -> str:
+    """Passer au solveur les mains (pas encore analysées) où se joue ce leak, les plus chères d'abord."""
+    if not leak.targets:
+        return ""
+    n = min(len(leak.targets), leaks.LEAK_SOLVES)
+    minutes = sum(m for _, m in leak.targets[:n])
+    more_hands = f" sur {len(leak.targets)}" if len(leak.targets) > n else ""
+    return (f'<button type="button" class="lk-solve" data-leak="{escape(leak.key)}" data-limit="{n}">Passer ses {n} '
+            f'main{"s" if n > 1 else ""} les plus chères{more_hands} au solveur (≈ {_duration(minutes)})</button>')
+
+
+def _follow(leak: leaks.Leak, follows: Optional[dict], track: str) -> str:
+    """Le suivi d'un leak dans le temps : depuis quand il est suivi (lien vers le Suivi, à l'adresse track), ou le
+    bouton pour le suivre."""
+    if follows is None or not leak.key or not leak.direction or leak.key.startswith("solveur:"):
+        return ""
+    found = follows.get(leak.key)
+    if found:
+        since = found.get("since", "")
+        shown = "/".join(reversed(since.split("-"))) if since else ""
+        return f'<a class="lk-track" href="{escape(track)}" target="_self">Suivi depuis le {escape(shown)} ↗</a>'
+    return (f'<button type="button" class="lk-follow" data-leak="{escape(leak.key)}" data-title="{escape(leak.title)}">'
+            "Suivre ce leak à partir d'aujourd'hui</button>")
+
+
+def _items(found: list[leaks.Leak], pages: str, standalone: bool, badge: bool = True, solve: bool = False,
+           follows: Optional[dict] = None, track: str = "") -> str:
     """Les leaks, l'essentiel visible (le titre, la preuve en une ligne, le conseil) ; la vérification en jeu, ses
-    preuves et la main la plus chère sous « Pourquoi ? »."""
+    preuves et la main la plus chère sous « Pourquoi ? » ; solve : le bouton qui passe ses mains au solveur ; follows :
+    les leaks suivis dans le temps (tracking.followed), pour les suivre d'ici."""
     drills = {} if standalone else _drills()
     out = []
     for x in found:
         detail = _verified(x) + _example(x, standalone)
+        action = _solve_button(x) if solve and not standalone else ""
+        action += "" if standalone else _follow(x, follows, track)
         out.append(f'<li><div class="lk-t">{escape(x.title)} {_conf(x.confidence)}'
                    f'{f" {_badge(x.check)}" if badge and x.check else ""}</div>'
                    f'<div class="lk-e">{escape(x.evidence)}</div>'
                    f'<div class="lk-a">→ {escape(x.advice)}{_leak_link(x, pages, drills, standalone)}</div>'
-                   f'{_related(x)}{more("Pourquoi ? Les preuves", detail) if detail else ""}</li>')
+                   f'{_related(x)}{more("Pourquoi ? Les preuves", detail) if detail else ""}{action}</li>')
     return "".join(out)
 
 
-def leaks_html(report: leaks.Report, pages: str, standalone: bool) -> str:
+def leaks_html(report: leaks.Report, pages: str, standalone: bool, follows: Optional[dict] = None) -> str:
     if not report.leaks:
         return ('<p class="note">Pas de leak net pour l\'instant : pas assez de mains contre les réguliers, ou un jeu '
                 'proche de la théorie dans les situations mesurées (ou des écarts qui rapportent, plus bas). Les mains '
                 'analysées par le solveur affinent le rapport.</p>')
-    return f'<ol class="lk-list">{_items(report.leaks, pages, standalone)}</ol>'
+    track = f"{pages}/suivi{format_query(report.table_format)}"
+    items = _items(report.leaks, pages, standalone, solve=True, follows=follows, track=track)
+    return f'<ol class="lk-list">{items}</ol>'
 
 
 def kept_html(report: leaks.Report, pages: str, standalone: bool) -> str:
@@ -362,17 +429,20 @@ def picks_html(report: leaks.Report, scope: str, pages: str, standalone: bool) -
 
 
 def _head(report: leaks.Report, api: str) -> str:
-    picks = report.picks.get(report.solver_scope, [])
-    state_total = sum(1 for p in picks if p.digest is not None or p.spot is not None)
-    done = sum(1 for p in picks if p.digest is not None)
-    todo = state_total - done
-    eta = 2.5 * todo
+    """Les mains de ses pots contre les réguliers passées au solveur : combien sont analysées, et le choix des
+    suivantes (liées à ses leaks, les plus chères, une par ligne), avec la durée estimée."""
+    orders = report.solve_orders
+    done, todo = report.review["analyzed"], len(orders.get("pertes", []))
+    eta = sum(m for _, m in orders.get("pertes", []))
+    picker = solve_picker([(key, orders.get(key) or []) for key, _ in leaks.SOLVE_ORDERS],
+                          "leaks" if orders.get("leaks") else "pertes")
     return (f'<div class="rv-head lk-head" data-api="{escape(api)}" data-query="{escape(format_query(report.table_format))}" '
-            f'data-done="{done}"><span><b>{done} / {state_total}</b> mains choisies analysées</span>'
-            f'<button type="button" class="go lk-run"{" hidden" if not todo else ""}>Analyser les {todo} mains '
-            'choisies</button><button type="button" class="lk-stop" hidden>Arrêter</button><span class="rv-status"></span></div>'
-            + (f'<p class="note">Chaque main se résout une fois : compte environ {_duration(eta)} sur 4 cœurs. Le rapport se '
-               'complète au fur et à mesure ; tu peux fermer la page.</p>' if todo else ""))
+            f'data-done="{done}"><span><b>{done} / {done + todo}</b> mains analysées</span>{picker}'
+            f'<button type="button" class="go lk-run"{" hidden" if not todo else ""}>Analyser</button>'
+            '<button type="button" class="lk-stop" hidden>Arrêter</button><span class="rv-status"></span></div>'
+            + (f'<p class="note">Les {todo} mains qui restent prendraient environ {_duration(eta)} sur 4 cœurs : '
+               "choisis-en une partie, celles où se jouent ses leaks ou les plus chères d'abord. Chaque main se résout "
+               'une fois ; le rapport se complète au fur et à mesure, tu peux fermer la page.</p>' if todo else ""))
 
 
 def opponents_html(opponents: list[dict], ring: bool = False, title: str = "Tes adversaires",
@@ -443,7 +513,7 @@ def _hints(report: leaks.Report, standalone: bool) -> str:
         return ""
     out = []
     if not report.context.get("charts"):
-        where = "" if standalone else " (Mon jeu › Tables à plusieurs : « Charger les charts »)"
+        where = "" if standalone else " (Paramètres › Ranges préflop : « Charger les charts 6-max »)"
         out.append("Ses charts ne sont pas encore là : le préflop n'est comparé qu'aux repères indicatifs de l'open d'un "
                    f"régulier 6-max. Avec les charts{where}, chaque décision est comparée main par main.")
     if not report.context.get("plans"):
@@ -464,7 +534,8 @@ LEAKS_NOTE = (
 
 def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = True, standalone: bool = False,
                      name: Optional[str] = None, opponents: Optional[list[dict]] = None,
-                     formats: Optional[list[tuple[str, int]]] = None, period: str = "") -> str:
+                     formats: Optional[list[tuple[str, int]]] = None, period: str = "",
+                     follows: Optional[dict] = None) -> str:
     """api : adresse des actions (analyse de la sélection) ; pages : préfixe des pages du joueur (/moi, /eleve/x) ;
     formats : les formats de table de ses mains, avec leur nombre (le choix en haut de la page) ; period : la période
     analysée, en une phrase (rien pour toutes les mains)."""
@@ -562,7 +633,7 @@ def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = T
 {_tiles(report)}
 {_hints(report, standalone)}
 <h2>Les leaks à travailler</h2>
-<div class="card">{leaks_html(report, pages, standalone)}
+<div class="card">{leaks_html(report, pages, standalone, follows)}
 {more("Comment ils sont classés et vérifiés", escape(leaks_note))}</div>
 {download}
 {kept_html(report, pages, standalone)}

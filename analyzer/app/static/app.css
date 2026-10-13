@@ -95,6 +95,12 @@ a { color: var(--accent); }
 .tabs a { text-decoration: none; color: var(--ink-2); padding: 8px 12px; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
 .tabs a:hover { color: var(--ink); }
 .tabs a[aria-current="page"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
+.subtabs { display: flex; gap: 6px; padding: 8px 20px; border-bottom: 1px solid var(--grid); overflow-x: auto; }
+.subtabs a { text-decoration: none; color: var(--ink-2); font-size: 13px; padding: 3px 12px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface); white-space: nowrap; }
+.subtabs a:hover { color: var(--ink); }
+.subtabs a[aria-current="page"] { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.tabs[hidden], .subtabs[hidden] { display: none; }
 .content { position: relative; flex: 1; min-height: 0; }
 #frame { border: 0; width: 100%; height: 100%; display: block; background: var(--page); }
 .loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--page); color: var(--ink-2); }
@@ -172,6 +178,7 @@ a.student:hover { border-color: var(--series-1); }
   .period-btn { max-width: 100%; }
   .period-pop { left: 0; right: auto; }
   .tabs { padding: 0 16px; }
+  .subtabs { padding: 8px 16px; }
   .panel { padding: 16px; }
 }
 @media (max-width: 860px) and (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
