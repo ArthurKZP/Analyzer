@@ -331,15 +331,81 @@ SCRIPT = r"""
     }
     e.target.disabled = false;
   });
+
+  // Les charts par niveau de limites : importer un fichier JSON, le retirer.
+  async function loadStakes() {
+    const box = $('rp-stakes');
+    let data;
+    try {
+      data = await api('/api/ranges/limites');
+    } catch (e) {
+      box.textContent = e.message;
+      return;
+    }
+    box.textContent = '';
+    for (const f of data.formats) {
+      const rows = f.bands.map((b) => {
+        const c = b.charts;
+        const out = el('span', { class: 'rp-err' });
+        const status = c
+          ? el('span', {}, el('b', {}, 'Importés'), c.source ? ' · ' + c.source : '',
+            c.rake ? ' · rake : ' + c.rake : '')
+          : el('span', { class: 'muted' }, f.reference ? 'Ceux de la référence (micro limites, rake élevé)'
+            : 'Pas de charts de référence (charge ceux de Hand2Note Guide, plus bas)');
+        const input = el('input', { type: 'file', accept: '.json,application/json', hidden: true });
+        input.addEventListener('change', async () => {
+          const file = input.files[0];
+          input.value = '';
+          if (!file) return;
+          out.textContent = 'Import…';
+          try {
+            const charts = JSON.parse(await file.text());
+            await api('/api/ranges/limites', { format: f.format, limites: b.band, charts });
+            loadStakes();
+          } catch (err) {
+            out.textContent = err instanceof SyntaxError ? 'Fichier illisible : il faut du JSON.' : err.message;
+          }
+        });
+        const pick = el('button', { type: 'button', class: 'rp-btn', onclick: () => input.click() },
+          c ? 'Remplacer…' : 'Importer…');
+        const drop = c ? el('button', { type: 'button', class: 'rp-btn', onclick: async () => {
+          if (!window.confirm('Retirer les charts ' + f.label + ' des ' + b.label.toLowerCase()
+            + ' ? Ces mains reprennent ceux de la référence.')) return;
+          try {
+            await api('/api/ranges/limites/retirer', { format: f.format, limites: b.band });
+            loadStakes();
+          } catch (err) { out.textContent = err.message; }
+        } }, 'Retirer') : null;
+        return el('tr', {}, el('td', {}, b.label), el('td', { class: 'num' }, b.hands ? num(b.hands, 0) : '–'),
+          el('td', {}, status, ' ', out), el('td', { class: 'act' }, pick, drop ? ' ' : '', drop, input));
+      });
+      box.append(el('h3', {}, f.label), el('div', { class: 'scroll' }, el('table', { class: 'stats rp-lines' },
+        el('thead', {}, el('tr', {}, el('th', {}, 'Limites'), el('th', { class: 'num' }, 'Tes mains'),
+          el('th', {}, 'Charts'), el('th', {}, ''))), el('tbody', {}, rows))));
+    }
+  }
+  loadStakes();
   load();
 })();
 """
 
 
 def build_ranges_page(embed: bool = True) -> str:
-    body = """<div class="meta">Tes ranges préflop par défaut, ligne par ligne : à la place de celles de la référence (la
-solution heads-up, les charts des tables à plusieurs), le solveur part des tiennes dans tous tes coups de la ligne.</div>
-<h2>Où elles s'appliquent</h2>
+    body = """<div class="meta">Tes charts préflop selon tes limites, qui jugent ton préflop ; puis tes ranges par
+défaut, ligne par ligne : à la place de celles de la référence (la solution heads-up, les charts des tables à
+plusieurs), le solveur part des tiennes dans tous tes coups de la ligne.</div>
+<h2>Charts selon les limites</h2>
+<div class="card">
+<p style="margin-top:0">Le rake change la théorie : plus il pèse, plus on ouvre et on défend serré, moins on paie et on
+limpe. Les charts de la référence (la solution heads-up, les charts 6-max) sont ceux des micro limites, au rake élevé.
+Importe, pour un niveau de limites, des charts faits pour lui (fichier JSON : en heads-up, une range par action à chaque
+nœud — open du bouton, BB face à l'open, bouton face au 3bet, BB face au 4bet — ; aux tables à plusieurs, une solution
+par lignes, voir le README) : tes mains de ce niveau sont jugées avec eux dans le Leakfinding, les mains de départ, le
+préflop et le suivi. Les coups résolus au solveur gardent leurs ranges (celles de la référence, ou les tiennes plus
+bas) : rien n'est à résoudre à nouveau.</p>
+<div id="rp-stakes"><p class="muted">Chargement…</p></div>
+</div>
+<h2>Tes ranges, ligne par ligne : où elles s'appliquent</h2>
 <div class="card">
 <p style="margin-top:0">Tes coups de la ligne et du format : l'explorateur, l'analyse de tes mains face au solveur et le
 Leakfinding. Un coup réglé à part dans l'explorateur (onglet <b>Ranges</b>, « pour ce coup seulement ») garde son

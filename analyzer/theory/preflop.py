@@ -87,7 +87,11 @@ class Solution:
 
 @lru_cache(maxsize=8)
 def load_solution(path: Optional[str] = None) -> Solution:
-    data = json.loads(Path(path or DEFAULT_SOLUTION).read_text(encoding="utf-8"))
+    return parse_solution(json.loads(Path(path or DEFAULT_SOLUTION).read_text(encoding="utf-8")))
+
+
+def parse_solution(data: dict) -> Solution:
+    """Une solution heads-up lue de son JSON (au format de theory/data/hu_100bb.json)."""
     nodes = {
         key: Node(
             key=key,
@@ -104,9 +108,10 @@ def load_solution(path: Optional[str] = None) -> Solution:
     return Solution(data["name"], data.get("description", ""), data.get("source", ""), data["stack_bb"], nodes)
 
 
-def gto_value(node_key: str, action: str) -> float:
-    """Fréquence globale (%) du solveur ; « raise » inclut le tapis, « vpip » = relances + calls."""
-    solution = load_solution()
+def gto_value(node_key: str, action: str, solution: Optional[Solution] = None) -> float:
+    """Fréquence globale (%) du solveur (la solution fournie, ou celle-ci) ; « raise » inclut le tapis, « vpip » =
+    relances + calls."""
+    solution = solution or load_solution()
     if action == "raise":
         return solution.aggressive_total(node_key)
     if action == "vpip":

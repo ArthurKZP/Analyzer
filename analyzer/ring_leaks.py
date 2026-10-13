@@ -32,7 +32,7 @@ from .leaks import (HAND_LEAKS, POT_STAKE, SCOPES, Pick, Report, Stat, _hand_lea
                     solve_orders, street_stake)
 from .models import BET, CALL, FOLD, RAISE, VOLUNTARY, Hand
 from .stats import HandReader, Ratio
-from .theory import coach, exploit, postflop, review, studyspots
+from .theory import coach, exploit, postflop, review, stake_charts, studyspots
 
 FORMAT = "ring"   # le format des tables à plusieurs dans l'application (« ?format=ring »)
 LABEL = ring.MERGED
@@ -374,7 +374,7 @@ def stats(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     if pots is None:
         pots = _pots(hands, hero)
     if plays is None:
-        plays = handplay.collect(hands, hero, handplay.Theory(None, handplay.ring_lines()))
+        plays = handplay.collect(hands, hero, stake_charts.theory(heads_up=False))
     else:  # celles de ces mains, sans l'EV perdue (le préflop face aux charts n'en a pas besoin)
         ids = {h.hand_id for h in hands}
         plays = [p for p in plays if p.hand_id in ids]
@@ -395,7 +395,7 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     lines = handplay.ring_lines()
     losses = review.hero_losses(solver["digests"])
     plays = (handplay.with_losses(plays, hands, losses) if plays is not None else
-             handplay.collect(hands, hero, handplay.Theory(None, lines), losses))
+             handplay.collect(hands, hero, stake_charts.theory(heads_up=False), losses))
     rows = stats(hands, hero, kinds, plays, pots)
     leakcheck.attach(rows, leakcheck.ring_checks(rows, parts["reg"], hero, pots, plays, kinds))
     regular = {h.hand_id for h in parts["reg"]}
@@ -417,5 +417,6 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     return Report(hero, len(hands), {s: len(parts[s]) for s, _ in SCOPES}, winrate, info, rows, solver, picks,
                   found_leaks, [], opponents, table_format=FORMAT, solve_orders=orders,
                   context={"charts": bool(lines), "plans": plans, "pots": len(pots),
+                           "stake_charts": stake_charts.used(FORMAT, hands),
                            "formats": sorted({h.table_format for h in hands}, key=lambda f: (len(f), f))},
                   exploits=kept(rows), opportunities=chances(rows))

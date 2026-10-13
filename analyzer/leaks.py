@@ -37,7 +37,7 @@ from . import handplay, leakcheck, players
 from .insights import wilson
 from .models import Hand
 from .stats import HandReader, Ratio, analyze
-from .theory import coach, exploit, postflop, preflop, review, studyspots
+from .theory import coach, exploit, postflop, preflop, review, stake_charts, studyspots
 
 SCOPES = (("all", "Toutes ses mains"), ("reg", "Contre réguliers"), ("rec", "Contre récréatifs"))
 PREFLOP = (  # (stat, nœud de la solution, action, libellé, sens de l'action)
@@ -280,13 +280,16 @@ def street_stake(key: str) -> float:
 
 
 def preflop_stats(stats: dict, hero: str, hands: dict) -> list[Stat]:
+    """Ses stats préflop face à la solution heads-up : celle de chaque niveau de limites (theory/stake_charts.py),
+    pondérée par ses mains de chaque niveau."""
     out = []
     total = len(hands["all"]) or 1
+    weights = stake_charts.mix(hands["all"])
     for key, node, action, label, kind in PREFLOP:
         ratios = {scope: (stats[scope].get(hero).r(key) if stats[scope].get(hero) else Ratio()) for scope, _ in SCOPES}
         if not ratios["all"].opps:
             continue
-        ref = preflop.gto_value(node, action) / 100
+        ref = stake_charts.hu_value(node, action, weights) / 100
         out.append(Stat(key, "Préflop", label, kind, ratios, ref, per100=100 * ratios["all"].opps / total,
                         stake=PREFLOP_STAKE.get(key.split(".")[0], 1.0)))
     return out
@@ -854,7 +857,7 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     picks = interesting(parts, hero, solver["digests"])
     losses = review.hero_losses(solver["digests"])
     plays = (handplay.with_losses(plays, parts["reg"], losses) if plays is not None else
-             handplay.collect(parts["reg"], hero, handplay.Theory(preflop.load_solution()), losses))
+             handplay.collect(parts["reg"], hero, stake_charts.theory(ring=False), losses))
     leakcheck.attach(rows, leakcheck.hu_checks(rows, parts["reg"], hero, stats["reg"], plays))
     hand_leaks = [_hand_leak(x, len(parts["reg"])) for x in handplay.losers(plays)[:HAND_LEAKS]]
     opponents: dict = {"reg": [], "rec": []}
@@ -864,7 +867,8 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     return Report(hero, len(hands), {s: len(parts[s]) for s, _ in SCOPES}, winrate, info, rows, solver, picks,
                   found, rec_notes(rows), opponents, exploits=kept(rows), opportunities=chances(rows),
                   solve_orders=solve_orders(solver["todo"], hero, lambda h: hand_keys(h, hero), found,
-                                            picks.get("reg", [])))
+                                            picks.get("reg", [])),
+                  context={"stake_charts": stake_charts.used("HU", hands)})
 
 
 def selection_spots(report: Report) -> list:

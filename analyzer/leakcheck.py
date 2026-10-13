@@ -48,7 +48,7 @@ from .insights import wilson
 from .lines import BOARD_SIZE
 from .models import BET, CALL, FOLD, RAISE, Action, Hand
 from .stats import HandReader, PlayerStats, Ratio, allin_ev
-from .theory import coach, exploit, preflop, studyspots
+from .theory import coach, exploit, stake_charts, studyspots
 
 Z = 1.96                # intervalle de confiance à 95 % des valeurs mesurées
 MIN_N = 15              # décisions minimum pour mesurer une valeur
@@ -589,11 +589,13 @@ def strongest(*found: Evidence) -> Evidence:
     return Evidence(best.value if best else None, [line for e in found for line in e.lines])
 
 
-def _hu_theory(key: str) -> Optional[float]:
+def _hu_theory(key: str, weights: Optional[dict] = None) -> Optional[float]:
+    """La fréquence de la théorie heads-up pour cette stat (celle de chaque niveau de limites, pondérée par weights :
+    les mains de chaque niveau, stake_charts.mix)."""
     situation, action = key.split(".")
     node = HU_NODES.get(situation)
     try:
-        return preflop.gto_value(node, action) / 100 if node else None
+        return stake_charts.hu_value(node, action, weights or {}) / 100 if node else None
     except (KeyError, AttributeError):
         return None
 
@@ -609,6 +611,7 @@ def hu_checks(stats: list, hands: list[Hand], hero: str, players: dict[str, Play
     if not flagged and not measured:
         return {}
     opponents = {h.opponent_of(hero) for h in hands} - {None, hero}
+    weights = stake_charts.mix(hands)
     found = hu_points(hands, hero)
     out: dict[str, Optional[Check]] = {}
     for family in studyspots.FAMILIES:
@@ -638,8 +641,8 @@ def hu_checks(stats: list, hands: list[Hand], hero: str, players: dict[str, Play
                 before, button, fold_key = HU_RAISES[key]
                 noun = HU_NOUNS[key]
                 value, text = folds_value(hu_raises(hands, hero, before, button), "tes " + noun, noun[:-1],
-                                          _hu_theory(fold_key), sized=False)
-                replies = [Reply(REPLIES[k], theirs.r(k), _hu_theory(k), sign=sign)
+                                          _hu_theory(fold_key, weights), sized=False)
+                replies = [Reply(REPLIES[k], theirs.r(k), _hu_theory(k, weights), sign=sign)
                            for k, sign in HU_PREFLOP_MIRRORS.get(key, ()) if k != fold_key]
                 out[key] = chance(measured[key], Evidence(value, [text] if text else []), len(hands), replies)
             continue
@@ -650,11 +653,11 @@ def hu_checks(stats: list, hands: list[Hand], hero: str, players: dict[str, Play
         if key in HU_RAISES:  # leur fold face à tes relances, face à la solution
             before, button, fold_key = HU_RAISES[key]
             value, text = folds_value(hu_raises(hands, hero, before, button), "tes " + noun, noun[:-1],
-                                      _hu_theory(fold_key), sized=False)
+                                      _hu_theory(fold_key, weights), sized=False)
             evidence = strongest(Evidence(value, [text] if text else []), evidence)
             if value is None:
                 fold_key = None
-        replies = [Reply(REPLIES[k], theirs.r(k), _hu_theory(k), sign=sign)
+        replies = [Reply(REPLIES[k], theirs.r(k), _hu_theory(k, weights), sign=sign)
                    for k, sign in HU_PREFLOP_MIRRORS.get(key, ()) if k != fold_key]  # leur fold : déjà mesuré
         out[key] = judge(stat, evidence, replies, len(hands))
     return {k: v for k, v in out.items() if v is not None}

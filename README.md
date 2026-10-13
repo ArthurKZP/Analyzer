@@ -705,11 +705,13 @@ ensemble ; les boutons en haut de la page, le dernier choisi est gardé), voir p
   fréquence en plus ou en moins, quand aucune autre de leurs réponses ne dit le contraire.
 - **Ses stats face à la théorie**, sur toutes ses mains, contre les réguliers et contre les récréatifs : d'abord
   **les écarts les plus importants** (situation, sa fréquence, la théorie, l'écart en points, la confiance, ce qu'il
-  coûte ou rapporte en jeu et quoi faire ; les fuites vérifiées d'abord), puis **le détail**, replié : VPIP, PFR, abattage, résultat, puis préflop face à la solution HU 100 bb (open,
-  limp, 3bet, 4bet, folds) et après le flop face aux plans de jeu des flops résolus (c-bet, barrels, c-bet retardée,
-  folds face aux mises, relances, probes), par type de pot et par position. Écart « solide » (le hasard l'explique
-  mal : intervalle de confiance à 90 % hors d'une marge de 4 points autour de la théorie) ou « indicatif » (8 points
-  d'écart) ; près de 0 % ou de 100 %, la marge rétrécit (un open à 23 % au lieu de 16 % est un gros écart).
+  coûte ou rapporte en jeu et quoi faire ; les fuites vérifiées d'abord), puis **le détail**, replié : VPIP, PFR,
+  abattage, résultat, puis préflop face à la solution HU 100 bb de son niveau de limites (open, limp, 3bet, 4bet,
+  folds ; voir *Charts selon les limites*) et après le flop face aux plans de jeu des flops résolus (c-bet, barrels,
+  c-bet retardée, folds face aux mises, relances, probes), par type de pot et par position. Écart « solide » (le
+  hasard l'explique mal : intervalle de confiance à 90 % hors d'une marge de 4 points autour de la théorie) ou
+  « indicatif » (8 points d'écart) ; près de 0 % ou de 100 %, la marge rétrécit (un open à 23 % au lieu de 16 % est
+  un gros écart).
 - **Le repère à sa taille** (après le flop) : une même stratégie théorique peut miser petit et souvent, ou gros et
   moins souvent ; comparer les seules fréquences prendrait l'une pour une fuite de l'autre (un check-raise à 33 % du
   pot, joué souvent, face à un check-raise au pot, joué moins souvent). Quand ses mises ou ses relances ont une
@@ -1027,6 +1029,46 @@ ligne ; les séries, leurs plans de jeu et les repères restent faits avec la r�
 n'a plus de référence (charts retirés, format que tu ne joues plus) restent listés, à effacer. Code :
 `analyzer/app/ranges_page.py` (l'éditeur, partagé avec l'explorateur : `static/rangekit.js`),
 `theory/custom_ranges.py` (`reference_lines`).
+
+### Charts selon les limites (rake)
+
+Le rake change la théorie : plus il pèse, plus on ouvre et on défend serré, moins on paie et on limpe. Les charts de
+la référence — la solution heads-up 100 bb (`theory/data/hu_100bb.json`) et les charts 6-max de Hand2Note Guide —
+sont ceux d'un jeu de **micro limites au rake élevé**. En tête de *Paramètres › Ranges préflop*, **Charts selon les
+limites** : pour chaque format que tu joues (heads-up, 6-max…) et chaque niveau de limites (micro : NL10 et moins ;
+milieu : jusqu'à NL100 ; hautes : NL200 et plus, d'après la grosse blinde de chaque main), tes mains de ce niveau, les
+charts qui les jugent, et *Importer…* (un fichier JSON) ou *Retirer*. En ligne de commande :
+
+```bash
+python -m analyzer ranges --importer hu_hautes.json --limites hautes            # heads-up (format lu dans le fichier)
+python -m analyzer ranges --importer 6max_milieu.json --limites milieu --format 6-max
+python -m analyzer ranges --retirer --limites hautes --format HU
+```
+
+Le fichier, en heads-up : une range par action à chaque nœud de l'arbre (open du bouton, BB face à l'open, bouton face
+au 3bet, BB face au 4bet) ; le poids d'une main est la part de ses combos qui prend l'action, le reste folde ; un nœud
+absent garde celui de la référence. Les fréquences de chaque nœud se calculent sur les combos qui y arrivent (le
+3bet de la BB pour la BB face au 4bet…). Les tailles sont facultatives (celles de la référence sinon) ; `source` et
+`rake` s'affichent dans les Paramètres. Une solution déjà main par main (au format de `hu_100bb.json`) passe aussi.
+
+```json
+{"format": "HU", "source": "…", "rake": "…",
+ "nodes": {"sb_open": {"raise": "AA,AKs,…,72o:0.5", "call": "…"},
+           "bb_vs_open": {"raise": "…", "call": "…", "allin": "…"},
+           "sb_vs_3bet": {"raise": "…", "call": "…", "allin": "…"},
+           "bb_vs_4bet": {"call": "…", "allin": "…"}},
+ "sizes": {"sb_open": {"raise": 2.5}, "bb_vs_open": {"raise": 11.5}}}
+```
+
+Aux tables à plusieurs, le fichier est une solution par lignes, au format de *Pots à deux joueurs au flop* (plus bas).
+
+**Ce qui change** : chaque main est jugée avec les charts de **son** niveau (ceux importés pour lui, sinon ceux de la
+référence) — les décisions préflop du Leakfinding, les mains de départ, la vérification en jeu, le suivi dans le temps ;
+les repères préflop du Leakfinding heads-up sont la théorie de chaque niveau, pondérée par tes mains de chaque niveau ;
+les pages *Préflop › Face à la théorie* montrent les charts du niveau où tu as le plus de mains. Le Leakfinding et le
+Préflop disent quels charts ont jugé. Les coups résolus au solveur gardent leurs ranges (la référence, ou les tiennes
+ligne par ligne) : rien n'est à résoudre à nouveau. Les charts par limites valent pour toi et tes élèves (gardés dans la
+base, et dans les sauvegardes). Code : `theory/stake_charts.py`.
 
 ## Bluffs des adversaires
 

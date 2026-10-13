@@ -723,6 +723,32 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(self.request("POST", "/api/suivi", json.dumps(bad), headers)[0], 400, bad)
         self.assertEqual(self.request("POST", "/api/eleves/inconnu/suivi", json.dumps(follow), headers)[0], 404)
 
+    def test_stake_charts_routes(self):
+        """Paramètres › Ranges préflop : des charts par niveau de limites, importés puis retirés."""
+        headers = {"Content-Type": "application/json"}
+        view = json.loads(self.request("GET", "/api/ranges/limites")[2])
+        heads_up = next(f for f in view["formats"] if f["format"] == "HU")
+        self.assertEqual([(b["band"], b["hands"], b["charts"]) for b in heads_up["bands"]],
+                         [("micro", 0, None), ("milieu", 0, None), ("hautes", 4, None)])
+        charts = {"source": "Essai", "nodes": {"sb_open": {"raise": "AA"}}}
+        body = {"format": "HU", "limites": "hautes", "charts": charts}
+        status, _, data = self.request("POST", "/api/ranges/limites", json.dumps(body), headers)
+        self.assertEqual(status, 200)
+        heads_up = next(f for f in json.loads(data)["formats"] if f["format"] == "HU")
+        self.assertEqual(heads_up["bands"][2]["charts"]["source"], "Essai")
+        try:
+            self.assertIn("Charts des hautes limites", self.request("GET", "/moi/preflop")[2].decode())
+            self.assertIn("Préflop jugé avec tes charts par limites", self.request("GET", "/moi/leaks")[2].decode())
+        finally:
+            status, _, data = self.request("POST", "/api/ranges/limites/retirer",
+                                           json.dumps({"format": "HU", "limites": "hautes"}), headers)
+        self.assertEqual(status, 200)
+        for bad in ({"format": "HU", "limites": "enorme", "charts": {"nodes": {"sb_open": {"raise": "AA"}}}},
+                    {"format": "HU", "limites": "hautes", "charts": {"nodes": {"sb_open": {"raise": "ZZ"}}}},
+                    {"format": "HU", "limites": "hautes"}, {"format": 3, "limites": "hautes", "charts": {}}):
+            self.assertEqual(self.request("POST", "/api/ranges/limites", json.dumps(bad), headers)[0], 400, bad)
+        self.assertIn("Charts selon les limites", self.request("GET", "/parametres/ranges")[2].decode())
+
     def test_tree_builder_routes(self):
         headers = {"Content-Type": "application/json"}
         status, _, data = self.request("POST", "/api/explorateur/construction", json.dumps({"hand": "HAND01"}), headers)

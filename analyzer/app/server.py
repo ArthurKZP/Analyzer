@@ -36,6 +36,7 @@ STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css
 MAX_PATH = 40  # étapes d'un chemin dans l'arbre (bien plus qu'un coup réel)
 MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
 MAX_SMALL_BODY = 64 * 1024
+MAX_CHARTS_BODY = 4 * 1024 * 1024  # des charts préflop importés (Paramètres › Ranges préflop)
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "bluffs", "tables", "mains", "suivi")
 REFINE_SIDES = {"attaque": "attack", "defense": "defense"}  # affiner un niveau du plan : le côté
@@ -113,9 +114,9 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return origin is None or origin.removeprefix("http://") in self.server.allowed_hosts
 
-    def _small_json(self):
+    def _small_json(self, limit: int = MAX_SMALL_BODY):
         length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0 or length > MAX_SMALL_BODY:
+        if length <= 0 or length > limit:
             return None
         try:
             return json.loads(self.rfile.read(length))
@@ -196,6 +197,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.ranges_settings_page())
             if parts == ["api", "ranges", "defaut"]:
                 return self._json(library.default_ranges_view())
+            if parts == ["api", "ranges", "limites"]:  # … tes charts par niveau de limites
+                return self._json(library.stake_charts_view())
             if parts == ["api", "leaks"]:
                 return self._json(library.leaks_state(table_format=self._format()))
             if parts == ["api", "eleves"]:
@@ -568,6 +571,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(library.coach.ask(conv, text.strip(), context))
         if parts[:3] == ["api", "ranges", "defaut"] and len(parts) <= 4:  # Paramètres › Ranges préflop
             return self._default_ranges(library, parts[3] if len(parts) == 4 else None, self._small_json())
+        if parts[:3] == ["api", "ranges", "limites"] and parts[3:] in ([], ["retirer"]):  # charts par limites
+            payload = self._small_json(MAX_CHARTS_BODY)
+            fmt = payload.get("format") if isinstance(payload, dict) else None
+            band = payload.get("limites") if isinstance(payload, dict) else None
+            charts = payload.get("charts") if isinstance(payload, dict) else None
+            if not (isinstance(fmt, str) and isinstance(band, str) and (parts[3:] or isinstance(charts, dict))):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.delete_stake_charts(fmt, band) if parts[3:] else
+                                  library.save_stake_charts(fmt, band, charts))
+            except ValueError as exc:
+                return self._error(400, str(exc))
         if parts == ["api", "ranges", "hand2note"]:  # charts 6-max de Hand2Note Guide, sur ta machine
             try:
                 return self._json(library.load_hand2note())

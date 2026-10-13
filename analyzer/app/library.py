@@ -34,9 +34,8 @@ from ..report import build_plan_page, build_report, format_switch, html_page
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
 from ..theory import (coach, custom_ranges, custom_tree, handclass, postflop, review, ring_preflop, ring_ranges, sizing,
-                      studyspots)
+                      stake_charts, studyspots)
 from ..theory.page import build_preflop_page, build_ring_preflop_page
-from ..theory.preflop import load_solution
 from ..viewer import build_viewer
 from . import bilan_page, synthesis
 from .report_pdf import build_pdf
@@ -73,6 +72,11 @@ MAX_REMOVED_PSEUDOS = 200  # pseudos dont on supprime les mains d'un coup
 
 class UnknownPlayer(NotFound):
     pass
+
+
+def _theory_changes() -> tuple:
+    """Les révisions de ce qui fait la théorie : plans de jeu, charts, charts par limites (pour les caches)."""
+    return documents.revision(db.current(), "plan", "ranges", stake_charts.KIND)[2:]
 
 
 def _excluded_note(excluded: dict) -> str:
@@ -711,7 +715,7 @@ class Library:
         if page not in SELF_PAGES:
             raise NotFound(page)
         if page == "tables":  # tables à 3 joueurs et plus : pas besoin de mains heads-up
-            changes = documents.revision(db.current(), "plan", "ranges")[2:]  # charts, plans des flops 6-max
+            changes = _theory_changes()  # charts, plans des flops 6-max
             return self._cached(("self", "tables") + changes + self._ring_kinds_key(), self._ring_page)
         if page == "mains":  # heads-up et tables à plusieurs ; les analyses du solveur s'y ajoutent
             key = (("self", "mains", tuple(sorted(ring_ranges.available().items())), _digest_count()) + self._kinds_key()
@@ -739,15 +743,19 @@ class Library:
                 return build_self_report(self.hands, self.all_stats(), self.hero, embed=True, spots_href="",
                                          kinds=self.kinds(), head=self._bilan_head("HU"),
                                          leaks_href="" if self.pages.startswith("/reference/") else "leaks")
-            if page == "preflop":
-                return build_preflop_page(regular, self.hero, embed=True, spots_href="spots",
-                                          note=_excluded_note(excluded), switch=format_switch(self.leak_formats(), "HU"))
+            if page == "preflop":  # les charts du niveau de limites où tu as le plus de mains
+                band, charts = stake_charts.page_band("HU", regular)
+                note = " ".join(x for x in (_excluded_note(excluded), charts) if x)
+                return build_preflop_page(regular, self.hero, embed=True, spots_href="spots", note=note,
+                                          switch=format_switch(self.leak_formats(), "HU"),
+                                          solution=stake_charts.hu_solution(band))
             if page == "bluffs":
                 return self._population_bluffs()
             return build_viewer(self.hands, self.hero, None, embed=True, solver=True, api=f"{self.api}/coups",
                                 records=self._spot_index(None))
         kinds = self._kinds_key() if page in ("bilan", "preflop", "bluffs") else ()
-        return self._cached(("self", page) + kinds, build)
+        charts = stake_charts.revision()[2:] if page == "preflop" else ()
+        return self._cached(("self", page) + kinds + charts, build)
 
     def _ring_overview(self) -> tuple[list, list]:
         """Tes stats aux tables à plusieurs (toutes ensemble) sur toutes tes mains, contre les réguliers et contre les
@@ -759,7 +767,7 @@ class Library:
             scopes = [(scope, label, found[scope]) for scope, label in leaks.SCOPES]
             stats = ring_leaks.stats(self.ring, hero, self.ring_kinds(), plays=self._plays().get("ring"))
             return scopes, leaks.top_stat_gaps(stats, "reg", 5)
-        key = (("ring_overview",) + documents.revision(db.current(), "plan", "ranges")[2:] + self._ring_kinds_key())
+        key = ("ring_overview",) + _theory_changes() + self._ring_kinds_key()
         return self._cached(key, build)
 
     def _ring_found(self) -> dict:
@@ -792,8 +800,7 @@ class Library:
             shown = [(scope, labels[scope], found[0] if found else None) for scope, _, found in scopes]
             return bilan_page.build_ring_bilan(ring_leaks.mine(self.ring, hero), hero, shown,
                                                self.ring_opponents_view(), gaps, head=self._bilan_head("ring"))
-        key = (("self", "bilan", "ring") + documents.revision(db.current(), "plan", "ranges")[2:]
-               + self._ring_kinds_key())
+        key = ("self", "bilan", "ring") + _theory_changes() + self._ring_kinds_key()
         return self._cached(key, build)
 
     def _ring_preflop_page(self) -> str:
@@ -805,11 +812,14 @@ class Library:
             note = (f"{len(parts['rec'])} mains contre des récréatifs sont exclues (un récréatif a mis de l'argent dans le "
                     "pot pendant que tu y étais) : contre eux, l'exploitation prime sur la théorie."
                     if parts["rec"] else "")
+            band, charts = stake_charts.page_band(ring_leaks.FORMAT, parts["reg"])
+            note = " ".join(x for x in (note, charts) if x)
             return build_ring_preflop_page(
-                ring_preflop.collect(parts["reg"], hero), hero, embed=True, note=note,
+                ring_preflop.collect(parts["reg"], hero, stake_charts.ring_lines(band)), hero, embed=True, note=note,
                 switch=format_switch(self.leak_formats(), ring_leaks.FORMAT), replay=_ring_replay,
                 load_hint=" Charge-les dans Paramètres › Ranges préflop (« Charger les charts 6-max »).")
-        key = ("self", "preflop", "ring") + documents.revision(db.current(), "ranges")[2:] + self._ring_kinds_key()
+        key = (("self", "preflop", "ring") + documents.revision(db.current(), "ranges", stake_charts.KIND)[2:]
+               + self._ring_kinds_key())
         return self._cached(key, build)
 
     def _plays(self) -> dict[str, list]:
@@ -818,12 +828,13 @@ class Library:
         def build():
             if not self.hero:
                 return {}
-            theory = handplay.Theory(load_solution(), handplay.ring_lines())
+            theory = stake_charts.theory()  # les charts du niveau de limites de chaque main
             losses = review.hero_losses(review.saved_digests())
             plays = {"HU": handplay.collect(self.hands, self.hero, theory, losses),
                      "ring": handplay.collect(self.ring, self.hero, theory, losses)}
             return {k: v for k, v in plays.items() if v}
-        return self._cached(("plays", tuple(sorted(ring_ranges.available().items())), _digest_count()), build)
+        return self._cached(("plays", tuple(sorted(ring_ranges.available().items())), _digest_count())
+                            + stake_charts.revision()[2:], build)
 
     def _kind_map(self) -> dict[str, str]:
         return {name: info["kind"] for name, info in self.kinds().items()}
@@ -1293,7 +1304,7 @@ class Library:
     def leaks_report(self, table_format: str = "HU") -> "leaks.Report":
         """Le rapport d'un format, recalculé quand des mains, des analyses du solveur, tes charts, les plans de jeu ou
         le type de tes adversaires changent."""
-        changes = (_digest_count(),) + documents.revision(db.current(), "plan", "ranges")[2:]
+        changes = (_digest_count(),) + _theory_changes()
         if table_format == "HU":  # (les mains de départ et les stats déjà lues pour les autres pages servent)
             return self._cached(("leaks",) + changes + self._kinds_key(),
                                 lambda: leaks.build(self.hands, self.hero, self.kinds(), plays=self._plays().get("HU"),
@@ -1319,7 +1330,7 @@ class Library:
         current = [(x.key, x.title, x.direction) for x in report.leaks
                    if x.key and x.direction and not x.key.startswith("solveur:")]
         hero = self.hero or ""
-        changes = documents.revision(db.current(), "plan", "ranges")[2:]
+        changes = _theory_changes()
         if fmt == "HU":
             kinds = self.kinds()
             hands = self.hands
@@ -1557,6 +1568,38 @@ class Library:
         return self.ranges_state(hand_id)
 
     # --- Paramètres › Ranges préflop : tes ranges par défaut, ligne par ligne, sans passer par un coup ---------------
+
+    def stake_charts_view(self) -> dict:
+        """Les charts préflop par niveau de limites (theory/stake_charts.py) : pour chaque format que tu joues (le
+        heads-up, les tables à plusieurs : les charts 6-max et les formats qui ont les leurs) et chaque niveau, ceux
+        importés ou ceux de la référence ; et tes mains de chaque niveau."""
+        plays = settings.load()["formats"]
+        found = stake_charts.available()
+        hero = self.hero or ""
+        formats = []
+        if not plays or "HU" in plays:
+            formats.append((stake_charts.HU, "Heads-up", stake_charts.mix(self._all_hands)))
+        if not plays or "ring" in plays:
+            ring_mix = stake_charts.mix(ring_leaks.mine(self._all_ring, hero)) if hero else {}
+            ring_formats = sorted({"6-max", *ring_ranges.available(), *(f for f in found if f != stake_charts.HU)}
+                                  - {"HU"}, key=lambda f: (f != "6-max", f))
+            formats += [(fmt, fmt, ring_mix) for fmt in ring_formats]
+        out = []
+        references = ring_ranges.available()
+        for fmt, label, counts in formats:
+            bands = [{"band": band, "label": stakes.label(band), "hands": counts.get(band, 0),
+                      "charts": stake_charts.summary(fmt, band)} for band in stakes.BANDS]
+            reference = fmt == stake_charts.HU or ring_ranges.chart_mapping(fmt, references) is not None
+            out.append({"format": fmt, "label": label, "bands": bands, "reference": reference})
+        return {"formats": out}
+
+    def save_stake_charts(self, table_format: str, band: str, data: dict) -> dict:
+        stake_charts.save(table_format, band, data)
+        return self.stake_charts_view()
+
+    def delete_stake_charts(self, table_format: str, band: str) -> dict:
+        stake_charts.delete(table_format, band)
+        return self.stake_charts_view()
 
     def default_ranges_view(self) -> dict:
         """Les lignes de chaque format que tu joues (custom_ranges.formats) et les positions où ta range remplace celle

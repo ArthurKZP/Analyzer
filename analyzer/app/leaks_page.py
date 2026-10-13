@@ -508,10 +508,11 @@ def _tiles(report: leaks.Report) -> str:
 
 
 def _hints(report: leaks.Report, standalone: bool) -> str:
-    """Tables à plusieurs : ce qui manque pour comparer à la théorie (charts, flops 6-max résolus)."""
+    """Les charts qui jugent son préflop selon ses limites ; aux tables à plusieurs, ce qui manque pour comparer à la
+    théorie (charts, flops 6-max résolus)."""
+    out = [report.context["stake_charts"]] if report.context.get("stake_charts") else []
     if not _ring(report):
-        return ""
-    out = []
+        return "".join(f'<p class="lk-hint">{escape(text)}</p>' for text in out)
     if not report.context.get("charts"):
         where = "" if standalone else " (Paramètres › Ranges préflop : « Charger les charts 6-max »)"
         out.append("Ses charts ne sont pas encore là : le préflop n'est comparé qu'aux repères indicatifs de l'open d'un "
@@ -519,7 +520,7 @@ def _hints(report: leaks.Report, standalone: bool) -> str:
     if not report.context.get("plans"):
         where = "" if standalone else " (Études du solveur › 6-max : « Résoudre tous les flops 6-max manquants »)"
         out.append(f"Pas encore de flop 6-max résolu : l'après-flop n'a pas de repère du solveur{where}.")
-    return "".join(f'<p class="lk-hint">{text}</p>' for text in out)
+    return "".join(f'<p class="lk-hint">{escape(text)}</p>' for text in out)
 
 
 LEAKS_NOTE = (
