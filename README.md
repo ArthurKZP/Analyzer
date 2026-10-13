@@ -1117,6 +1117,30 @@ occasions pour avoir un profil). Deux groupes se réunissent tant que leurs prof
 moyenne. Chaque groupe a son titre (ce qui le distingue des autres réguliers), ses écarts situation par situation et
 ce qui ressort de ses mains.
 
+### Bluffcatch à la river : payer ou coucher
+
+Juste sous *Ce qui ressort*, les critères pour payer ou coucher une mise river quand tu défends. Chaque mise (ou
+relance) river que tu as affrontée est rangée par ligne (mise après check à la turn, barrel, mise après call…),
+taille (petite ≤ 40 % du pot, moyenne 41–75 %, grosse 76–110 %, overbet), carte de la river (brique, overcard, board
+pairé, couleur ou quinte possible) et ligne × taille. Pour chaque situation :
+
+- **sa part de bluffs** (rien de fait à la river) dans ses mises vues à l'abattage, face à l'équité qu'il te faut
+  pour payer, taille / (pot + 2 × taille) — 33 % face à une mise pot, 20 % face à un tiers de pot. Au-dessus, un
+  bluffcatcher (une main qui ne bat que ses bluffs) gagne à payer ; en dessous, à coucher. Ses mises vues sont celles
+  que tu as payées : ta décision ne dépend pas de ses cartes, l'échantillon est honnête tant que ses mains payées sont
+  montrées (la part montrée est donnée) ;
+- **tes folds**, face à la part au-delà de laquelle tous ses bluffs sont rentables, taille / (pot + taille) — 50 %
+  face à une mise pot ;
+- ce qu'un bluffcatcher y gagne ou perd par call (en bb, à sa part de bluffs), et **tes calls** : gagnés sur joués,
+  et ce qu'ils ont rapporté.
+
+Le verdict : **payer** quand il bluffe nettement plus qu'il ne faut, **coucher** quand il bluffe nettement moins
+(« solide » : intervalle de confiance à 90 % hors de la référence, 10 mises vues au moins ; « à confirmer » : écart net
+sur peu de mains) ; sinon, **défendre plus** quand tu couches nettement plus que la part qui rend tous ses bluffs
+rentables (10 mises affrontées au moins) — les situations où tu couches trop sont réunies en une ligne, les plus
+coûteuses d'abord. Le détail de chaque situation est replié dessous. Pour les réguliers ensemble, la part de bluffs est
+la moyenne des joueurs (même pondération que plus haut). Code : `analyzer/bluffcatch.py`.
+
 ## Plan de jeu suggéré
 
 Onglet *Plan de jeu suggéré* de *Études du solveur* : les études résolues réduites à des règles simples, du

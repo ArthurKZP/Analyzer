@@ -5,7 +5,7 @@ from __future__ import annotations
 from html import escape
 from typing import Optional
 
-from .. import bluffs
+from .. import bluffcatch, bluffs
 from ..lines import INTENT_LABELS, INTENTS
 from ..models import POSTFLOP
 from ..report import cards_html, fold, html_page, more
@@ -26,6 +26,13 @@ table.bl td.plus { background: var(--hi-bg); }
 table.bl td.moins { background: var(--lo-bg); }
 table.bl tr.sub td { font-weight: 600; background: var(--page); }
 table.bl td.small { font-size: 12px; color: var(--ink-2); }
+.bl-list li.payer { border-left-color: var(--alert); }
+.bl-list li.coucher { border-left-color: var(--series-1); }
+.bl-list li.defendre { border-left-color: var(--series-4); }
+table.bc td.nowrap { white-space: nowrap; }
+table.bc td:first-child { min-width: 180px; }
+.bc-tag { font-size: 11px; font-weight: 600; border-radius: 999px; padding: 0 8px; margin-left: 6px;
+  white-space: nowrap; border: 1px solid var(--axis); color: var(--ink-2); }
 """
 
 STREET_NAME = {"flop": "Flop", "turn": "Turn", "river": "River"}
@@ -139,6 +146,100 @@ def shown_html(report: bluffs.Report) -> str:
     return "".join(out)
 
 
+DECISION_LABELS = {"payer": "Payer", "coucher": "Coucher", "défendre plus": "Défendre plus"}
+
+
+def _bb(x: Optional[float]) -> str:
+    return "–" if x is None else f"{'+' if x > 0 else '−' if x < 0 else ''}{abs(x):.1f}".replace(".", ",")
+
+
+def catch_html(found: list, plural: bool = False) -> str:
+    """Bluffcatch à la river : les critères pour payer ou coucher (bluffcatch.criteria), puis le détail."""
+    who = "leurs" if plural else "ses"
+    method = (
+        "Chaque mise ou relance river que tu as affrontée, rangée par ligne, taille, carte de la river, et ligne et "
+        "taille. <b>Sa part de bluffs</b> (rien de fait à la river) dans ses mises vues à l'abattage, face à "
+        "l'équité qu'il te faut pour payer (taille / (pot + 2 × taille)) : au-dessus, un bluffcatcher — une main qui "
+        "ne bat que ses bluffs — gagne à payer ; en dessous, à coucher. Ses mises vues sont celles que tu as payées : "
+        "ta décision ne dépend pas de ses cartes, l'échantillon est honnête tant que ses mains payées sont montrées "
+        "(colonne « Montrées »). <b>Tes folds</b>, face à la part qui rend tous ses bluffs rentables (taille / (pot "
+        "+ taille)) : au-delà, n'importe quel bluff lui rapporte. Verdict : payer quand il bluffe nettement plus qu'il "
+        "ne faut, coucher quand il bluffe nettement moins (« solide » : intervalle de confiance à 90 % hors de la "
+        "référence, 10 mises vues au moins ; « à confirmer » : écart net sur peu de mains) ; sinon, défendre plus "
+        "quand tu couches nettement trop. « Bluffcatcher » : ce qu'une main qui ne bat que ses bluffs gagne ou perd "
+        "par call, en bb, à sa part de bluffs. « Tes calls » : gagnés sur joués, et ce qu'ils ont rapporté (le pot "
+        "et sa mise quand tu gagnes, ton call quand tu perds).")
+    if plural:
+        method = (method.replace("Sa part", "Leur part").replace("ses mises", "leurs mises")
+                  .replace("ses bluffs", "leurs bluffs").replace("ses cartes", "leurs cartes")
+                  .replace("ses mains", "leurs mains").replace("il bluffe", "ils bluffent")
+                  .replace("lui rapporte", "leur rapporte").replace("sa part", "leur part")
+                  .replace("sa mise", "leur mise") + " Plusieurs joueurs : la part de bluffs est la moyenne des "
+                  "joueurs, chacun pesant selon ses mises vues.")
+    every = next((x for x in found if x.dimension == bluffcatch.ALL), None)
+    if every is None:
+        return ('<h2>Bluffcatch à la river : payer ou coucher</h2><div class="card"><p class="note" style="margin:0">'
+                f"Aucune de {who} mises river affrontée pour l'instant.</p></div>")
+    items = []
+    for x in bluffcatch.criteria(found):
+        action, confidence = x.decision
+        items.append(f'<li class="{"defendre" if action == "défendre plus" else action}"><div class="bl-t">'
+                     f'{escape(x.title)}<span class="bc-tag">{escape(DECISION_LABELS[action])}</span>'
+                     f'{_conf(confidence)}</div><div class="bl-e">{escape(bluffcatch.evidence(x, plural))}</div>'
+                     f'<div class="bl-a">→ {escape(bluffcatch.advice(x, plural))}</div></li>')
+    over = bluffcatch.overfolds(found)
+    if over:  # où tu couches trop, en une ligne chacune
+        spots = " · ".join(f"{x.title.lower() if x.dimension == bluffcatch.SIZE else x.title} : tu couches "
+                           f"{_pct(x.fold_rate)} pour {_pct(x.alpha)}" for x in over)
+        bluff_word = "leurs" if plural else "ses"
+        items.append('<li class="defendre"><div class="bl-t">Où tu couches trop<span class="bc-tag">Défendre plus'
+                     f'</span></div><div class="bl-e">{escape(spots)}.</div><div class="bl-a">→ À ces taux de folds, '
+                     f"n'importe lequel de {bluff_word} bluffs est rentable : paie davantage avec tes meilleurs "
+                     "bluffcatchers, ceux qui battent la value fine.</div></li>")
+    nothing = (f"Rien de net pour l'instant ({bluffcatch.evidence(every, plural)}) → "
+               f"{bluffcatch.advice(every, plural)}")
+    head = (f'<ul class="bl-list">{"".join(items)}</ul>' if items else
+            f'<p class="note" style="margin:0">{escape(nothing)}</p>')
+    dims = dict(bluffcatch.DIMENSIONS)
+    rows, last = [], None
+    for x in found:
+        if x.dimension != last:
+            last = x.dimension
+            if x.dimension != bluffcatch.ALL:
+                rows.append(f'<tr class="sub"><td colspan="10">{escape(dims[x.dimension])}</td></tr>')
+        c, (won, judged, bb) = x.counts, x.won
+        cls = {"payer": "plus", "coucher": "moins"}.get(x.decision[0], "") if x.decision else ""
+        name = x.value if x.dimension in (bluffcatch.LINE, bluffcatch.LINE_SIZE) else x.title
+        seen = "" if x.seen is None or x.seen >= 0.99 else f" ({_pct(x.seen)})"
+        rows.append(
+            f'<tr><td>{escape(name)}</td><td class="num">{len(x.items)}</td>'
+            f'<td class="num">{_pct(x.fold_rate)} <span class="small">/ {_pct(x.alpha)}</span></td>'
+            f'<td class="num">{len(x.shown)}{seen}</td>'
+            f'<td class="num small">{c["bluff"]} · {c["thin"]} · {c["value"]}</td>'
+            f'<td class="num {cls}">{_pct(x.share)}</td><td class="num">{_pct(x.required)}</td>'
+            f'<td class="num">{_bb(x.catcher)}</td>'
+            f'<td class="num nowrap">{f"{won}/{judged} · {_bb(bb)}" if judged else "–"}</td></tr>')
+    table = ('<div class="bl-scroll"><table class="bl bc"><thead><tr><th>Situation</th><th class="num">Mises</th>'
+             '<th class="num" title="Ta part de folds / la part qui rend ses bluffs rentables">Tu couches / max</th>'
+             '<th class="num">Vues</th><th class="num" title="Bluffs · value fine · value">B · VF · V</th>'
+             '<th class="num">Bluffs</th><th class="num">Il te faut</th>'
+             '<th class="num" title="Ce qu\'une main qui ne bat que ses bluffs gagne par call">Bluffcatcher</th>'
+             '<th class="num">Tes calls (bb)</th></tr></thead><tbody>' + "".join(rows) + "</tbody></table></div>"
+             '<p class="note">Tu couches / max : ta part de folds, et celle au-delà de laquelle tous ses bluffs sont '
+             "rentables. B · VF · V : ses mises vues, bluffs, value fine (paire moyenne ou faible), value. Bluffs : sa "
+             "part de bluffs (moyenne des joueurs), face à l'équité qu'il te faut pour payer. Bluffcatcher : bb gagnés "
+             "ou perdus par call avec une main qui ne bat que ses bluffs. Tes calls : gagnés sur joués, bb.</p>")
+    if plural:
+        table = (table.replace("ses bluffs", "leurs bluffs").replace("sa part", "leur part")
+                 .replace("ses mises", "leurs mises"))
+    n = len(every.items)
+    how = more("Comment c'est mesuré", method)
+    return (f'<h2>Bluffcatch à la river : payer ou coucher</h2><div class="card">{head}{how}</div>'
+            + fold("Le détail : chaque ligne, taille et carte", f'<div class="card">{table}</div>',
+                   f"{n} mise{'s' if n > 1 else ''} river affrontée{'s' if n > 1 else ''}, dont {len(every.shown)} "
+                   "vue" + ("s" if len(every.shown) > 1 else "") + " à l'abattage", "bluffcatch"))
+
+
 def examples_html(report: bluffs.Report, limit: int = 30) -> str:
     """Ses bluffs vus, les plus récents d'abord."""
     seen = [s for s in report.shown if s.bluff]
@@ -236,9 +337,10 @@ réguliers ; en rouge, le groupe mise ou bluffe plus que la théorie, en bleu mo
 
 
 def build_bluffs_page(report: bluffs.Report, who: str, embed: bool = True, note: str = "",
-                      players: Optional[list[dict]] = None, groups: Optional[list[dict]] = None) -> str:
+                      players: Optional[list[dict]] = None, groups: Optional[list[dict]] = None,
+                      catch: Optional[list] = None) -> str:
     """who : « de Villain » ou « des réguliers » ; players : résumé par adversaire, groups : les groupes de profils
-    (report.clusters) et ce qui ressort de chacun (population)."""
+    (report.clusters) et ce qui ressort de chacun (population) ; catch : le bluffcatch à la river (bluffcatch.spots)."""
     river = sum(1 for s in report.shown if s.street == "river")
     tiles = (
         '<div class="tiles">'
@@ -285,6 +387,7 @@ def build_bluffs_page(report: bluffs.Report, who: str, embed: bool = True, note:
 <h2>Ce qui ressort</h2>
 <div class="card">{patterns_html(report)}
 {more("Comment c'est mesuré", sources_note)}</div>
+{catch_html(catch, plural) if catch is not None else ""}
 {clusters_html(report, groups or [])}
 {fold(f"{w['Ses']} mises selon la carte",
       f'<div class="card">{frequencies_html(report)}<p class="note">{cards_note}</p></div>',

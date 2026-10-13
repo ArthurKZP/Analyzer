@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import quote
 
-from .. import (aliases, bluffs, db, field, handplay, leaks, memory, players, ring, ring_leaks, settings, spots, stakes,
-               store, students, tracking)
+from .. import (aliases, bluffcatch, bluffs, db, field, handplay, leaks, memory, players, ring, ring_leaks, settings,
+               spots, stakes, store, students, tracking)
 from .. import period as periods
 from .. import reference as refstudy
 from ..db import analyses as db_analyses
@@ -704,7 +704,8 @@ class Library:
                 return build_report(hands, stats, self.hero, player, spots_href="spots", embed=True, lines=lines)
             if page == "bluffs":
                 return build_bluffs_page(bluffs.analyze(hands, [player], self.hero), f"de {player}",
-                                         note=_note(f"{player} : {players.describe(kind)}."))
+                                         note=_note(f"{player} : {players.describe(kind)}."),
+                                         catch=bluffcatch.spots(bluffcatch.faced(hands, [player], self.hero)))
             return build_viewer(hands, self.hero, player, embed=True, solver=True, api=f"{self.api}/coups",
                                 records=self._spot_index(player))
         return self._cached(("player", player, page) + ((kind["kind"],) if page == "preflop" else ()), build)
@@ -1064,7 +1065,8 @@ class Library:
                    if len(cluster.members) > 1 else None)
             groups.append({"cluster": cluster, "patterns": (sub.patterns if sub else [])[:3]})
         return build_bluffs_page(report, "des réguliers", note=_note(note),
-                                 players=sorted(rows, key=lambda r: -r["hands"]), groups=groups)
+                                 players=sorted(rows, key=lambda r: -r["hands"]), groups=groups,
+                                 catch=bluffcatch.spots(bluffcatch.faced(self.hands, regs, self.hero)))
 
     # --- élèves -----------------------------------------------------------------------
     def student(self, ident: str) -> "Library":
