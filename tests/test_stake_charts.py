@@ -87,6 +87,20 @@ BB (3b et call)
            bbc=combos("AKs", 0.5) + "," + combos("22"))
 
 
+VS3BET = """Ranges de défense (4bet et call) vs 3bet, essai
+Sizings de 4b oop :
+\tUTG / HJ versus ip : 20bb
+\tUTG vs bb : 22bb
+
+VS HJ 3BET
+Utg
+\t4b :
+{four}
+\tcall :
+{call}
+""".format(four=combos("AA"), call=combos("AKs", 0.5))
+
+
 class TextTest(unittest.TestCase):
     def test_parse(self):
         self.assertEqual(stake_charts.parse_text(OPENS), {"open:UTG": "AA,AKs", "open:BTN": "AA,72o:0.5"})
@@ -111,6 +125,20 @@ class TextTest(unittest.TestCase):
         with self.assertRaises(ValueError):  # 3bet et call d'une même main : plus de 100 %
             stake_charts.lines_from_parts({"3bet:UTG:BB": "AA", "call:UTG:BB": "AA"})
 
+    def test_vs_3bet(self):
+        """La réponse de l'ouvreur au 3bet : ses calls (pot 3bet) et ses 4bets (pot 4bet), poids de toute sa range."""
+        self.assertEqual(stake_charts.parse_text(VS3BET), {"4bet:UTG:HJ": "AA", "call3:UTG:HJ": "AKs:0.5"})
+        lines = stake_charts.lines_from_parts({**stake_charts.parse_text(OPENS), **stake_charts.parse_text(DEFENSE),
+                                               **stake_charts.parse_text(VS3BET)})
+        self.assertEqual(lines["UTG:raise HJ:raise UTG:call"],
+                         {"pot_type": "pot 3bet", "ranges": {"HJ": "AA,KK", "UTG": "AKs:0.5"}})
+        self.assertEqual(lines["UTG:raise HJ:raise UTG:raise HJ:call"],
+                         {"pot_type": "pot 4bet", "ranges": {"UTG": "AA"}})
+        with self.assertRaises(ValueError):  # il paie et 4bette plus de mains qu'il n'en ouvre
+            stake_charts.lines_from_parts({"open:UTG": "AA", "call3:UTG:HJ": "AA:0.6", "4bet:UTG:HJ": "AA:0.6"})
+        with self.assertRaises(ValueError):  # 4b ou call ?
+            stake_charts.parse_text("VS HJ 3BET\nUtg\n" + combos("AA"))
+
 
 class StoreTest(IsolatedHome):
     def test_text_import_completes_reference(self):
@@ -121,7 +149,8 @@ class StoreTest(IsolatedHome):
             "UTG:raise BB:call": {"pot_type": "SRP", "ranges": {"UTG": "AA,KK,QQ", "BB": "QQ,JJ"}},
             "UTG:raise BB:raise UTG:call": {"pot_type": "pot 3bet", "ranges": {"BB": "KK", "UTG": "QQ"}}}})
         summary = stake_charts.import_text(DEFENSE, "hautes")
-        self.assertEqual(summary["covers"], "pas d'open (ceux de la référence) ; défense face à l'open : UTG")
+        self.assertEqual(summary["covers"], "pas d'open (ceux de la référence) ; défense face à l'open : UTG ; "
+                                            "pas de réponse au 3bet")
         lines = stake_charts.ring_lines("hautes")["6-max"]
         self.assertEqual(_chart_open(lines, "UTG", "KK"), {"raise": 1.0, "fold": 0.0})  # l'open de la référence
         self.assertEqual(_chart_vs_open(lines, "UTG", "BB", "22"), {"raise": 0.0, "call": 1.0, "fold": 0.0})
@@ -136,8 +165,14 @@ class StoreTest(IsolatedHome):
         self.assertEqual(_chart_open(lines, "UTG", "KK"), {"raise": 0.0, "fold": 1.0})
         self.assertNotIn("UTG", lines["UTG:raise BB:raise UTG:call"])
         self.assertIn("opens : UTG, BTN", stake_charts.summary("6-max", "hautes")["covers"])
+        stake_charts.import_text(VS3BET, "hautes")  # la réponse au 3bet arrive : elle est lue
+        self.assertIn("réponse au 3bet : UTG", stake_charts.summary("6-max", "hautes")["covers"])
+        self.assertEqual(stake_charts.ring_lines("hautes")["6-max"]["UTG:raise BB:raise UTG:call"].get("UTG"), None)
+        self.assertEqual(stake_charts.ring_lines("hautes")["6-max"]["UTG:raise HJ:raise UTG:call"]["UTG"],
+                         {"AKs": 0.5})
         self.assertEqual(stake_charts.summary("6-max", "hautes")["source"],
-                         "Ranges de défense, essai · Open raise 2.5x, essai")
+                         "Ranges de défense, essai · Open raise 2.5x, essai · Ranges de défense (4bet et call) vs "
+                         "3bet, essai")
         with self.assertRaises(ValueError):
             stake_charts.import_text(OPENS, "hautes", "HU")
 

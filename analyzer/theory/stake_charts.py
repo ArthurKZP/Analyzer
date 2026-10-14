@@ -161,15 +161,17 @@ def _hu_solution_data(data: dict) -> dict:
 
 # --- Tables à plusieurs : des ranges en texte, combo par combo -----------------------------------------------------
 #
-# L'export texte de GTO Wizard : un titre de position (« UTG », « BU »…) avant chaque range, la range en
+# L'export texte de GTO Wizard : un titre de position (« UTG », « BU », « Utg »…) avant chaque range, la range en
 # « AcKd: 0.5, … » (le poids de chaque combo, les absents à 0). Les opens d'abord ; « VS OPEN … UTG » ouvre la défense
 # face à l'open de l'UTG, où chaque range est un 3bet (« 3bet or fold ») sauf si « 3b : » ou « Call : » la précède
-# (la BB, qui paie aussi). Les tailles et les autres lignes de titre sont ignorées.
+# (la BB, qui paie aussi) ; « VS HJ 3BET » (ou « VERSUS HJ 3BET ») ouvre la réponse de chaque ouvreur au 3bet du HJ,
+# « 4b : » et « Call : » avant chaque range. Les poids sont ceux de toute la range de départ : un call face au 3bet est
+# une main qui ouvre ET paie. Les tailles et les autres lignes de titre sont ignorées.
 
 POSITION_NAMES = {"UTG": "UTG", "LJ": "LJ", "HJ": "HJ", "CO": "CO", "BTN": "BTN", "BU": "BTN", "SB": "SB", "BB": "BB"}
 RANKS = "23456789TJQKA"
 _COMBO_RE = re.compile(r"\b([2-9TJQKA][cdhs])([2-9TJQKA][cdhs])\s*:\s*(\d+(?:\.\d+)?)")
-_ACTION_RE = re.compile(r"^(3b|3bet|call|flat)\s*:?$", re.I)
+_ACTION_RE = re.compile(r"^(3b|3bet|4b|4bet|call|flat)\s*:?$", re.I)
 MAX_OPEN = 0.90  # un open de plus de 90 % des mains : la range de départ copiée à la place de celle de l'open
 
 
@@ -203,16 +205,19 @@ def share(text: str) -> float:
 
 
 def _position(line: str) -> Optional[str]:
-    """La position d'un titre (« UTG », « BB (3b et call) »), ou None."""
+    """La position d'un titre (« UTG », « Utg », « BB (3b et call) »), ou None (pas une ligne de tailles : « UTG vs
+    bb : 22bb »)."""
     found = re.match(r"([A-Za-z]+)\b", line)
-    return POSITION_NAMES.get(found.group(1).upper()) if found and len(line) <= 40 else None
+    return POSITION_NAMES.get(found.group(1).upper()) if found and len(line) <= 40 and ":" not in line else None
 
 
 def parse_text(text: str) -> dict[str, str]:
-    """Les ranges d'un export texte : {"open:UTG": range, "3bet:UTG:HJ": range, "call:UTG:BB": range…} (ranges par
-    main, ring_ranges.parse_range)."""
+    """Les ranges d'un export texte : {"open:UTG": range, "3bet:UTG:HJ": range, "call:UTG:BB": range,
+    "call3:UTG:HJ": range, "4bet:UTG:HJ": range…} (ranges par main, ring_ranges.parse_range ; call3 : l'ouvreur paie
+    le 3bet)."""
     parts: dict[str, str] = {}
     opener: Optional[str] = None  # None : les opens ; sinon, la défense face à l'open de cette position
+    raiser: Optional[str] = None  # la réponse au 3bet de cette position (who : l'ouvreur)
     who: Optional[str] = None
     action: Optional[str] = None
     for raw in text.splitlines():
@@ -228,6 +233,10 @@ def parse_text(text: str) -> dict[str, str]:
                 if share(found) > MAX_OPEN:
                     raise ValueError(f"L'open {who} couvre {round(100 * share(found))} % des mains : c'est la range de "
                                      "départ, pas celle de l'open (dans GTO Wizard, copie la range de l'action Raise).")
+            elif raiser is not None:
+                if action is None:
+                    raise ValueError(f"{who} face au 3bet {raiser} : « 4b : » ou « Call : » avant chaque range.")
+                key = f"{'call3' if action == 'call' else '4bet'}:{who}:{raiser}"
             elif action is None and who == "BB":
                 raise ValueError(f"Face à l'open {opener}, la BB : « 3b : » ou « Call : » avant chaque range.")
             else:
@@ -236,13 +245,18 @@ def parse_text(text: str) -> dict[str, str]:
             action = None
             continue
         upper = line.upper()
-        if upper.startswith("VS OPEN") or upper.startswith("VS "):
-            opener = next((POSITION_NAMES[t] for t in re.findall(r"[A-Z]+", upper)[1:] if t in POSITION_NAMES), None)
-            if opener is None:
-                raise ValueError(f"Face à quel open ? « {line[:60]} »")
+        if upper.startswith("VS ") or upper.startswith("VERSUS "):
+            found = next((POSITION_NAMES[t] for t in re.findall(r"[A-Z]+", upper)[1:] if t in POSITION_NAMES), None)
+            if found is None:
+                raise ValueError(f"Face à quel open ou quel 3bet ? « {line[:60]} »")
+            if "3BET" in upper.replace(" ", ""):
+                opener, raiser = "", found  # la réponse des ouvreurs au 3bet de cette position
+            else:
+                opener, raiser = found, None
             who, action = None, None
         elif _ACTION_RE.match(line):
-            action = "call" if _ACTION_RE.match(line).group(1).lower() in ("call", "flat") else "3bet"
+            word = _ACTION_RE.match(line).group(1).lower()
+            action = "call" if word in ("call", "flat") else "4bet" if word.startswith("4") else "3bet"
         elif _position(line):
             who, action = _position(line), None
     if not parts:
@@ -271,14 +285,25 @@ def lines_from_parts(parts: dict[str, str]) -> dict[str, dict]:
         elif kind == "3bet":
             opener, raiser = who
             line(f"{opener}:raise {raiser}:raise {opener}:call", "pot 3bet")[raiser] = text
-    for (opener, defender) in {tuple(k.split(":")[1:]) for k in parts if not k.startswith("open:")}:
-        total = defaultdict(float)  # 3bet et call d'une même main : au plus 100 %
-        for kind in ("3bet", "call"):
-            for hand, weight in ring_ranges.parse_range(parts.get(f"{kind}:{opener}:{defender}", "")).items():
+        elif kind == "call3":  # l'ouvreur paie le 3bet : sa range au flop du pot 3bet
+            opener, raiser = who
+            line(f"{opener}:raise {raiser}:raise {opener}:call", "pot 3bet")[opener] = text
+        elif kind == "4bet":
+            opener, raiser = who
+            line(f"{opener}:raise {raiser}:raise {opener}:raise {raiser}:call", "pot 4bet")[opener] = text
+    pairs = {(k.split(":")[0] in ("call3", "4bet"), *k.split(":")[1:]) for k in parts if not k.startswith("open:")}
+    for (reply, opener, other) in pairs:  # deux actions d'une même main : au plus 100 % (de ce qu'il ouvre)
+        kinds = ("call3", "4bet") if reply else ("3bet", "call")
+        total = defaultdict(float)
+        for kind in kinds:
+            for hand, weight in ring_ranges.parse_range(parts.get(f"{kind}:{opener}:{other}", "")).items():
                 total[hand] += weight
-        over = next((h for h, w in total.items() if w > 1.0001), None)
+        top = ring_ranges.parse_range(parts.get(f"open:{opener}", "")) if reply else {}
+        over = next((h for h, w in total.items() if w > (top.get(h, 1.0) if reply and top else 1.0) + 0.0101), None)
         if over:
-            raise ValueError(f"{defender} face à l'open {opener} : {over} dépasse 100 % (3bet et call).")
+            what = (f"{opener} face au 3bet {other} : {over} dépasse ce qu'il ouvre (call et 4bet)" if reply else
+                    f"{other} face à l'open {opener} : {over} dépasse 100 % (3bet et call)")
+            raise ValueError(what + ".")
     return lines
 
 
@@ -355,11 +380,13 @@ def covers(data: dict) -> str:
     parts = data.get("parts") or {}
     order = list(dict.fromkeys(POSITION_NAMES.values()))
     opens = sorted({k.split(":")[1] for k in parts if k.startswith("open:")}, key=order.index)
-    faced = sorted({k.split(":")[1] for k in parts if not k.startswith("open:")}, key=order.index)
+    faced = sorted({k.split(":")[1] for k in parts if k.split(":")[0] in ("3bet", "call")}, key=order.index)
+    replies = sorted({k.split(":")[1] for k in parts if k.split(":")[0] in ("call3", "4bet")}, key=order.index)
     out = []
     if parts:
         out.append(f"opens : {', '.join(opens)}" if opens else "pas d'open (ceux de la référence)")
         out.append(f"défense face à l'open : {', '.join(faced)}" if faced else "pas de défense (celle de la référence)")
+        out.append(f"réponse au 3bet : {', '.join(replies)}" if replies else "pas de réponse au 3bet")
     return " ; ".join(out)
 
 

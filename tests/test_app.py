@@ -752,7 +752,8 @@ class ServerTest(unittest.TestCase):
         status, _, data = self.request("POST", "/api/ranges/limites", json.dumps(text), headers)
         six = next(f for f in json.loads(data)["formats"] if f["format"] == "6-max")
         self.assertEqual((status, six["bands"][2]["charts"]["covers"]),
-                         (200, "pas d'open (ceux de la référence) ; défense face à l'open : UTG"))
+                         (200, "pas d'open (ceux de la référence) ; défense face à l'open : UTG ; pas de réponse "
+                               "au 3bet"))
         self.request("POST", "/api/ranges/limites/retirer", json.dumps({"format": "6-max", "limites": "hautes"}),
                      headers)
         self.assertIn("Charts selon les limites", self.request("GET", "/parametres/ranges")[2].decode())
