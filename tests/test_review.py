@@ -143,6 +143,21 @@ class AnalyzeTest(unittest.TestCase):
         self.assertIn("Ses écarts à exploiter", villain_page)
         self.assertNotIn("Ses écarts à exploiter", page)
 
+    def test_stake_charts_ranges(self):
+        """Tes charts des hautes limites deviennent les ranges du solveur pour ces mains (grosse blinde à 5) ; une
+        main déjà analysée avec les ranges de la référence garde son analyse."""
+        from analyzer.theory import postflop, stake_charts
+        hand = next(h for h in self.hands if h.hand_id == "HAND01")
+        before = postflop.build_spot(hand, "Hero")
+        self.assertEqual(review.analyze([hand], "Hero", log=lambda m: None), 1)
+        stake_charts.save("HU", "hautes", {"source": "Essai", "nodes": {"sb_open": {"raise": "AA,KK,QQ,AKs,AKo"}}})
+        after = postflop.build_spot(hand, "Hero")
+        self.assertEqual(postflop.build_spot(hand, "Hero", stakes=False).ranges, before.ranges)
+        self.assertNotEqual(after.ranges[hand.button], before.ranges[hand.button])
+        self.assertLess(len(after.ranges[hand.button]), len(before.ranges[hand.button]))
+        done, todo = review.collect([hand], "Hero")
+        self.assertEqual((len(done), len(todo)), (1, 0))  # l'analyse d'avant compte toujours
+
     def test_library_partial_queue(self):
         """N'analyser qu'une partie des mains : les plus chères d'abord, une seule ici."""
         lib = Library(FIXTURES)

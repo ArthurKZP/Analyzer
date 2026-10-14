@@ -22,8 +22,10 @@ Gardés dans la base (documents « charts-limites », clé « <format>|<niveau> 
 
 Ce qui en dépend : le jugement préflop de chaque main (handplay.Theory, avec les charts de son niveau : Leakfinding,
 mains de départ, vérification en jeu, suivi), les repères préflop du Leakfinding heads-up (la théorie de chaque niveau,
-pondérée par tes mains de chaque niveau) et les pages Préflop (les charts du niveau où tu as le plus de mains). Les
-ranges des coups résolus au solveur restent celles de la référence : un coup déjà résolu ne se résout pas à nouveau.
+pondérée par tes mains de chaque niveau), les pages Préflop (les charts du niveau où tu as le plus de mains), et les
+ranges du solveur pour les coups de ce niveau (postflop.build_spot : explorateur, mains face au solveur ; tes ranges
+ajustées ligne par ligne passent avant). Une main déjà analysée avec les ranges de la référence garde son analyse
+(review : ses clés d'avant comptent toujours) ; les suivantes partent de tes charts.
 """
 from __future__ import annotations
 
@@ -426,9 +428,22 @@ def _merge(reference: dict, mine: dict) -> dict:
     return out
 
 
+_LINES: dict[tuple, dict] = {}
+
+
 def ring_lines(band: Optional[str]) -> dict[str, dict]:
     """Les charts des tables à plusieurs pour ce niveau : ceux importés pour lui à la place de ceux de la référence
-    (handplay.ring_lines), là où ils en donnent (_merge)."""
+    (handplay.ring_lines), là où ils en donnent (_merge). Gardés tant que les charts ne changent pas (à lire, pas à
+    modifier)."""
+    key = (band, documents.revision(db.current(), KIND, "ranges"))
+    if key not in _LINES:
+        if len(_LINES) >= 8:
+            _LINES.clear()
+        _LINES[key] = _ring_lines(band)
+    return _LINES[key]
+
+
+def _ring_lines(band: Optional[str]) -> dict[str, dict]:
     from .. import handplay
     lines = handplay.ring_lines()
     for fmt in available():
@@ -441,6 +456,42 @@ def ring_lines(band: Optional[str]) -> dict[str, dict]:
                     if isinstance(entry, dict) and isinstance(entry.get("ranges"), dict)}
             lines[fmt] = _merge(lines.get(fmt, {}), mine)
     return lines
+
+
+def band_for(hand) -> Optional[str]:
+    """Le niveau de limites d'une main quand des charts sont importés pour lui dans sa famille de format (le heads-up,
+    les tables à plusieurs), sinon None : ses ranges sont celles de la référence."""
+    band = stakes.band_of(hand.bb)
+    if band is None:
+        return None
+    found = available()
+    if len(hand.seats) == 2:
+        return band if band in found.get(HU, []) else None
+    return band if any(band in bands for fmt, bands in found.items() if fmt != HU) else None
+
+
+def ring_lookup(table_format: str, steps: list[tuple[str, str]], band: Optional[str]
+                ) -> Optional[tuple[str, dict[str, dict[str, float]], list[tuple[str, str]]]]:
+    """Comme ring_ranges.resolve puis lookup, dans les charts de ce niveau (ceux importés, sinon ceux de la
+    référence) : (type de pot, {position des charts : range}, étapes aux positions des charts), ou None."""
+    lines = ring_lines(band)
+    found = ring_ranges.chart_mapping(table_format, lines)
+    if found is None:
+        return None
+    chart_format, mapping = found
+    if mapping and any(pos not in mapping for pos, _ in steps):
+        return None
+    chart_steps = [(mapping[pos], kind) for pos, kind in steps] if mapping else list(steps)
+    key = ring_ranges.line_key(chart_steps)
+    ranges = lines[chart_format].get(key)
+    if not ranges:
+        return None
+    entry = ((stored(chart_format, band) or {}).get("lines") or {}).get(key) or \
+        ((ring_ranges.solution(chart_format) or {}).get("lines") or {}).get(key) or {}
+    raises = sum(1 for _, kind in steps if kind == "raise")
+    pot_type = (entry.get("pot_type") if isinstance(entry, dict) else None) or ring_ranges.POT_TYPES.get(
+        raises, "pot limpé" if raises == 0 else f"pot {raises + 1}bet")
+    return pot_type, {pos: dict(r) for pos, r in ranges.items()}, chart_steps
 
 
 def theory(heads_up: bool = True, ring: bool = True):

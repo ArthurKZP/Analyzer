@@ -411,9 +411,9 @@ Importe, pour un niveau de limites, des charts faits pour lui (en heads-up, un f
 chaque nœud — open du bouton, BB face à l'open, bouton face au 3bet, BB face au 4bet ; aux tables à plusieurs, l'export
 texte de GTO Wizard, combo par combo — les opens, la défense face à chaque open —, plusieurs fichiers se complètent, ou
 une solution par lignes en JSON ; voir le README) : tes mains de ce niveau sont jugées avec eux dans le Leakfinding,
-les mains de départ, le préflop et le suivi ; ce qu'ils ne donnent pas reste jugé avec la référence. Les coups
-résolus au solveur gardent leurs ranges (celles de la référence, ou les tiennes plus bas) : rien n'est à résoudre à
-nouveau.</p>
+les mains de départ, le préflop et le suivi ; ce qu'ils ne donnent pas reste jugé avec la référence. Ils sont aussi
+les ranges du solveur pour tes coups de ce niveau (l'explorateur, tes mains face au solveur ; tes ranges ligne par
+ligne, plus bas, passent avant) ; une main déjà analysée garde son analyse.</p>
 <div id="rp-stakes"><p class="muted">Chargement…</p></div>
 </div>
 <h2>Tes ranges, ligne par ligne : où elles s'appliquent</h2>

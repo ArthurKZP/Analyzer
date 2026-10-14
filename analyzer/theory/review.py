@@ -23,7 +23,7 @@ from typing import Optional
 from .. import db, store
 from ..db import analyses as db_analyses, documents
 from ..models import Hand
-from . import postflop, sizing
+from . import postflop, sizing, stake_charts
 from .preflop import MIXED_THRESHOLD
 
 FAMILY = {"SRP": "srp", "pot 3bet": "3bet", "pot 4bet": "4bet"}
@@ -186,17 +186,21 @@ _KEYS_LIMIT = 300_000
 
 
 def _signature() -> tuple:
-    """Ce dont dépend le spot d'une main, hors la main : tailles choisies, ranges (charts, ranges ajustées) et
-    réglage de précision (leurs révisions dans la base)."""
+    """Ce dont dépend le spot d'une main, hors la main : tailles choisies, ranges (charts, ranges ajustées, charts par
+    limites) et réglage de précision (leurs révisions dans la base)."""
+    from .stake_charts import KIND
     from .studyspots import DEPENDS
-    return documents.revision(db.current(), *DEPENDS)
+    return documents.revision(db.current(), *DEPENDS, KIND)
 
 
-def _variant(spot: postflop.PostflopSpot) -> dict:
+def _variant(spot: postflop.PostflopSpot, stakes: bool = True) -> dict:
+    """Les clés d'un spot ; stakes=False : construit avec les ranges de la référence (pas celles de tes charts par
+    limites)."""
     request = spot.request()
     default = dict(request, max_iterations=postflop.DEFAULT_ITERATIONS, target_exploit_pct=postflop.DEFAULT_TARGET)
     return {"theory": spot.plan is not None, "digest": digest_key(spot), "base": postflop.base_key(request),
-            "solved": (postflop.cache_key(default), postflop.study_key(default)), "pot_type": spot.pot_type}
+            "solved": (postflop.cache_key(default), postflop.study_key(default)), "pot_type": spot.pot_type,
+            "stakes": stakes}
 
 
 def _spot_keys(hand: Hand, hero: str, signature: tuple) -> Optional[list[dict]]:
@@ -218,11 +222,32 @@ def _spot_keys(hand: Hand, hero: str, signature: tuple) -> Optional[list[dict]]:
             variants = [_variant(spot)]
             if spot.plan is not None:
                 variants.append(_variant(postflop.build_spot(hand, hero, theory=False)))
+            if stake_charts.band_for(hand):  # une analyse faite avec les ranges de la référence reste
+                variants += _reference_variants(hand, hero, variants)
         store.put("spots", stored_key, {"variants": variants})
     if len(_KEYS) >= _KEYS_LIMIT:
         _KEYS.clear()
     _KEYS[key] = variants
     return variants
+
+
+def _reference_variants(hand: Hand, hero: str, known: list[dict]) -> list[dict]:
+    """Les clés de la main avec les ranges de la référence (quand celles de tes charts de son niveau les remplacent) :
+    une analyse déjà faite avec elles compte toujours."""
+    out = []
+    try:
+        spots = [postflop.build_spot(hand, hero, stakes=False)]
+        if spots[0].plan is not None:
+            spots.append(postflop.build_spot(hand, hero, theory=False, stakes=False))
+    except postflop.Unsupported:
+        return out
+    digests = {v["digest"] for v in known}
+    for spot in spots:
+        found = _variant(spot, stakes=False)
+        if found["digest"] not in digests:
+            out.append(found)
+            digests.add(found["digest"])
+    return out
 
 
 _SIGNATURES: dict[tuple, str] = {}
@@ -247,7 +272,7 @@ def _done_by_keys(hand: Hand, hero: str, variants: list[dict], listed: set[str],
                 return data
         result, study = variant["solved"]
         if variant["base"] in precisions or result in solved[0] or study in solved[1]:
-            spot = postflop.build_spot(hand, hero, theory=variant["theory"])
+            spot = postflop.build_spot(hand, hero, theory=variant["theory"], stakes=variant.get("stakes", True))
             data = _done(spot, listed, solved)
             if data is not None:
                 return data

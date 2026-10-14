@@ -154,6 +154,13 @@ class StoreTest(IsolatedHome):
         lines = stake_charts.ring_lines("hautes")["6-max"]
         self.assertEqual(_chart_open(lines, "UTG", "KK"), {"raise": 1.0, "fold": 0.0})  # l'open de la référence
         self.assertEqual(_chart_vs_open(lines, "UTG", "BB", "22"), {"raise": 0.0, "call": 1.0, "fold": 0.0})
+        # les ranges du solveur pour un coup de ce niveau : les tiennes là où tes charts en donnent
+        pot, ranges, steps = stake_charts.ring_lookup("6-max", [("UTG", "raise"), ("BB", "call")], "hautes")
+        self.assertEqual((pot, ranges["BB"], ranges["UTG"]), ("SRP", {"AKs": 0.5, "22": 1.0},
+                                                             {"AA": 1.0, "KK": 1.0, "QQ": 1.0}))
+        self.assertEqual(stake_charts.ring_lookup("6-max", [("UTG", "raise"), ("BB", "call")], "milieu")[1]["BB"],
+                         {"QQ": 1.0, "JJ": 1.0})
+        self.assertIsNone(stake_charts.ring_lookup("6-max", [("CO", "raise"), ("BB", "call")], "hautes"))
         reference = stake_charts.ring_lines("milieu")["6-max"]  # un autre niveau : la référence
         self.assertEqual(reference["UTG:raise BB:call"]["BB"], {"QQ": 1.0, "JJ": 1.0})
         # l'open arrive : il remplace celui de la référence ; sa réponse au 3bet (faite pour un autre open)

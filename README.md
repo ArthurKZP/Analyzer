@@ -1081,9 +1081,13 @@ qu'ils couvrent.
 référence) — les décisions préflop du Leakfinding, les mains de départ, la vérification en jeu, le suivi dans le temps ;
 les repères préflop du Leakfinding heads-up sont la théorie de chaque niveau, pondérée par tes mains de chaque niveau ;
 les pages *Préflop › Face à la théorie* montrent les charts du niveau où tu as le plus de mains. Le Leakfinding et le
-Préflop disent quels charts ont jugé. Les coups résolus au solveur gardent leurs ranges (la référence, ou les tiennes
-ligne par ligne) : rien n'est à résoudre à nouveau. Les charts par limites valent pour toi et tes élèves (gardés dans la
-base, et dans les sauvegardes). Code : `theory/stake_charts.py`.
+Préflop disent quels charts ont jugé. Ce sont aussi **les ranges du solveur** pour tes coups de ce niveau : un coup
+ouvert dans l'explorateur ou passé au solveur (*Face au solveur*, Leakfinding) part de tes charts — en heads-up, de ta
+solution du niveau ; aux tables à plusieurs, de tes lignes, celles de la référence là où tes charts n'en donnent pas
+— et « Range de la référence » dans l'explorateur y revient. Tes ranges ajustées ligne par ligne (plus haut) passent
+avant. Une main déjà analysée avec les ranges de la référence garde son analyse ; les suivantes partent de tes charts.
+Les séries d'étude et leurs plans de jeu restent faits avec la référence. Les charts par limites valent pour toi et
+tes élèves (gardés dans la base, et dans les sauvegardes). Code : `theory/stake_charts.py`.
 
 ## Bluffs des adversaires
 

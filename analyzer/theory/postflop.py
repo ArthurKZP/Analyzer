@@ -492,7 +492,7 @@ POSTFLOP_ORDER = ("SB", "BB", "UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN") 
 
 
 def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custom: bool = True,
-               theory: bool = True) -> PostflopSpot:
+               theory: bool = True, stakes: bool = True) -> PostflopSpot:
     """Le spot postflop d'une main : heads-up (ranges de la solution HU), ou table à plusieurs quand il ne reste que
     deux joueurs au flop (ranges de ta solution du format, voir ring_ranges). Tes ranges ajustées pour ce coup ou
     pour sa ligne (custom_ranges) remplacent celles de la référence, sauf avec custom=False.
@@ -500,8 +500,11 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
     Tailles : les tailles théoriques du flop dans la famille de spots la plus proche (studyspots.size_families :
     heads-up pour un coup heads-up, 6-max d'abord à une table à plusieurs), une par situation, plus chaque taille jouée
     (ajoutée, ou à la place d'une taille théorique à moins de 10 points) ; theory=False : l'arbre d'avant, aux
-    tailles fixes (DEFAULT_BETS), pour retrouver les analyses déjà faites."""
-    from . import custom_ranges, studyspots
+    tailles fixes (DEFAULT_BETS), pour retrouver les analyses déjà faites.
+
+    Ranges : celles des charts du niveau de limites de la main quand tu en as importé pour lui (stake_charts), sinon
+    celles de la référence ; stakes=False : celles de la référence, pour retrouver les analyses déjà faites."""
+    from . import custom_ranges, stake_charts, studyspots
     if len(hand.seats) == 2 and (not hand.button or not hand.big_blind or hand.opponent_of(hero) is None):
         raise Unsupported("Seules les mains heads-up se résolvent.")
     pre = [a for a in hand.actions if a.street == "preflop" and a.kind in VOLUNTARY]
@@ -509,10 +512,12 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
         raise Unsupported("Tapis préflop : il n'y a plus de décision après le flop.")
     if len(hand.board) < 3 or not any(a.street == "flop" for a in hand.actions):
         raise Unsupported("La main s'arrête avant le flop : rien à résoudre après le flop.")
+    band = stake_charts.band_for(hand) if stakes else None
     if len(hand.seats) == 2:
-        oop, ip, pot_type, ranges = _heads_up_ranges(hand, pre, solution or load_solution())
+        default = stake_charts.hu_solution(band) if band else load_solution()
+        oop, ip, pot_type, ranges = _heads_up_ranges(hand, pre, solution or default)
     else:
-        oop, ip, pot_type, ranges = _ring_ranges(hand, hero, pre)
+        oop, ip, pot_type, ranges = _ring_ranges(hand, hero, pre, band)
     villain = ip if hero == oop else oop
     context = custom_ranges.context(hand.table_format, [(hand.position(a.player), a.kind) for a in pre
                                                         if a.kind != FOLD])
@@ -674,10 +679,11 @@ def flop_pair(hand: Hand) -> Optional[tuple[str, str]]:
     return oop, ip
 
 
-def _ring_ranges(hand: Hand, hero: str, pre: list) -> tuple[str, str, str, dict]:
+def _ring_ranges(hand: Hand, hero: str, pre: list, band: Optional[str] = None) -> tuple[str, str, str, dict]:
     """Table à plusieurs : les deux joueurs qui voient le flop, leurs ranges d'après ta solution du format (ou les
-    charts 6-max à même nombre de joueurs derrière, voir ring_ranges.resolve)."""
-    from . import ring_ranges
+    charts 6-max à même nombre de joueurs derrière, voir ring_ranges.resolve) ; band : celles de tes charts de ce
+    niveau de limites (stake_charts), là où ils en donnent."""
+    from . import ring_ranges, stake_charts
     folded = {a.player for a in pre if a.kind == FOLD}
     players = [p for p in hand.seats if p not in folded]
     if hero not in players:
@@ -691,13 +697,17 @@ def _ring_ranges(hand: Hand, hero: str, pre: list) -> tuple[str, str, str, dict]
     if any(pos not in POSTFLOP_ORDER for pos in positions.values()):
         raise Unsupported("Positions inconnues : le bouton manque dans l'historique.")
     steps = [(positions[a.player], a.kind) for a in pre if a.kind != FOLD]
-    chart = ring_ranges.resolve(hand.table_format, steps)
-    found = ring_ranges.lookup(*chart) if chart else None
-    if found is None:
-        raise Unsupported(f"Pas de range préflop pour « {ring_ranges.describe(steps)} » en {hand.table_format} : "
-                          f"{ring_ranges.missing_hint(hand.table_format)}.")
-    pot_type, by_position = found
-    in_chart = dict(zip((pos for pos, _ in steps), (pos for pos, _ in chart[1])))  # position à la table -> charts
+    own = stake_charts.ring_lookup(hand.table_format, steps, band) if band else None
+    if own is not None:
+        pot_type, by_position, chart_steps = own
+    else:
+        chart = ring_ranges.resolve(hand.table_format, steps)
+        found = ring_ranges.lookup(*chart) if chart else None
+        if found is None:
+            raise Unsupported(f"Pas de range préflop pour « {ring_ranges.describe(steps)} » en {hand.table_format} : "
+                              f"{ring_ranges.missing_hint(hand.table_format)}.")
+        (pot_type, by_position), chart_steps = found, chart[1]
+    in_chart = dict(zip((pos for pos, _ in steps), (pos for pos, _ in chart_steps)))  # position à la table -> charts
     if any(in_chart.get(pos) not in by_position for pos in positions.values()):
         raise Unsupported(f"Ta solution ne donne pas les deux ranges de « {ring_ranges.describe(steps)} ».")
     oop, ip = sorted(players, key=lambda p: POSTFLOP_ORDER.index(positions[p]))
