@@ -567,7 +567,7 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
             key = f"bet:{where}:{past}" if a.kind == BET else f"raise:{where}:{past}:{raises}"
             situations.append({"key": key, "street": s, "player": 0 if a.player == oop else 1,
                                "kind": "bet" if a.kind == BET else "raise",
-                               "equiv": _symbolic_sizes(a.pot_before, behind, 3 - s) if a.kind == BET else {}})
+                               "equiv": symbolic_sizes(a.pot_before, behind, 3 - s) if a.kind == BET else {}})
         step: dict = {"action": a.kind}
         if a.kind in (BET, RAISE, CALL):
             step["to"] = round(a.to / bb, 4)
@@ -620,7 +620,7 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
                         size_target=families[0] if families else None)
 
 
-def _symbolic_sizes(pot: float, behind: float, streets: int) -> dict[str, float]:
+def symbolic_sizes(pot: float, behind: float, streets: int) -> dict[str, float]:
     """Ce que valent, en % du pot, les tailles symboliques d'un plan pour une mise (voir native/arbre.rs) : le
     géométrique sur les streets restantes (ou sur N), le tapis."""
     if pot <= 0 or behind <= 0:

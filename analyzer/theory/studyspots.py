@@ -662,14 +662,16 @@ def hand_sizes_for(family: str, board: list[str]) -> Optional[tuple[dict, str, b
     if not found:
         return None
     chosen, near, exact = found
-    candidates = {s.key: s.candidates for s in sizing.situations(family)}
+    # les tailles comparées par la version de la méthode qui a fait ce choix (gardées dans le rapport depuis la 3)
+    candidates = {s.key: s.candidates for s in sizing.situations(family, chosen.get("method") or 2)}
     plan = {}
     for key, sizes in chosen["plan"].items():
         if key.startswith("raise:r"):
             continue  # la configuration par défaut : pas de relance à la river, sauf jouée
         if key.startswith("bet:r") and len(sizes) > 1:
-            usage = (chosen.get("report") or {}).get(key, {}).get("usage") or []
-            options = candidates.get(key, [])
+            entry = (chosen.get("report") or {}).get(key, {})
+            usage = entry.get("usage") or []
+            options = entry.get("candidates") or candidates.get(key, [])
             used = {s: usage[options.index(s)] for s in sizes if s in options and len(usage) == len(options)}
             sizes = [max(sizes, key=lambda s: used.get(s, 0.0))] if used else sizes[:1]
         plan[key] = list(sizes)

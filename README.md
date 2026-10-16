@@ -522,7 +522,8 @@ Les candidates :
 | C-bet retardée (flop checké) | 33 % · 66 % · géométrique |
 | Probe turn de la BB (flop checké) | 33 % · 75 % · pot · géométrique |
 | Mises de la BB et du bouton après un check-raise payé | 50 % · pot · géo / 33 % · 66 % · géo |
-| River : 3e barrel, bet/check/bet, check/bet/bet, probes river… | deux parmi 50 % · 75 % · pot · 150 % · tapis |
+| River du bouton (en position) : 3e barrel, bet/check/bet… | deux parmi 50 % · 75 % · 150 % · 200 % · tapis |
+| River de la BB (hors de position) : probes river… | deux parmi 33 % · 50 % · 75 % · pot · 150 % · tapis |
 | Relances et sur-relances (check-raise, relance d'un probe…) | 33 % · 66 % · géométrique (tapis à la river) |
 
 Le géométrique mise la même fraction du pot à chaque street restante pour finir à tapis à la river
@@ -536,8 +537,18 @@ Méthode, street par street, chaque situation à son tour (les autres gardent le
   (`--cartes`), 8 pour la river ; l'écart d'EV se juge quand la situation arrive (l'écart à la racine
   du sous-jeu, rapporté à sa fréquence) : sous 0,5 % du pot, la plus petite taille l'emporte. Une
   situation rare se compare sur 4 cartes ; presque jamais atteinte (moins de 0,3 % des coups), elle prend
-  la plus petite taille. À la river, une première résolution propose les cinq tailles à la fois : les
-  trois plus employées restent, et leurs trois paires se comparent.
+  la plus petite taille. À la river, une première résolution propose toutes les tailles à la fois : les
+  trois paires les plus employées se comparent.
+
+**Deux tailles river vraiment différentes** (méthode 3 du choix) : la grande vaut au moins le double de la petite
+(33 et 75 %, 50 et 150 %, 75 % et tapis… mais jamais 50 et 75 %, qui font le même travail) ; le tapis va avec toute
+taille sous 150 % du pot. Hors de position, une **petite taille (33 %)** fait partie des candidates ; en position,
+**une moyenne et une très grosse** (overbet 150-200 % ou tapis). Une taille qui mettrait au moins **les deux tiers
+du tapis restant** à la river (d'après le pot et le tapis de la ligne : turn checkée ou mise turn du plan payée)
+devient **le tapis** : il fait le même travail sans laisser trop peu derrière. Dans les pots 3bet, la mise river du
+bouton après sa mise payée est une moyenne (50 / 75 %) et le tapis. Un choix fait avant garde ses tailles, et les
+analyses de mains qui s'en servent restent valables ; refais-le pour ces règles (les tailles livrées avec Merlin
+viennent de la méthode précédente).
 
 Mesuré sur K♠K♦4♣ avec 4 cœurs : 35 minutes pour le flop, 5 pour la turn, une demi-heure pour la river,
 puis une dizaine de minutes pour résoudre le flop avec ses tailles (arbre d'environ 1,2 million de nœuds,
@@ -559,9 +570,9 @@ dans le bouton quand il a misé à la street précédente. Les tailles comparée
 | C-bet de la BB | 33 % · 75 % · géométrique sur deux streets (97 % : tapis à la turn) |
 | 2e barrel | 33 % · 50 % · 75 % · tapis |
 | C-bet retardée (flop checké) | 33 % · 75 % · géométrique (turn et river) |
-| River de la BB : 3e barrel, bet/check/bet, probe… | deux parmi 33 % · 50 % · 75 % · tapis |
+| River de la BB : 3e barrel, bet/check/bet, probe… | deux parmi 33 % · 50 % · 75 % · tapis (distinctes) |
 | Stab du bouton (la BB checke), à chaque street | 25 % · 50 % · tapis |
-| Le bouton qui continue après sa mise payée | 33 % · 50 % · 75 % · tapis (deux à la river) |
+| Le bouton qui continue après sa mise payée | 33 % · 50 % · 75 % · tapis (river : 50 ou 75 %, et le tapis) |
 | Relances et sur-relances | 33 % · 66 % · tapis |
 
 La synthèse de chaque flop montre la c-bet de la BB, la réponse du bouton, la BB face à sa relance, puis le

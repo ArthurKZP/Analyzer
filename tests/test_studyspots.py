@@ -138,12 +138,36 @@ class SizingRulesTest(unittest.TestCase):
         self.assertEqual(sits["bet:ti:i"].candidates, [50, 100, "geo"])  # 2e barrel
         self.assertEqual(sits["bet:ti:x"].candidates, [33, 66, "geo"])  # c-bet retardée
         self.assertEqual(sits["bet:to:x"].candidates, [33, 75, 100, "geo"])  # probe turn
-        self.assertEqual((sits["bet:ri:ix"].choose, len(sits["bet:ri:ix"].options())), (2, 10))
+        # river : en position, une moyenne et une très grosse ; hors de position, une petite possible ; deux tailles
+        # distinctes (plus de 50 / 75 %)
+        self.assertEqual((sits["bet:ri:ix"].candidates, sits["bet:ri:ix"].choose, len(sits["bet:ri:ix"].options())),
+                         ([50, 75, 150, 200, "a"], 2, 6))
+        self.assertEqual((sits["bet:ro:ix"].candidates, len(sits["bet:ro:ix"].options())),
+                         ([33, 50, 75, 100, 150, "a"], 10))
+        self.assertNotIn((50, 75), sits["bet:ro:ix"].options())
+        self.assertIn((33, 75), sits["bet:ro:ix"].options())
+        self.assertEqual(sits["bet:ri:ix"].initial(), [75, 200])
+        legacy = {s.key: s for s in sizing.situations("srp", method=2)}  # un choix fait avant : ses tailles
+        self.assertEqual(legacy["bet:ri:ix"].candidates, [50, 75, 100, 150, "a"])
         self.assertEqual(sits["raise:ro:ix:0"].candidates, [33, 66, "a"])
         self.assertNotIn("bet:to:i", sits)  # pas de donk de la BB
         self.assertNotIn("bet:ro:xi", sits)
         self.assertEqual(sizing.label("bet:ri:ix"), "Bet/check/bet")
         self.assertEqual(sizing.label("raise:ti:x:1"), "Sur-relance turn du BTN (flop checké)")
+
+    def test_spread_and_near_allin(self):
+        pairs = ((50, 75), (33, 75), (50, 100), (100, "a"), (150, "a"), ("geo", 75))
+        self.assertEqual([sizing.spread(p) for p in pairs], [False, True, True, True, False, True])
+        selection = sizing.Selection.__new__(sizing.Selection)
+        selection.spot = mock.Mock(stack_bb=97.5, pot_bb=5.0)
+        selection.plan = {"bet:ti:i": [100]}
+        sit = sizing.Situation("bet:ri:ii", [50, 75, 150, 200, "a"], 2)
+        # turn à 20 bb (90 bb derrière), 2e barrel pot payé : river à 60 bb, 70 derrière ; 75 % (45 bb) est sous les
+        # 2/3 du tapis, 150 % et 200 % deviennent le tapis
+        self.assertEqual(selection._river_pot(sit, 20.0), (60.0, 70.0))
+        self.assertEqual(selection._near_allin(sit, 20.0).candidates, [50, 75, "a"])
+        checked = sizing.Situation("bet:ri:xx", [50, 75, 150, 200, "a"], 2)
+        self.assertIs(selection._near_allin(checked, 20.0), checked)  # turn checkée : 200 % de 20 bb, loin du tapis
 
     def test_pick_prefers_smaller_on_ties(self):
         self.assertEqual(sizing.pick([33, 75, "geo"], [3.00, 3.05, 3.01]), 1)
@@ -267,7 +291,9 @@ class SolveSpotsTest(unittest.TestCase):
         self.assertEqual(plan["raise:fo::0"], [33])
         self.assertEqual(plan["raise:fi::1"], [66])
         self.assertEqual((plan["bet:ti:x"], plan["bet:to:x"]), ([66], [33]))
-        self.assertEqual((plan["bet:ri:xx"], plan["bet:ro:xx"]), ([50, 75], [50, 75]))
+        # river : deux tailles distinctes (le faux solveur préfère 70 % au bouton, 40 % à la BB)
+        self.assertEqual((plan["bet:ri:xx"], plan["bet:ro:xx"]), ([50, 150], [33, 75]))
+        self.assertEqual(report["bet:ri:xx"]["candidates"], [50, 75, 150, 200, "a"])
         self.assertEqual(report["bet:fi:"]["method"], "arbre complet")
         self.assertEqual(report["bet:ti:x"]["cards"], 8)
         self.assertEqual((report["raise:ti:x:1"]["method"], plan["raise:ti:x:1"]), ("rare", [33]))
@@ -296,7 +322,7 @@ class SolveSpotsTest(unittest.TestCase):
         self.assertEqual((plan["bet:fo:"], plan["raise:fi::0"], plan["bet:fi:"]), ([33], [66], [50]))
         self.assertEqual(len([e for e in report.values() if e["method"] == "arbre complet"]), 6)
         self.assertEqual((plan["bet:to:x"], plan["bet:ti:x"]), ([33], [50]))
-        self.assertEqual((plan["bet:ro:xx"], plan["bet:ri:xx"]), ([33, 50], [50]))
+        self.assertEqual((plan["bet:ro:xx"], plan["bet:ri:xx"]), ([33, 75], [50]))
         spot = StudySpot("3bet", cards_of("KsKd4c"))
         self.assertEqual(spot.request()["plan"]["bet:fo:"], [33.0])
         self.assertTrue(spot.menu_text().startswith("c-bet 33 %"))
