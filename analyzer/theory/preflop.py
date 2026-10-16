@@ -28,6 +28,9 @@ ACTION_WORDS = {
 }
 MAIN, MIXED, DEVIATION, OUT_OF_RANGE = "principale", "secondaire", "écart", "hors range"
 MIXED_THRESHOLD, MAIN_THRESHOLD = 0.10, 0.50
+# Une erreur récurrente : au moins 2 écarts avec la même main, et la moitié de ses décisions avec elle (une main mal
+# jouée une fois n'est que du bruit).
+RECURRING_MIN, RECURRING_SHARE = 2, 0.5
 ALLIN_SHARE = 0.6  # une relance qui engage plus de 60 % du tapis effectif compte comme un tapis
 
 
@@ -261,6 +264,21 @@ class NodeSummary:
         for d in self.decisions:
             out[d.combo].append(d)
         return out
+
+    def recurring(self) -> dict[str, tuple[int, int]]:
+        """Les erreurs récurrentes : main -> (écarts, décisions avec elle), au moins RECURRING_MIN écarts et
+        RECURRING_SHARE de ses décisions."""
+        out = {}
+        for combo, played in self.by_hand().items():
+            bad = sum(d.verdict == DEVIATION for d in played)
+            if recurring(bad, len(played)):
+                out[combo] = (bad, len(played))
+        return out
+
+
+def recurring(bad: int, n: int) -> bool:
+    """Une main jouée autrement que la théorie bad fois sur n : une erreur récurrente, pas un écart isolé ?"""
+    return bad >= RECURRING_MIN and bad >= RECURRING_SHARE * n
 
 
 def summarize(decisions_list: list[Decision], solution: Optional[Solution] = None) -> list[NodeSummary]:

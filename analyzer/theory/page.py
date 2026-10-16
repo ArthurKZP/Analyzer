@@ -24,6 +24,7 @@ from .preflop import (
     Solution,
     decisions,
     load_solution,
+    recurring,
     summarize,
 )
 
@@ -53,8 +54,11 @@ PAGE_STYLE = """
 .rc { position: relative; aspect-ratio: 1.35; border-radius: 3px; background-color: var(--cell-empty); font-size: 11px; line-height: 1.1; overflow: hidden; }
 .rc .hl { position: absolute; left: 3px; top: 2px; color: #fff; font-weight: 600; text-shadow: 0 0 2px rgba(0,0,0,0.75); }
 .rc.out .hl { color: var(--muted); text-shadow: none; font-weight: 400; }
-.rc .cnt { position: absolute; right: 2px; bottom: 2px; font-size: 10px; font-weight: 700; background: var(--surface); color: var(--ink); border-radius: 999px; padding: 0 4px; border: 1px solid var(--border); }
-.rc .cnt.bad { border: 2px solid var(--alert); color: var(--alert); }
+.rc .cnt { position: absolute; right: 2px; bottom: 2px; font-size: 10px; font-weight: 700; background: var(--surface);
+  color: var(--alert); border-radius: 999px; padding: 0 4px; border: 2px solid var(--alert); }
+.rc.err { box-shadow: inset 0 0 0 2px var(--alert); }
+.dev-group .rec { font-weight: 700; }
+.dev-group .once { color: var(--muted); }
 .alegend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--ink-2); margin: 10px 0 0; }
 .alegend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
 .alegend .badge-demo { font-size: 10px; font-weight: 700; border: 2px solid var(--alert); color: var(--alert); border-radius: 999px; padding: 0 4px; margin-right: 6px; }
@@ -99,7 +103,13 @@ def _sort_combos(combos: list[str]) -> list[str]:
     return sorted(set(combos), key=key)
 
 
+def _times(n: int) -> str:
+    return "une fois" if n == 1 else f"{n} fois"
+
+
 def grid_html(node: Node, solution: Solution, by_hand: dict[str, list[Decision]], ref: str = "solveur") -> str:
+    """La grille 13 × 13 de la stratégie du nœud ; seules les erreurs récurrentes y sont marquées (écarts / décisions
+    avec la main, preflop.recurring) : une main mal jouée une fois reste au survol et dans la liste des écarts."""
     cells = []
     for i in range(13):
         for j in range(13):
@@ -107,11 +117,14 @@ def grid_html(node: Node, solution: Solution, by_hand: dict[str, list[Decision]]
             strategy = node.strategy(hand)
             weight = solution.weight(node.key, hand)
             played = by_hand.get(hand, [])
-            bad = [d for d in played if d.verdict in (DEVIATION, OUT_OF_RANGE)]
+            bad = sum(d.verdict == DEVIATION for d in played)
             title = f"{hand} — {ref} : {_mix(node, strategy)}"
             if played:
                 acts = Counter(node.word(d.action) for d in played)
-                title += " · toi : " + ", ".join(f"{a} ×{n}" for a, n in acts.most_common())
+                title += " · toi : " + ", ".join(f"{a} {_times(n)}" for a, n in acts.most_common())
+                if bad:
+                    kind = "erreur récurrente" if recurring(bad, len(played)) else "isolé"
+                    title += f" · {bad} écart{'s' if bad > 1 else ''} sur {len(played)} ({kind})"
             if strategy and weight > 0.005:
                 stops, start = [], 0.0
                 for action, freq in strategy.items():
@@ -124,14 +137,18 @@ def grid_html(node: Node, solution: Solution, by_hand: dict[str, list[Decision]]
                 cls = "rc"
             else:
                 style, cls = "", "rc out"
-            badge = (f'<span class="cnt{" bad" if bad else ""}">{"✕" if bad else ""}{len(played)}</span>'
-                     if played else "")
-            cells.append(f'<div class="{cls}" style="{style}" title="{escape(title)}"><span class="hl">{hand}</span>{badge}</div>')
+            badge = ""
+            if played and recurring(bad, len(played)):
+                badge = f'<span class="cnt">{bad}/{len(played)}</span>'
+                cls += " err"
+            cells.append(f'<div class="{cls}" style="{style}" title="{escape(title)}"><span class="hl">{hand}</span>'
+                         f'{badge}</div>')
     legend = "".join(f'<span><i style="background:var(--a-{a})"></i>{escape(node.word(a))}</span>' for a in node.actions)
     return (f'<div class="rgrid-wrap"><div class="rgrid" role="img" aria-label="Stratégie {REFS[ref]["of"]}, {escape(node.label)}">'
             f'{"".join(cells)}</div></div><div class="alegend">{legend}'
             '<span>hauteur = part de la main qui arrive ici</span>'
-            '<span><span class="badge-demo">✕2</span>tes décisions avec cette main (✕ = écart)</span></div>')
+            '<span><span class="badge-demo">3/4</span>erreur récurrente : 3 écarts sur tes 4 décisions avec cette main '
+            "(une main mal jouée une fois n'est pas marquée : elle est au survol et dans les écarts)</span></div>")
 
 
 def frequency_table(summary: NodeSummary, ref: str = "solveur") -> str:
@@ -161,7 +178,7 @@ def deviations_html(summary: NodeSummary, spots_href: str, ref: str = "solveur",
         return f'<p class="muted">Aucun écart net : toutes tes décisions font partie de la stratégie {REFS[ref]["of"]}.</p>'
     out = []
     for (action, best), items in groups:
-        combos = ", ".join(_sort_combos([d.combo for d in items]))
+        combos = _combo_counts(items, summary)
         rows = "".join(
             f'<tr><td class="nowrap">{d.hand.date:%d/%m %H:%M}</td><td>{cards_html(d.hand.hole_cards[d.player])}</td>'
             f'<td class="muted">{escape(_mix(node, d.strategy))}</td>'
@@ -171,11 +188,36 @@ def deviations_html(summary: NodeSummary, spots_href: str, ref: str = "solveur",
         )
         out.append(
             f'<details class="dev-group"><summary><b>{escape(node.word(action).capitalize())} au lieu de '
-            f'{escape(node.word(best))}</b> — {len(items)} fois : {escape(combos)}</summary>'
+            f'{escape(node.word(best))}</b> — {len(items)} fois : {combos}</summary>'
             f'<table class="stats"><thead><tr><th>Date</th><th>Main</th><th>{REFS[ref]["col"]}</th><th class="num">Tapis eff.</th>'
             f'<th></th></tr></thead><tbody>{rows}</tbody></table></details>'
         )
     return "".join(out)
+
+
+def _by_count(items: list[Decision]) -> list[tuple[str, int]]:
+    """Les mains de ces écarts, les plus fréquentes d'abord (puis dans l'ordre de la grille)."""
+    counts = Counter(d.combo for d in items)
+    order = {c: k for k, c in enumerate(_sort_combos(list(counts)))}
+    return sorted(counts.items(), key=lambda kv: (-kv[1], order[kv[0]]))
+
+
+def _combo_counts(items: list[Decision], summary: NodeSummary) -> str:
+    """Les mains d'un groupe d'écarts (HTML) : les erreurs récurrentes d'abord, en gras avec leur nombre, puis les
+    écarts isolés (une main mal jouée une fois, ou rarement), à part."""
+    repeated = summary.recurring()
+    rec, once = [], []
+    for combo, n in _by_count(items):
+        if combo in repeated:
+            bad, total = repeated[combo]
+            rec.append(f'<span class="rec">{escape(combo)} ({n} fois sur {total})</span>')
+        else:
+            once.append(escape(combo))
+    out = ", ".join(rec)
+    if once:
+        word = "isolés" if len(once) > 1 else "isolé"
+        out += (" · " if rec else "") + f'<span class="once">{word} : {", ".join(once)}</span>'
+    return out
 
 
 def _replay(spots_href: str, hand: Hand) -> str:
@@ -229,16 +271,19 @@ def brief_points(summaries: list[NodeSummary], limit: int = MAX_BRIEF, ref: str 
             weight = abs(act - exp) * n / 100
         if groups:
             (action, best), items = groups[0]
-            combos = _sort_combos([d.combo for d in items])
-            shown = escape(", ".join(combos[:3]) + ("…" if len(combos) > 3 else ""))
+            counts = _by_count(items)
+            more_hands = "…" if len(counts) > 3 else ""
+            shown = escape(", ".join(c + (f" ({n} fois)" if n > 1 and len(counts) > 1 else "") for c, n in counts[:3])
+                           + more_hands)
+            names = escape(", ".join(c for c, _ in counts[:3]) + more_hands)
             played, wanted = escape(node.word(action)), escape(node.word(best))
             leak.append(f"{'Surtout : ' if gap else ''}{played if gap else _cap(played)} au lieu de {wanted} avec "
                         f"{shown} ({len(items)} fois).")
             same_way = gap and ((gap[1] < gap[2] and best == gap[0]) or (gap[1] > gap[2] and action == gap[0]))
             if same_way:  # ces mains sont le premier pas du correctif
-                fix[0] += f" : commence par {shown} ({wanted} plutôt que {played})"
+                fix[0] += f" : commence par {names} ({wanted} plutôt que {played})"
             else:
-                fix.append(f"avec {shown} : {wanted} plutôt que {played}")
+                fix.append(f"avec {names} : {wanted} plutôt que {played}")
             weight = max(weight, len(items))
         elif gap:
             fix[0] += " (la grille de la situation, plus bas, montre quelles mains)"
@@ -370,8 +415,7 @@ def build_preflop_page(hands: list[Hand], hero: str, villain: Optional[str] = No
     for s in summaries:
         if not s.decisions:
             continue
-        n, bad = len(s.decisions), s.verdicts[DEVIATION]
-        count = f"{n} décision{'s' if n > 1 else ''}" + (f", {bad} écart{'s' if bad > 1 else ''}" if bad else "")
+        count = _count(s)
         nodes_html.append(fold(s.node.label, f"""<div class="node-grid">
   <div class="card">{grid_html(s.node, solution, s.by_hand())}</div>
   <div class="card"><h3>Fréquences</h3>{frequency_table(s)}
@@ -401,6 +445,16 @@ def build_preflop_page(hands: list[Hand], hero: str, villain: Optional[str] = No
     return html_page(f"Préflop vs solveur — {villain or hero}", f"<style>{PAGE_STYLE}</style>{body}", embed)
 
 
+def _count(summary: NodeSummary) -> str:
+    """« 120 décisions, 9 écarts, dont 2 mains en erreur récurrente »."""
+    n, bad = len(summary.decisions), summary.verdicts[DEVIATION]
+    out = f"{n} décision{'s' if n > 1 else ''}" + (f", {bad} écart{'s' if bad > 1 else ''}" if bad else "")
+    repeated = len(summary.recurring())
+    if repeated:
+        out += f", dont {repeated} main{'s' if repeated > 1 else ''} en erreur récurrente"
+    return out
+
+
 def _seen_note(node: Node) -> str:
     """D'où viennent les décisions d'un nœud quand elles ne sont pas toutes de sa table et de sa place (le LJ d'une
     table de 9 joueurs jugé avec les charts de l'UTG du 6-max…)."""
@@ -415,9 +469,7 @@ def _seen_note(node: Node) -> str:
 
 def _ring_node(summary: NodeSummary, solution: Solution, replay: Optional[Callable[[Hand], str]], open_: bool) -> str:
     node = summary.node
-    n = len(summary.decisions)
-    bad = summary.verdicts[DEVIATION]
-    count = f"{n} décision{'s' if n > 1 else ''}" + (f", {bad} écart{'s' if bad > 1 else ''}" if bad else "")
+    count = _count(summary)
     return (f'<details class="rp-node"{" open" if open_ else ""}><summary><b>{escape(node.label)}</b> '
             f'<span class="muted">— {count}</span></summary><div class="rp-body">{_seen_note(node)}'
             f'<div class="node-grid"><div class="card">{grid_html(node, solution, summary.by_hand(), "charts")}</div>'

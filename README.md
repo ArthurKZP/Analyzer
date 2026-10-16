@@ -217,16 +217,21 @@ Pour chaque décision (tes cartes sont toujours connues ; les siennes seulement 
 - **hors range** : le solveur n'amène jamais cette main à ce nœud (ex. un 4bet face à un 3bet avec une main
   qu'il n'ouvre pas) ; ces décisions sont exclues des fréquences.
 
-La page commence par **En bref** : les trois situations qui s'écartent le plus de la théorie, classées par le
-nombre de mains jouées autrement, chacune en deux temps. **Le leak**, ce que tu joues : « Trop de 3bet : 27 % de
-tes décisions ici, contre 19 % pour le solveur avec les mêmes mains. Surtout : 3bet au lieu de call avec A7s, A6s,
-K9s… (19 fois). » **Le correctif**, ce qu'il faut jouer à la place : « Moins de 3bet, vers 19 % ici : commence par
-A7s, A6s, K9s… (call plutôt que 3bet). » Les autres situations sont comptées, et le détail de la comparaison est
-replié ; un écart n'est pas toujours une fuite (le Leakfinding vérifie ce qu'il coûte en jeu). Elle montre
-ensuite, par nœud, la grille du solveur (couleurs = actions, hauteur = part de la main qui arrive ici) avec tes
-décisions par main (✕ = écart), tes fréquences face à celles du solveur **avec exactement les mêmes mains**, et la
-liste des écarts avec un lien « rejouer ». Pour l'adversaire : ses fréquences globales face au solveur et les
-mains montrées qu'il joue autrement.
+La page commence par **En bref** : les trois situations qui s'écartent le plus de la théorie, classées par le nombre
+de mains jouées autrement, chacune en deux temps. **Le leak**, ce que tu joues : « Trop de 3bet : 27 % de tes
+décisions ici, contre 19 % pour le solveur avec les mêmes mains. Surtout : 3bet au lieu de call avec A7s (3 fois),
+A6s (2 fois), K9s… (19 fois). » — les mains les plus souvent jouées autrement d'abord. **Le correctif**, ce qu'il
+faut jouer à la place : « Moins de 3bet, vers 19 % ici : commence par A7s, A6s, K9s… (call plutôt que 3bet). » Les
+autres situations sont comptées, et le détail de la comparaison est replié ; un écart n'est pas toujours une fuite
+(le Leakfinding vérifie ce qu'il coûte en jeu). Elle montre ensuite, par nœud, la grille du solveur (couleurs =
+actions, hauteur = part de la main qui arrive ici) avec tes **erreurs récurrentes** en évidence — une main cerclée
+de rouge avec « 3/4 » : 3 écarts sur tes 4 décisions avec elle (au moins 2 écarts, et la moitié de ses décisions) ;
+une main mal jouée une fois, ou rarement, n'est que du bruit et n'est pas marquée (le survol de chaque case dit ce
+que tu en as fait et ses écarts). Puis tes fréquences face à celles du solveur **avec exactement les mêmes mains**,
+et la liste des écarts avec un lien « rejouer » : pour chaque écart (« Open au lieu de fold »), les mains en erreur
+récurrente d'abord, en gras avec leur nombre (« 84o (5 fois sur 7) »), puis les écarts isolés, en gris. Le titre de
+chaque nœud compte ses mains en erreur récurrente. Pour l'adversaire : ses fréquences globales face au solveur et
+les mains montrées qu'il joue autrement.
 
 Limites : la lecture des captures est précise à environ 2 % ; la solution est à 100bb et avec ces tailles,
 alors que ta profondeur et vos tailles réelles peuvent différer (la page les affiche). Les pots limpés et
