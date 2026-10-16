@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import quote
 
-from .. import (aliases, bluffcatch, bluffs, db, field, gains, handplay, leaks, memory, players, ring, ring_leaks,
-               settings, spots, stakes, store, students, tracking)
+from .. import (aliases, bluffcatch, bluffs, db, field, gains, handplay, leaks, memory, players, replay, ring,
+               ring_leaks, settings, spots, stakes, store, students, tracking)
 from .. import period as periods
 from .. import reference as refstudy
 from ..db import analyses as db_analyses
@@ -37,7 +37,7 @@ from ..theory import (coach, custom_ranges, custom_tree, handclass, postflop, re
                       stake_charts, studyspots)
 from ..theory.page import build_preflop_page, build_ring_preflop_page
 from ..viewer import build_viewer
-from . import bilan_page, gains_page, synthesis
+from . import bilan_page, catch_trainer, gains_page, synthesis
 from .report_pdf import build_pdf
 from .report_pptx import build_pptx
 from .bluffs_page import build_bluffs_page
@@ -99,12 +99,14 @@ def _kind_note(kind: dict) -> str:
 
 
 
-def _ring_replay(hand: Hand) -> str:
-    """Revoir une main d'une table à plusieurs : au solveur, quand elle est allée au flop à deux."""
+def _ring_replay(hand: Hand, api: str = "/api") -> str:
+    """Revoir une main d'une table à plusieurs : au replayer, et au solveur quand elle est allée au flop à deux."""
+    link = (f'<a class="spots-link" href="{escape(replay.href(hand.hand_id, api))}" target="_blank" '
+            'rel="noopener">rejouer ↗</a>')
     if postflop.flop_pair(hand) is None:
-        return ""
-    return (f'<a class="spots-link" href="/explorateur/{quote(hand.hand_id, safe="")}" target="_blank" '
-            'rel="noopener">revoir ↗</a>')
+        return link
+    return (f'{link} <a class="spots-link" href="/explorateur/{quote(hand.hand_id, safe="")}" target="_blank" '
+            'rel="noopener">solveur ↗</a>')
 
 
 def _round(x: Optional[float], digits: int = 1) -> Optional[float]:
@@ -906,7 +908,8 @@ class Library:
             note = " ".join(x for x in (note, charts) if x)
             return build_ring_preflop_page(
                 ring_preflop.collect(parts["reg"], hero, stake_charts.ring_lines(band)), hero, embed=True, note=note,
-                switch=format_switch(self.leak_formats(), ring_leaks.FORMAT), replay=_ring_replay,
+                switch=format_switch(self.leak_formats(), ring_leaks.FORMAT),
+                replay=lambda hand: _ring_replay(hand, self.api),
                 load_hint=" Charge-les dans Paramètres › Ranges préflop (« Charger les charts 6-max »).")
         key = (("self", "preflop", "ring") + documents.revision(db.current(), "ranges", stake_charts.KIND)[2:]
                + self._ring_kinds_key())
@@ -1355,6 +1358,25 @@ class Library:
                          "total_bb": round(h.total_pot / h.bb, 1), "net_bb": round(h.net(self.hero) / h.bb, 1),
                          "status": status})
         return rows
+
+    def catch_trainer_page(self) -> str:
+        """Entraîneur › Bluffcatch : les mises river que tu as affrontées, à payer ou coucher (catch_trainer)."""
+        def build():
+            played = dict(self.leak_formats())
+            groups = [("HU", self.hands, self.kinds())] if "HU" in played else []
+            groups += [("ring", self.ring, self.ring_kinds())] if ring_leaks.FORMAT in played else []
+            return catch_trainer.build_page(catch_trainer.exercises(groups, self.hero or "", self.api))
+        return self._cached(("entraineur", "bluffcatch") + self._kinds_key() + self._ring_kinds_key(), build)
+
+    def replay_record(self, hand_id: str) -> dict:
+        """Une main pour le replayer (replay.record), vue de cet espace ; dans le tien, aussi celles des élèves et de
+        tes joueurs de référence. NotFound si elle n'y est pas."""
+        found = (self.by_id[hand_id], self.hero) if hand_id in self.by_id else (
+            self.find_hand(hand_id) if self.is_me else None)
+        if found is None:
+            raise NotFound(hand_id)
+        hand, hero = found
+        return dict(replay.record(hand, hero), explorer=len(hand.board) >= 3 and postflop.flop_pair(hand) is not None)
 
     def find_hand(self, hand_id: str) -> Optional[tuple[Hand, str]]:
         """Une main et son joueur : parmi les tiennes, puis celles des élèves et de tes joueurs de référence."""

@@ -7,7 +7,7 @@ from html import escape
 from typing import Optional
 from urllib.parse import quote
 
-from .. import ring
+from .. import replay, ring
 from ..field import INTENT_LABELS
 from ..lines import BOARD_SIZE
 from ..reference import POSITION_MIN, LineRow, LineStats, Result, Row, examples, gaps, passed, street_totals
@@ -211,11 +211,13 @@ def street_html(street: str, rows: list[LineRow]) -> str:
 
 
 def _replay(hand) -> str:
-    """Revoir la main dans l'explorateur (au solveur), quand il ne restait que deux joueurs au flop."""
+    """Revoir la main au replayer, et au solveur (l'explorateur) quand il ne restait que deux joueurs au flop."""
+    link = (f'<a class="spots-link" href="{escape(replay.href(hand.hand_id))}" target="_blank" '
+            'rel="noopener">rejouer ↗</a>')
     if postflop.flop_pair(hand) is None:
-        return ""
-    return (f'<a class="spots-link" href="/explorateur/{quote(hand.hand_id, safe="")}" target="_blank" '
-            'rel="noopener">revoir ↗</a>')
+        return link
+    return (f'{link} <a class="spots-link" href="/explorateur/{quote(hand.hand_id, safe="")}" target="_blank" '
+            'rel="noopener">solveur ↗</a>')
 
 
 def examples_html(title: str, bets: list, note: str) -> str:

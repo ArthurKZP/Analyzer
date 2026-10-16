@@ -466,6 +466,14 @@ class ServerTest(unittest.TestCase):
         status, _, body = self.request("GET", "/api/coups/HAND02")  # la main complète, pour la rejouer
         self.assertEqual((status, len(json.loads(body)["x"]) > 3), (200, True))
         self.assertEqual(self.request("GET", "/api/coups/INCONNUE")[0], 404)
+        status, ctype, body = self.request("GET", "/rejouer/HAND04")  # le replayer, même d'une main finie au préflop
+        self.assertEqual((status, b"/static/replayer.js" in body), (200, True))
+        status, _, body = self.request("GET", "/api/rejouer/HAND04")
+        self.assertEqual((status, json.loads(body)["board"]), (200, []))
+        self.assertEqual(self.request("GET", "/api/rejouer/INCONNUE")[0], 404)
+        self.assertEqual(self.request("GET", "/api/eleves/inconnu/rejouer/HAND04")[0], 404)
+        self.assertEqual(self.request("GET", "/static/replayer.js")[0], 200)
+        self.assertIn(b"Bluffcatch : tes mains", self.request("GET", "/entraineur/bluffcatch")[2])
         self.assertEqual(json.loads(self.request("GET", "/api/coups?adversaire=Villain&reach=x")[2])["total"], 4)
         status, _, body = self.request("GET", "/api/mains?main=K9s&sit=open&pos=BTN")  # d'où vient le résultat
         self.assertEqual((status, json.loads(body)["n"]), (200, 1))

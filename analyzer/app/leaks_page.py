@@ -10,7 +10,7 @@ from html import escape
 from typing import Optional
 from urllib.parse import quote
 
-from .. import leaks
+from .. import leaks, replay
 from ..report import cards_html, fold, format_query, format_switch, html_page, more, num
 from ..selfreport import OPP_SCRIPT, OPP_STYLE, opponent_row_data, opponent_tools
 from ..theory import review, studyspots
@@ -409,10 +409,13 @@ def _pick_row(p: leaks.Pick, hero: str, pages: str, standalone: bool) -> str:
         status = "à analyser" if p.spot is not None else ("à revoir à la main" if p.kind == "rec" else "hors solveur")
         if p.spot is None and p.why:
             status_html = _why(p.why)
-        # une main heads-up se rejoue dans Mes spots ; celle d'une table à plusieurs s'ouvre au solveur
+        # une main heads-up se rejoue dans Mes spots ; celle d'une table à plusieurs s'ouvre au solveur (au flop à
+        # deux), sinon au replayer
         href = (f"{pages}/spots#hand={quote(p.hand.hand_id, safe='')}" if heads_up
-                else f"/explorateur/{quote(p.hand.hand_id, safe='')}")
-    link = "" if standalone else f'<a class="open" href="{escape(href)}">Revoir ↗</a>'
+                else f"/explorateur/{quote(p.hand.hand_id, safe='')}" if p.spot is not None
+                else replay.href(p.hand.hand_id, replay.api_of(pages)))
+    blank = ' target="_blank" rel="noopener"' if href.startswith("/rejouer/") else ""
+    link = "" if standalone else f'<a class="open" href="{escape(href)}"{blank}>Revoir ↗</a>'
     return (f'<tr><td>{escape(p.line)}</td><td>{cards}</td><td class="num">{num(p.pot_bb, 0)} bb</td>'
             f'<td class="num">{num(p.net_bb, 1, sign=True)} bb</td><td class="small">{status_html or escape(status)}</td>'
             f'<td class="small">{escape(p.hand.hand_id)}</td><td>{link}</td></tr>')

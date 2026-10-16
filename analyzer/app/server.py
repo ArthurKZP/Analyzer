@@ -31,6 +31,7 @@ STATIC = Path(__file__).parent / "static"
 STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8",
                 "explorer.js": "text/javascript; charset=utf-8", "explorer.css": "text/css; charset=utf-8",
                 "trainer.js": "text/javascript; charset=utf-8", "trainer.css": "text/css; charset=utf-8",
+                "replayer.js": "text/javascript; charset=utf-8", "replayer.css": "text/css; charset=utf-8",
                 "coach.js": "text/javascript; charset=utf-8", "coach.css": "text/css; charset=utf-8",
                 "rangekit.js": "text/javascript; charset=utf-8"}
 MAX_PATH = 40  # étapes d'un chemin dans l'arbre (bien plus qu'un coup réel)
@@ -248,6 +249,14 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(owner.hand_fiche(parts[-1]))
                 query = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
                 return self._json(owner.spots_search(query))
+            if len(parts) == 2 and parts[0] == "rejouer":  # le replayer d'une main jouée (?api= : son espace)
+                return self._html((STATIC / "replayer.html").read_text(encoding="utf-8"))
+            if parts[:2] == ["api", "rejouer"] and len(parts) == 3 or (
+                    len(parts) == 5 and parts[:2] in (["api", "eleves"], ["api", "references"])
+                    and parts[3] == "rejouer"):
+                owner = (library if len(parts) == 3 else library.student(parts[2]) if parts[1] == "eleves"
+                         else library.reference(parts[2]))
+                return self._json(owner.replay_record(parts[-1]))
             if parts == ["api", "mains"] or (len(parts) == 4 and parts[:2] in (["api", "eleves"], ["api", "references"])
                                              and parts[3] == "mains"):
                 owner = (library if len(parts) == 2 else library.student(parts[2]) if parts[1] == "eleves"
@@ -273,6 +282,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(build_studies_page(embed=True, section=parts[1]))
             if parts == ["entraineur"]:
                 return self._html((STATIC / "trainer.html").read_text(encoding="utf-8"))
+            if parts == ["entraineur", "bluffcatch"]:  # payer ou coucher, sur tes mains jouées
+                return self._html(library.catch_trainer_page())
             if parts == ["api", "entraineur"]:
                 return self._json(trainer.overview())
             if parts == ["api", "sauvegarde"]:

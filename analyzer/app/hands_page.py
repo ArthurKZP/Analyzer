@@ -538,6 +538,11 @@ SCRIPT = r"""
         const li = el('li', {}, el('b', {}, h), ' · ' + (date ? date + ' · ' : '') + 'EV ' + signed(ev, 1) + ' bb (réel ' + signed(net, 1) + ')'
           + (loss !== null ? ' · solveur : −' + num(loss, 2) + ' bb d\'EV perdue' : ''), el('span', { class: 'd' }, ' — ' + what + ' · ' + id));
         if (st.fmt === 'HU') li.append(el('a', { href: 'spots#hand=' + encodeURIComponent(id) }, 'Rejouer'));
+        else {
+          const space = D.space && D.space !== '/api' ? '?api=' + encodeURIComponent(D.space).replace(/%2F/g, '/') : '';
+          li.append(el('a', { href: '/rejouer/' + encodeURIComponent(id) + space, target: '_blank', rel: 'noopener' },
+            'Rejouer ↗'));
+        }
         if (FLOP_POTS.includes(pot)) li.append(el('a', { href: '/explorateur/' + encodeURIComponent(id), target: '_blank', rel: 'noopener' }, 'Solveur ↗'));
         ul.append(li);
       });
@@ -577,7 +582,8 @@ def build_hands_page(formats: dict[str, dict], embed: bool = True, api: str = ""
     data = {"formats": formats, "names": FORMAT_NAMES, "situations": [list(s) for s in handplay.SITUATIONS],
             "pots": [list(p) for p in handplay.POTS], "ends": [list(e) for e in handplay.ENDS],
             "flops": [list(f) for f in handplay.FLOPS], "flop_pots": list(handplay.FLOP_POTS),
-            "ends_for": list(handplay.REVIEW_POTS), "next": handplay.NEXT, "api": api}
+            "ends_for": list(handplay.REVIEW_POTS), "next": handplay.NEXT, "api": api,
+            "space": api.rsplit("/", 1)[0] if api else "/api"}
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     heading = "" if embed else "<h1>Mains de départ</h1>"
     body = f"""{STYLE}{heading}

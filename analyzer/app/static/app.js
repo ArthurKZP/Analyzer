@@ -17,6 +17,8 @@
     // un joueur de référence : la comparaison avec toi, sa value et ses bluffs, puis son jeu analysé comme le tien
     reference: [['comparaison', 'Toi et lui'], ['lignes', 'Value et bluffs'], ['bilan', 'Bilan'], PREFLOP_GROUP,
       ['tables', 'Ses coups à plusieurs']],
+    // l'entraîneur : sur les spots résolus (heads-up), et le bluffcatch sur tes mains jouées
+    entraineur: [['solveur', 'Spots résolus'], ['bluffcatch', 'Bluffcatch']],
     adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
       ['solveur', 'Face au solveur'], ['bluffs', 'Ses bluffs']],
     // L'explorateur part du préflop ; les séries heads-up (SRP, pots 3bet et 4bet), les séries 6-max et les coups joués
@@ -27,7 +29,7 @@
   const FORMAT_TABS = ['bilan', 'leaks', 'suivi', 'preflop', 'comparaison', 'lignes'];  // pages qui ont un choix heads-up / tables à plusieurs
   // Les formats que tu joues (Paramètres) : sans choix, tous. Un format que tu ne joues pas sort des menus.
   const plays = (fmt) => !state || !state.settings || !state.settings.plays || state.settings.plays.includes(fmt);
-  const HIDDEN_TABS = { HU: { moi: ['spots', 'solveur'], field: ['bluffs'], etudes: ['hu'] },
+  const HIDDEN_TABS = { HU: { moi: ['spots', 'solveur'], field: ['bluffs'], etudes: ['hu'], entraineur: ['solveur'] },
     ring: { moi: ['tables'], etudes: ['6max'] } };
   function groupsOf(view) {  // [{ label, tabs: [[page, libellé], …] }] : les groupes dont une page au moins est jouée
     const hidden = ['HU', 'ring'].filter((f) => !plays(f)).flatMap((f) => HIDDEN_TABS[f][view] || []);
@@ -89,7 +91,7 @@
     if (parts[0] === 'importer') return { view: 'importer' };
     if (parts[0] === 'etudes' && HU_SERIES.includes(parts[1])) return { view: 'etudes', tab: 'hu', family: parts[1] };
     if (parts[0] === 'etudes') return { view: 'etudes', tab: tabOf('etudes', parts[1], 'explorateur') };
-    if (parts[0] === 'entraineur') return { view: 'entraineur' };
+    if (parts[0] === 'entraineur') return { view: 'entraineur', tab: tabOf('entraineur', parts[1], 'solveur') };
     if (parts[0] === 'sauvegarde') return { view: 'sauvegarde' };
     if (parts[0] === 'adversaire' && parts[1]) return { view: 'adv', player: parts[1], tab: tabOf('adv', parts[2], 'plan') };
     if (parts[0] === 'moi' && parts[1] === 'bluffs') return { view: 'field', tab: 'bluffs' };  // ancienne adresse
@@ -115,7 +117,7 @@
     if (r.view === 'field') return '#/field/' + r.tab;
     if (r.view === 'parametres') return '#/parametres/' + r.tab;
     if (r.view === 'etudes') return '#/etudes/' + r.tab;
-    if (r.view === 'entraineur') return '#/entraineur';
+    if (r.view === 'entraineur') return '#/entraineur' + (r.tab === 'bluffcatch' ? '/bluffcatch' : '');
     if (r.view === 'sauvegarde') return '#/sauvegarde';
     if (r.view === 'eleves') return '#/eleves';
     if (r.view === 'eleve') return '#/eleve/' + encodeURIComponent(r.student) + '/' + r.tab;
@@ -130,7 +132,7 @@
       if (r.tab === 'explorateur') return '/explorateur/preflop' + (plays('HU') ? '' : '#table=6-max');
       return '/etudes/' + r.tab + (r.family ? '#' + r.family : '');
     }
-    if (r.view === 'entraineur') return '/entraineur';
+    if (r.view === 'entraineur') return r.tab === 'bluffcatch' ? '/entraineur/bluffcatch' : '/entraineur';
     if (r.view === 'parametres') return '/parametres/' + r.tab;
     if (r.view === 'field') {  // le format et les limites choisis en dernier dans l'Étude du field (ou ceux de la fiche)
       const fmt = r.fmt || pref('format:/field');
@@ -261,7 +263,9 @@
       subtitle.textContent = r ? refSummary(r) : '';
     } else if (route.view === 'entraineur') {
       title.textContent = 'Entraîneur';
-      subtitle.textContent = 'Joue des mains sur les spots résolus : le solveur juge chaque décision';
+      subtitle.textContent = route.tab === 'bluffcatch'
+        ? 'Payer ou coucher une mise river, sur tes mains jouées : le plan de la situation après chaque décision'
+        : 'Joue des mains sur les spots résolus : le solveur juge chaque décision';
     } else {
       title.textContent = 'Importer des mains';
       subtitle.textContent = 'Historiques de cash game NLHE (.txt, dossier ou archive .zip) — les mains déjà présentes sont ignorées';
@@ -298,7 +302,8 @@
     tabs.textContent = '';
     subtabs.textContent = '';
     const groups = groupsOf(route.view);
-    tabs.hidden = !groups.length || (!hasHands() && !hasAnyHands() && !['etudes', 'eleve', 'parametres', 'reference'].includes(route.view));
+    const always = ['etudes', 'eleve', 'parametres', 'reference', 'entraineur'];  // des onglets même sans tes mains
+    tabs.hidden = !groups.length || (!hasHands() && !hasAnyHands() && !always.includes(route.view));
     subtabs.hidden = true;
     for (const g of groups) {
       const current = g.tabs.some(([id]) => id === route.tab);
@@ -340,9 +345,8 @@
 
   function renderSidebar() {
     $('hero-name').textContent = state.hero ? 'Toi : ' + state.hero : 'Aucune main chargée';
-    // Paramètres : les Élèves si tu es coach, l'entraîneur (spots heads-up) si tu joues le heads-up
+    // Paramètres : les Élèves si tu es coach
     document.querySelector('.nav a[data-view="eleves"]').hidden = !(state.settings ? state.settings.coach : true);
-    document.querySelector('.nav a[data-view="entraineur"]').hidden = !plays('HU');
     const fmt = oppFormat();
     const switcher = $('opp-fmt');
     const both = plays('HU') && plays('ring') && state.opponents.length && (state.ring_opponents || []).length;
@@ -1190,7 +1194,9 @@
     else if (parts[0] === 'field' && parts.length === 3 && parts[1] === 'groupe') r = { view: 'field', tab: 'groupe', group: parts[2] };
     else if (parts[0] === 'parametres' && parts.length === 2) r = { view: 'parametres', tab: parts[1] };
     else if (parts[0] === 'etudes' && parts.length <= 2) r = { view: 'etudes', tab: !parts[1] || HU_SERIES.includes(parts[1]) ? 'hu' : parts[1] };
-    else if (parts[0] === 'entraineur' && parts.length === 1) r = { view: 'entraineur' };
+    else if (parts[0] === 'entraineur' && parts.length <= 2) {
+      r = { view: 'entraineur', tab: parts[1] === 'bluffcatch' ? 'bluffcatch' : 'solveur' };
+    }
     else if (parts[0] === 'eleve' && parts.length === 3) r = { view: 'eleve', student: parts[1], tab: parts[2] };
     else if (parts[0] === 'reference' && parts.length === 3) r = { view: 'reference', ref: parts[1], tab: parts[2] };
     if (!r) return;

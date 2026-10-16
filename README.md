@@ -86,7 +86,8 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   et celles de tes élèves), sa fiche rappelle ses pseudos, et « Défaire » les sépare à nouveau. Et *Ranges
   préflop* : tes ranges préflop par défaut, ligne par ligne et format par format, pour le solveur. Voir *Paramètres*
   plus bas.
-- **Entraîneur** : joue des mains sur les spots résolus, le solveur juge chaque décision (voir plus bas).
+- **Entraîneur** : *Spots résolus* (joue des mains sur les spots résolus, le solveur juge chaque décision) et
+  *Bluffcatch* (payer ou coucher une mise river sur tes mains jouées), voir plus bas.
 - **Sauvegarde** : tes calculs vers un dossier synchronisé ou un stockage en ligne (voir plus bas).
 - **Période d'analyse** (en haut de *Mon jeu*, de l'*Étude du field*, d'une fiche d'adversaire ou d'un élève) :
   toutes les mains, *ce mois*, *ce trimestre* ou *cette année* (du premier jour du mois, du trimestre ou de l'année
@@ -186,6 +187,19 @@ mises, board, temps de réflexion, ta main à chaque street et, si sa main a ét
 Depuis le rapport, chaque ligne de « Ses lignes » a un lien « voir les mains » et chaque main de la
 section abattage un lien « rejouer ». Les filtres sont gardés dans l'adresse de la page : tu peux garder
 un spot en favori.
+
+## Replayer
+
+Toute main jouée se revoit au **replayer** (`/rejouer/<main>`, il s'ouvre dans un nouvel onglet) : heads-up ou table à
+plusieurs, finie au préflop, sur un fold ou à l'abattage. La table avec chaque joueur à sa place (position, bouton,
+tapis qui baisse à chaque mise, sa dernière action, les mises devant lui), le tableau carte par carte et le pot ;
+tes cartes toujours visibles, celles des autres à la fin quand elles ont été montrées (case « Montrer les cartes
+connues » pour les voir avant). Lecture action par action (flèches ← →, Origine/Fin, Espace pour la lecture
+automatique), le déroulé street par street à côté (un clic y mène à l'action), et à la fin ce que chacun récupère,
+son résultat et l'EV all-in. Les liens **rejouer ↗** y mènent depuis le préflop des tables à plusieurs, les mains de
+départ, le Leakfinding (une main sans spot au solveur), les exemples d'un joueur de référence et l'entraîneur ;
+« Ouvrir au solveur ↗ » mène à l'explorateur quand le coup est allé au flop à deux. Une main heads-up se rejoue aussi
+dans le visualiseur de spots (*Mes mains › Heads-up*). Code : `analyzer/replay.py`, `app/static/replayer.*`.
 
 ## Préflop vs solveur
 
@@ -1378,6 +1392,18 @@ Deux raccourcis : **S'entraîner ici** dans l'explorateur rejoue des mains à pa
 une main jouée recalculée), et **S'entraîner** dans « Les erreurs récurrentes » de *Face au solveur* lance la
 situation où tu perds de l'EV.
 
+**Bluffcatch** (second onglet de l'entraîneur, heads-up et tables à plusieurs) : t'entraîner à payer ou coucher une
+mise river, sur tes mains jouées. Chaque situation est une mise (ou relance) river que tu as affrontée : la main se
+rejoue au replayer jusqu'à ta décision, avec la mise, le pot, l'équité qu'il te faut pour payer, la part de folds
+qui rend ses bluffs rentables et ta main. Paie (P) ou couche (C), puis lis **le plan de la situation** — ce que
+disent ses mises vues dans la même ligne et la même taille (sinon la même ligne, sinon toutes ses mises river),
+contre le même type d'adversaires et au même format, comme dans *Bluffcatch à la river* : payer, coucher tes
+bluffcatchers ou défendre plus — si ton choix y est conforme, ce que tu as fait à la table et, quand elles sont
+connues, ses cartes (payer gagnait ou perdait). Les filtres choisissent **la situation à travailler** : format,
+ligne (3e barrel, mise après check à la turn…), taille, réguliers ou récréatifs, et ce que tu as fait (tes calls
+ou tes folds) ; ils sont gardés pour la fois suivante. Le score de la séance compte tes choix conformes au plan et,
+quand ses cartes sont connues, les gagnants. Code : `app/catch_trainer.py`.
+
 ## Sauvegarde
 
 Tout ce que Merlin garde est dans la base de données (`~/.analyzer/analyzer.db`, voir plus bas), sauf les arbres
@@ -1547,6 +1573,7 @@ analyzer/
   report.py            rapport HTML, styles communs et sections repliables (fold, more)
   viewer.py            visualiseur de spots (HTML + JavaScript, sans dépendance)
   selfreport.py        « Mon jeu » : ton bilan contre tous tes adversaires
+  replay.py            une main jouée pour le replayer (static/replayer.*)
   gains.py             tes gains par limite, room, mois, moment du mois et créneau horaire (le filtre du bilan)
   theory/              préflop vs solveur : solution (data/), comparaison (preflop.py), page (page.py),
                        arbre préflop pour l'explorateur (preflop_tree.py), plan de jeu suggéré
