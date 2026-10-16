@@ -54,17 +54,23 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   plus importants** aux repères avant le détail de tes stats (aux tables à plusieurs, sur toutes tes mains, contre
   les réguliers et contre les récréatifs, puis **par position**), résultats par adversaire avec recherche, filtre
   par type et tri par mains, résultat, bb/100, date ou nom (aux tables à plusieurs : mains ensemble, pots disputés
-  et ton résultat dans ces pots), pertes sans abattage (heads-up). **Leaks** : *À travailler* (le Leakfinding, voir
-  plus bas), *Suivi dans le temps* (tes leaks période par période, avant et après le jour où tu as commencé à les
-  travailler, voir plus bas) et *Face au solveur* (tes erreurs postflop, voir plus bas). **Préflop** : *Face à la
-  théorie* et *Mains de départ* (ce que rapporte chaque main, voir plus bas). *Face à la théorie* compare tes
-  décisions préflop à la solution heads-up, ou, aux tables à plusieurs (choix *Heads-up* / *Tables à plusieurs* en
-  haut de la page), à tes charts avec les mêmes cartes : un nœud par situation et positions (premier à parler, face
-  à l'open de telle position, face au 3bet après ton open), avec la grille de la stratégie, tes fréquences face aux
-  charts et tes écarts main par main ; une table sans charts à elle prend ceux du 6-max à même nombre de joueurs
-  derrière, et les mains contre les récréatifs sont exclues. **Mes mains** : *Heads-up* (le visualiseur de spots,
-  voir plus bas) et *Tables à plusieurs* (tes coups à deux joueurs au flop, à ouvrir au solveur). Un élève a les
-  mêmes onglets (*Leaks*, *Préflop*, *Ses mains*), plus *Importer*.
+  et ton résultat dans ces pots), pertes sans abattage (heads-up). Tout en haut, **Filtrer tes gains** : par limite
+  (NL500…), room, mois, moment du mois (début du 1er au 10, milieu du 11 au 20, fin) et créneau horaire (nuit 0h–6h,
+  matin, après-midi, soir 18h–24h, l'heure de tes historiques) ; seules les dimensions où tes mains varient sont
+  proposées, et le choix du format garde le filtre. Les tuiles, la courbe et les résultats tous formats confondus
+  suivent le filtre (tes stats et tes écarts restent sur toutes tes mains de la période) ; *Tes gains en détail*,
+  sous la courbe, compare valeur par valeur (mains, bb, bb/100 avec la marge du hasard à 95 %, EV all-in, €) sur les
+  mains que les autres filtres gardent, et un clic sur une ligne l'applique. **Leaks** : *À travailler* (le
+  Leakfinding, voir plus bas), *Suivi dans le temps* (tes leaks période par période, avant et après le jour où tu as
+  commencé à les travailler, voir plus bas) et *Face au solveur* (tes erreurs postflop, voir plus bas).
+  **Préflop** : *Face à la théorie* et *Mains de départ* (ce que rapporte chaque main, voir plus bas). *Face à la
+  théorie* compare tes décisions préflop à la solution heads-up, ou, aux tables à plusieurs (choix *Heads-up* /
+  *Tables à plusieurs* en haut de la page), à tes charts avec les mêmes cartes : un nœud par situation et positions
+  (premier à parler, face à l'open de telle position, face au 3bet après ton open), avec la grille de la stratégie,
+  tes fréquences face aux charts et tes écarts main par main ; une table sans charts à elle prend ceux du 6-max à
+  même nombre de joueurs derrière, et les mains contre les récréatifs sont exclues. **Mes mains** : *Heads-up* (le
+  visualiseur de spots, voir plus bas) et *Tables à plusieurs* (tes coups à deux joueurs au flop, à ouvrir au
+  solveur). Un élève a les mêmes onglets (*Leaks*, *Préflop*, *Ses mains*), plus *Importer*.
 - **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Réguliers* et *Récréatifs* : le
   leakfinding de ceux que tu croises le plus, par limites (micro, milieu, hautes), chacun avec ses leaks à exploiter
   et ce que montrent ses lignes, puis sa fiche détaillée (voir *Étude du field : le leakfinding de tes
@@ -1534,6 +1540,7 @@ analyzer/
   report.py            rapport HTML, styles communs et sections repliables (fold, more)
   viewer.py            visualiseur de spots (HTML + JavaScript, sans dépendance)
   selfreport.py        « Mon jeu » : ton bilan contre tous tes adversaires
+  gains.py             tes gains par limite, room, mois, moment du mois et créneau horaire (le filtre du bilan)
   theory/              préflop vs solveur : solution (data/), comparaison (preflop.py), page (page.py),
                        arbre préflop pour l'explorateur (preflop_tree.py), plan de jeu suggéré
                        (coach.py), profil d'un adversaire réel et node-lock, tailles et volume de mise
@@ -1553,7 +1560,8 @@ analyzer/
                        (bluffs_page.py), étude du field (field_page.py : les joueurs et les alias ; field_leaks_page.py : le
                        leakfinding des adversaires), joueurs de référence (reference_page.py : toi et lui, sa value
                        et ses bluffs), paramètres (settings_page.py), bilan des tables à plusieurs
-                       (bilan_page.py), mains de départ (hands_page.py), synthèse du Leakfinding
+                       (bilan_page.py) et son filtre des gains (gains_page.py), mains de départ (hands_page.py),
+                       synthèse du Leakfinding
                        (synthesis.py), son rapport PDF (report_pdf.py) et sa présentation (report_pptx.py),
                        entraîneur (trainer.py, static/trainer.*), plan de jeu suggéré (plan_page.py), coach
                        (coach_chat.py, static/coach.*) et son serveur MCP pour l'abonnement Claude

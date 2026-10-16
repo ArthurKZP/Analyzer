@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import quote
 
-from .. import (aliases, bluffcatch, bluffs, db, field, handplay, leaks, memory, players, ring, ring_leaks, settings,
-               spots, stakes, store, students, tracking)
+from .. import (aliases, bluffcatch, bluffs, db, field, gains, handplay, leaks, memory, players, ring, ring_leaks,
+               settings, spots, stakes, store, students, tracking)
 from .. import period as periods
 from .. import reference as refstudy
 from ..db import analyses as db_analyses
@@ -37,7 +37,7 @@ from ..theory import (coach, custom_ranges, custom_tree, handclass, postflop, re
                       stake_charts, studyspots)
 from ..theory.page import build_preflop_page, build_ring_preflop_page
 from ..viewer import build_viewer
-from . import bilan_page, synthesis
+from . import bilan_page, gains_page, synthesis
 from .report_pdf import build_pdf
 from .report_pptx import build_pptx
 from .bluffs_page import build_bluffs_page
@@ -710,9 +710,10 @@ class Library:
                                 records=self._spot_index(player))
         return self._cached(("player", player, page) + ((kind["kind"],) if page == "preflop" else ()), build)
 
-    def self_page(self, page: str, table_format: Optional[str] = None) -> str:
+    def self_page(self, page: str, table_format: Optional[str] = None, filters: Optional[dict] = None) -> str:
         """Une page de Mon jeu ; table_format : le heads-up (« HU ») ou les tables à plusieurs (« ring »), pour le
-        Leakfinding et le préflop."""
+        Leakfinding et le préflop ; filters : le filtre des gains du bilan (gains.clean)."""
+        filters = gains.clean(filters or {}) if page == "bilan" else {}
         if page not in SELF_PAGES:
             raise NotFound(page)
         if page == "tables":  # tables à 3 joueurs et plus : pas besoin de mains heads-up
@@ -729,7 +730,7 @@ class Library:
         if page == "preflop" and self._leak_format(table_format) != "HU":
             return self._ring_preflop_page()
         if page == "bilan" and self._leak_format(table_format) != "HU":
-            return self._ring_bilan()
+            return self._ring_bilan(filters)
         if not self.hands:
             if self.ring:  # seulement des tables à plusieurs : la page heads-up le dit
                 return html_page("Heads-up", HEADS_UP_ONLY, True)
@@ -742,8 +743,9 @@ class Library:
         def build():
             if page == "bilan":
                 return build_self_report(self.hands, self.all_stats(), self.hero, embed=True, spots_href="",
-                                         kinds=self.kinds(), head=self._bilan_head("HU"),
-                                         leaks_href="" if self.pages.startswith("/reference/") else "leaks")
+                                         kinds=self.kinds(), head=self._bilan_head("HU", filters),
+                                         leaks_href="" if self.pages.startswith("/reference/") else "leaks",
+                                         gains=self._hu_gains(filters))
             if page == "preflop":  # les charts du niveau de limites où tu as le plus de mains
                 band, charts = stake_charts.page_band("HU", regular)
                 note = " ".join(x for x in (_excluded_note(excluded), charts) if x)
@@ -756,7 +758,7 @@ class Library:
                                 records=self._spot_index(None))
         kinds = self._kinds_key() if page in ("bilan", "preflop", "bluffs") else ()
         charts = stake_charts.revision()[2:] if page == "preflop" else ()
-        return self._cached(("self", page) + kinds + charts, build)
+        return self._cached(("self", page) + kinds + charts + tuple(sorted(filters.items())), build)
 
     def _ring_overview(self) -> tuple[list, list]:
         """Tes stats aux tables à plusieurs (toutes ensemble) sur toutes tes mains, contre les réguliers et contre les
@@ -786,15 +788,32 @@ class Library:
         return build_ring_page(scopes, self.hero or "", spots=self.ring_spots(MAX_RING_SPOTS),
                                ranges=ring_ranges.available())
 
-    def _bilan_head(self, fmt: str) -> str:
-        """En tête du bilan : tes résultats tous formats confondus (puis en heads-up et aux tables à plusieurs), puis le
-        choix du format qui suit."""
+    def _bilan_head(self, fmt: str, filters: Optional[dict] = None) -> str:
+        """En tête du bilan : le filtre des gains, tes résultats tous formats confondus (puis en heads-up et aux tables
+        à plusieurs), puis le choix du format qui suit (le filtre gardé)."""
         hero = self.hero or ""
-        return bilan_page.overall_html(bilan_page.results(self.hands, hero),
-                                       bilan_page.results(ring_leaks.mine(self.ring, hero), hero)) + format_switch(
-            self.leak_formats(), fmt)
+        filters = filters or {}
+        heads_up, tables = gains.mine(self.hands, hero), gains.mine(ring_leaks.mine(self.ring, hero), hero)
+        both = heads_up + tables
+        kept_hu, kept_ring = gains.apply(heads_up, filters), gains.apply(tables, filters)
+        kept = len(kept_hu) + len(kept_ring) if filters else len(both)
+        bar = (f"<style>{gains_page.STYLE}</style>" + gains_page.filter_bar(both, filters, fmt)
+               + gains_page.active_note(filters, kept, len(both)))
+        return (bar + bilan_page.overall_html(bilan_page.results(kept_hu, hero), bilan_page.results(kept_ring, hero))
+                + format_switch(self.leak_formats(), fmt, keep=gains.query(filters)))
 
-    def _ring_bilan(self) -> str:
+    def _hu_gains(self, filters: dict) -> dict:
+        """Le bilan heads-up filtré : tes résultats et ta courbe sur les mains que le filtre garde (rien à changer sans
+        filtre), et la répartition de tes gains."""
+        hero = self.hero or ""
+        mine = gains.mine(self.hands, hero)
+        out = {"detail": gains_page.breakdown_html(mine, hero, filters, "HU"), "script": gains_page.SCRIPT}
+        if filters:
+            res = bilan_page.results(gains.apply(mine, filters), hero)
+            out.update(tiles=bilan_page.result_tiles(res), curve=res["curve"])
+        return out
+
+    def _ring_bilan(self, filters: Optional[dict] = None) -> str:
         """Ton bilan aux tables à plusieurs, sur le plan de celui du heads-up."""
         def build():
             hero = self.hero or ""
@@ -802,8 +821,10 @@ class Library:
             labels = {"all": "Toutes tes mains", "reg": "Contre les réguliers", "rec": "Contre les récréatifs"}
             shown = [(scope, labels[scope], found[0] if found else None) for scope, _, found in scopes]
             return bilan_page.build_ring_bilan(ring_leaks.mine(self.ring, hero), hero, shown,
-                                               self.ring_opponents_view(), gaps, head=self._bilan_head("ring"))
-        key = ("self", "bilan", "ring") + _theory_changes() + self._ring_kinds_key()
+                                               self.ring_opponents_view(), gaps, head=self._bilan_head("ring", filters),
+                                               filters=filters)
+        filters = filters or {}
+        key = ("self", "bilan", "ring") + _theory_changes() + self._ring_kinds_key() + tuple(sorted(filters.items()))
         return self._cached(key, build)
 
     def _ring_preflop_page(self) -> str:
@@ -1190,7 +1211,8 @@ class Library:
         self.reload()
         return dict(self.references_view(), state=self.summary())
 
-    def reference_page(self, ident: str, page: str, table_format: Optional[str] = None) -> str:
+    def reference_page(self, ident: str, page: str, table_format: Optional[str] = None,
+                       filters: Optional[dict] = None) -> str:
         """Une page d'un joueur de référence : « comparaison » (toi et lui), « lignes » (sa value et ses bluffs), ou une
         page de son jeu analysée comme les tiennes (bilan, tables, préflop, mains de départ)."""
         if page not in REFERENCE_PAGES:
@@ -1203,7 +1225,7 @@ class Library:
             note = (f'<p class="note" style="margin:0 0 12px">Le jeu de <b>{escape(name)}</b>, analysé comme le tien : '
                     "les colonnes et les titres portent son nom, et dans les textes, « tu », « ton » et « tes » le "
                     "désignent aussi.</p>")
-            html = as_reference(lib.self_page(page, table_format=table_format), name)
+            html = as_reference(lib.self_page(page, table_format=table_format, filters=filters), name)
             return html.replace("<main>\n", "<main>\n" + note, 1)
         fmt = lib._leak_format(table_format)  # UnknownPlayer s'il n'a pas de mains
 

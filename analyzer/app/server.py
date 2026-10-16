@@ -131,6 +131,10 @@ class Handler(BaseHTTPRequestHandler):
         plusieurs (« 6-max », « 3-max »… y mènent aussi)."""
         return parse_qs(urlsplit(self.path).query).get("format", [None])[0]
 
+    def _query(self) -> dict[str, str]:
+        """Les paramètres de l'adresse (le premier de chaque nom)."""
+        return {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+
     def _stakes(self) -> Optional[str]:
         """Le niveau de limites demandé (« ?limites=micro ») pour l'Étude du field (stakes.BANDS), ou None."""
         band = parse_qs(urlsplit(self.path).query).get("limites", [None])[0]
@@ -182,7 +186,7 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["moi", "leaks"]:
                 return self._html(library.leaks_page(table_format=self._format()))
             if len(parts) == 2 and parts[0] == "moi":
-                return self._html(library.self_page(parts[1], table_format=self._format()))
+                return self._html(library.self_page(parts[1], table_format=self._format(), filters=self._query()))
             if len(parts) == 2 and parts[0] == "field":  # Étude du field
                 return self._html(library.field_page(parts[1], self._format(), self._stakes()))
             if len(parts) == 3 and parts[0] == "field" and parts[1] == "joueur":  # la fiche d'un adversaire
@@ -206,7 +210,7 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["api", "references"]:  # tes joueurs de référence, et les pseudos qui peuvent le devenir
                 return self._json(library.references_view())
             if len(parts) == 3 and parts[0] == "reference":  # une page d'un joueur de référence
-                return self._html(library.reference_page(parts[1], parts[2], self._format()))
+                return self._html(library.reference_page(parts[1], parts[2], self._format(), self._query()))
             if len(parts) == 3 and parts[0] == "eleve":
                 student = library.student(parts[1])
                 if parts[2] == "rapport":
@@ -222,7 +226,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise NotFound(parts[2])
                 if parts[2] == "leaks":
                     return self._html(student.leaks_page(table_format=self._format()))
-                return self._html(student.self_page(parts[2], table_format=self._format()))
+                return self._html(student.self_page(parts[2], table_format=self._format(), filters=self._query()))
             if len(parts) == 5 and parts[:2] == ["api", "eleves"] and parts[3] == "import":
                 job = library.student(parts[2]).import_status(parts[4])
                 return self._json(job) if job else self._error(404, "Import inconnu.")

@@ -6,12 +6,13 @@ from __future__ import annotations
 from html import escape
 from typing import Optional
 
-from .. import ring
+from .. import gains, ring
 from ..models import FOLD, Hand
 from ..rake import paid as rake_paid
 from ..report import SCRIPT, chart_svg, fold, html_page, legend, more, num, pct_cell, rake_tile
 from ..selfreport import OPP_SCRIPT, OPP_STYLE, opponent_row_data, opponent_tools
 from ..stats import allin_ev
+from . import gains_page
 from .leaks_page import STYLE as LEAK_STYLE
 from .review_page import STYLE as REVIEW_STYLE
 from .ring_page import SCRIPT as RING_SCRIPT
@@ -157,11 +158,15 @@ RING_NOTE = ('<p class="note">Toutes tes tables de 3 joueurs et plus ensemble. U
 
 
 def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, Optional[ring.FormatStats]]],
-                     opponents: list[dict], gaps: Optional[list], head: str = "", embed: bool = True) -> str:
+                     opponents: list[dict], gaps: Optional[list], head: str = "", embed: bool = True,
+                     filters: Optional[dict] = None) -> str:
     """hands : tes mains aux tables à plusieurs ; scopes : [(portée, libellé, ring.analyze(…, merge=True)[0])] ;
     opponents : Library.ring_opponents_view() ; gaps : tes écarts les plus importants contre les réguliers ; head : le
-    choix du format et tes résultats tous formats confondus."""
+    filtre des gains, le choix du format et tes résultats tous formats confondus ; filters : le filtre des gains
+    (gains.clean), pour tes résultats et leur répartition."""
+    filters = filters or {}
     res = results(hands, hero)
+    shown_res = results(gains.apply(hands, filters), hero) if filters else res
     if not res["hands"]:
         body = (f'{head}<p class="note">Aucune main à une table de 3 joueurs ou plus. Importe des historiques 3-max, '
                 "6-max ou de 7 à 9 joueurs.</p>")
@@ -170,15 +175,16 @@ def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, 
     formats = sorted({h.table_format for h in hands}, key=lambda f: (ring.h_size(f), f))
     period = f"{res['first']:%d/%m/%Y} → {res['last']:%d/%m/%Y}"
     tools = len(opponents) > 1
-    body = f"""<style>{OPP_STYLE}{REVIEW_STYLE}{LEAK_STYLE}</style>{RING_STYLE}
+    body = f"""<style>{OPP_STYLE}{REVIEW_STYLE}{LEAK_STYLE}{gains_page.STYLE}</style>{RING_STYLE}
 {head}
 <div class="meta">{res['hands']} mains aux tables à plusieurs ({escape(', '.join(formats))}) · {len(opponents)} adversaire(s)
 · {period}</div>
-{result_tiles(res)}
+{result_tiles(shown_res)}
 
 <h2>Résultat cumulé (bb)</h2>
-<div class="card">{legend(res['curve'])}{chart_svg(res['curve'])}
+<div class="card">{legend(shown_res['curve'])}{chart_svg(shown_res['curve'])}
 {more("Comment c'est calculé", RING_CURVE_NOTE)}</div>
+{gains_page.breakdown_html(gains.mine(hands, hero), hero, filters, "ring")}
 
 {_gaps(gaps) if gaps is not None else ""}
 
@@ -191,4 +197,5 @@ def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, 
 {fold("Résultats par adversaire", _by_scope(shown) + opponents_table(opponents) + RING_NOTE,
       f"{len(opponents)} adversaire{'s' if len(opponents) > 1 else ''}", "adversaires")}
 """
-    return html_page(f"Mon jeu — {hero}", body, embed, script=SCRIPT + RING_SCRIPT + (OPP_SCRIPT if tools else ""))
+    return html_page(f"Mon jeu — {hero}", body, embed,
+                     script=SCRIPT + RING_SCRIPT + (OPP_SCRIPT if tools else "") + gains_page.SCRIPT)

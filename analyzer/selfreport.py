@@ -255,11 +255,15 @@ STATS_LEGEND = ('<div class="legend-dev"><span><i style="background:var(--hi-bg)
 
 def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str,
                       embed: bool = False, spots_href: str = "spots", kinds: Optional[dict] = None,
-                      head: str = "", leaks_href: str = "") -> str:
+                      head: str = "", leaks_href: str = "", gains: Optional[dict] = None) -> str:
     """kinds : type de chaque adversaire (players.classify), pour séparer réguliers et récréatifs ; head : en tête,
     le choix du format et tes résultats tous formats confondus (l'application) ; leaks_href : le Leakfinding, où ces
-    écarts se lisent face à la théorie (l'application), et son suivi dans le temps à côté."""
+    écarts se lisent face à la théorie (l'application), et son suivi dans le temps à côté ; gains : le filtre des
+    gains (l'application, déjà dans head) : « tiles » et « curve » à la place de tes résultats sur toutes tes mains,
+    « detail » sous la courbe, « script »."""
     h = stats[hero]
+    gains = gains or {}
+    curve = gains.get("curve", h.curve)
     results = opponent_results(hands, hero)
     kinds = kinds or {}
 
@@ -292,11 +296,12 @@ def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: st
     body = f"""{heading}<style>{OPP_STYLE}</style>
 {head}
 <div class="meta">{len(hands)} mains · {len(results)} adversaire(s) · {period}{spots}</div>
-{tiles(h)}
+{gains.get("tiles") or tiles(h)}
 
 <h2>Résultat cumulé (bb)</h2>
-<div class="card">{legend(h.curve)}{chart_svg(h.curve)}
+<div class="card">{legend(curve)}{chart_svg(curve)}
 {more("Comment c'est calculé", CURVE_NOTE)}</div>
+{gains.get("detail", "")}
 
 <h2>Tes écarts les plus importants</h2>
 <div class="card">{priorities_html(h, len(hands), folds=hero_fold_holdings(hands, hero))}
@@ -312,4 +317,5 @@ def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: st
       "les mains finies sans abattage, ce que tu as quand tu checkes, tes folds turn et river", "sans-abattage")}
 
 """
-    return html_page(f"Mon jeu — {hero}", body, embed, script=SCRIPT + (OPP_SCRIPT if tools else ""))
+    return html_page(f"Mon jeu — {hero}", body, embed,
+                     script=SCRIPT + (OPP_SCRIPT if tools else "") + gains.get("script", ""))

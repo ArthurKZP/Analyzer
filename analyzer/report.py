@@ -881,12 +881,15 @@ def format_query(table_format: str) -> str:
     return "" if table_format == "HU" else f"?format={quote(table_format)}"
 
 
-def format_switch(formats: list[tuple[str, int]], current: str) -> str:
-    """Le choix entre le heads-up et les tables à plusieurs, avec leur nombre de mains (rien s'il n'y en a qu'un)."""
+def format_switch(formats: list[tuple[str, int]], current: str, keep: str = "") -> str:
+    """Le choix entre le heads-up et les tables à plusieurs, avec leur nombre de mains (rien s'il n'y en a qu'un) ;
+    keep : d'autres paramètres de l'adresse à garder (« limite=NL500 », le filtre des gains du bilan)."""
     if len(formats) < 2:
         return ""
+    extra = f"&{keep}" if keep else ""
     links = "".join(
-        f'<a href="{escape(format_query(fmt) or "?format=HU")}" aria-current="{"page" if fmt == current else "false"}">'
+        f'<a href="{escape((format_query(fmt) or "?format=HU") + extra)}" '
+        f'aria-current="{"page" if fmt == current else "false"}">'
         f'{escape(FORMAT_NAMES.get(fmt, fmt))} <span>{n}</span></a>' for fmt, n in formats)
     return f'<nav class="lk-fmt" aria-label="Format de table">{links}</nav>'
 
