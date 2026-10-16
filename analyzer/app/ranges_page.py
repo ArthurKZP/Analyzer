@@ -1,7 +1,9 @@
-"""Onglet « Ranges préflop » des Paramètres : tes ranges par défaut, ligne par ligne et format par format, sans passer
-par un coup. La liste vient de /api/ranges/defaut (Library.default_ranges_view) ; l'éditeur d'une ligne (grille à
-peindre, texte, plus serré ou plus large : static/rangekit.js, comme l'onglet Ranges de l'explorateur) enregistre par
-/api/ranges/defaut/enregistrer. Les ranges sont gardées par custom_ranges, portée « ligne »."""
+"""Onglet « Ranges préflop » des Paramètres : tes ranges par défaut — celles de tes mains selon leur limite, ou
+toujours celles des petites ou des hautes limites (/api/ranges/defaut/choix) — puis, pour chaque jeu de ranges (petites
+limites, hautes limites), ligne par ligne et format par format, sans passer par un coup. La liste vient de
+/api/ranges/defaut?jeu=… (Library.default_ranges_view) ; l'éditeur d'une ligne (grille à peindre, texte, plus serré ou
+plus large : static/rangekit.js, comme l'onglet Ranges de l'explorateur) enregistre par /api/ranges/defaut/enregistrer.
+Les ranges sont gardées par custom_ranges, portée « ligne », une table par jeu."""
 from __future__ import annotations
 
 from ..report import html_page
@@ -12,6 +14,11 @@ STYLE = """
 .rp-status { font-size: 12px; min-height: 1.2em; margin-top: 6px; color: var(--muted); }
 .rp-status.err, .rp-err { color: var(--alert); font-size: 12px; }
 .rp-covers { display: block; font-size: 12px; color: var(--muted); }
+.rp-choice { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.rp-choice select { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--page); color: var(--ink); }
+.rp-sets { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 4px 0 12px; }
+.rp-sets .seg button span { opacity: 0.75; font-size: 12px; margin-left: 4px; }
 table.rp-lines td { vertical-align: middle; }
 table.rp-lines tr.group td { font-size: 12px; font-weight: 600; color: var(--muted); padding-top: 14px;
   border-bottom: 1px solid var(--axis); }
@@ -73,6 +80,9 @@ SCRIPT = r"""
   }
 
   let view = null;  // les lignes de chaque format (/api/ranges/defaut)
+  // le jeu de ranges réglé : petites ou hautes limites (gardé pour la prochaine fois)
+  let rset = 'petites';
+  try { if (localStorage.getItem('ranges:jeu') === 'hautes') rset = 'hautes'; } catch (e) { /* navigateur */ }
   // la ligne ouverte : ses ranges (data), celles en cours d'édition (edit), la position montrée, le pinceau
   let ed = null;
 
@@ -82,18 +92,56 @@ SCRIPT = r"""
 
   async function load() {
     try {
-      view = await api('/api/ranges/defaut');
+      view = await api('/api/ranges/defaut?jeu=' + rset);
     } catch (e) {
       $('rp-list').textContent = e.message;
       return;
     }
     $('rp-spots-box').checked = view.for_spots;
     $('rp-charts').hidden = view.charts;
+    $('rp-choice').value = view.choice;
+    renderSets();
     renderList();
   }
 
+  // Le jeu de ranges réglé plus bas : petites ou hautes limites, avec tes mains de chacun.
+  function renderSets() {
+    const box = $('rp-sets');
+    box.textContent = '';
+    const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Jeu de ranges à régler' });
+    for (const x of view.sets) {
+      seg.append(el('button', { type: 'button', 'aria-pressed': String(x.set === rset), title: x.level,
+        onclick: () => {
+          if (x.set === rset || !leave()) return;
+          rset = x.set;
+          ed = null;
+          try { localStorage.setItem('ranges:jeu', rset); } catch (e) { /* navigateur */ }
+          load();
+        } }, x.name, el('span', {}, x.hands ? num(x.hands, 0) + ' mains' : '')));
+    }
+    const current = view.sets.find((x) => x.set === rset);
+    box.append(el('span', { class: 'note', style: 'margin:0' }, 'Régler les ranges des'), seg,
+      el('span', { class: 'muted small' }, current ? current.level : ''));
+  }
+
+  $('rp-choice').addEventListener('change', async (e) => {
+    const out = $('rp-choice-status');
+    out.textContent = 'Enregistrement…';
+    out.classList.remove('err');
+    try {
+      const data = await api('/api/ranges/defaut/choix', { choix: e.target.value });
+      e.target.value = data.choice;
+      out.textContent = 'Enregistré : le préflop, le Leakfinding et les ranges du solveur de tes mains suivent '
+        + 'ce choix.';
+      load();
+    } catch (err) {
+      out.textContent = err.message;
+      out.classList.add('err');
+    }
+  });
+
   function status(line) {
-    if (!line.adjusted.length) return el('span', { class: 'muted' }, 'référence');
+    if (!line.adjusted.length) return el('span', { class: 'muted' }, 'base');
     return el('span', { class: 'rp-mine' }, 'ta range : ' + line.adjusted.join(', '));
   }
 
@@ -105,9 +153,9 @@ SCRIPT = r"""
         group.hands ? el('span', { class: 'muted', style: 'font-weight:400;font-size:14px' },
           ' · ' + num(group.hands, 0) + (group.hands > 1 ? ' mains' : ' main')) : ''));
       const card = box.appendChild(el('div', { class: 'card' }));
-      card.append(el('p', { class: 'note', style: 'margin-top:0' }, 'Référence : ' + group.reference + '.'));
+      card.append(el('p', { class: 'note', style: 'margin-top:0' }, 'Base : ' + group.reference + '.'));
       if (!group.lines.length) {
-        card.append(el('p', { class: 'muted' }, 'Aucune ligne à deux joueurs au flop dans ta référence pour ce format.'));
+        card.append(el('p', { class: 'muted' }, 'Aucune ligne à deux joueurs au flop dans la base pour ce format.'));
         continue;
       }
       const table = card.appendChild(el('table', { class: 'stats rp-lines' }));
@@ -132,7 +180,7 @@ SCRIPT = r"""
     if (view.orphans.length) {
       box.append(el('h2', {}, 'Réglages sans référence'));
       const card = box.appendChild(el('div', { class: 'card' }));
-      card.append(el('p', { class: 'note', style: 'margin-top:0' }, 'Tes ranges de lignes que ta référence ne couvre plus '
+      card.append(el('p', { class: 'note', style: 'margin-top:0' }, 'Tes ranges de lignes que la base ne couvre plus '
         + '(charts retirés, format que tu ne joues plus) : elles ne servent pas tant que la ligne n\'a pas de référence.'));
       const table = card.appendChild(el('table', { class: 'stats rp-lines' }));
       for (const o of view.orphans) {
@@ -154,7 +202,7 @@ SCRIPT = r"""
     ed = { context: line.context, data: null, edit: null, player: 0, brush: 1, busy: false, msg: '', ui: null };
     renderList();
     try {
-      setLine(await api('/api/ranges/defaut', { context: line.context }));
+      setLine(await api('/api/ranges/defaut', { context: line.context, jeu: rset }));
     } catch (e) {
       ed.msg = e.message;
     }
@@ -171,7 +219,7 @@ SCRIPT = r"""
   async function forget(o) {
     if (!window.confirm('Effacer ta range de « ' + (o.line || o.context) + ' » en ' + o.format + ' ?')) return;
     try {
-      await api('/api/ranges/defaut/effacer', { context: o.context });
+      await api('/api/ranges/defaut/effacer', { context: o.context, jeu: rset });
     } catch (e) {
       window.alert(e.message);
     }
@@ -188,13 +236,13 @@ SCRIPT = r"""
     const ui = ed.ui = {};
     const wrap = cell.appendChild(el('div', { class: 'rp-ed' }));
     wrap.append(el('p', { class: 'note' }, d.line + (d.format !== 'HU' ? ' en ' + d.format : '') + ' · ' + d.pot_type
-      + ' · référence : ' + d.reference + '. Les ranges sont celles de chaque joueur au flop.'));
+      + ' · base : ' + d.reference + '. Les ranges sont celles de chaque joueur au flop.'));
     const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Position' });
     ui.players = d.players.map((q, k) => seg.appendChild(el('button', {
       type: 'button', 'aria-pressed': String(k === ed.player), onclick: () => { ed.player = k; renderList(); },
     }, q.position)));
     wrap.append(el('div', { class: 'rp-row' }, seg, el('span', { class: 'note', style: 'margin:0' },
-      p.source === 'ligne' ? 'Enregistrée : ta range' : 'Enregistrée : celle de la référence')));
+      p.source === 'ligne' ? 'Enregistrée : ta range' : 'Enregistrée : celle de base')));
     ui.count = wrap.appendChild(el('div', { class: 'note', style: 'margin:0' }));
 
     const brushes = el('div', { class: 'seg', role: 'group', 'aria-label': 'Pinceau' });
@@ -219,7 +267,8 @@ SCRIPT = r"""
     }, () => ed.busy);
     ui.cells = grid.cells;
     wrap.append(grid.box);
-    wrap.append(el('p', { class: 'note' }, 'Clique ou glisse sur les mains avec le pinceau choisi. Contour orange : différent de la référence.'));
+    wrap.append(el('p', { class: 'note' }, 'Clique ou glisse sur les mains avec le pinceau choisi. Contour orange : '
+      + 'différent de la base.'));
 
     ui.text = el('textarea', { class: 'rp-text', rows: 4, spellcheck: 'false', 'aria-label': 'Range de ' + p.position + ' en texte' });
     ui.text.addEventListener('input', () => {  // la grille suit la saisie dès qu'elle se lit
@@ -231,13 +280,17 @@ SCRIPT = r"""
     });
     wrap.append(ui.text);
 
-    ui.toRef = el('button', { type: 'button', class: 'rp-btn', onclick: () => change({ ...p.reference }) }, 'Range de la référence');
+    ui.toRef = el('button', { type: 'button', class: 'rp-btn', onclick: () => change({ ...p.reference }) },
+      'Range de base');
     ui.undo = el('button', { type: 'button', class: 'rp-btn', onclick: () => change({ ...p.current }) }, 'Annuler mes changements');
     wrap.append(el('div', { class: 'rp-row' }, ui.toRef, ui.undo));
 
     ui.save = el('button', { type: 'button', class: 'rp-btn go', onclick: save }, 'Enregistrer');
     const actions = el('div', { class: 'rp-row' }, ui.save);
-    if (d.adjusted) actions.append(el('button', { type: 'button', class: 'rp-btn', disabled: ed.busy, onclick: reset }, 'Revenir à la référence'));
+    if (d.adjusted) {
+      actions.append(el('button', { type: 'button', class: 'rp-btn', disabled: ed.busy, onclick: reset },
+        'Revenir à la base'));
+    }
     wrap.append(actions);
     ui.msg = wrap.appendChild(el('p', { role: 'status' }));
     refresh();
@@ -253,10 +306,10 @@ SCRIPT = r"""
       const h = cell.dataset.h, x = w[h] || 0, r = p.reference[h] || 0;
       cell.style.setProperty('--w', Math.round(100 * x) + '%');
       cell.classList.toggle('diff', Math.abs(x - r) > 0.002);
-      cell.title = h + ' · ' + pct(x) + (Math.abs(x - r) > 0.002 ? ' (référence ' + pct(r) + ')' : '');
+      cell.title = h + ' · ' + pct(x) + (Math.abs(x - r) > 0.002 ? ' (base ' + pct(r) + ')' : '');
     });
     const n = K.combosOf(w), ref = K.combosOf(p.reference);
-    ui.count.textContent = num(n, 0) + ' combos (' + num(100 * n / 1326, 1) + ' % des mains) · référence '
+    ui.count.textContent = num(n, 0) + ' combos (' + num(100 * n / 1326, 1) + ' % des mains) · base '
       + num(ref, 0) + ' (' + num(100 * ref / 1326, 1) + ' %)';
     ui.players.forEach((b, k) => { b.textContent = d.players[k].position + (K.sameRange(ed.edit[k], d.players[k].current) ? '' : ' •'); });
     if (document.activeElement !== ui.text) ui.text.value = K.rangeText(w);
@@ -275,7 +328,7 @@ SCRIPT = r"""
     try {
       const data = await api(url, body);
       if (data.players) setLine(data);
-      else setLine(await api('/api/ranges/defaut', { context: ed.context }));
+      else setLine(await api('/api/ranges/defaut', { context: ed.context, jeu: rset }));
       ed.msg = done;
       ed.error = false;
     } catch (e) {
@@ -293,14 +346,14 @@ SCRIPT = r"""
     const ranges = {};
     ed.data.players.forEach((p, k) => { ranges[p.position] = K.rangeText(ed.edit[k]); });
     if (Object.values(ranges).some((t) => !t)) { ed.msg = 'Range vide : garde au moins une main.'; ed.error = true; refresh(); return; }
-    call('/api/ranges/defaut/enregistrer', { context: ed.context, ranges },
+    call('/api/ranges/defaut/enregistrer', { context: ed.context, ranges, jeu: rset },
       'Enregistré : tes coups de cette ligne se résolvent désormais avec ces ranges.');
   }
 
   function reset() {
     if (!window.confirm('Effacer tes ranges de « ' + ed.data.line + ' » en ' + ed.data.format
-      + ' ? La ligne reprend celles de la référence.')) return;
-    call('/api/ranges/defaut/effacer', { context: ed.context }, 'La ligne reprend les ranges de la référence.');
+      + ' ? La ligne reprend celles de base.')) return;
+    call('/api/ranges/defaut/effacer', { context: ed.context, jeu: rset }, 'La ligne reprend les ranges de base.');
   }
 
   $('rp-spots-box').addEventListener('change', async (e) => {
@@ -333,95 +386,34 @@ SCRIPT = r"""
     e.target.disabled = false;
   });
 
-  // Les charts par niveau de limites : importer un fichier JSON, le retirer.
-  async function loadStakes() {
-    const box = $('rp-stakes');
-    let data;
-    try {
-      data = await api('/api/ranges/limites');
-    } catch (e) {
-      box.textContent = e.message;
-      return;
-    }
-    box.textContent = '';
-    for (const f of data.formats) {
-      const rows = f.bands.map((b) => {
-        const c = b.charts;
-        const out = el('span', { class: 'rp-err' });
-        const status = c
-          ? el('span', {}, el('b', {}, 'Importés'), c.source ? ' · ' + c.source : '',
-            c.rake ? ' · rake : ' + c.rake : '', c.covers ? el('span', { class: 'rp-covers' }, c.covers) : '')
-          : el('span', { class: 'muted' }, f.reference ? 'Ceux de la référence (micro limites, rake élevé)'
-            : 'Pas de charts de référence (charge ceux de Hand2Note Guide, plus bas)');
-        // un JSON, ou l'export texte des tables à plusieurs (plusieurs fichiers se complètent)
-        const input = el('input', { type: 'file', accept: '.json,.txt,application/json,text/plain', hidden: true,
-          multiple: f.format !== 'HU' });
-        input.addEventListener('change', async () => {
-          const files = Array.from(input.files);
-          input.value = '';
-          if (!files.length) return;
-          out.textContent = 'Import…';
-          try {
-            for (const file of files) {
-              const text = await file.text();
-              const json = /\.json$/i.test(file.name) || /^\s*\{/.test(text);
-              const body = { format: f.format, limites: b.band };
-              if (json) body.charts = JSON.parse(text);
-              else body.texte = text;
-              await api('/api/ranges/limites', body);
-            }
-            loadStakes();
-          } catch (err) {
-            out.textContent = err instanceof SyntaxError ? 'Fichier illisible : JSON invalide.' : err.message;
-          }
-        });
-        const pick = el('button', { type: 'button', class: 'rp-btn', onclick: () => input.click() },
-          c ? 'Remplacer…' : 'Importer…');
-        const drop = c ? el('button', { type: 'button', class: 'rp-btn', onclick: async () => {
-          if (!window.confirm('Retirer les charts ' + f.label + ' des ' + b.label.toLowerCase()
-            + ' ? Ces mains reprennent ceux de la référence.')) return;
-          try {
-            await api('/api/ranges/limites/retirer', { format: f.format, limites: b.band });
-            loadStakes();
-          } catch (err) { out.textContent = err.message; }
-        } }, 'Retirer') : null;
-        return el('tr', {}, el('td', {}, b.label), el('td', { class: 'num' }, b.hands ? num(b.hands, 0) : '–'),
-          el('td', {}, status, ' ', out), el('td', { class: 'act' }, pick, drop ? ' ' : '', drop, input));
-      });
-      box.append(el('h3', {}, f.label), el('div', { class: 'scroll' }, el('table', { class: 'stats rp-lines' },
-        el('thead', {}, el('tr', {}, el('th', {}, 'Limites'), el('th', { class: 'num' }, 'Tes mains'),
-          el('th', {}, 'Charts'), el('th', {}, ''))), el('tbody', {}, rows))));
-    }
-  }
-  loadStakes();
   load();
 })();
 """
 
 
 def build_ranges_page(embed: bool = True) -> str:
-    body = """<div class="meta">Tes charts préflop selon tes limites, qui jugent ton préflop ; puis tes ranges par
-défaut, ligne par ligne : à la place de celles de la référence (la solution heads-up, les charts des tables à
-plusieurs), le solveur part des tiennes dans tous tes coups de la ligne.</div>
-<h2>Charts selon les limites</h2>
+    body = """<div class="meta">Tes ranges préflop : celles qui jugent ton préflop et dont part le solveur pour tes
+coups, en deux jeux — les petites limites (NL100 et moins) et les hautes limites (NL200 et plus, où le rake pèse
+moins).</div>
+<h2>Tes ranges par défaut</h2>
 <div class="card">
-<p style="margin-top:0">Le rake change la théorie : plus il pèse, plus on ouvre et on défend serré, moins on paie et on
-limpe. Les charts de la référence (la solution heads-up, les charts 6-max) sont ceux des micro limites, au rake élevé.
-Importe, pour un niveau de limites, des charts faits pour lui (en heads-up, un fichier JSON : une range par action à
-chaque nœud — open du bouton, BB face à l'open, bouton face au 3bet, BB face au 4bet ; aux tables à plusieurs, l'export
-texte de GTO Wizard, combo par combo — les opens, la défense face à chaque open —, plusieurs fichiers se complètent, ou
-une solution par lignes en JSON ; voir le README) : tes mains de ce niveau sont jugées avec eux dans le Leakfinding,
-les mains de départ, le préflop et le suivi ; ce qu'ils ne donnent pas reste jugé avec la référence. Ils sont aussi
-les ranges du solveur pour tes coups de ce niveau (l'explorateur, tes mains face au solveur ; tes ranges ligne par
-ligne, plus bas, passent avant) ; une main déjà analysée garde son analyse.</p>
-<div id="rp-stakes"><p class="muted">Chargement…</p></div>
+<div class="rp-choice"><label for="rp-choice"><b>Pour tes mains</b></label>
+<select id="rp-choice"><option value="auto">Selon la limite de chaque main</option>
+<option value="petites">Toujours les petites limites</option><option value="hautes">Toujours les hautes limites</option>
+</select></div>
+<div class="rp-status" id="rp-choice-status" aria-live="polite"></div>
+<p class="note">Le préflop (Leakfinding, mains de départ, page Préflop, suivi) juge chaque main avec ces ranges, et le
+solveur en part pour tes coups (l'explorateur, tes mains face au solveur) ; une main déjà analysée garde son analyse.
+Les petites limites partent des ranges de la référence (la solution heads-up, les charts 6-max : un jeu au rake élevé) ;
+les hautes limites, de leurs charts quand ils sont enregistrés, sinon de la référence. Règle chaque jeu ligne par ligne,
+plus bas. Dans <b>Études du solveur</b>, le choix « Ranges » ouvre les spots avec l'un ou l'autre.</p>
 </div>
 <h2>Tes ranges, ligne par ligne : où elles s'appliquent</h2>
 <div class="card">
-<p style="margin-top:0">Tes coups de la ligne et du format : l'explorateur, l'analyse de tes mains face au solveur et le
-Leakfinding. Un coup réglé à part dans l'explorateur (onglet <b>Ranges</b>, « pour ce coup seulement ») garde son
-réglage. Les séries d'étude, leurs plans de jeu et les repères restent faits avec la référence, pour rester
-comparables.</p>
+<p style="margin-top:0">Tes coups de la ligne et du format, dans le jeu de leur limite : l'explorateur, l'analyse de tes
+mains face au solveur et le Leakfinding. Un coup réglé à part dans l'explorateur (onglet <b>Ranges</b>, « pour ce coup
+seulement ») garde son réglage. Les séries d'étude, leurs plans de jeu et les repères restent faits avec la référence,
+pour rester comparables.</p>
 <label class="rp-opt"><input type="checkbox" id="rp-spots-box"><span>Aussi pour les spots d'étude ouverts dans
 l'explorateur <span class="muted">(ils se résolvent alors à nouveau, dans une étude à part)</span></span></label>
 <div class="rp-status" id="rp-spots-status" aria-live="polite"></div>
@@ -430,11 +422,11 @@ dans une étude à part ; celle de la référence reste.</p>
 </div>
 <div class="card" id="rp-charts" hidden style="margin-top:12px">
 <p style="margin-top:0">Pas encore de charts pour les tables à plusieurs : charge les charts 6-max de Hand2Note Guide
-(usage personnel, gardés dans ta base) pour régler leurs lignes, ou importe ta solution (<code>python -m analyzer ranges
---importer FICHIER.json</code>).</p>
+(usage personnel, gardés dans ta base) pour régler leurs lignes.</p>
 <button type="button" class="rp-btn" id="rp-charts-go">Charger les charts 6-max</button>
 <div class="rp-status" id="rp-charts-status" aria-live="polite"></div>
 </div>
+<div class="rp-sets" id="rp-sets"></div>
 <div id="rp-list"><p class="muted">Chargement…</p></div>
 <script src="/static/rangekit.js"></script>
 """

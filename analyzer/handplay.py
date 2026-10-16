@@ -211,14 +211,15 @@ class Theory:
     """La fréquence de chaque action selon la théorie, pour une main à une décision préflop."""
 
     def __init__(self, heads_up_solution=None, ring_lines: Optional[dict[str, dict[str, dict[str, float]]]] = None,
-                 bands: Optional[dict[str, "Theory"]] = None):
+                 bands: Optional[dict[str, "Theory"]] = None, band_of=None):
         self.solution = heads_up_solution
         self.lines = ring_lines or {}  # format -> clé de ligne -> {position: range}
         self.bands = bands or {}  # niveau de limites -> la théorie de ses charts (theory/stake_charts.py)
+        self.band_of = band_of or stakes.band_of  # le niveau dont les charts jugent une main (tes ranges par défaut)
 
     def strategy(self, hand: Hand, hero: str, situation: str, raisers: list[str], combo: str
                  ) -> Optional[dict[str, float]]:
-        other = self.bands.get(stakes.band_of(hand.bb)) if self.bands else None
+        other = self.bands.get(self.band_of(hand.bb)) if self.bands else None
         if other is not None:  # les charts du niveau de limites de la main
             return other.strategy(hand, hero, situation, raisers, combo)
         if len(hand.seats) == 2:

@@ -1615,6 +1615,13 @@ class Library:
             return [(spot.oop, spot.oop, None), (spot.ip, spot.ip, None)]
         return [(p, spot.hand.position(p), "H" if p == spot.hero else "V") for p in (spot.oop, spot.ip)]
 
+    @staticmethod
+    def _ranges_set(spot) -> str:
+        """Le jeu de ranges d'un coup (stake_charts.SETS) : celui du spot d'étude, ou celui de la limite de la main."""
+        if isinstance(spot, studyspots.StudySpot):
+            return spot.ranges_set
+        return stake_charts.set_of(spot.hand.bb)
+
     def ranges_state(self, hand_id: str) -> dict:
         """Les ranges préflop du coup : celles de la référence, celles en jeu, et d'où elles viennent."""
         try:
@@ -1623,12 +1630,13 @@ class Library:
             return {"hand": hand_id, "supported": False, "message": str(exc)}
         study = isinstance(spot, studyspots.StudySpot)
         data = custom_ranges.load()
+        rset = self._ranges_set(spot)
         by_hand = data["coups"].get(spot.ident, {})
         can_line = not study or data["spots"]  # un spot d'étude : avec l'option des Paramètres
-        by_line = data["lignes"].get(spot.context, {}) if can_line else {}
+        by_line = data[custom_ranges.lines_key(rset)].get(spot.context, {}) if can_line else {}
         table_format, key = spot.context.split("|", 1)
         steps = [tuple(step.split(":", 1)) for step in key.split()]
-        reference = custom_ranges.reference_name(table_format)
+        reference = custom_ranges.reference_name(table_format, rset)
         players = []
         for name, pos, role in self._range_players(spot):
             source = "coup" if pos in by_hand else "ligne" if pos in by_line else "reference"
@@ -1637,7 +1645,8 @@ class Library:
             players.append({"position": pos, "role": role, "source": source, "reference": spot.reference[name],
                             "line": ring_ranges.parse_range(by_line[pos]) if pos in by_line else None,
                             "current": current})
-        return {"hand": hand_id, "supported": True, "spot": study, "format": table_format,
+        return {"hand": hand_id, "supported": True, "spot": study, "format": table_format, "set": rset,
+                "set_name": stake_charts.SET_NAMES[rset],
                 "line": ring_ranges.describe(steps), "can_line": can_line, "for_spots": data["spots"],
                 "adjusted": spot.adjusted, "reference": reference, "players": players,
                 "order": custom_ranges.hand_order()}
@@ -1654,7 +1663,8 @@ class Library:
         if not ranges or set(ranges) - set(names) or not all(isinstance(t, str) for t in ranges.values()):
             raise ValueError("Positions inconnues pour ce coup.")
         weights = {pos: custom_ranges.check(text) for pos, text in ranges.items()}
-        by_line = data["lignes"].get(spot.context, {}) if scope == "coup" and can_line else {}
+        rset = self._ranges_set(spot)
+        by_line = data[custom_ranges.lines_key(rset)].get(spot.context, {}) if scope == "coup" and can_line else {}
         keep = {}
         for pos, w in weights.items():
             base = ring_ranges.parse_range(by_line[pos]) if pos in by_line else spot.reference[names[pos]]
@@ -1662,9 +1672,9 @@ class Library:
                 keep[pos] = postflop.range_text(w)
         key = spot.ident if scope == "coup" else spot.context
         if keep:
-            custom_ranges.save(scope, key, keep)
+            custom_ranges.save(scope, key, keep, rset)
         else:
-            custom_ranges.clear(scope, key)
+            custom_ranges.clear(scope, key, rset)
         if scope == "ligne":  # la range de la ligne s'applique à ce coup : son réglage à lui s'efface
             custom_ranges.clear("coup", spot.ident)
         with self._lock:
@@ -1676,7 +1686,7 @@ class Library:
         spot = self._spot(hand_id)
         if scope not in custom_ranges.SCOPES:
             raise ValueError("Portée inconnue.")
-        custom_ranges.clear(scope, spot.ident if scope == "coup" else spot.context)
+        custom_ranges.clear(scope, spot.ident if scope == "coup" else spot.context, self._ranges_set(spot))
         with self._lock:
             self._cache.clear()
         return self.ranges_state(hand_id)
@@ -1721,82 +1731,99 @@ class Library:
         stake_charts.delete(table_format, band)
         return self.stake_charts_view()
 
-    def default_ranges_view(self) -> dict:
-        """Les lignes de chaque format que tu joues (custom_ranges.formats) et les positions où ta range remplace celle
-        de la référence ; les réglages dont la ligne n'a plus de référence (à effacer) ; l'option des spots d'étude."""
+    def default_ranges_view(self, rset: str = "petites") -> dict:
+        """Les lignes de chaque format que tu joues (custom_ranges.formats) dans ce jeu de ranges (petites ou hautes
+        limites) et les positions où ta range remplace celle de base ; les réglages dont la ligne n'a plus de base (à
+        effacer) ; l'option des spots d'étude ; tes ranges par défaut (le choix) et tes mains de chaque jeu."""
         plays = settings.load()["formats"]
         counts = Counter(h.table_format for h in self._all_ring)
         counts["HU"] = len(self._all_hands)
         data = custom_ranges.load()
+        mine = data[custom_ranges.lines_key(rset)]
         groups, listed = [], set()
         for table_format in custom_ranges.formats(counts, heads_up=not plays or "HU" in plays,
                                                   ring=not plays or "ring" in plays):
             lines = []
-            for line in custom_ranges.reference_lines(table_format):
+            for line in custom_ranges.reference_lines(table_format, rset):
                 context = custom_ranges.context(table_format, line["steps"])
                 listed.add(context)
                 lines.append({"context": context, "line": ring_ranges.describe(line["steps"]),
                               "pot_type": line["pot_type"], "positions": list(line["ranges"]),
-                              "adjusted": [pos for pos in line["ranges"] if pos in data["lignes"].get(context, {})]})
+                              "adjusted": [pos for pos in line["ranges"] if pos in mine.get(context, {})]})
             groups.append({"format": table_format, "hands": counts.get(table_format, 0), "lines": lines,
-                           "reference": custom_ranges.reference_name(table_format)})
+                           "reference": custom_ranges.reference_name(table_format, rset)})
         orphans = []
-        for context in sorted(set(data["lignes"]) - listed):
+        for context in sorted(set(mine) - listed):
             table_format, _, key = context.partition("|")
             steps = [tuple(step.split(":", 1)) for step in key.split() if ":" in step]
             orphans.append({"context": context, "format": table_format, "line": ring_ranges.describe(steps),
-                            "positions": sorted(data["lignes"][context])})
+                            "positions": sorted(mine[context])})
         ring_played = not plays or "ring" in plays
+        level = stake_charts.bands()
+        sets = Counter("hautes" if level(h.bb) == "hautes" else "petites"
+                       for h in self._all_hands + self._all_ring if h.bb)
         return {"formats": groups, "orphans": orphans, "for_spots": data["spots"],
-                "charts": bool(ring_ranges.available()) or not ring_played}
+                "charts": bool(ring_ranges.available()) or not ring_played, "set": rset,
+                "sets": [{"set": k, "name": stake_charts.SET_NAMES[k], "level": stake_charts.SET_LEVELS[k],
+                          "hands": sets.get(k, 0)} for k in stake_charts.SETS],
+                "choice": stake_charts.choice()}
 
-    def default_range_line(self, context: str) -> dict:
-        """Une ligne pour l'éditeur : la range de référence de chaque position, et la tienne. NotFound si la ligne n'a
-        pas de référence."""
-        line = custom_ranges.reference_line(context)
+    def default_range_line(self, context: str, rset: str = "petites") -> dict:
+        """Une ligne pour l'éditeur, dans ce jeu de ranges : la range de base de chaque position, et la tienne.
+        NotFound si la ligne n'a pas de base."""
+        line = custom_ranges.reference_line(context, rset)
         if line is None:
             raise NotFound(context)
-        mine = custom_ranges.load()["lignes"].get(context, {})
+        mine = custom_ranges.load()[custom_ranges.lines_key(rset)].get(context, {})
         table_format = context.split("|", 1)[0]
         players = [{"position": pos, "role": None, "source": "ligne" if pos in mine else "reference",
                     "reference": reference, "line": None,
                     "current": ring_ranges.parse_range(mine[pos]) if pos in mine else dict(reference)}
                    for pos, reference in line["ranges"].items()]
-        return {"context": context, "supported": True, "format": table_format,
+        return {"context": context, "supported": True, "format": table_format, "set": rset,
                 "line": ring_ranges.describe(line["steps"]), "pot_type": line["pot_type"],
-                "reference": custom_ranges.reference_name(table_format), "players": players,
+                "reference": custom_ranges.reference_name(table_format, rset), "players": players,
                 "adjusted": "ligne" if mine else None, "order": custom_ranges.hand_order()}
 
-    def save_default_ranges(self, context: str, ranges: object) -> dict:
-        """Enregistre tes ranges par défaut d'une ligne ; une range égale à celle de la référence n'est pas gardée.
-        Les positions absentes de la demande gardent leur réglage. ValueError si la demande ne va pas."""
-        line = custom_ranges.reference_line(context)
+    def save_default_ranges(self, context: str, ranges: object, rset: str = "petites") -> dict:
+        """Enregistre tes ranges par défaut d'une ligne dans ce jeu ; une range égale à celle de base n'est pas
+        gardée. Les positions absentes de la demande gardent leur réglage. ValueError si la demande ne va pas."""
+        line = custom_ranges.reference_line(context, rset)
         if line is None:
             raise NotFound(context)
         if not isinstance(ranges, dict) or not ranges or set(ranges) - set(line["ranges"]) \
                 or not all(isinstance(t, str) for t in ranges.values()):
             raise ValueError("Positions inconnues pour cette ligne.")
         weights = {pos: custom_ranges.check(text) for pos, text in ranges.items()}
-        mine = dict(custom_ranges.load()["lignes"].get(context, {}))
+        mine = dict(custom_ranges.load()[custom_ranges.lines_key(rset)].get(context, {}))
         for pos, w in weights.items():
             if custom_ranges.same(w, line["ranges"][pos]):
                 mine.pop(pos, None)
             else:
                 mine[pos] = postflop.range_text(w)
         if mine:
-            custom_ranges.save("ligne", context, mine)
+            custom_ranges.save("ligne", context, mine, rset)
         else:
-            custom_ranges.clear("ligne", context)
+            custom_ranges.clear("ligne", context, rset)
         with self._lock:
             self._cache.clear()
-        return self.default_range_line(context)
+        return self.default_range_line(context, rset)
 
-    def clear_default_ranges(self, context: str) -> dict:
-        """Efface tes ranges par défaut d'une ligne (aussi celles d'une ligne qui n'a plus de référence)."""
-        cleared = custom_ranges.clear("ligne", context)
+    def clear_default_ranges(self, context: str, rset: str = "petites") -> dict:
+        """Efface tes ranges par défaut d'une ligne dans ce jeu (aussi celles d'une ligne qui n'a plus de base)."""
+        cleared = custom_ranges.clear("ligne", context, rset)
         with self._lock:
             self._cache.clear()
         return {"context": context, "cleared": cleared}
+
+    def set_ranges_choice(self, value: object) -> dict:
+        """Tes ranges par défaut : selon la limite de chaque main (« auto »), petites ou hautes limites (le jugement
+        préflop, le Leakfinding et les ranges du solveur de tes mains en dépendent). ValueError si le choix est
+        inconnu."""
+        stake_charts.set_choice(str(value))
+        with self._lock:
+            self._cache.clear()
+        return {"choice": stake_charts.choice()}
 
     def set_ranges_for_spots(self, value: bool) -> dict:
         """Tes ranges par défaut valent aussi (ou non) pour les spots d'étude ouverts dans l'explorateur."""

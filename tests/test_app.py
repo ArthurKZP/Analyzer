@@ -568,7 +568,22 @@ class ServerTest(unittest.TestCase):
         status, _, body = self.request("POST", "/api/ranges/defaut/enregistrer", save, headers)
         self.assertEqual((status, json.loads(body)["adjusted"]), (200, "ligne"))
         state = json.loads(self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "HAND02"}), headers)[2])
+        self.assertEqual((state["adjusted"], state["set"]), (None, "hautes"))  # tes mains à NL500 : les hautes limites
+        hautes = json.dumps({"context": context, "ranges": {"BB": "AA,KK"}, "jeu": "hautes"})
+        status, _, body = self.request("POST", "/api/ranges/defaut/enregistrer", hautes, headers)
+        self.assertEqual((status, json.loads(body)["set"]), (200, "hautes"))
+        state = json.loads(self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "HAND02"}), headers)[2])
         self.assertEqual(state["adjusted"], "ligne")  # ton pot 3bet joué prend la range de la ligne
+        view = json.loads(self.request("GET", "/api/ranges/defaut?jeu=hautes")[2])
+        self.assertEqual((view["set"], view["choice"], [s["hands"] for s in view["sets"]]), ("hautes", "auto", [0, 4]))
+        self.request("POST", "/api/ranges/defaut/effacer", json.dumps({"context": context, "jeu": "hautes"}), headers)
+        # tes ranges par défaut : toujours celles des petites limites
+        status, _, body = self.request("POST", "/api/ranges/defaut/choix", json.dumps({"choix": "petites"}), headers)
+        self.assertEqual((status, json.loads(body)), (200, {"choice": "petites"}))
+        state = json.loads(self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "HAND02"}), headers)[2])
+        self.assertEqual((state["adjusted"], state["set"]), ("ligne", "petites"))
+        self.assertEqual(self.request("POST", "/api/ranges/defaut/choix", json.dumps({"choix": "x"}), headers)[0], 400)
+        self.request("POST", "/api/ranges/defaut/choix", json.dumps({"choix": "auto"}), headers)
         for path, bad in (("/api/ranges/defaut/enregistrer", {"context": context, "ranges": {"SB": "AA"}}),
                           ("/api/ranges/defaut/enregistrer", {"context": context, "ranges": {"BB": "AXo"}}),
                           ("/api/ranges/defaut/enregistrer", {"context": context}),
@@ -584,6 +599,8 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((status, json.loads(body)["cleared"]), (200, True))
         state = json.loads(self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "HAND02"}), headers)[2])
         self.assertEqual(state["adjusted"], None)
+        self.assertEqual(self.request("POST", "/api/ranges/defaut", json.dumps({"context": context, "jeu": "x"}),
+                                      headers)[0], 400)
 
     def test_studies_page(self):
         status, _, body = self.request("GET", "/etudes")
@@ -764,7 +781,9 @@ class ServerTest(unittest.TestCase):
                                "au 3bet"))
         self.request("POST", "/api/ranges/limites/retirer", json.dumps({"format": "6-max", "limites": "hautes"}),
                      headers)
-        self.assertIn("Charts selon les limites", self.request("GET", "/parametres/ranges")[2].decode())
+        page = self.request("GET", "/parametres/ranges")[2].decode()
+        self.assertIn("Tes ranges par défaut", page)
+        self.assertNotIn("Importer…", page)  # plus d'import de charts dans la page : tes ranges s'y règlent
 
     def test_tree_builder_routes(self):
         headers = {"Content-Type": "application/json"}

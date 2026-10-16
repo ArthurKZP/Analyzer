@@ -181,7 +181,8 @@ document.querySelectorAll('.spot-head').forEach(function (box) {
       return;
     }
     msg.textContent = '';
-    window.open('/explorateur/spot:' + family + ':' + board.join(''), '_blank', 'noopener');
+    var ident = 'spot:' + family + ':' + board.join('') + (form.dataset.suffix || '');
+    window.open('/explorateur/' + ident, '_blank', 'noopener');
   });
 });
 // Toutes les séries d'un onglet (heads-up, 6-max) : un bouton pour mettre en file tous les flops manquants.
@@ -350,15 +351,18 @@ def _reading(family: str) -> str:
     return f"la c-bet {de(ip)} après le check {de(oop)}, la réponse {de(oop)}, puis celle {de(ip)} face au check-raise"
 
 
-def _spot_section(family: str = "srp", shown_now: bool = True) -> str:
+def _spot_section(family: str = "srp", shown_now: bool = True, rset: str = "petites") -> str:
     info = studyspots.family_info(family)
     ring = family in studyspots.RING_FAMILIES
-    studies = studyspots.spot_studies((family,))
+    high = rset == "hautes"  # les ranges des hautes limites : une étude à part, hors des séries
+    studies = studyspots.spot_studies((family,), rset)
     boards = studyspots.family_boards(family)
-    spots = [studyspots.StudySpot(family, studyspots.cards_of(b)) for b in boards]
+    if high:
+        boards += sorted({"".join(m["board"]) for m in studies.values()} - set(boards))
+    spots = [studyspots.StudySpot(family, studyspots.cards_of(b), ranges_set=rset) for b in boards]
     metas = {s.ident: studies[s.ident] for s in spots if s.ident in studies and studies[s.ident].get("summary")}
     series = set(studyspots.flop_set(family))
-    refs = {i: r for i, r in studyspots.reference(family).items() if i not in metas}
+    refs = {} if high else {i: r for i, r in studyspots.reference(family).items() if i not in metas}
     shown = {**refs, **metas}  # une étude de cet ordinateur passe avant la référence
     columns = _columns(list(shown.values()), family)
     width = len(columns) + 3
@@ -420,6 +424,26 @@ def _spot_section(family: str = "srp", shown_now: bool = True) -> str:
         origin = ("Ranges de la solution préflop ; pas de donk (la BB ne mène pas dans celui qui a misé à la street "
                   "précédente). Trois flops par texture : pairé, monotone, puis selon la plus haute carte")
         cost = COST[family]
+    if high:
+        title += " · hautes limites"
+        origin = ("Ranges des hautes limites : leurs charts (Paramètres › Ranges préflop) là où ils en donnent, sinon "
+                  "celles de la référence ; " + origin[0].lower() + origin[1:])
+        controls = (f'<p class="note"><b>{done} / {total}</b> flops résolus avec ces ranges. <b>Explorer ↗</b> '
+                    "résout un flop avec elles (une étude à part : les séries, leurs plans de jeu et l'entraîneur "
+                    "restent faits avec la référence) ; les tailles de mise sont celles choisies pour le flop.</p>")
+    else:
+        controls = (
+            f'<div class="spot-head" data-family="{escape(family)}" data-done="{done}">'
+            f'<span><b>{done} / {total}</b> flops résolus{" · " + _size(size) if size else ""}</span>'
+            f'<button type="button" class="go spot-run"{" hidden" if not missing else ""}>Résoudre les {missing} '
+            'flops manquants</button><button type="button" class="spot-stop" hidden>Arrêter</button>'
+            f'<label class="spot-prec"{" hidden" if not missing else ""}>Précision <select aria-label="Précision '
+            f'visée">{PRECISION_OPTIONS}</select></label><span class="spot-est muted small"></span>'
+            '<span class="spot-status"></span></div>'
+            f'<p class="note">Un flop sans tailles choisies passe d\'abord par leur choix, puis par sa résolution : '
+            f"{escape(cost)} (sur 4 cœurs ; moins avec plus de cœurs). Les flops se traitent l'un après l'autre en "
+            "arrière-plan, tant que l'application reste ouverte ; tu peux fermer cette page. En ligne de commande : "
+            f"<code>python -m analyzer gtopen --spots {escape(family)}</code>.</p>")
     return f"""
 <section class="spot-family" data-family="{escape(family)}"{"" if shown_now else " hidden"}>
 <h2>{escape(title, quote=False)}</h2>
@@ -429,21 +453,12 @@ par flop, une par situation (deux à la river) : {escape(sizing.description(fami
 celui qui mise l'emporte. Chaque ligne donne la stratégie de toute la range : {escape(_reading(family))}.
 <b>Explorer ↗</b> ouvre le spot dans l'explorateur (turn et river comprises).{" Les flops marqués <b>réf.</b> montrent "
 f"la synthèse livrée avec {NAME} (même arbre, calculée à l'avance) : résous-les ici pour les explorer." if refs else ""}</p>
-<div class="spot-head" data-family="{escape(family)}" data-done="{done}">
-  <span><b>{done} / {total}</b> flops résolus{" · " + _size(size) if size else ""}</span>
-  <button type="button" class="go spot-run"{" hidden" if not missing else ""}>Résoudre les {missing} flops manquants</button>
-  <button type="button" class="spot-stop" hidden>Arrêter</button>
-  <label class="spot-prec"{" hidden" if not missing else ""}>Précision <select aria-label="Précision visée">{PRECISION_OPTIONS}</select></label>
-  <span class="spot-est muted small"></span>
-  <span class="spot-status"></span>
-</div>
-<p class="note">Un flop sans tailles choisies passe d'abord par leur choix, puis par sa résolution : {escape(cost)}
-(sur 4 cœurs ; moins avec plus de cœurs). Les flops se
-traitent l'un après l'autre en arrière-plan, tant que l'application reste ouverte ; tu peux fermer cette page. En ligne de commande : <code>python -m analyzer gtopen --spots {escape(family)}</code>.</p>
+{controls}
 <div class="scroll"><table class="stats studies spots"><thead><tr><th>Flop</th>{head}<th class="num">Précision</th>
 <th></th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
 <div class="spot-legend">{legend}</div>
-<form class="spot-other"><label for="spot-flop-{escape(family)}">Étudier un autre flop :</label>
+<form class="spot-other" data-suffix="{":hautes" if high else ""}">
+<label for="spot-flop-{escape(family)}">Étudier un autre flop :</label>
 <input id="spot-flop-{escape(family)}" name="flop" placeholder="ex. Ah7d2c" autocomplete="off" spellcheck="false">
 <button type="submit">Ouvrir ↗</button><span class="muted spot-other-msg"></span></form>
 {_stale_section(family)}
@@ -452,20 +467,21 @@ traitent l'un après l'autre en arrière-plan, tant que l'application reste ouve
 """
 
 
-def _ring_family_section(family: str, shown_now: bool) -> str:
+def _ring_family_section(family: str, shown_now: bool, rset: str = "petites") -> str:
     """La série d'une famille 6-max ; si tes charts n'ont pas sa ligne, pourquoi elle ne s'affiche pas."""
+    from ..theory import stake_charts
     try:
-        studyspots.ring_spot_ranges(family)
+        studyspots.ring_spot_ranges(family, stake_charts.set_band(rset))
     except postflop.Unsupported as exc:
         info = studyspots.RING_FAMILIES[family]
         title = f"6-max · {info['pair']} · {info['name']}"
         return (f'<section class="spot-family" data-family="{escape(family)}"{"" if shown_now else " hidden"}>'
                 f'<h2>{escape(title, quote=False)}</h2><div class="card"><p class="note">{escape(str(exc))}</p></div>'
                 "</section>")
-    return _spot_section(family, shown_now)
+    return _spot_section(family, shown_now, rset)
 
 
-def _ring_section() -> str:
+def _ring_section(rset: str = "petites") -> str:
     """Les spots d'étude 6-max : une famille à la fois (paire de positions et type de pot)."""
     from ..theory import ring_ranges
     families = list(studyspots.RING_FAMILIES)
@@ -486,13 +502,14 @@ def _ring_section() -> str:
             f'<button type="button" data-family="{escape(f)}" aria-pressed="{str(f == families[0]).lower()}">'
             f'{escape(studyspots.RING_FAMILIES[f]["name"])}</button>' for f in group) + "</div>"
         for pair, group in pairs.items())
-    sections = "".join(_ring_family_section(f, f == families[0]) for f in families)
-    return (f'<div class="fam-group" data-group="6max"><h2>Spots d\'étude 6-max</h2>{intro}{_group_all("6max")}'
+    sections = "".join(_ring_family_section(f, f == families[0], rset) for f in families)
+    group = _group_all("6max") if rset == "petites" else ""
+    return (f'<div class="fam-group" data-group="6max"><h2>Spots d\'étude 6-max</h2>{intro}{group}'
             f'<div class="fam-switch" role="group" aria-label="Paire de positions et type de pot">{switch}</div>'
-            f'{sections}{_ring_others()}</div>')
+            f'{sections}{_ring_others() if rset == "petites" else ""}</div>')
 
 
-def _hu_section(first: str = "srp") -> str:
+def _hu_section(first: str = "srp", rset: str = "petites") -> str:
     """Les spots d'étude heads-up (bouton contre BB) : une série à la fois (SRP, pot 3bet, pot 4bet), first d'abord."""
     families = list(studyspots.FAMILIES)
     first = first if first in families else families[0]
@@ -502,9 +519,19 @@ def _hu_section(first: str = "srp") -> str:
     switch = ('<div class="fam-pair"><span>BTN contre BB</span>' + "".join(
         f'<button type="button" data-family="{escape(f)}" aria-pressed="{str(f == first).lower()}">'
         f'{escape(studyspots.FAMILIES[f]["name"])}</button>' for f in families) + "</div>")
-    sections = "".join(_spot_section(f, f == first) for f in families)
-    return (f'<div class="fam-group" data-group="hu"><h2>Spots d\'étude heads-up</h2>{intro}{_group_all("hu")}'
+    sections = "".join(_spot_section(f, f == first, rset) for f in families)
+    group = _group_all("hu") if rset == "petites" else ""
+    return (f'<div class="fam-group" data-group="hu"><h2>Spots d\'étude heads-up</h2>{intro}{group}'
             f'<div class="fam-switch" role="group" aria-label="Type de pot">{switch}</div>{sections}</div>')
+
+
+def ranges_switch(rset: str) -> str:
+    """Le choix des ranges des études : petites ou hautes limites (« ?ranges=… »)."""
+    from ..theory import stake_charts
+    links = "".join(
+        f'<a href="?ranges={k}" aria-current="{"page" if k == rset else "false"}">{escape(stake_charts.SET_NAMES[k])} '
+        f'<span>{escape(stake_charts.SET_LEVELS[k])}</span></a>' for k in stake_charts.SETS)
+    return f'<nav class="lk-fmt" aria-label="Ranges des études">{links}</nav>'
 
 
 def _ring_others() -> str:
@@ -595,21 +622,22 @@ quelques secondes, sans recalculer.</p>{table}</div>
 SECTIONS = ("hu", "6max", "coups") + tuple(studyspots.FAMILIES)
 
 
-def build_studies_page(embed: bool = True, section: Optional[str] = None) -> str:
+def build_studies_page(embed: bool = True, section: Optional[str] = None, rset: str = "petites") -> str:
     """Toutes les études, ou une seule section (onglets de l'application) : hu (SRP, pots 3bet et 4bet heads-up), 6max
-    ou coups."""
+    ou coups ; rset : les ranges des séries, petites ou hautes limites."""
     if section is not None and section not in SECTIONS:
         raise NotFound(section)
     studies = postflop.list_studies()
     total = sum(s["size"] for s in studies)
+    switch = ranges_switch(rset) if section != "coups" else ""
     if section is None:
-        content = _hu_section() + _ring_section() + _hand_section()
+        content = switch + _hu_section(rset=rset) + _ring_section(rset) + _hand_section()
     elif section == "coups":
         content = _hand_section()
     elif section == "6max":
-        content = _ring_section()
+        content = switch + _ring_section(rset)
     else:
-        content = _hu_section(section)
+        content = switch + _hu_section(section, rset)
     body = f"""
 <div class="meta">{len(studies)} étude(s) · {_size(total)} sur le disque · {escape(str(postflop.studies_dir()))}</div>
 <p class="note">Précision : exploitabilité de la solution, en % du pot (plus c'est bas, plus elle est proche de

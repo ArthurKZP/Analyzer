@@ -1056,28 +1056,40 @@ ses formats) :
 L'onglet *Joueurs et alias* : le type de chaque adversaire (régulier ou récréatif) et les alias (voir *Application*).
 Code : `analyzer/settings.py`, `analyzer/app/settings_page.py`.
 
-L'onglet *Ranges préflop* : tes ranges préflop par défaut, ligne par ligne, sans ouvrir de coup. Pour chaque format
-que tu joues — le heads-up (solution préflop), les formats qui ont leurs charts, et ceux de tes mains que les charts
-6-max couvrent (7 à 9 joueurs, position pour position) —, les lignes à deux joueurs au flop (pots simples, 3bet,
-4bet) et les positions où ta range remplace celle de la référence. *Modifier* ouvre l'éditeur de l'onglet *Ranges*
-de l'explorateur (grille à peindre, texte, *Plus serré* / *Plus large*, *Range de la référence*) ; *Enregistrer*
-garde les ranges qui diffèrent de la référence, *Revenir à la référence* efface celles de la ligne. Elles valent
-pour tous tes coups de la ligne (explorateur, analyse face au solveur, Leakfinding) ; un coup réglé à part dans
-l'explorateur garde son réglage, et un coup déjà résolu se résout à nouveau, dans une étude à part. *Aussi pour les
-spots d'étude ouverts dans l'explorateur* (décochée par défaut) : un spot d'étude part alors des ranges de sa
-ligne ; les séries, leurs plans de jeu et les repères restent faits avec la référence. Les réglages d'une ligne qui
-n'a plus de référence (charts retirés, format que tu ne joues plus) restent listés, à effacer. Code :
+L'onglet *Ranges préflop* : tes ranges préflop, en **deux jeux** — les **petites limites** (NL100 et moins) et les
+**hautes limites** (NL200 et plus, où le rake pèse moins). En tête, **Tes ranges par défaut** : *selon la limite de
+chaque main* (par défaut), *toujours les petites limites* ou *toujours les hautes limites* ; le préflop (Leakfinding,
+mains de départ, page Préflop, suivi) juge tes mains avec ce jeu, et le solveur en part pour tes coups (explorateur,
+mains face au solveur). Les petites limites partent des ranges de la référence (la solution heads-up, les charts
+6-max) ; les hautes limites, de leurs charts quand ils sont enregistrés (voir plus bas), sinon de la référence. Puis
+**Régler les ranges des** *Petites limites* / *Hautes limites* (avec tes mains de chacune ; le choix est gardé) : pour
+chaque format que tu joues — le heads-up (solution préflop), les formats qui ont leurs charts, et ceux de tes mains
+que les charts 6-max couvrent (7 à 9 joueurs, position pour position) —, les lignes à deux joueurs au flop (pots
+simples, 3bet, 4bet) et les positions où ta range remplace celle de base. *Modifier* ouvre l'éditeur de l'onglet
+*Ranges* de l'explorateur (grille à peindre, texte, *Plus serré* / *Plus large*, *Range de base*) ; *Enregistrer*
+garde les ranges qui diffèrent de la base, *Revenir à la base* efface celles de la ligne. Elles valent pour tous tes
+coups de la ligne dans ce jeu (explorateur, analyse face au solveur, Leakfinding) ; un coup réglé à part dans
+l'explorateur garde son réglage, et un coup déjà résolu se résout à nouveau, dans une étude à part. Tes réglages
+d'avant les deux jeux valaient pour toutes tes mains : les hautes limites les reprennent jusqu'au premier
+enregistrement. *Aussi pour les spots d'étude ouverts dans l'explorateur* (décochée par défaut) : un spot d'étude
+part alors des ranges de sa ligne ; les séries, leurs plans de jeu et les repères restent faits avec la référence.
+Les réglages d'une ligne qui n'a plus de base (charts retirés, format que tu ne joues plus) restent listés, à
+effacer. Dans *Études du solveur*, **Ranges : Petites limites / Hautes limites** (en tête des onglets *Heads-up* et
+*6-max* ; par défaut les hautes quand tes ranges par défaut le sont toujours) : avec les hautes limites, chaque flop
+s'ouvre dans l'explorateur avec leurs ranges (une étude à part, `spot:srp:KsKd4c:hautes`, aux tailles choisies pour
+le flop) ; les séries, leurs plans de jeu et l'entraîneur restent faits avec la référence. Code :
 `analyzer/app/ranges_page.py` (l'éditeur, partagé avec l'explorateur : `static/rangekit.js`),
-`theory/custom_ranges.py` (`reference_lines`).
+`theory/custom_ranges.py` (`reference_lines`), `theory/stake_charts.py` (`choice`, `set_of`).
 
 ### Charts selon les limites (rake)
 
 Le rake change la théorie : plus il pèse, plus on ouvre et on défend serré, moins on paie et on limpe. Les charts de
 la référence — la solution heads-up 100 bb (`theory/data/hu_100bb.json`) et les charts 6-max de Hand2Note Guide —
-sont ceux d'un jeu de **micro limites au rake élevé**. En tête de *Paramètres › Ranges préflop*, **Charts selon les
-limites** : pour chaque format que tu joues (heads-up, 6-max…) et chaque niveau de limites (micro : NL10 et moins ;
-milieu : jusqu'à NL100 ; hautes : NL200 et plus, d'après la grosse blinde de chaque main), tes mains de ce niveau, les
-charts qui les jugent, et *Importer…* (un fichier JSON) ou *Retirer*. En ligne de commande :
+sont ceux d'un jeu de **micro limites au rake élevé**. Des charts faits pour un niveau de limites (micro : NL10 et
+moins ; milieu : jusqu'à NL100 ; hautes : NL200 et plus, d'après la grosse blinde de chaque main) les remplacent pour
+les mains de ce niveau ; ceux des hautes limites font la base du jeu de ranges des hautes limites (*Paramètres ›
+Ranges préflop*, plus haut, où tes ranges se règlent ligne par ligne : l'import de fichiers n'y est plus). Ils
+s'enregistrent en ligne de commande :
 
 ```bash
 python -m analyzer ranges --importer hu_hautes.json --limites hautes            # heads-up (format lu dans le fichier)
@@ -1108,24 +1120,26 @@ un titre de position (`UTG`, `HJ`, `CO`, `BU`, `SB`, ou `Utg`…) avant chaque r
 ou `Call :` la précède (la BB), et `VS HJ 3BET` (ou `VERSUS HJ 3BET`) la réponse de chaque ouvreur au 3bet du HJ,
 `4b :` et `call :` avant chaque range. Les poids sont ceux de toute la range de départ : un call face au 3bet est une
 main qui ouvre *et* paie (l'appli vérifie que call et 4bet ne dépassent pas l'open). Les tailles et les autres titres
-sont ignorés. Plusieurs fichiers se complètent (opens, défense face à l'open, réponse au 3bet ; *Importer…* en accepte
-plusieurs à la fois, `--importer` aussi). Un open de plus de 90 %
+sont ignorés. Plusieurs fichiers se complètent (opens, défense face à l'open, réponse au 3bet ; `--importer` en
+accepte plusieurs à la fois). Un open de plus de 90 %
 des mains est refusé : c'est la range de départ copiée à la place de celle de l'action Raise. Ce que tes charts ne
 donnent pas (un open, la réponse au 3bet…) reste jugé avec la référence ; quand ils donnent l'open d'une position
 mais pas sa réponse au 3bet, celle de la référence, faite pour un autre open, n'est plus lue. Les Paramètres disent ce
 qu'ils couvrent.
 
-**Ce qui change** : chaque main est jugée avec les charts de **son** niveau (ceux importés pour lui, sinon ceux de la
-référence) — les décisions préflop du Leakfinding, les mains de départ, la vérification en jeu, le suivi dans le temps ;
-les repères préflop du Leakfinding heads-up sont la théorie de chaque niveau, pondérée par tes mains de chaque niveau ;
-les pages *Préflop › Face à la théorie* montrent les charts du niveau où tu as le plus de mains. Le Leakfinding et le
-Préflop disent quels charts ont jugé. Ce sont aussi **les ranges du solveur** pour tes coups de ce niveau : un coup
-ouvert dans l'explorateur ou passé au solveur (*Face au solveur*, Leakfinding) part de tes charts — en heads-up, de ta
-solution du niveau ; aux tables à plusieurs, de tes lignes, celles de la référence là où tes charts n'en donnent pas
-— et « Range de la référence » dans l'explorateur y revient. Tes ranges ajustées ligne par ligne (plus haut) passent
-avant. Une main déjà analysée avec les ranges de la référence garde son analyse ; les suivantes partent de tes charts.
-Les séries d'étude et leurs plans de jeu restent faits avec la référence. Les charts par limites valent pour toi et
-tes élèves (gardés dans la base, et dans les sauvegardes). Code : `theory/stake_charts.py`.
+**Ce qui change** : chaque main est jugée avec les charts de **son** niveau (ceux importés pour lui, sinon ceux de
+la référence ; *toujours les petites* ou *toujours les hautes limites* dans tes ranges par défaut : ceux-là pour
+toutes) — les décisions préflop du Leakfinding, les mains de départ, la vérification en jeu, le suivi dans le
+temps ; les repères préflop du Leakfinding heads-up sont la théorie de chaque niveau, pondérée par tes mains de
+chaque niveau ; les pages *Préflop › Face à la théorie* montrent les charts du niveau où tu as le plus de mains. Le
+Leakfinding et le Préflop disent quels charts ont jugé. Ce sont aussi **les ranges du solveur** pour tes coups de ce
+niveau : un coup ouvert dans l'explorateur ou passé au solveur (*Face au solveur*, Leakfinding) part de tes charts —
+en heads-up, de ta solution du niveau ; aux tables à plusieurs, de tes lignes, celles de la référence là où tes
+charts n'en donnent pas — et « Range de la référence » dans l'explorateur y revient. Tes ranges ajustées ligne par
+ligne (plus haut) passent avant. Une main déjà analysée avec les ranges de la référence garde son analyse ; les
+suivantes partent de tes charts. Les séries d'étude et leurs plans de jeu restent faits avec la référence. Les
+charts par limites valent pour toi et tes élèves (gardés dans la base, et dans les sauvegardes). Code :
+`theory/stake_charts.py`.
 
 ## Bluffs des adversaires
 

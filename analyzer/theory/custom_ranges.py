@@ -4,7 +4,14 @@ tables à plusieurs), pour un coup ou un spot d'étude précis, ou par défaut p
 Gardées dans la base (document « ranges-ajustees », clé « perso ») :
 
     {"lignes": {"6-max|CO:raise BB:call": {"CO": "AA,KK,…", "BB": "…"}},
+     "lignes_hautes": {…},
      "coups": {"<numéro de main ou spot:srp:KsKd4c>": {"BB": "…", "BTN": "…"}}}
+
+Deux jeux de ranges par ligne (stake_charts.SETS) : « lignes » pour les petites limites (à la place des ranges de la
+référence), « lignes_hautes » pour les hautes limites (à la place de leurs charts, sinon de la référence) ; une main
+prend le jeu de sa limite, selon tes ranges par défaut (stake_charts.set_of). Tant que les hautes limites n'ont pas
+leurs lignes à elles (un document d'avant les deux jeux), elles prennent celles des petites limites : tes réglages
+valaient alors pour toutes tes mains ; le premier enregistrement les sépare.
 
 Une ligne : le format (« HU », « 6-max »…) et la clé de ring_ranges (relances et calls préflop avec la position de
 leur auteur). Les ranges sont rangées par position ; une position absente garde la range de référence. Le réglage d'un
@@ -39,11 +46,21 @@ STEP = 0.10  # « plus serré » / « plus large » : environ 10 % des combos de
 KIND, KEY = "ranges-ajustees", "perso"
 
 
+LINES = {"petites": "lignes", "hautes": "lignes_hautes"}  # jeu de ranges -> ses lignes dans le document
+
+
+def lines_key(rset: str = "petites") -> str:
+    if rset not in LINES:
+        raise ValueError(f"Jeu de ranges inconnu : {rset}.")
+    return LINES[rset]
+
+
 def load() -> dict:
     data = documents.get(db.current(), KIND, KEY)
     data = data if isinstance(data, dict) else {}
-    return {"lignes": dict(data.get("lignes") or {}), "coups": dict(data.get("coups") or {}),
-            "spots": data.get("spots") is True}
+    high = data["lignes_hautes"] if "lignes_hautes" in data else data.get("lignes")
+    return {"lignes": dict(data.get("lignes") or {}), "lignes_hautes": dict(high or {}),
+            "coups": dict(data.get("coups") or {}), "spots": data.get("spots") is True}
 
 
 def _save(data: dict) -> None:
@@ -75,10 +92,11 @@ def check(text: str) -> dict[str, float]:
     return weights
 
 
-def lookup(ident: str, line: Optional[str]) -> tuple[Optional[str], dict[str, dict[str, float]]]:
-    """(portée, {position: range}) des réglages qui s'appliquent : ceux du coup, complétés par ceux de sa ligne."""
+def lookup(ident: str, line: Optional[str], rset: str = "petites") -> tuple[Optional[str], dict[str, dict[str, float]]]:
+    """(portée, {position: range}) des réglages qui s'appliquent : ceux du coup, complétés par ceux de sa ligne dans ce
+    jeu de ranges."""
     data = load()
-    by_line = data["lignes"].get(line, {}) if line else {}
+    by_line = data[lines_key(rset)].get(line, {}) if line else {}
     by_hand = data["coups"].get(ident, {})
     if not by_line and not by_hand:
         return None, {}
@@ -86,18 +104,18 @@ def lookup(ident: str, line: Optional[str]) -> tuple[Optional[str], dict[str, di
     return ("coup" if by_hand else "ligne"), merged
 
 
-def save(scope: str, key: str, ranges: dict[str, str]) -> None:
+def save(scope: str, key: str, ranges: dict[str, str], rset: str = "petites") -> None:
     if scope not in SCOPES or not key:
         raise ValueError("Portée inconnue.")
     texts = {pos: postflop.range_text(check(text)) for pos, text in ranges.items()}
     data = load()
-    data["coups" if scope == "coup" else "lignes"][key] = texts
+    data["coups" if scope == "coup" else lines_key(rset)][key] = texts
     _save(data)
 
 
-def clear(scope: str, key: str) -> bool:
+def clear(scope: str, key: str, rset: str = "petites") -> bool:
     data = load()
-    table = data["coups" if scope == "coup" else "lignes"]
+    table = data["coups" if scope == "coup" else lines_key(rset)]
     if key not in table:
         return False
     del table[key]
@@ -157,8 +175,14 @@ def formats(seen=(), heads_up: bool = True, ring: bool = True) -> list[str]:
     return out
 
 
-def reference_name(table_format: str) -> str:
-    """D'où viennent les ranges de référence d'un format : « solution préflop heads-up », « Hand2Note Guide (6-max) »…"""
+def reference_name(table_format: str, rset: str = "petites") -> str:
+    """D'où viennent les ranges de base d'un format dans ce jeu : « solution préflop heads-up », « Hand2Note Guide
+    (6-max) »… ; pour les hautes limites, leurs charts quand ils sont enregistrés."""
+    from . import stake_charts
+    band = stake_charts.set_band(rset)
+    mine = band and stake_charts.stored(table_format if table_format == "HU" else "6-max", band)
+    if mine:
+        return "charts des hautes limites" + (f" ({mine['source']})" if mine.get("source") else "")
     if table_format == "HU":
         return "solution préflop heads-up"
     found = ring_ranges.chart_mapping(table_format, ring_ranges.available())
@@ -175,15 +199,17 @@ def _order(steps: list[tuple[str, str]], pot_type: str) -> tuple:
     return (POT_ORDER.index(pot_type) if pot_type in POT_ORDER else len(POT_ORDER)), seats
 
 
-def reference_lines(table_format: str) -> list[dict]:
+def reference_lines(table_format: str, rset: str = "petites") -> list[dict]:
     """Les lignes à deux joueurs au flop d'un format, avec leurs ranges de référence au flop : la solution heads-up,
     ou les charts du format (ceux du 6-max à même nombre de joueurs derrière, ring_ranges.chart_mapping), aux
     positions de la table. [{"key": "CO:raise BB:call", "steps": [("CO", "raise"), ("BB", "call")],
     "pot_type": "SRP", "ranges": {"CO": {…}, "BB": {…}}}], des pots simples aux pots 4bet, dans l'ordre des
     positions."""
+    from . import stake_charts
+    band = stake_charts.set_band(rset)
     out = []
     if table_format == "HU":
-        solution = load_solution()
+        solution = stake_charts.hu_solution(band)
         for pattern, (pot_type, sb_source, bb_source) in postflop.PREFLOP_LINES.items():
             steps = [("BTN" if who == "sb" else "BB", kind) for who, kind in pattern]
             out.append({"key": line_key(steps), "steps": steps, "pot_type": pot_type,
@@ -196,16 +222,14 @@ def reference_lines(table_format: str) -> list[dict]:
     chart_format, mapping = found
     seats = table_seats(table_format)
     back = {chart: seat for seat, chart in mapping.items() if seat in seats}  # position des charts -> à la table
-    for key in (ring_ranges.solution(chart_format) or {}).get("lines", {}):
+    lines = stake_charts.ring_lines(band).get(chart_format, {})  # la référence, ou les hautes limites par-dessus
+    for key, by_position in lines.items():
         chart_steps = [tuple(step.split(":", 1)) for step in str(key).split()]
         if not chart_steps or any(len(step) != 2 for step in chart_steps):
             continue
         if mapping and any(pos not in back for pos, _ in chart_steps):
             continue
-        entry = ring_ranges.lookup(chart_format, chart_steps)
-        if entry is None:
-            continue
-        pot_type, by_position = entry
+        pot_type = stake_charts.line_pot_type(chart_format, key, band)
         steps = [(back.get(pos, pos) if mapping else pos, kind) for pos, kind in chart_steps]
         players = list(dict.fromkeys(pos for pos, _ in chart_steps))
         if len(players) != 2 or any(pos not in by_position for pos in players):
@@ -215,7 +239,7 @@ def reference_lines(table_format: str) -> list[dict]:
     return sorted(out, key=lambda line: _order(line["steps"], line["pot_type"]))
 
 
-def reference_line(line: str) -> Optional[dict]:
-    """Une ligne (« 6-max|CO:raise BB:call ») et ses ranges de référence, ou None si elle n'en a pas."""
+def reference_line(line: str, rset: str = "petites") -> Optional[dict]:
+    """Une ligne (« 6-max|CO:raise BB:call ») et ses ranges de base dans ce jeu, ou None si elle n'en a pas."""
     table_format, _, key = (line or "").partition("|")
-    return next((found for found in reference_lines(table_format) if found["key"] == key), None)
+    return next((found for found in reference_lines(table_format, rset) if found["key"] == key), None)

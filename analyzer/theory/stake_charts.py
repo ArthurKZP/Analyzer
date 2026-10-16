@@ -78,6 +78,65 @@ def available() -> dict[str, list[str]]:
     return {fmt: sorted(bands, key=stakes.BANDS.index) for fmt, bands in sorted(out.items())}
 
 
+# --- Les deux jeux de ranges : petites limites (micro et milieu) et hautes limites ------------------------------
+#
+# Tes ranges par défaut (Paramètres › Ranges préflop) : selon la limite de chaque main (« auto » : NL200 et plus, les
+# hautes limites), ou toujours celles des petites limites, ou toujours celles des hautes limites. Le choix est gardé
+# avec les charts (même révision : les calculs qui en dépendent se refont).
+
+SETS = ("petites", "hautes")
+SET_NAMES = {"petites": "Petites limites", "hautes": "Hautes limites"}
+SET_LEVELS = {"petites": "NL100 et moins", "hautes": "NL200 et plus"}
+CHOICES = ("auto", "petites", "hautes")
+CHOICE_KEY = "choix"  # documents KIND : {"ranges": choix}
+
+
+def choice() -> str:
+    """Tes ranges par défaut : « auto » (selon la limite de chaque main), « petites » ou « hautes »."""
+    data = documents.get(db.current(), KIND, CHOICE_KEY)
+    found = data.get("ranges") if isinstance(data, dict) else None
+    return found if found in CHOICES else "auto"
+
+
+def set_choice(value: str) -> str:
+    if value not in CHOICES:
+        raise ValueError(f"Choix inconnu : {value} ({', '.join(CHOICES)}).")
+    documents.put(db.current(), KIND, CHOICE_KEY, {"ranges": value})
+    return value
+
+
+def bands():
+    """La fonction grosse blinde -> niveau de limites dont les charts jugent la main, selon tes ranges par défaut
+    (lues une fois) : le sien (auto) ; toujours les petites limites (le sien s'il est micro ou du milieu, sinon le
+    milieu) ; toujours les hautes limites."""
+    found = choice()
+
+    def band_of(bb: float) -> Optional[str]:
+        band = stakes.band_of(bb)
+        if band is None or found == "auto":
+            return band
+        if found == "hautes":
+            return "hautes"
+        return band if band in ("micro", "milieu") else "milieu"
+    return band_of
+
+
+def band_of(bb: float) -> Optional[str]:
+    """Le niveau de limites dont les charts jugent une main de cette grosse blinde (bands)."""
+    return bands()(bb)
+
+
+def set_of(bb: float) -> str:
+    """Le jeu de ranges d'une main : « hautes » ou « petites » (selon tes ranges par défaut)."""
+    return "hautes" if band_of(bb) == "hautes" else "petites"
+
+
+def set_band(name: str) -> Optional[str]:
+    """Le niveau dont les charts font la base d'un jeu de ranges : les hautes limites, ou None (la référence) pour
+    les petites limites."""
+    return "hautes" if name == "hautes" else None
+
+
 def revision() -> tuple:
     """Change à chaque import ou retrait de charts : pour les caches des calculs qui en dépendent."""
     return documents.revision(db.current(), KIND)
@@ -461,7 +520,7 @@ def _ring_lines(band: Optional[str]) -> dict[str, dict]:
 def band_for(hand) -> Optional[str]:
     """Le niveau de limites d'une main quand des charts sont importés pour lui dans sa famille de format (le heads-up,
     les tables à plusieurs), sinon None : ses ranges sont celles de la référence."""
-    band = stakes.band_of(hand.bb)
+    band = band_of(hand.bb)
     if band is None:
         return None
     found = available()
@@ -486,12 +545,17 @@ def ring_lookup(table_format: str, steps: list[tuple[str, str]], band: Optional[
     ranges = lines[chart_format].get(key)
     if not ranges:
         return None
+    return line_pot_type(chart_format, key, band), {pos: dict(r) for pos, r in ranges.items()}, chart_steps
+
+
+def line_pot_type(chart_format: str, key: str, band: Optional[str]) -> str:
+    """Le type de pot d'une ligne des charts (« SRP », « pot 3bet »…) : celui que donnent les charts de ce niveau ou
+    ceux de la référence, sinon d'après le nombre de relances."""
     entry = ((stored(chart_format, band) or {}).get("lines") or {}).get(key) or \
         ((ring_ranges.solution(chart_format) or {}).get("lines") or {}).get(key) or {}
-    raises = sum(1 for _, kind in steps if kind == "raise")
-    pot_type = (entry.get("pot_type") if isinstance(entry, dict) else None) or ring_ranges.POT_TYPES.get(
+    raises = sum(1 for step in str(key).split() if step.endswith(":raise"))
+    return (entry.get("pot_type") if isinstance(entry, dict) else None) or ring_ranges.POT_TYPES.get(
         raises, "pot limpé" if raises == 0 else f"pot {raises + 1}bet")
-    return pot_type, {pos: dict(r) for pos, r in ranges.items()}, chart_steps
 
 
 def theory(heads_up: bool = True, ring: bool = True):
@@ -499,22 +563,23 @@ def theory(heads_up: bool = True, ring: bool = True):
     pour lui, sinon ceux de la référence."""
     from .. import handplay
     found = available()
-    bands = {}
+    by_band = {}
     for band in stakes.BANDS:
         has_hu = heads_up and band in found.get(HU, [])
         has_ring = ring and any(band in b for fmt, b in found.items() if fmt != HU)
         if has_hu or has_ring:
-            bands[band] = handplay.Theory(hu_solution(band) if heads_up else None,
-                                          ring_lines(band) if ring else None)
+            by_band[band] = handplay.Theory(hu_solution(band) if heads_up else None,
+                                            ring_lines(band) if ring else None)
     return handplay.Theory(load_solution() if heads_up else None, handplay.ring_lines() if ring else None,
-                           bands=bands)
+                           bands=by_band, band_of=bands())
 
 
 def mix(hands) -> dict[Optional[str], int]:
-    """Le nombre de mains de chaque niveau de limites (None : grosse blinde inconnue)."""
+    """Le nombre de mains jugées avec chaque niveau de limites (band_of ; None : grosse blinde inconnue)."""
     out: dict[Optional[str], int] = {}
+    level = bands()
     for h in hands:
-        band = stakes.band_of(h.bb)
+        band = level(h.bb)
         out[band] = out.get(band, 0) + 1
     return out
 

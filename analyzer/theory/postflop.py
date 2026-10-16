@@ -524,7 +524,8 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
     reference = {p: dict(r) for p, r in ranges.items()}
     adjusted = None
     if custom:
-        scope, mine = custom_ranges.lookup(hand.hand_id, context)
+        scope, mine = custom_ranges.lookup(hand.hand_id, context,
+                                           stake_charts.set_of(hand.bb) if stakes else "petites")
         for p in (oop, ip):
             if hand.position(p) in mine:
                 ranges[p], adjusted = dict(mine[hand.position(p)]), scope

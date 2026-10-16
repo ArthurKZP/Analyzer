@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from .. import NAME, aliases, db, stakes
 from ..db import hands as db_hands
 from ..errors import NotFound
-from ..theory import postflop, preflop_tree, ring_tree, studyspots
+from ..theory import postflop, preflop_tree, ring_tree, stake_charts, studyspots
 from . import trainer
 from .library import Library, UnknownPlayer
 from .solves import NeedSession
@@ -136,6 +136,19 @@ class Handler(BaseHTTPRequestHandler):
         """Les paramètres de l'adresse (le premier de chaque nom)."""
         return {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
 
+    def _ranges_set(self) -> str:
+        """Le jeu de ranges demandé (« ?jeu=hautes » ou « ?ranges=hautes ») : « petites » par défaut."""
+        query = parse_qs(urlsplit(self.path).query)
+        found = (query.get("jeu") or query.get("ranges") or ["petites"])[0]
+        return found if found in stake_charts.SETS else "petites"
+
+    def _study_set(self) -> str:
+        """Les ranges des études demandées (« ?ranges=hautes »), sinon celles de tes ranges par défaut quand elles sont
+        toujours celles des hautes limites."""
+        if "ranges" in parse_qs(urlsplit(self.path).query):
+            return self._ranges_set()
+        return "hautes" if stake_charts.choice() == "hautes" else "petites"
+
     def _stakes(self) -> Optional[str]:
         """Le niveau de limites demandé (« ?limites=micro ») pour l'Étude du field (stakes.BANDS), ou None."""
         band = parse_qs(urlsplit(self.path).query).get("limites", [None])[0]
@@ -200,8 +213,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.field_page("joueurs"))
             if parts == ["parametres", "ranges"]:  # … tes ranges préflop par défaut, ligne par ligne
                 return self._html(library.ranges_settings_page())
-            if parts == ["api", "ranges", "defaut"]:
-                return self._json(library.default_ranges_view())
+            if parts == ["api", "ranges", "defaut"]:  # (« ?jeu=hautes » : les ranges des hautes limites)
+                return self._json(library.default_ranges_view(self._ranges_set()))
             if parts == ["api", "ranges", "limites"]:  # … tes charts par niveau de limites
                 return self._json(library.stake_charts_view())
             if parts == ["api", "leaks"]:
@@ -266,7 +279,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 3 and parts[0] == "p":
                 return self._html(library.player_page(parts[1], parts[2]))
             if parts == ["etudes"]:
-                return self._html(build_studies_page(embed=True))
+                return self._html(build_studies_page(embed=True, rset=self._study_set()))
             if parts == ["etudes", "plan"]:  # (« ?limites=micro » : le field de ce niveau)
                 return self._html(library.plan_page(self._stakes()))
             if parts == ["api", "plan"]:
@@ -279,7 +292,7 @@ class Handler(BaseHTTPRequestHandler):
                 view = library.coach.view(parts[2])
                 return self._json(view) if view else self._error(404, "Conversation inconnue.")
             if len(parts) == 2 and parts[0] == "etudes":
-                return self._html(build_studies_page(embed=True, section=parts[1]))
+                return self._html(build_studies_page(embed=True, section=parts[1], rset=self._study_set()))
             if parts == ["entraineur"]:
                 return self._html((STATIC / "trainer.html").read_text(encoding="utf-8"))
             if parts == ["entraineur", "bluffcatch"]:  # payer ou coucher, sur tes mains jouées
@@ -370,16 +383,22 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload.get("for_spots"), bool):
                 return self._error(400, "Requête invalide.")
             return self._json(library.set_ranges_for_spots(payload["for_spots"]))
+        if action == "choix":  # tes ranges par défaut : selon la limite de la main, petites ou hautes limites
+            try:
+                return self._json(library.set_ranges_choice(payload.get("choix")))
+            except ValueError as exc:
+                return self._error(400, str(exc))
         context = payload.get("context")
-        if not isinstance(context, str) or len(context) > 200:
+        rset = payload.get("jeu", "petites")
+        if not isinstance(context, str) or len(context) > 200 or rset not in stake_charts.SETS:
             return self._error(400, "Requête invalide.")
         try:
             if action is None:
-                return self._json(library.default_range_line(context))
+                return self._json(library.default_range_line(context, rset))
             if action == "enregistrer":
-                return self._json(library.save_default_ranges(context, payload.get("ranges")))
+                return self._json(library.save_default_ranges(context, payload.get("ranges"), rset))
             if action == "effacer":
-                return self._json(library.clear_default_ranges(context))
+                return self._json(library.clear_default_ranges(context, rset))
         except NotFound:
             return self._error(404, "Ligne sans range de référence.")
         except ValueError as exc:
