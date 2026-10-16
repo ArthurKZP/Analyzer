@@ -228,7 +228,7 @@ def curve_slide(deck: px.Presentation, s: Synthesis, number: int) -> bool:
 def leaks_slide(deck: px.Presentation, s: Synthesis, number: int) -> None:
     slide = deck.add_slide()
     header(slide, "Priorités", "Les leaks à travailler", number)
-    items = s.report.leaks
+    items = s.report.leaks[:leaks.REPORT_TOP]
     if not items:
         text_block(slide, LEFT, 1.8, WIDTH, "Pas de leak net pour l'instant : pas assez de mains contre les "
                    "réguliers, ou un jeu proche de la théorie dans les situations mesurées.", 20, INK2, max_lines=3)

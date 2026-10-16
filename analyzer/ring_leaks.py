@@ -28,8 +28,8 @@ from typing import Optional
 from urllib.parse import urlencode
 
 from . import handplay, leakcheck, ring
-from .leaks import (HAND_LEAKS, POT_STAKE, SCOPES, Pick, Report, Stat, _hand_leak, chances, kept, rank, sized,
-                    solve_orders, street_stake)
+from .leaks import (HAND_LEAKS, POT_STAKE, SCOPES, Pick, Report, Stat, _hand_leak, attach_examples, chances, kept, rank,
+                    sized, solve_orders, street_stake)
 from .models import BET, CALL, FOLD, RAISE, VOLUNTARY, Hand
 from .stats import HandReader, Ratio
 from .theory import coach, exploit, postflop, review, stake_charts, studyspots
@@ -397,10 +397,12 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     plays = (handplay.with_losses(plays, hands, losses) if plays is not None else
              handplay.collect(hands, hero, stake_charts.theory(heads_up=False), losses))
     rows = stats(hands, hero, kinds, plays, pots)
-    leakcheck.attach(rows, leakcheck.ring_checks(rows, parts["reg"], hero, pots, plays, kinds))
+    points = leakcheck.ring_points(parts["reg"], hero, pots)
+    leakcheck.attach(rows, leakcheck.ring_checks(rows, parts["reg"], hero, pots, plays, kinds, points))
     regular = {h.hand_id for h in parts["reg"]}
-    hand_leaks = [_hand_leak(x, len(parts["reg"]), "reg", FORMAT)
-                  for x in handplay.losers([p for p in plays if p.hand_id in regular])[:HAND_LEAKS]]
+    regular_plays = [p for p in plays if p.hand_id in regular]
+    hand_leaks = [_hand_leak(x, len(parts["reg"]), "reg", FORMAT, regular_plays, hero)
+                  for x in handplay.losers(regular_plays)[:HAND_LEAKS]]
     if found is None:
         found = {scope: ring.analyze(parts[scope], hero, merge=True) for scope, _ in SCOPES}
     info = {scope: {k: found[scope][0].total.ratios[k] if found[scope] else Ratio() for k in ("vpip", "pfr", "wtsd", "wsd")}
@@ -412,6 +414,7 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
         opponents["rec" if info_k.get("kind") == "rec" else "reg"].append(name)
     picks = interesting(parts, hero, pots, solver["digests"])
     found_leaks = rank(rows, solver["groups"], solver["analyzed"], digests=solver["digests"], extra=hand_leaks)
+    attach_examples(found_leaks, rows, hero, regular_plays, points[0], solver["digests"])
     orders = solve_orders(solver["todo"], hero, lambda h: hand_keys(h, hero, pots.get(h.hand_id)), found_leaks,
                           picks.get("reg", []))
     return Report(hero, len(hands), {s: len(parts[s]) for s, _ in SCOPES}, winrate, info, rows, solver, picks,

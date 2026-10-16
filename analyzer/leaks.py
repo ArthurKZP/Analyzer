@@ -19,6 +19,8 @@
    montré à part, avec ce qu'il rapporte. Une perte face au solveur qui vient d'un tel écart est relativisée. Là où
    il joue comme la théorie, leur fold face à ses mises et relances montre les exploitations possibles (ils se
    couchent trop face à ses opens : ouvrir plus large rapporterait).
+6. Les leaks sont rangés par catégorie (préflop, après le flop à l'initiative, en défense) ; chacun a ses exemples :
+   ses décisions où se joue l'écart, les plus parlantes d'abord (analyzer/leak_examples.py).
 
 Contre un récréatif, s'écarter de la théorie n'est pas une erreur en soi : ses stats sont montrées à côté, mais
 seules celles contre les réguliers comptent pour les leaks.
@@ -33,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urlencode
 
-from . import handplay, leakcheck, players
+from . import handplay, leak_examples, leakcheck, players
 from .insights import wilson
 from .models import Hand
 from .stats import HandReader, Ratio, analyze
@@ -59,7 +61,8 @@ MISTAKE_COST = 0.5  # bb par décision jouée autrement que la théorie : sert s
 STREET_STAKE = {"preflop": 1.0, "flop": 2.0, "turn": 4.0, "river": 8.0}
 POT_STAKE = {"srp": 1.0, "3bet": 2.0, "4bet": 3.0}
 PREFLOP_STAKE = {"sb_first": 1.0, "bb_vs_open": 1.0, "sb_vs_3bet": 2.0, "bb_vs_4bet": 3.0}
-TOP = 5
+TOP = 8          # leaks à travailler, toutes catégories
+REPORT_TOP = 5   # dans les rapports PDF et PowerPoint
 HAND_LEAKS = 3  # mains de départ qui perdent plus que le fold, au plus
 
 
@@ -209,6 +212,8 @@ class Leak:
     targets: list = field(default_factory=list)  # ses mains pas encore analysées, les plus chères d'abord
     # (main, minutes de résolution)
     effects: list = field(default_factory=list)  # ceux qu'il entraîne sans doute (leur titre)
+    freq: Optional[tuple] = None     # (sa fréquence, celle de la théorie ou None, sa fourchette ou None, occasions)
+    examples: Optional[leak_examples.Examples] = None  # ses décisions où se joue l'écart (le détail du leak)
 
     @property
     def verified(self) -> str:
@@ -437,7 +442,8 @@ def _stat_leak(stat: Stat, scope: str = "reg") -> Optional[Leak]:
                 _cap(advice) + ".", "préflop" if preflop_stat else "postflop", conf, importance(stat, scope),
                 link[0], link[1], check=check, confirmed=check is not None and check.verdict == "fuite",
                 note=stat.size_note(), key=stat.key, direction=direction,
-                focus=frozenset() if preflop_stat else frozenset({stat.key}))
+                focus=frozenset() if preflop_stat else frozenset({stat.key}),
+                freq=(p, stat.ref_for(scope), stat.band, r.opps))
 
 
 KEPT_ADVICE = {
@@ -605,10 +611,11 @@ def _solver_leak(group: dict, analyzed: int, digests: Optional[list[dict]] = Non
                 key=f"solveur:{group['family']}:{group['key']}", focus=focus)
 
 
-def _hand_leak(x: "handplay.Loser", hands: int, scope: str = "reg", fmt: str = "HU") -> Leak:
+def _hand_leak(x: "handplay.Loser", hands: int, scope: str = "reg", fmt: str = "HU", plays: Optional[list] = None,
+               hero: str = "") -> Leak:
     """Une main (ou une famille) jouée ainsi perd nettement plus que le fold, contre les réguliers (fmt « ring » : à
     une table à plusieurs, face aux charts) : d'où vient la perte (le type de pot qui coûte le plus), ce qu'en dit la
-    théorie, et le coup le plus cher à revoir."""
+    théorie, et le coup le plus cher à revoir ; plays : ses mains de départ de cette portée, pour ses exemples."""
     fr = lambda text: text.replace(".", ",")  # noqa: E731  (les nombres à la française ; le point final après)
     evidence = fr(f"{x.n} fois{SCOPE_WORDS.get(scope, '')} : {x.mean:+.2f} bb par main (± {x.half_width:.1f}), contre "
                   f"{x.fold:+.2f} bb pour le fold, soit {100 * x.gap:+.0f} bb/100 par rapport au fold") + "."
@@ -645,7 +652,8 @@ def _hand_leak(x: "handplay.Loser", hands: int, scope: str = "reg", fmt: str = "
         hand_id, ev, _ = x.worst[0]
         example = (hand_id, 0, -ev)
     return Leak(f"Préflop · {x.label}", evidence, advice, "préflop", "solide", -100 * x.gap * x.n / max(hands, 1),
-                link, "Voir d'où vient la perte", example, confirmed=True)
+                link, "Voir d'où vient la perte", example, confirmed=True,
+                examples=leak_examples.hand_loser(x, plays, hero) if plays else None)
 
 
 # --- Leaks liés -----------------------------------------------------------------------------------------------------
@@ -771,6 +779,73 @@ def rank(stats: list[Stat], groups: list[dict], analyzed: int, top: int = TOP,
     return leaks[:top]
 
 
+# --- Catégories et exemples ---------------------------------------------------------------------------------------
+#
+# Les leaks se lisent d'abord par catégorie (où ils se jouent), puis un par un, avec leurs exemples.
+
+CATEGORIES = (
+    ("preflop", "Préflop", "ses ranges : ouverture, défense, 3bet, 4bet, et les mains de départ qui perdent"),
+    ("initiative", "Après le flop, à l'initiative", "c-bet, barrels, face aux relances"),
+    ("defense", "Après le flop, en défense", "face aux mises : fold, relance ; mises quand l'agresseur checke"),
+    ("postflop", "Après le flop", "les autres situations jugées par le solveur"),
+)
+AGGRESSOR_KEYS = frozenset(s.key for s in exploit.situations("srp", "agresseur"))
+
+
+def _role_of(key: str) -> Optional[str]:
+    """Le rôle d'une stat après le flop (« srp:cbet », « srp_ip:defenseur:fold_flop ») : « agresseur » ou
+    « defenseur »."""
+    parts = key.split(":")
+    for role in ("agresseur", "defenseur"):
+        if role in parts:
+            return role
+    return ("agresseur" if parts[-1] in AGGRESSOR_KEYS else "defenseur") if len(parts) == 2 else None
+
+
+def category(leak: Leak) -> str:
+    """La catégorie d'un leak (CATEGORIES) : le préflop, après le flop à l'initiative ou en défense."""
+    if leak.source == "préflop":
+        return "preflop"
+    role = None
+    if leak.source == "solveur" and leak.key.startswith("solveur:"):
+        _, family, key = leak.key.split(":", 2)
+        role = leakcheck.solver_role(family, key)
+    else:
+        role = _role_of(leak.key)
+    return {"agresseur": "initiative", "defenseur": "defense"}.get(role or "", "postflop")
+
+
+def by_category(found: list[Leak]) -> list[tuple[tuple[str, str, str], list[tuple[int, Leak]]]]:
+    """Les leaks par catégorie, avec leur rang (1 : le plus important) ; les catégories dans l'ordre de leur leak le
+    plus important."""
+    groups: dict[str, list[tuple[int, Leak]]] = {}
+    for k, x in enumerate(found, start=1):
+        groups.setdefault(category(x), []).append((k, x))
+    names = {c[0]: c for c in CATEGORIES}
+    return [(names[c], items) for c, items in sorted(groups.items(), key=lambda kv: kv[1][0][0])]
+
+
+def attach_examples(found: list[Leak], stats: list[Stat], hero: str, plays: list, points: dict[str, list],
+                    digests: list[dict]) -> None:
+    """Les exemples de chaque leak (leak_examples) : plays, ses mains de départ de la portée comparée à la théorie ;
+    points, ses décisions après le flop par stat (leakcheck.hu_points, ring_points) ; digests, ses mains au solveur."""
+    by_key = {s.key: s for s in stats}
+    for x in found:
+        if x.examples is not None or not x.key:
+            continue
+        if x.source == "solveur" and x.key.startswith("solveur:"):
+            _, family, key = x.key.split(":", 2)
+            x.examples = leak_examples.solver(family, key, digests)
+            continue
+        stat = by_key.get(x.key)
+        if stat is None or not x.direction:
+            continue
+        if stat.section.startswith("Préflop"):
+            x.examples = leak_examples.preflop(stat.key, x.direction, plays, hero)
+        elif stat.kind in ("bet", "fold", "raise"):
+            x.examples = leak_examples.postflop(stat.kind, x.direction, points.get(stat.key, []), hero)
+
+
 # --- 5. Les mains à passer au solveur ----------------------------------------------------------------------
 #
 # Résoudre toutes ses mains prend des heures : on en choisit une partie. Les plus chères d'abord (ce qu'il y a perdu),
@@ -858,12 +933,14 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     losses = review.hero_losses(solver["digests"])
     plays = (handplay.with_losses(plays, parts["reg"], losses) if plays is not None else
              handplay.collect(parts["reg"], hero, stake_charts.theory(ring=False), losses))
-    leakcheck.attach(rows, leakcheck.hu_checks(rows, parts["reg"], hero, stats["reg"], plays))
-    hand_leaks = [_hand_leak(x, len(parts["reg"])) for x in handplay.losers(plays)[:HAND_LEAKS]]
+    points = leakcheck.hu_points(parts["reg"], hero)
+    leakcheck.attach(rows, leakcheck.hu_checks(rows, parts["reg"], hero, stats["reg"], plays, points))
+    hand_leaks = [_hand_leak(x, len(parts["reg"]), plays=plays, hero=hero) for x in handplay.losers(plays)[:HAND_LEAKS]]
     opponents: dict = {"reg": [], "rec": []}
     for name, info_k in kinds.items():
         opponents["rec" if info_k.get("kind") == "rec" else "reg"].append(name)
     found = rank(rows, solver["groups"], solver["analyzed"], digests=solver["digests"], extra=hand_leaks)
+    attach_examples(found, rows, hero, plays, points, solver["digests"])
     return Report(hero, len(hands), {s: len(parts[s]) for s, _ in SCOPES}, winrate, info, rows, solver, picks,
                   found, rec_notes(rows), opponents, exploits=kept(rows), opportunities=chances(rows),
                   solve_orders=solve_orders(solver["todo"], hero, lambda h: hand_keys(h, hero), found,
@@ -891,6 +968,9 @@ def summary(report: Report) -> dict:
         "bb_100": {k: None if v is None else round(v, 1) for k, v in report.winrate.items()},
         "leaks": [{"titre": x.title, "preuve": x.evidence, "conseil": x.advice, "source": x.source,
                    "confiance": x.confidence, "main_la_plus_chere": x.example[0] if x.example else None,
+                   "categorie": dict((c[0], c[1]) for c in CATEGORIES)[category(x)],
+                   **({"exemples": {"mains": [e.hand for e in x.examples.shown], "en_tout": x.examples.total}}
+                      if x.examples else {}),
                    **({"verifie_en_jeu": _check_summary(x.check)} if x.check else {}),
                    **({"reserve": x.note} if x.note else {}),
                    **({"lie_a": [link.text() for link in x.causes]} if x.causes else {}),

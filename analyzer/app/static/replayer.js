@@ -1,7 +1,8 @@
 /* Replayer : revoir une main jouée action par action (heads-up ou table à plusieurs, finie au préflop ou à
    l'abattage). Adresse : /rejouer/<main>?api=/api/eleves/<élève> (l'espace de la main ; /api par défaut).
    ?stop=<n> : la main s'arrête avant sa n-ième action (l'entraîneur : la décision à prendre), sans le résultat ni
-   les cartes des autres ; ?embed=1 : sans bandeau, dans une autre page. */
+   les cartes des autres ; ?at=<n> : la main entière, placée sur sa n-ième action (un exemple d'un leak) ;
+   ?embed=1 : sans bandeau, dans une autre page. */
 (function () {
   'use strict';
 
@@ -34,6 +35,7 @@
   const SPACE = /^\/api(\/(eleves|references)\/[A-Za-z0-9_-]+)?$/;
   const api = SPACE.test(params.get('api') || '') ? params.get('api') : '/api';
   const stop = /^\d+$/.test(params.get('stop') || '') ? Number(params.get('stop')) : null;
+  const start = /^\d+$/.test(params.get('at') || '') ? Number(params.get('at')) : null;
   const embed = params.get('embed') === '1' || window.self !== window.top && stop !== null;
   if (embed) document.body.classList.add('embed');
   const id = decodeURIComponent(location.pathname.split('/').filter(Boolean)[1] || '');
@@ -275,6 +277,10 @@
     }
     steps = build();
     at = stop !== null ? steps.length - 1 : 0;
+    if (stop === null && start !== null) {  // placée sur cette action
+      const k = steps.findIndex((x) => x.type === 'action' && x.i === start);
+      if (k >= 0) at = k;
+    }
     header();
     $('main').hidden = false;
     $('b-first').addEventListener('click', () => { pause(); go(0); });

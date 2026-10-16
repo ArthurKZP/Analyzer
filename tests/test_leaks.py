@@ -6,8 +6,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from analyzer import leaks, students
-from analyzer.app.leaks_page import _items, build_leaks_page
+from types import SimpleNamespace
+
+from analyzer import handplay, leak_examples, leakcheck, leaks, students
+from analyzer.app.leaks_page import _items, build_leaks_page, leaks_html
 from analyzer.parsers import load_hands
 from analyzer.stats import Ratio
 from analyzer.theory import review
@@ -142,7 +144,8 @@ class LinksTest(unittest.TestCase):
         page = _items(ranked, "/moi", True)
         self.assertIn("↳ Sans doute une conséquence de « Préflop · BB : fold face à l&#x27;open » : corrige d'abord "
                       "celui-là.", page)
-        self.assertIn('<summary>Pourquoi ? Les preuves</summary>', page)  # le détail, replié
+        self.assertIn('<summary>Le détail : fréquence et preuves</summary>', page)  # le détail, replié
+        self.assertIn('<span class="v">20 % <span class="n">sur 100 occasions</span></span>', page)
         self.assertIn("Entraîne sans doute aussi : « SRP · BB : Fold face à la c-bet ».", page)
         # dans l'autre sens (défend trop serré, folde trop face à la c-bet), rien ne les relie
         tight = self.stat("bb_vs_open.fold", "Préflop", "BB : fold face à l'open", "fold", 60, 0.40)
@@ -160,6 +163,92 @@ class LinksTest(unittest.TestCase):
         folds = self.stat("srp_oop:defenseur:fold_flop", "SRP", "En défense : Fold face à la c-bet", "fold", 60, 0.33)
         found = leaks.links([wide, folds])
         self.assertEqual([x.cause.key for x in found["srp_oop:defenseur:fold_flop"]], ["pre:vs_open:BB:call"])
+
+
+class CategoryTest(unittest.TestCase):
+    @staticmethod
+    def leak(source, key, title="", confidence="solide"):
+        return leaks.Leak(title or key, "preuve", "conseil.", source, confidence, 1.0, key=key, direction="plus")
+
+    def test_categories(self):
+        found = [self.leak("postflop", "srp:cbet"), self.leak("préflop", "sb_first.raise", "Préflop · Bouton : open"),
+                 self.leak("postflop", "srp:fold_flop"), self.leak("postflop", "srp_ip:defenseur:raise"),
+                 self.leak("solveur", "solveur:srp:face:fo::1"), self.leak("solveur", "solveur:srp:bet:fi:"),
+                 self.leak("solveur", "solveur:inconnue:bet:fi:"), self.leak("postflop", "srp_oop:agresseur:barrel")]
+        self.assertEqual([leaks.category(x) for x in found], ["initiative", "preflop", "defense", "defense", "defense",
+                                                              "initiative", "postflop", "initiative"])
+        groups = leaks.by_category(found)  # dans l'ordre de leur leak le plus important
+        self.assertEqual([(c[0], [k for k, _ in items]) for c, items in groups],
+                         [("initiative", [1, 6, 8]), ("preflop", [2]), ("defense", [3, 4, 5]), ("postflop", [7])])
+
+
+class ExamplesTest(unittest.TestCase):
+    @staticmethod
+    def play(combo, cards, action, theory, ev=-1.0, index=3, position="BTN", situation="open"):
+        hand = SimpleNamespace(hand_id=f"H-{combo}", hole_cards={"Hero": cards}, board=[])
+        return handplay.Played(hand, combo, position, ev, ev,
+                               decisions=[handplay.Decision(situation, action, -0.5, theory, index)])
+
+    def test_preflop(self):
+        plays = [self.play("K9o", ["Kd", "9c"], "raise", {"raise": 0.3, "fold": 0.7}, ev=2.0),
+                 self.play("T2o", ["Ts", "2d"], "raise", {"fold": 1.0}, index=4),
+                 self.play("AA", ["Ah", "Ad"], "raise", {"raise": 1.0}),  # la théorie l'ouvre : pas un exemple
+                 self.play("72o", ["7h", "2c"], "fold", {"fold": 1.0})]
+        ex = leak_examples.preflop("sb_first.raise", "plus", plays, "Hero")  # ouvre trop large
+        self.assertEqual((ex.total, [e.hand for e in ex.shown]), (2, ["H-T2o", "H-K9o"]))  # le plus loin d'abord
+        first = ex.shown[0]
+        self.assertEqual((first.cards, first.did, first.why, first.value, first.at),
+                         (["Ts", "2d"], "open (T2o)", "théorie : fold 100 %", -0.5, 4))
+        self.assertEqual(ex.shown[1].why, "théorie : fold 70 %, relance 30 %")
+        tight = leak_examples.preflop("sb_first.raise", "moins", plays, "Hero")  # n'ouvre pas assez : aucune
+        self.assertIsNone(tight)
+        # tables à plusieurs : « pre:situation:position:mot »
+        ring = [self.play("AQo", ["Ac", "Qd"], "call", {"raise": 0.8, "call": 0.2}, position="BB",
+                          situation="vs_open")]
+        ex = leak_examples.preflop("pre:vs_open:BB:3bet", "moins", ring, "Hero")
+        self.assertEqual((ex.total, ex.shown[0].did, ex.shown[0].why),
+                         (1, "call (AQo)", "théorie : relance 80 %, call 20 %"))
+
+    def test_postflop_and_solver(self):
+        hands = [h for h in load_hands([FIXTURES]) if len(h.seats) == 2]
+        points = leakcheck.hu_points(hands, "Hero")
+        ex = leak_examples.postflop("bet", "plus", points["srp:cbet"], "Hero")  # c-bet trop souvent
+        cbet = ex.shown[0]
+        hand = next(h for h in hands if h.hand_id == cbet.hand)
+        self.assertEqual((hand.actions[cbet.at].player, hand.actions[cbet.at].street, len(cbet.board)),
+                         ("Hero", "flop", 3))
+        self.assertTrue(cbet.did.startswith("mise "))
+        self.assertEqual(ex.value_label, "Rapporté à partir de là")
+        self.assertIsNone(leak_examples.postflop("bet", "moins", points["srp:cbet"], "Hero"))  # jamais checké
+        digests = [{"hand": "H9", "family": "srp", "decisions": [
+            {"who": "H", "key": "bet:fi:", "d": 2, "ev_loss": 1.2, "frequency": 0.0, "combo": "AhKd",
+             "board": ["2c", "7d", "9s"], "played": "mise 75 %", "strategy": [0.9, 0.1],
+             "actions": [{"label": "check"}, {"label": "mise 75 %"}]},
+            {"who": "H", "key": "bet:fi:", "d": 4, "ev_loss": 0.0, "frequency": 1.0, "combo": "AhKd", "board": [],
+             "played": "check", "strategy": [1.0, 0.0], "actions": [{"label": "check"}, {"label": "mise"}]}]}]
+        ex = leak_examples.solver("srp", "bet:fi:", digests)  # ses erreurs seulement
+        self.assertEqual((ex.total, ex.shown[0].solver, ex.shown[0].value, ex.shown[0].cards, ex.shown[0].why),
+                         (1, 2, -1.2, ["Ah", "Kd"], "solveur : check 90 %, mise 75 % 10 %"))
+
+    def test_page(self):
+        x = leaks.Leak("Préflop · Bouton : open", "90 % sur 40 occasions", "Resserre.", "préflop", "solide", 2.0,
+                       key="sb_first.raise", direction="plus", freq=(0.9, 0.8, None, 40))
+        x.examples = leak_examples.preflop("sb_first.raise", "plus",
+                                           [ExamplesTest.play("T2o", ["Ts", "2d"], "raise", {"fold": 1.0})], "Hero")
+        y = leaks.Leak("SRP · BTN : C-bet flop", "80 % sur 30 occasions", "Checke plus.", "postflop", "indicatif",
+                       1.0, key="srp:cbet", direction="plus", freq=(0.8, None, (0.5, 0.6), 30))
+        report = SimpleNamespace(leaks=[y, x], table_format="HU")
+        page = leaks_html(report, "/eleve/paul", False)
+        for text in ('<a class="nm" href="#lk-c-initiative">Après le flop, à l&#x27;initiative</a>',
+                     '<li value="2"><a href="#lk-2">Bouton : open</a></li>', '<li value="2" id="lk-2">',
+                     "1 leak, solide", "1 leak, indicatif", "<summary>Le détail : fréquence et mains (1)</summary>",
+                     'href="/rejouer/H-T2o?api=/api/eleves/paul&amp;at=3"', "1 fois : des mains que la théorie joue",
+                     '<span class="lb">Repère</span>', '<span class="v">50–60 %</span>'):
+            self.assertIn(text, page)
+        self.assertLess(page.index('id="lk-c-initiative"'), page.index('id="lk-c-preflop"'))
+        alone = leaks_html(report, "/moi", True)
+        self.assertNotIn("/rejouer/", alone)
+        self.assertIn('<td class="small">H-T2o</td>', alone)  # le coup, sans lien
 
 
 class SolveOrderTest(unittest.TestCase):

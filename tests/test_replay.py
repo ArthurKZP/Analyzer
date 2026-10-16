@@ -48,6 +48,8 @@ class RecordTest(unittest.TestCase):
     def test_links(self):
         self.assertEqual(replay.href("A/1"), "/rejouer/A%2F1")
         self.assertEqual(replay.href("X", "/api/eleves/paul"), "/rejouer/X?api=/api/eleves/paul")
+        self.assertEqual(replay.href("X", "/api", at=7), "/rejouer/X?at=7")
+        self.assertEqual(replay.href("X", "/api/eleves/paul", 7), "/rejouer/X?api=/api/eleves/paul&at=7")
         self.assertEqual([replay.api_of(p) for p in ("/moi", "/eleve/paul", "/reference/ana")],
                          ["/api", "/api/eleves/paul", "/api/references/ana"])
 

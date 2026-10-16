@@ -69,6 +69,7 @@ class Decision:
     action: str
     fold_bb: Optional[float]  # résultat d'un fold à ce moment (-ce que tu as déjà mis) ; None : pas de fold possible
     theory: Optional[dict[str, float]] = None  # fréquence de chaque action selon la théorie, pour ta main
+    index: int = -1  # l'action de la main (hand.actions), pour la revoir au replayer
 
 
 @dataclass
@@ -113,7 +114,7 @@ def read(hand: Hand, hero: str, theory: Optional["Theory"] = None) -> Optional[P
     effective = hand.effective_stack()
     put = defaultdict(float)
     raises, limpers, raisers = 0, 0, []
-    for a in hand.actions:
+    for i, a in enumerate(hand.actions):
         if a.street != "preflop":
             continue
         if a.kind not in VOLUNTARY:  # blindes et antes
@@ -126,7 +127,7 @@ def read(hand: Hand, hero: str, theory: Optional["Theory"] = None) -> Optional[P
                 fold = None if situation == "vs_limp" and hero == hand.big_blind and raises == 0 else \
                     round(-put[hero] / bb, 2) + 0.0
                 played.decisions.append(Decision(situation, action, fold, theory.strategy(
-                    hand, hero, situation, raisers, played.combo) if theory else None))
+                    hand, hero, situation, raisers, played.combo) if theory else None, i))
         if a.kind in (RAISE, CALL):
             put[a.player] = a.to  # ce qu'il a mis dans la street (blinde comprise)
         if a.kind == RAISE:

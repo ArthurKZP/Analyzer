@@ -189,6 +189,8 @@ class Point:
     pot: float             # le pot avant ta décision (bb)
     size: float            # ta mise ou relance (bb ajoutés)
     reply: Optional[str]   # leur réponse à ta mise ou relance : fold, call, raise
+    hand: Optional[Hand] = None  # la main (ses exemples, dans le détail d'un leak)
+    index: int = -1        # l'action de la main (hand.actions)
 
 
 def points(hand: Hand, hero: str, actions: Iterable[Action]) -> dict[int, Point]:
@@ -212,7 +214,8 @@ def points(hand: Hand, hero: str, actions: Iterable[Action]) -> dict[int, Point]
         if a.kind in (BET, RAISE):
             reply = next((b.kind for b in hand.actions[i + 1:]
                           if b.street == a.street and b.player != hero and b.kind in (FOLD, CALL, RAISE)), None)
-        out[id(a)] = Point(a, (net + put) / hand.bb, intent, a.pot_before / hand.bb, a.amount / hand.bb, reply)
+        out[id(a)] = Point(a, (net + put) / hand.bb, intent, a.pot_before / hand.bb, a.amount / hand.bb, reply,
+                           hand, i)
     return out
 
 
@@ -601,7 +604,7 @@ def _hu_theory(key: str, weights: Optional[dict] = None) -> Optional[float]:
 
 
 def hu_checks(stats: list, hands: list[Hand], hero: str, players: dict[str, PlayerStats],
-              plays: list[handplay.Played]) -> dict[str, Check]:
+              plays: list[handplay.Played], points: Optional[dict[str, list[Point]]] = None) -> dict[str, Check]:
     """Les vérifications des écarts nets contre les réguliers, en heads-up. stats : leaks.Stat ; hands : tes mains
     contre les réguliers ; players : les stats de chacun sur ces mains (stats.analyze) ; plays : tes mains de départ
     (handplay.collect, avec la solution préflop)."""
@@ -612,7 +615,7 @@ def hu_checks(stats: list, hands: list[Hand], hero: str, players: dict[str, Play
         return {}
     opponents = {h.opponent_of(hero) for h in hands} - {None, hero}
     weights = stake_charts.mix(hands)
-    found = hu_points(hands, hero)
+    found = points if points is not None else hu_points(hands, hero)
     out: dict[str, Optional[Check]] = {}
     for family in studyspots.FAMILIES:
         for role, other in (("agresseur", "defenseur"), ("defenseur", "agresseur")):
@@ -713,7 +716,7 @@ def ring_mirrors(situation: str, position: str, word: str) -> tuple[tuple[str, i
 
 
 def ring_checks(stats: list, hands: list[Hand], hero: str, pots: dict, plays: list[handplay.Played],
-                kinds: Optional[dict] = None) -> dict[str, Check]:
+                kinds: Optional[dict] = None, points: Optional[tuple] = None) -> dict[str, Check]:
     """Les vérifications des écarts nets contre les réguliers, aux tables à plusieurs. stats : ring_leaks.stats ;
     hands : tes mains contre les réguliers ; pots : tes pots à deux au flop (ring_leaks._pots) ; plays : tes mains de
     départ (handplay.collect, avec tes charts) ; kinds : le type de tes adversaires."""
@@ -726,7 +729,7 @@ def ring_checks(stats: list, hands: list[Hand], hero: str, pots: dict, plays: li
     kinds = kinds or {}
     out: dict[str, Optional[Check]] = {}
     if measured or any(not k.startswith("pre:") for k in flagged):
-        found, theirs = ring_points(hands, hero, pots)
+        found, theirs = points if points is not None else ring_points(hands, hero, pots)
         for structure, _ in ring_leaks.STRUCTURES:
             families = ring_leaks._families(structure)
             if not families:
@@ -788,18 +791,10 @@ def solver_stat(family: str, key: str, category: str) -> Optional[str]:
     """La stat (clé de leaks.Stat) d'une situation du solveur (theory/review.py : famille du pot, clé « bet:fi: »,
     « face:fo::1 »…, catégorie d'action « fold », « passive », « aggressive »), ou None. Sert à relativiser l'EV
     perdue face au solveur quand l'écart en cause exploite tes adversaires."""
-    if family in studyspots.FAMILIES:
-        side = "o" if coach.aggressor_of(family) == 0 else "i"
-        prefix = f"{family}:"
-        roles = {"agresseur": "", "defenseur": ""}
-    else:
-        info = studyspots.ring_family(family)
-        if not info:
-            return None
-        structure = info["structure"]
-        side = "i" if structure.endswith("_ip") else "o"
-        prefix = f"{structure}:"
-        roles = {"agresseur": "agresseur:", "defenseur": "defenseur:"}
+    found = _solver_side(family)
+    if found is None:
+        return None
+    side, prefix, roles = found
     kind, where, past, *level = key.split(":")
     street, actor = where[0], where[1]
     other = "o" if side == "i" else "i"
@@ -820,3 +815,26 @@ def solver_stat(family: str, key: str, category: str) -> Optional[str]:
             stab = ("f", "") if other == "i" else ("t", "x")
             situation = "stab" if (street, past) == stab else None
     return None if situation is None else f"{prefix}{roles[role]}{situation}"
+
+
+def _solver_side(family: str) -> Optional[tuple[str, str, dict]]:
+    """(le siège de l'agresseur au solveur : « o » hors de position, « i » en position ; le préfixe des clés de ses
+    stats ; le mot de chaque rôle dans ces clés) pour une famille du solveur, ou None."""
+    if family in studyspots.FAMILIES:
+        return ("o" if coach.aggressor_of(family) == 0 else "i"), f"{family}:", {"agresseur": "", "defenseur": ""}
+    info = studyspots.ring_family(family)
+    if not info:
+        return None
+    structure = info["structure"]
+    return ("i" if structure.endswith("_ip") else "o"), f"{structure}:", {"agresseur": "agresseur:",
+                                                                           "defenseur": "defenseur:"}
+
+
+def solver_role(family: str, key: str) -> Optional[str]:
+    """Le rôle du joueur à cette décision du solveur (theory/review.py : « bet:fi: »…) : « agresseur » (il a
+    l'initiative préflop) ou « defenseur » ; None pour une famille inconnue."""
+    found = _solver_side(family)
+    if found is None:
+        return None
+    where = key.split(":")[1]
+    return "agresseur" if where[1] == found[0] else "defenseur"

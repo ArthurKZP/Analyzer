@@ -63,6 +63,37 @@ details.lk-all > .inner-body { padding: 12px 16px; }
 .lk-b.plan { color: var(--series-1); border: 1px solid var(--series-1); }
 .lk-b.chance { color: var(--good); border: 1px dashed var(--good); }
 .lk-v.chance { color: var(--good); font-weight: 600; }
+.lk-cats { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin: 4px 0 16px; }
+.lk-cat { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--page); }
+.lk-cat a.nm { font-weight: 700; font-size: 15px; color: var(--ink); text-decoration: none; }
+.lk-cat a.nm:hover { color: var(--series-1); }
+.lk-cat .ct { font-size: 13px; color: var(--ink-2); margin-top: 2px; }
+.lk-cat .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+ol.lk-mini { margin: 6px 0 0; padding-left: 22px; font-size: 13px; }
+ol.lk-mini li { margin: 2px 0; }
+ol.lk-mini li::marker { color: var(--muted); font-weight: 600; }
+.lk-sec { margin-top: 18px; }
+.lk-sec > h3 { margin: 0 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.lk-sec > h3 .n { font-size: 13px; font-weight: 400; color: var(--muted); }
+.lk-sec:target > h3, .lk-list li:target > .lk-t { color: var(--series-1); }
+details.lk-det { margin: 6px 0 0; background: none; border: 0; border-radius: 0; }
+details.lk-det > summary { font-size: 13px; font-weight: 600; color: var(--series-1); cursor: pointer; padding: 0;
+  border: 0; }
+details.lk-det > .lk-det-body { margin: 6px 0 4px; padding: 8px 12px; border-left: 2px solid var(--border);
+  background: var(--surface); border-radius: 0 8px 8px 0; }
+.lk-fq { display: grid; grid-template-columns: max-content minmax(120px, 260px) max-content; justify-content: start;
+  gap: 4px 10px; align-items: center; font-size: 13px; margin-bottom: 8px; }
+.lk-fq .lb { color: var(--ink-2); }
+.lk-fq .tr { position: relative; height: 8px; border-radius: 4px; background: var(--grid); overflow: hidden; }
+.lk-fq .tr i { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+.lk-fq .tr i.me { background: var(--series-1); }
+.lk-fq .tr i.th { background: var(--axis); }
+.lk-fq .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+.lk-fq .v .n { font-weight: 400; color: var(--muted); font-size: 12px; }
+.lk-xi { font-size: 13px; color: var(--ink-2); margin: 4px 0; }
+table.lk-x td { vertical-align: middle; }
+table.lk-x td.res.neg { color: var(--alert); }
+table.lk-x td.go, table.lk-x td.num { white-space: nowrap; }
 """
 
 SCRIPT = PICKER_SCRIPT + """
@@ -117,6 +148,21 @@ SCRIPT = PICKER_SCRIPT + """
     });
   });
   refresh();
+})();
+"""
+
+# Un leak choisi dans l'aperçu (ou dans l'adresse) : son détail s'ouvre.
+DETAIL_SCRIPT = """
+(function () {
+  function open(hash) {
+    var el = hash && hash.length > 1 ? document.getElementById(hash.slice(1)) : null;
+    var d = el ? el.querySelector('details.lk-det') : null;
+    if (d) d.open = true;
+  }
+  document.querySelectorAll('ol.lk-mini a').forEach(function (a) {
+    a.addEventListener('click', function () { open(a.getAttribute('href')); });
+  });
+  open(location.hash);
 })();
 """
 
@@ -229,33 +275,127 @@ def _follow(leak: leaks.Leak, follows: Optional[dict], track: str) -> str:
             "Suivre ce leak à partir d'aujourd'hui</button>")
 
 
+def _freq(leak: leaks.Leak) -> str:
+    """Sa fréquence face à celle de la théorie (ou à sa fourchette), en deux barres."""
+    if not leak.freq:
+        return ""
+    p, reference, band, n = leak.freq
+
+    def bar(lo: float, hi: float, cls: str) -> str:
+        width = max(100 * (hi - lo), 0.8)
+        return f'<span class="tr"><i class="{cls}" style="left:{100 * lo:.1f}%;width:{width:.1f}%"></i></span>'
+
+    out = (f'<span class="lb">Joué</span>{bar(0.0, p, "me")}'
+           f'<span class="v">{round(100 * p)} % <span class="n">sur {n} occasion{"s" if n > 1 else ""}</span></span>')
+    if reference is not None:
+        out += (f'<span class="lb">Théorie</span>{bar(0.0, reference, "th")}'
+                f'<span class="v">{round(100 * reference)} %</span>')
+    elif band is not None:
+        out += (f'<span class="lb">Repère</span>{bar(band[0], band[1], "th")}'
+                f'<span class="v">{round(100 * band[0])}–{round(100 * band[1])} %</span>')
+    return f'<div class="lk-fq">{out}</div>'
+
+
+def _examples(leak: leaks.Leak, api: str, standalone: bool) -> str:
+    """Ses décisions où se joue l'écart (leak_examples), les plus parlantes d'abord, chacune à revoir."""
+    ex = leak.examples
+    if ex is None or not ex.shown:
+        return ""
+    boards = any(e.board for e in ex.shown)
+    rows = []
+    for e in ex.shown:
+        link = ""
+        if not standalone:
+            if e.solver is not None:
+                href, text = f"/explorateur/{quote(e.hand, safe='')}#d={e.solver}", "Au solveur ↗"
+            else:
+                href, text = replay.href(e.hand, api, e.at), "Rejouer ↗"
+            link = (f'<a class="open" href="{escape(href)}" target="_blank" rel="noopener" '
+                    f'title="Main {escape(e.hand)}">{text}</a>')
+        value = "–" if e.value is None else f"{num(e.value, 1, sign=True)} bb"
+        neg = " neg" if e.value is not None and e.value < -0.005 else ""
+        rows.append(f'<tr><td>{cards_html(e.cards)}</td>{f"<td>{cards_html(e.board)}</td>" if boards else ""}'
+                    f'<td>{escape(e.did)}</td><td class="small">{escape(e.why) or "–"}</td>'
+                    f'<td class="num res{neg}">{value}</td>'
+                    + (f'<td class="small">{escape(e.hand)}</td>' if standalone else f'<td class="go">{link}</td>')
+                    + "</tr>")
+    shown = len(ex.shown)
+    times = f"{ex.total} fois"
+    intro = f"{times} ; ici les {shown} plus parlantes : {ex.order}." if ex.total > shown else f"{times} : {ex.order}."
+    head = ("<th>Main</th>" + ("<th>Board</th>" if boards else "") + "<th>Joué</th><th>Pourquoi cet exemple</th>"
+            f'<th class="num">{escape(ex.value_label)}</th><th>{"Coup" if standalone else ""}</th>')
+    return (f'<div class="lk-xi">{escape(intro)}</div><div class="scroll"><table class="stats lk-x"><thead><tr>{head}'
+            f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>')
+
+
 def _items(found: list[leaks.Leak], pages: str, standalone: bool, badge: bool = True, solve: bool = False,
-           follows: Optional[dict] = None, track: str = "") -> str:
-    """Les leaks, l'essentiel visible (le titre, la preuve en une ligne, le conseil) ; la vérification en jeu, ses
-    preuves et la main la plus chère sous « Pourquoi ? » ; solve : le bouton qui passe ses mains au solveur ; follows :
-    les leaks suivis dans le temps (tracking.followed), pour les suivre d'ici."""
+           follows: Optional[dict] = None, track: str = "", ranks: Optional[list[int]] = None) -> str:
+    """Les leaks, l'essentiel visible (le titre, la preuve en une ligne, le conseil) ; leur détail replié : sa
+    fréquence face à la théorie, ses mains (les exemples), la vérification en jeu et ses preuves ; solve : le bouton
+    qui passe ses mains au solveur ; follows : les leaks suivis dans le temps (tracking.followed), pour les suivre
+    d'ici ; ranks : leur rang parmi tous les leaks (numéro et ancre « lk-<rang> »)."""
     drills = {} if standalone else _drills()
+    api = replay.api_of(pages)
     out = []
-    for x in found:
-        detail = _verified(x) + _example(x, standalone)
+    for k, x in enumerate(found):
+        proofs = _verified(x) + _example(x, standalone)
+        examples = _examples(x, api, standalone)
+        detail = _freq(x) + examples + (f'<div class="lk-v"><b>Les preuves</b></div>{proofs}'
+                                        if proofs and (examples or x.freq) else proofs)
+        if x.examples is not None and x.examples.total:
+            label = f"Le détail : fréquence et mains ({x.examples.total})"
+        else:
+            label = "Le détail : fréquence et preuves" if x.freq else "Pourquoi ? Les preuves"
         action = _solve_button(x) if solve and not standalone else ""
         action += "" if standalone else _follow(x, follows, track)
-        out.append(f'<li><div class="lk-t">{escape(x.title)} {_conf(x.confidence)}'
+        rank = f' value="{ranks[k]}" id="lk-{ranks[k]}"' if ranks else ""
+        folded = (f'<details class="lk-det"><summary>{escape(label)}</summary><div class="lk-det-body">{detail}'
+                  "</div></details>") if detail else ""
+        out.append(f'<li{rank}><div class="lk-t">{escape(x.title)} {_conf(x.confidence)}'
                    f'{f" {_badge(x.check)}" if badge and x.check else ""}</div>'
                    f'<div class="lk-e">{escape(x.evidence)}</div>'
                    f'<div class="lk-a">→ {escape(x.advice)}{_leak_link(x, pages, drills, standalone)}</div>'
-                   f'{_related(x)}{more("Pourquoi ? Les preuves", detail) if detail else ""}{action}</li>')
+                   f'{_related(x)}{folded}{action}</li>')
     return "".join(out)
 
 
+def _solidity(solid: int, n: int) -> str:
+    """« dont 2 solides », « tous solides », « indicatif » : la confiance des leaks d'une catégorie."""
+    if solid == n:
+        return "solide" if n == 1 else "tous solides"
+    if not solid:
+        return "indicatif" if n == 1 else "tous indicatifs"
+    return f"dont {solid} solide{'s' if solid > 1 else ''}"
+
+
+def _short(title: str, category: str) -> str:
+    """Le titre d'un leak dans sa catégorie (« Préflop · Bouton : open » -> « Bouton : open »)."""
+    return title.split(" · ", 1)[1] if category == "preflop" and title.startswith("Préflop · ") else title
+
+
 def leaks_html(report: leaks.Report, pages: str, standalone: bool, follows: Optional[dict] = None) -> str:
+    """Les leaks par catégorie : d'abord un aperçu (une carte par catégorie, ses leaks en une ligne), puis chaque
+    catégorie et ses leaks, leur détail (fréquence, mains) à déplier."""
     if not report.leaks:
         return ('<p class="note">Pas de leak net pour l\'instant : pas assez de mains contre les réguliers, ou un jeu '
                 'proche de la théorie dans les situations mesurées (ou des écarts qui rapportent, plus bas). Les mains '
                 'analysées par le solveur affinent le rapport.</p>')
     track = f"{pages}/suivi{format_query(report.table_format)}"
-    items = _items(report.leaks, pages, standalone, solve=True, follows=follows, track=track)
-    return f'<ol class="lk-list">{items}</ol>'
+    cards, sections = [], []
+    for (key, name, what), items in leaks.by_category(report.leaks):
+        n = len(items)
+        solid = sum(x.confidence == "solide" for _, x in items)
+        s_ = "s" if n > 1 else ""
+        mini = "".join(f'<li value="{k}"><a href="#lk-{k}">{escape(_short(x.title, key))}</a></li>' for k, x in items)
+        cards.append(f'<div class="lk-cat"><a class="nm" href="#lk-c-{key}">{escape(name)}</a>'
+                     f'<div class="ct">{n} leak{s_}, {_solidity(solid, n)}</div>'
+                     f'<div class="sub">{escape(what)}</div><ol class="lk-mini">{mini}</ol></div>')
+        body = _items([x for _, x in items], pages, standalone, solve=True, follows=follows, track=track,
+                      ranks=[k for k, _ in items])
+        sections.append(f'<section class="lk-sec" id="lk-c-{key}"><h3>{escape(name)} <span class="n">{n} leak{s_}'
+                        f'</span></h3><ol class="lk-list">{body}</ol></section>')
+    return (f'<p class="lk-xi">Par catégorie, numérotés du plus important au moins important : choisis-en un pour son '
+            f'détail (sa fréquence, ses mains).</p><div class="lk-cats">{"".join(cards)}</div>{"".join(sections)}')
 
 
 def kept_html(report: leaks.Report, pages: str, standalone: bool) -> str:
@@ -527,13 +667,17 @@ def _hints(report: leaks.Report, standalone: bool) -> str:
 
 
 LEAKS_NOTE = (
+    "Rangés par catégorie (préflop, après le flop à l'initiative, en défense), numérotés dans l'ordre d'importance. "
     "Les grosses erreurs d'abord : les pertes confirmées (mesurées sur ses mains, face au fold ou au solveur, ou "
     "confirmées par les réponses de ses adversaires), puis les écarts encore à vérifier ; ensuite par confiance et par "
     "poids (ce qu'elles coûtent en bb/100 ; à défaut, fréquence de la situation × écart × ce que la décision met en "
     "jeu). Chaque écart à la théorie est vérifié en jeu : ce qu'il rapporte ou coûte sur ses mains (leur fold face à "
     "ses mises comparé à celui de la théorie, le résultat des mains jouées en plus ou en moins), la réponse de ses "
     "adversaires, le plan de jeu suggéré ; ceux qui rapportent sont à part (« Les écarts justifiés »). Seules les mains "
-    "contre les réguliers comptent : contre un récréatif, l'exploitation prime sur la théorie.")
+    "contre les réguliers comptent : contre un récréatif, l'exploitation prime sur la théorie. Le détail de chaque "
+    "leak montre sa fréquence et ses mains : ses décisions dans le sens de l'écart, les plus parlantes d'abord (avant "
+    "le flop, celles que la théorie joue le moins ainsi ; après le flop, ses mains les plus faibles quand il en fait "
+    "trop, les plus fortes quand il n'en fait pas assez ; face au solveur, les plus chères).")
 
 
 def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = True, standalone: bool = False,
@@ -650,4 +794,5 @@ def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = T
 """
     style = f"<style>{REVIEW_STYLE}{STYLE}{OPP_STYLE}</style>"
     title = f"Leakfinding tables à plusieurs — {who}" if ring else f"Leakfinding — {who}"
-    return html_page(title, style + body, embed, script="" if standalone else SCRIPT + KIND_SCRIPT + OPP_SCRIPT)
+    return html_page(title, style + body, embed,
+                     script=DETAIL_SCRIPT + ("" if standalone else SCRIPT + KIND_SCRIPT + OPP_SCRIPT))

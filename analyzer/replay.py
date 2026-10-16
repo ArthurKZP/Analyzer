@@ -57,6 +57,7 @@ def api_of(pages: str) -> str:
     return "/api"
 
 
-def href(hand_id: str, api: str = "/api") -> str:
-    """L'adresse du replayer pour cette main, dans l'espace de api."""
-    return f"/rejouer/{quote(hand_id, safe='')}" + ("" if api == "/api" else f"?api={quote(api, safe='/')}")
+def href(hand_id: str, api: str = "/api", at: Optional[int] = None) -> str:
+    """L'adresse du replayer pour cette main, dans l'espace de api ; at : placée sur cette action (hand.actions)."""
+    query = ([] if api == "/api" else [f"api={quote(api, safe='/')}"]) + ([] if at is None else [f"at={at}"])
+    return f"/rejouer/{quote(hand_id, safe='')}" + ("?" + "&".join(query) if query else "")

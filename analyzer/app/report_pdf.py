@@ -234,7 +234,7 @@ def _curve(flow: Flow) -> None:
 
 
 def _leaks(flow: Flow) -> None:
-    items = flow.s.report.leaks
+    items = flow.s.report.leaks[:leaks.REPORT_TOP]
     flow.heading("Les leaks à travailler", "classés par confiance, puis par poids", keep=70)
     if not items:
         flow.paragraph("Pas de leak net pour l'instant : pas assez de mains contre les réguliers, ou un jeu proche de "

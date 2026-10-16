@@ -190,16 +190,17 @@ un spot en favori.
 
 ## Replayer
 
-Toute main jouée se revoit au **replayer** (`/rejouer/<main>`, il s'ouvre dans un nouvel onglet) : heads-up ou table à
-plusieurs, finie au préflop, sur un fold ou à l'abattage. La table avec chaque joueur à sa place (position, bouton,
-tapis qui baisse à chaque mise, sa dernière action, les mises devant lui), le tableau carte par carte et le pot ;
-tes cartes toujours visibles, celles des autres à la fin quand elles ont été montrées (case « Montrer les cartes
-connues » pour les voir avant). Lecture action par action (flèches ← →, Origine/Fin, Espace pour la lecture
+Toute main jouée se revoit au **replayer** (`/rejouer/<main>`, il s'ouvre dans un nouvel onglet) : heads-up ou table
+à plusieurs, finie au préflop, sur un fold ou à l'abattage. La table avec chaque joueur à sa place (position,
+bouton, tapis qui baisse à chaque mise, sa dernière action, les mises devant lui), le tableau carte par carte et le
+pot ; tes cartes toujours visibles, celles des autres à la fin quand elles ont été montrées (case « Montrer les
+cartes connues » pour les voir avant). Lecture action par action (flèches ← →, Origine/Fin, Espace pour la lecture
 automatique), le déroulé street par street à côté (un clic y mène à l'action), et à la fin ce que chacun récupère,
 son résultat et l'EV all-in. Les liens **rejouer ↗** y mènent depuis le préflop des tables à plusieurs, les mains de
-départ, le Leakfinding (une main sans spot au solveur), les exemples d'un joueur de référence et l'entraîneur ;
-« Ouvrir au solveur ↗ » mène à l'explorateur quand le coup est allé au flop à deux. Une main heads-up se rejoue aussi
-dans le visualiseur de spots (*Mes mains › Heads-up*). Code : `analyzer/replay.py`, `app/static/replayer.*`.
+départ, le Leakfinding (une main sans spot au solveur, et les mains d'un leak : le replayer s'ouvre alors sur la
+décision, `?at=<n>`), les exemples d'un joueur de référence et l'entraîneur ; « Ouvrir au solveur ↗ » mène à
+l'explorateur quand le coup est allé au flop à deux. Une main heads-up se rejoue aussi dans le visualiseur de spots
+(*Mes mains › Heads-up*). Code : `analyzer/replay.py`, `app/static/replayer.*`.
 
 ## Préflop vs solveur
 
@@ -717,10 +718,22 @@ les héros de ses historiques sont lui, le choix par défaut). **Deux rapports**
 (toutes ses tables de 3 à 9 joueurs ensemble ; les boutons en haut de la page, le dernier choisi est gardé), voir
 plus bas pour les tables à plusieurs.
 
-- **Les leaks à travailler** : les cinq plus importants, l'essentiel d'abord — le titre, la confiance et le verdict
-  en jeu, la preuve en une ligne, puis quoi faire et où (entraîneur sur la situation, onglet Préflop, plan de jeu) ;
-  **Pourquoi ? Les preuves** déplie la vérification en jeu (voir plus bas), ses preuves et, pour une perte face au
-  solveur, la main la plus chère à revoir. **Les grosses erreurs d'abord** : les pertes confirmées (mesurées sur ses
+- **Les leaks à travailler** : les huit plus importants, **par catégorie d'abord** — *Préflop* (ses ranges, et les
+  mains de départ qui perdent), *Après le flop, à l'initiative* (c-bet, barrels, face aux relances), *Après le flop,
+  en défense* (face aux mises, mises quand l'agresseur checke) : une carte par catégorie, avec le nombre de leaks,
+  leur confiance et leurs titres numérotés du plus important au moins important (un clic ouvre son détail). Puis
+  chaque catégorie et ses leaks, l'essentiel visible — le titre, la confiance et le verdict en jeu, la preuve en une
+  ligne, puis quoi faire et où (entraîneur sur la situation, onglet Préflop, plan de jeu). **Le détail : fréquence
+  et mains** déplie sa fréquence face à la théorie (deux barres : joué, théorie ou repère), **ses mains** — ses
+  décisions dans le sens de l'écart, les plus parlantes d'abord : avant le flop, celles que la théorie joue le plus
+  souvent autrement (un open de T2o que la théorie folde à 100 %), avec ce qu'elle fait de sa main et le résultat
+  par rapport au fold ; après le flop, ses mains les plus faibles quand il en fait trop (miser, payer, relancer),
+  les plus fortes quand il n'en fait pas assez (checker, folder), avec ce qu'il avait et ce que le coup a rapporté à
+  partir de là ; face au solveur, ses erreurs les plus chères, avec ce que joue le solveur ; une main de départ qui
+  perd, ses coups les plus coûteux. Chacune se rejoue d'un clic (*Rejouer ↗* : le replayer s'ouvre sur la décision,
+  la main entière à dérouler ; *Au solveur ↗* pour une main analysée). Sous les mains, la vérification en jeu (voir
+  plus bas) et ses preuves, et pour une perte face au solveur la main la plus chère à revoir. Le PDF et la
+  présentation gardent les cinq premiers. **Les grosses erreurs d'abord** : les pertes confirmées (mesurées sur ses
   mains, face au fold ou au solveur, ou confirmées par les réponses de ses adversaires) passent devant les écarts
   encore à vérifier ; puis par confiance et par poids — ce qu'elles coûtent en bb/100 quand c'est mesuré, sinon
   fréquence de la situation × écart × ce que la décision met en jeu (le pot double à peu près à chaque street et
@@ -1647,7 +1660,9 @@ analyzer/
   pdfwriter.py         PDF sans dépendance : pages A4, texte Helvetica (accents), symboles des cartes, formes, courbes
   pptxwriter.py        PowerPoint sans dépendance : diapositives 16:9, textes, formes, tableaux, courbes, notes
   leaks.py             leakfinding : stats face à la théorie (repère ramené à sa taille), revue du solveur, mains à
-                       revoir, leaks prioritaires et leaks liés
+                       revoir, leaks prioritaires et leaks liés, leurs catégories
+  leak_examples.py     leakfinding : les exemples d'un leak, ses décisions dans le sens de l'écart (les plus
+                       parlantes d'abord)
   leakcheck.py         leakfinding : chaque écart vérifié en jeu (ce qu'il rapporte ou coûte, la réponse des
                        adversaires, le plan de jeu) : fuite ou exploitation
   ring_leaks.py        leakfinding aux tables à plusieurs : réguliers et récréatifs, préflop face aux charts, après le
