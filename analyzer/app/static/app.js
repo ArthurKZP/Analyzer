@@ -12,8 +12,8 @@
     // étude du field : le leakfinding de tes adversaires (réguliers, récréatifs), les bluffs des réguliers en heads-up
     field: [['regs', 'Réguliers'], ['recs', 'Récréatifs'], ['bluffs', 'Bluffs des réguliers']],
     parametres: [['general', 'Général'], ['joueurs', 'Joueurs et alias'], ['ranges', 'Ranges préflop']],
-    eleve: [LEAKS_GROUP, PREFLOP_GROUP, ['Ses mains', [['spots', 'Heads-up'], ['tables', 'Tables à plusieurs']]],
-      ['importer', 'Importer']],
+    eleve: [['bilan', 'Bilan'], LEAKS_GROUP, PREFLOP_GROUP,
+      ['Ses mains', [['spots', 'Heads-up'], ['tables', 'Tables à plusieurs']]], ['importer', 'Importer']],
     // un joueur de référence : la comparaison avec toi, sa value et ses bluffs, puis son jeu analysé comme le tien
     reference: [['comparaison', 'Toi et lui'], ['lignes', 'Value et bluffs'], ['bilan', 'Bilan'], PREFLOP_GROUP,
       ['tables', 'Ses coups à plusieurs']],
@@ -579,7 +579,7 @@
     };
     const quoted = (names) => names.map((n) => '« ' + n + ' »').join(', ');
     const role = (p) => (p.role === 'reference' ? 'joueur de référence : ' + p.reference
-      : p.role === 'other' ? 'décoché dans Paramètres' : student ? '' : 'toi');
+      : p.role === 'other' ? (student ? 'pas l\'élève' : 'décoché dans Paramètres') : student ? '' : 'toi');
     const checks = [];
     const remove = el('button', { type: 'button', class: 'primary danger', disabled: true }, 'Supprimer leurs mains');
     const picked = () => checks.filter((c) => c.checked).map((c) => c.value);
@@ -625,6 +625,7 @@
         window.alert(err.message || String(err));
       }
     });
+    if (student && (view.pseudos.length || view.extra.length)) box.append(choosePseudos(view, student));
     box.append(el('h3', {}, 'Mains par pseudo (' + view.pseudos.length + ')'));
     if (note) box.append(el('p', { class: 'small', role: 'status' }, note));
     if (rows.length) {
@@ -636,8 +637,9 @@
         el('p', { class: 'muted small' }, 'Chaque historique marque un pseudo comme héros : ce sont les mains importées '
           + 'de son compte. Supprimer efface ces mains de la base (pas celles où ce pseudo n\'est qu\'un joueur de la '
           + 'table) ; une main qu\'un autre de ces historiques contient aussi revient de ce point de vue. Les imports '
-          + 'suivants écartent ses mains. Pour seulement sortir un pseudo de tes analyses sans rien effacer : '
-          + 'Paramètres.'));
+          + 'suivants écartent ses mains. Pour seulement sortir un pseudo ' + (student
+          ? 'de ses analyses sans rien effacer : décoche-le dans « Ses pseudos ».' : 'de tes analyses sans rien '
+          + 'effacer : Paramètres.')));
     }
     if (view.removed.length) {
       const back = view.removed.map((r) => {
@@ -668,6 +670,49 @@
         el('p', { class: 'muted small' }, '« Rétablir » remet ses mains depuis les historiques gardés, et les imports '
           + 'suivants les gardent à nouveau.'));
     }
+  }
+
+  // Les pseudos d'un élève : ceux que ses historiques marquent comme héros (sur GGPoker : « Hero »), et d'autres qui
+  // jouent dans ses mains ; seules les mains de ceux cochés sont les siennes (aucun coché : tous les héros).
+  function choosePseudos(view, student) {
+    const chosen = new Set(view.chosen);
+    const message = el('p', { class: 'small', 'aria-live': 'polite' });
+    const option = (name, detail, checked) => el('label', { class: 'ref-opt' },
+      el('input', { type: 'checkbox', value: name, checked }),
+      el('span', {}, el('b', {}, name), ' ', el('span', { class: 'muted small' }, detail)));
+    const list = el('div', { class: 'pseudo-pick' },
+      view.pseudos.map((p) => option(p.name, (p.sites.length ? p.sites.join(', ') + ' · ' : '') + count(p.hands)
+        + ' main(s) où il est le héros', !chosen.size || chosen.has(p.name))),
+      view.extra.map((p) => option(p.name, count(p.hands) + ' main(s) sans héros marqué', true)));
+    const other = el('input', { type: 'text', maxlength: '60', placeholder: 'Autre pseudo (présent dans ses mains)',
+      'aria-label': 'Autre pseudo de l\'élève' });
+    const save = el('button', { type: 'submit', class: 'primary' }, 'Enregistrer ses pseudos');
+    const form = el('form', { class: 'pseudo-form', onsubmit: async (e) => {
+      e.preventDefault();
+      const names = [...list.querySelectorAll('input:checked')].map((i) => i.value);
+      if (other.value.trim()) names.push(other.value.trim());
+      if (!names.length) { message.textContent = 'Coche au moins un pseudo.'; return; }
+      const all = view.pseudos.every((p) => names.includes(p.name)) && names.length === view.pseudos.length;
+      save.disabled = true;
+      message.textContent = 'Relecture de ses mains…';
+      try {
+        const res = await fetch(pseudoApi(student) + '/choisir', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: all ? [] : names }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Enregistrement impossible.');
+        frame.dataset.src = '';
+        await loadStudents();
+        renderHeader();
+        refreshImported(student);
+      } catch (err) {
+        save.disabled = false;
+        message.textContent = err.message || String(err);
+      }
+    } }, list, el('div', { class: 'student-form' }, other, save));
+    return el('div', { class: 'pseudo-choice' }, el('h3', {}, 'Ses pseudos'),
+      el('p', { class: 'muted small' }, 'Coche les pseudos de l\'élève sur tous ses sites (sur GGPoker, son pseudo '
+        + 'dans les historiques est « Hero ») : seules les mains où l\'un d\'eux est le héros sont analysées, sous un '
+        + 'seul nom. Tous cochés : tous les héros de ses historiques sont lui.'), form, message);
   }
 
   // Les historiques importés : retirer les mains de l'un d'eux (il reste gardé, pour le rétablir).

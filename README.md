@@ -70,7 +70,8 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   tes fréquences face aux charts et tes écarts main par main ; une table sans charts à elle prend ceux du 6-max à
   même nombre de joueurs derrière, et les mains contre les récréatifs sont exclues. **Mes mains** : *Heads-up* (le
   visualiseur de spots, voir plus bas) et *Tables à plusieurs* (tes coups à deux joueurs au flop, à ouvrir au
-  solveur). Un élève a les mêmes onglets (*Leaks*, *Préflop*, *Ses mains*), plus *Importer*.
+  solveur). Un élève a les mêmes onglets (*Bilan* avec ses courbes, *Leaks*, *Préflop*, *Ses mains*), plus
+  *Importer*.
 - **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Réguliers* et *Récréatifs* : le
   leakfinding de ceux que tu croises le plus, par limites (micro, milieu, hautes), chacun avec ses leaks à exploiter
   et ce que montrent ses lignes, puis sa fiche détaillée (voir *Étude du field : le leakfinding de tes
@@ -680,12 +681,16 @@ d'abord) ; la durée estimée s'affiche avant de lancer.
 
 ## Leakfinding (toi et tes élèves)
 
-Le rapport de ce qu'un joueur doit travailler en priorité : onglet *Leaks › À travailler* de *Mon jeu* pour toi, et menu
-*Élèves* pour tes élèves. Chaque élève a son espace dans la base de données (ses historiques et ses mains,
-sauvegardés ; son dossier `~/.analyzer/eleves/<élève>/` sert de boîte d'arrivée) : ajoute-le
-(nom, et son pseudo à la table si tu le connais), importe les historiques qu'il t'envoie (de tous les sites lus par
-Merlin), et son rapport se construit. **Deux rapports** : *Heads-up* et *Tables à plusieurs* (toutes ses tables de 3 à 9 joueurs
-ensemble ; les boutons en haut de la page, le dernier choisi est gardé), voir plus bas pour les tables à plusieurs.
+Le rapport de ce qu'un joueur doit travailler en priorité : onglet *Leaks › À travailler* de *Mon jeu* pour toi, et
+menu *Élèves* pour tes élèves. Chaque élève a son espace dans la base de données (ses historiques et ses mains,
+sauvegardés ; son dossier `~/.analyzer/eleves/<élève>/` sert de boîte d'arrivée) : ajoute-le (nom, et son pseudo à
+la table si tu le connais), importe les historiques qu'il t'envoie (de tous les sites lus par Merlin, GGPoker
+compris : son pseudo y est « Hero »), et son rapport se construit. Dans son onglet *Importer*, **Ses pseudos** :
+coche ceux qui sont les siens parmi les héros de ses historiques (sur tous ses sites), ou ajoute un pseudo qui joue
+dans ses mains ; seules les mains où l'un d'eux est le héros sont analysées, sous un seul nom (tous cochés : tous
+les héros de ses historiques sont lui, le choix par défaut). **Deux rapports** : *Heads-up* et *Tables à plusieurs*
+(toutes ses tables de 3 à 9 joueurs ensemble ; les boutons en haut de la page, le dernier choisi est gardé), voir
+plus bas pour les tables à plusieurs.
 
 - **Les leaks à travailler** : les cinq plus importants, l'essentiel d'abord — le titre, la confiance et le verdict
   en jeu, la preuve en une ligne, puis quoi faire et où (entraîneur sur la situation, onglet Préflop, plan de jeu) ;
@@ -749,13 +754,15 @@ ensemble ; les boutons en haut de la page, le dernier choisi est gardé), voir p
 - **Exporter** (sous les leaks) : *le rapport*, la même page en fichier autonome, sans les boutons de l'application,
   à envoyer à l'élève. Le coach a l'outil *leakfinding* : « Écris le rapport de coaching de Paul » dans
   l'application Claude rédige un rapport à partir de ces données.
-- **Synthèse PDF** : l'essentiel en deux pages environ (A4) — les chiffres clés, la courbe des résultats (réel et EV
-  all-in), les leaks à travailler (avec ce qu'en dit la vérification en jeu), les écarts justifiés, les écarts les
-  plus importants, ce que dit le solveur, les mains à revoir (cartes en quatre couleurs) et, s'il y a lieu, quoi
-  changer contre les récréatifs ; sur la période choisie, qu'elle rappelle. Fait sans dépendance (`analyzer/pdfwriter.py` : les polices standard des lecteurs PDF, rien à
-  embarquer, une quinzaine de Ko).
+- **Synthèse PDF** : l'essentiel en deux pages environ (A4) — les chiffres clés, la courbe des résultats (réel, EV
+  all-in, à l'abattage en bleu, sans abattage en rouge), les leaks à travailler (avec ce qu'en dit la vérification
+  en jeu), les écarts justifiés, les écarts les plus importants, ce que dit le solveur, les mains à revoir (cartes
+  en quatre couleurs) et, s'il y a lieu, quoi changer contre les récréatifs ; sur la période choisie, qu'elle
+  rappelle. Fait sans dépendance (`analyzer/pdfwriter.py` : les polices standard des lecteurs PDF, rien à embarquer,
+  une quinzaine de Ko).
 - **Présentation PowerPoint** (Leakfinding d'un élève) : de quoi mener la séance, une idée par diapositive — où en
-  est l'élève (chiffres clés), la courbe de ses résultats (réel et EV all-in), ses leaks puis chacun des trois
+  est l'élève (chiffres clés), la courbe de ses résultats (réel, EV all-in, à l'abattage en bleu et sans abattage
+  en rouge), ses leaks puis chacun des trois
   premiers (sa fréquence face à la théorie, ce que disent ses mains, quoi travailler, la main la plus chère), ses
   écarts à la théorie, ce que dit le solveur, les mains à revoir ensemble (cartes en quatre couleurs), quoi changer
   contre les récréatifs et le plan de travail d'ici la prochaine séance. Chaque diapositive a ses **notes pour le coach** (questions à poser, chiffres

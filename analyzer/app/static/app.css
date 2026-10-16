@@ -169,6 +169,8 @@ a.student:hover { border-color: var(--series-1); }
 .ref-form legend { font-weight: 600; margin-bottom: 4px; padding: 0; }
 .ref-opt { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
 .ref-opt input { margin: 0; flex: none; }
+.pseudo-pick { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; }
+.pseudo-choice { margin-bottom: 18px; }
 .student-form input { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
   background: var(--surface); color: var(--ink); flex: 1 1 200px; }
 .welcome h2 { font-size: 18px; margin: 0 0 8px; }

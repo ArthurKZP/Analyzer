@@ -251,6 +251,11 @@ class Library:
         if self.is_me and not self.hero_override:  # tes pseudos réunis sous ton nom (Paramètres)
             hero, mine, pseudo_set, owners = self._group_me(hands, pseudos, conf)
             snapshot.update(path="moi", mine=pseudo_set, owners=owners)
+        elif self.chosen_pseudos():  # les pseudos choisis de l'élève : seules leurs mains, sous un seul nom
+            chosen = self.chosen_pseudos()
+            hero = self._chosen_hero(pseudos, chosen, mapping)
+            mine = self._claim_chosen(hands, chosen, hero)
+            snapshot = dict(snapshot, path="choisis", chosen=tuple(chosen))
         else:  # --hero (ligne de commande) ou le pseudo de l'élève, sinon le plus fréquent : ses pseudos sous celui-là
             hero = mapping.get(self.hero_override, self.hero_override) if self.hero_override else detect_hero(hands)
             unify_hero(hands, hero)
@@ -296,6 +301,11 @@ class Library:
             if name != self.hero or (not conf["hero"] and len(top) > 1 and top[0][1] == top[1][1]):
                 return False  # ton nom (le pseudo le plus fréquent) change, ou deux pseudos à égalité
             mine = self._claim(owners, name)
+        elif snap["path"] == "choisis":  # les pseudos choisis de l'élève : comme au chargement
+            if tuple(self.chosen_pseudos()) != snap["chosen"]:
+                return False
+            mine = self._claim_chosen(new, list(snap["chosen"]), self.hero)
+            counts = snap.get("owners")
         else:  # le pseudo donné (un élève) : comme au chargement
             unify_hero(new, self.hero)
             mine = [h for h in new if self.hero and self.hero in h.seats and (not h.hero or h.hero == self.hero)]
@@ -351,6 +361,62 @@ class Library:
             self.players_seen = Counter(name for h in mine for name in h.seats)
             self.unmarked_seen = Counter()
             self._select()
+
+    def chosen_pseudos(self) -> list[str]:
+        """Les pseudos choisis de l'élève (vide : tous les héros de ses historiques ; jamais ailleurs que chez un
+        élève)."""
+        if not (self.space_key or "").startswith(students.PREFIX) or self.space_id is None:
+            return []
+        return students.pseudos(self.space_key[len(students.PREFIX):])
+
+    def _chosen_hero(self, pseudos: Counter, chosen: list[str], mapping: dict) -> str:
+        """Le nom de l'élève dans ses analyses : le pseudo donné à sa création, sinon celui de ses pseudos choisis qui
+        a le plus de mains."""
+        if self.hero_override:
+            return mapping.get(self.hero_override, self.hero_override)
+        counts: Counter = Counter()
+        for (pseudo, _), n in pseudos.items():
+            if pseudo in chosen:
+                counts[pseudo] += n
+        return counts.most_common(1)[0][0] if counts else chosen[0]
+
+    @staticmethod
+    def _claim_chosen(hands: list[Hand], chosen: list[str], hero: str) -> list[Hand]:
+        """Les mains de l'élève : celles dont le héros marqué est un de ses pseudos, ou, sans héros marqué, où l'un
+        d'eux joue ; ce pseudo y prend son nom."""
+        wanted = set(chosen)
+        mine = []
+        for h in hands:
+            marked = h.hero
+            if marked:
+                if marked not in wanted:
+                    continue
+                h.rename(marked, hero)
+            else:
+                present = [p for p in chosen if p in h.seats]
+                if not present:
+                    continue
+                if hero not in h.seats:
+                    h.rename(present[0], hero)
+            if hero in h.seats:
+                mine.append(h)
+        return mine
+
+    def set_chosen_pseudos(self, names: object) -> dict:
+        """Choisit les pseudos de l'élève parmi ceux de ses historiques (une liste vide : tous les héros de ses
+        historiques) ; ValueError : pas un élève, ou un pseudo absent de ses mains."""
+        if not (self.space_key or "").startswith(students.PREFIX):
+            raise ValueError("Seulement pour un élève.")
+        if not (isinstance(names, list) and len(names) <= students.MAX_PSEUDOS
+                and all(isinstance(n, str) and 0 < len(n.strip()) <= 60 for n in names)):
+            raise ValueError("Requête invalide.")
+        known = {p for p, _ in self.hero_pseudos} | set(self.players_seen) | set(self.chosen_pseudos())
+        unknown = [n.strip() for n in names if n.strip() not in known]
+        if unknown:
+            raise ValueError(f"« {unknown[0]} » ne joue dans aucune de ses mains.")
+        students.set_pseudos(self.space_key[len(students.PREFIX):], names)
+        self.reload()
+        return {"pseudos": self.pseudos_view(), "files": self.files_view(), "state": self.summary()}
 
     @staticmethod
     def my_pseudos(pseudos: Counter, conf: dict) -> set[str]:
@@ -2338,7 +2404,8 @@ class Library:
         rôle : « me » (toi, ou l'élève), « other » (décoché dans tes Paramètres : pas toi), « reference » (un joueur de
         référence) ; puis les pseudos dont les mains sont supprimées."""
         conf = settings.load() if self.is_me else None
-        mine = self.my_pseudos(self.hero_pseudos, conf) if conf is not None else None
+        chosen = self.chosen_pseudos()
+        mine = self.my_pseudos(self.hero_pseudos, conf) if conf is not None else set(chosen) if chosen else None
         owners = {p: ref["name"] for ref in conf["references"] for p in ref["pseudos"]} if conf is not None else {}
         rows: dict[str, dict] = {}
         for (pseudo, site), n in self.hero_pseudos.items():
@@ -2352,7 +2419,10 @@ class Library:
                            else "other")
         removed = [{"name": name, "hands": r["hands"], "removed": r["removed"]}
                    for name, r in db_hands.removed_pseudos(self.db, self.space_id).items()]
-        return {"pseudos": sorted(rows.values(), key=lambda r: (-r["hands"], r["name"].lower())), "removed": removed}
+        # les pseudos choisis d'un élève qu'aucun historique ne marque comme héros : ses mains sans héros marqué
+        extra = [{"name": p, "hands": self.unmarked_seen.get(p, 0)} for p in chosen if p not in rows]
+        return {"pseudos": sorted(rows.values(), key=lambda r: (-r["hands"], r["name"].lower())), "removed": removed,
+                "chosen": chosen, "extra": extra, "student": self.space_key.startswith(students.PREFIX)}
 
     def _raw_pseudos(self, names: set[str]) -> set[str]:
         """Ces pseudos tels que les historiques les écrivent (un alias réunit les pseudos qu'il regroupe)."""

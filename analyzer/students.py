@@ -2,7 +2,9 @@
 historiques et ses mains. Son dossier ~/.analyzer/eleves/<identifiant>/ sert de boîte d'arrivée (les historiques
 qu'on y dépose sont importés), comme le dossier de tes mains.
 
-Le pseudo est facultatif : sans lui, le joueur des mains est détecté comme pour tes propres mains.
+Le pseudo est facultatif : sans lui, le joueur des mains est détecté comme pour tes propres mains. Ses pseudos se
+choisissent ensuite parmi ceux de ses historiques (pseudos()) : seules les mains où l'un d'eux est le héros sont les
+siennes ; sans choix, tous les héros de ses historiques sont lui (sur GGPoker, le héros s'appelle « Hero »).
 """
 from __future__ import annotations
 
@@ -11,10 +13,13 @@ from typing import Optional
 
 from . import db
 from .cli import slugify
+from .db import documents
 from .db import hands as db_hands
 from .theory import postflop
 
 PREFIX = "eleve:"
+PSEUDOS = "eleve-pseudos"  # documents : les pseudos choisis de chaque élève
+MAX_PSEUDOS = 200
 
 
 def root() -> Path:
@@ -55,3 +60,19 @@ def create(name: str, pseudo: Optional[str] = None) -> dict:
         return existing
     db_hands.space(db.current(), PREFIX + ident, name, (pseudo or "").strip()[:60] or None)
     return get(ident)
+
+
+def pseudos(ident: str) -> list[str]:
+    """Les pseudos choisis de l'élève (vide : tous les héros de ses historiques)."""
+    data = documents.get(db.current(), PSEUDOS, ident)
+    return list(data.get("pseudos") or []) if isinstance(data, dict) else []
+
+
+def set_pseudos(ident: str, names: list[str]) -> list[str]:
+    """Enregistre ses pseudos (sans doublons, dans l'ordre donné) ; une liste vide revient au choix automatique."""
+    kept = list(dict.fromkeys(n.strip() for n in names if n.strip()))[:MAX_PSEUDOS]
+    if kept:
+        documents.put(db.current(), PSEUDOS, ident, {"pseudos": kept})
+    else:
+        documents.delete(db.current(), PSEUDOS, ident)
+    return kept

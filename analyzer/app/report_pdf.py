@@ -21,7 +21,10 @@ INK, INK2, MUTED = pw.rgb("#0b0b0b"), pw.rgb("#52514e"), pw.rgb("#898781")
 GRID, AXIS = pw.rgb("#e1e0d9"), pw.rgb("#c3c2b7")
 TILE = pw.rgb("#f4f3ef")
 ACCENT = pw.rgb("#2a78d6")
-REAL_LINE, EV_LINE = pw.rgb("#008300"), pw.rgb("#eda100")  # comme le graphique de l'application (trackers)
+# comme le graphique de l'application (les couleurs des trackers) : réel, EV all-in, à l'abattage, sans abattage
+REAL_LINE, EV_LINE, SD_LINE, NOSD_LINE = pw.rgb("#008300"), pw.rgb("#eda100"), pw.rgb("#2a78d6"), pw.rgb("#e34948")
+CURVES = (("Résultat réel", REAL_LINE, 1.5), ("EV all-in", EV_LINE, 1.0), ("À l'abattage", SD_LINE, 1.0),
+          ("Sans abattage", NOSD_LINE, 1.0))
 WIN, LOSS = pw.rgb("#006300"), pw.rgb("#d03b3b")
 HI_BG, LO_BG = pw.rgb("#fbe1d6"), pw.rgb("#dde9f8")  # trop souvent, pas assez (et « solide », « indicatif »)
 WHITE = (1.0, 1.0, 1.0)
@@ -202,7 +205,7 @@ def _curve(flow: Flow) -> None:
     page, top, height = flow.page, flow.y, 150.0
     left, bottom_pad, top_pad = M + 36, 18.0, 16.0
     plot_w, plot_h = W - M - 8 - left, height - bottom_pad - top_pad
-    values = [v for _, net, ev in points for v in (net, ev)] + [0.0]
+    values = [v for point in points for v in point[1:]] + [0.0]
     lo, hi = min(values), max(values)
     if hi - lo < 1:
         lo, hi = lo - 1, hi + 1
@@ -217,14 +220,16 @@ def _curve(flow: Flow) -> None:
         page.line(left, py(tick), left + plot_w, py(tick), color, width)
         page.text(left - 5, py(tick) + 2.6, num(tick, 0), "regular", 7, MUTED, align="right")
         tick += step
-    page.polyline([(px(i), py(ev)) for i, _, ev in points], EV_LINE, 1.0)
-    page.polyline([(px(i), py(net)) for i, net, _ in points], REAL_LINE, 1.5)
+    for k in (4, 3, 2, 1):  # le résultat réel par-dessus
+        _, color, width = CURVES[k - 1]
+        page.polyline([(px(p[0]), py(p[k])) for p in points], color, width)
     page.text(left + plot_w, top + height - 4, f"{num(n, 0)} mains", "regular", 7, MUTED, align="right")
     page.text(left, top + height - 4, "0", "regular", 7, MUTED)
     x = left + 4
-    for label, color in (("Résultat réel", REAL_LINE), ("EV all-in", EV_LINE)):
+    for k, (label, color, _) in enumerate(CURVES, start=1):
         page.line(x, top + 6, x + 14, top + 6, color, 2)
-        x += 18 + page.text(x + 18, top + 8.5, label, "regular", 7.5, INK2) + 14
+        text = f"{label} {num(points[-1][k], 0, sign=True)}"
+        x += 18 + page.text(x + 18, top + 8.5, text, "regular", 7.5, INK2) + 12
     flow.y = top + height + 6
 
 

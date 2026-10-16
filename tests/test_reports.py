@@ -168,6 +168,8 @@ class ReportPdfTest(IsolatedHome):
                          "Mains à revoir", "Heads-up · 4 mains · le 10/01/2026"):
             self.assertIn(expected, text)
         self.assertFalse(any(t.startswith("Période") for t in text))
+        for curve in ("Résultat réel", "EV all-in", "À l'abattage", "Sans abattage"):  # les quatre courbes
+            self.assertTrue(any(t.startswith(curve + " ") for t in text), curve)
         lib.set_period({"kind": "last", "n": 2})
         self.assertIn("Période : 2 dernières mains", pdf_strings(lib.report_pdf()))
 
@@ -183,6 +185,8 @@ class ReportPdfTest(IsolatedHome):
         flat = [t for slide in texts for t in slide]
         for expected in ("Où tu en es", "Les leaks à travailler", "Les mains à revoir", "D'ici la prochaine séance"):
             self.assertIn(expected, flat)
+        for curve in ("Résultat réel", "À l'abattage", "Sans abattage"):  # avec les lignes bleue et rouge
+            self.assertTrue(any(t.startswith(curve + " ") for t in flat), curve)
         self.assertTrue(any(t.startswith(f"Préparé avec {NAME} le ") for t in flat))
         notes = slide_texts(parts, "ppt/notesSlides/notesSlide")
         self.assertEqual(len(notes), len(texts))

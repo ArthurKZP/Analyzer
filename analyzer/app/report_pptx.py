@@ -20,6 +20,9 @@ FELT, FELT_2 = "0F3D2E", "1A5240"          # le tapis, et ses cartes
 INK, INK2, MUTED = "1B1B1B", "52514E", "898781"
 ON_FELT, ON_FELT_2 = "FFFFFF", "C9DDD2"
 AMBER, RED, GREEN, BLUE = "E0A526", "D03B3B", "1B7A3E", "2A78D6"
+# les courbes du résultat (les couleurs des trackers, comme l'application) : réel, EV all-in, abattage, sans abattage
+CURVES = (("Résultat réel", "008300", 2.5), ("EV all-in", "EDA100", 1.75), ("À l'abattage", "2A78D6", 1.5),
+          ("Sans abattage", "E34948", 1.5))
 CARD, RULE = "EEF3EF", "D9DED9"
 HI_BG, LO_BG = "FBE1D6", "DDE9F8"          # trop souvent, pas assez (et « solide », « indicatif »)
 SUITS = {"s": ("♠", INK), "h": ("♥", RED), "d": ("♦", BLUE), "c": ("♣", GREEN)}
@@ -182,7 +185,7 @@ def curve_slide(deck: px.Presentation, s: Synthesis, number: int) -> bool:
     header(slide, "Résultat", f"{num(res['net_bb'], 1, sign=True)} bb sur {num(res['hands'], 0)} mains "
                               f"({num(res['bb100'], 1, sign=True)} bb/100)", number)
     plot_x, plot_y, plot_w, plot_h = LEFT + 0.85, 1.75, WIDTH - 0.95, 4.1
-    values = [v for _, net, ev in points for v in (net, ev)] + [0.0]
+    values = [v for point in points for v in point[1:]] + [0.0]
     lo, hi = min(values), max(values)
     if hi - lo < 1:
         lo, hi = lo - 1, hi + 1
@@ -197,16 +200,17 @@ def curve_slide(deck: px.Presentation, s: Synthesis, number: int) -> bool:
         tick += step
     n = points[-1][0] or 1
     to_box = lambda i, v: (i / n, (hi - v) / (hi - lo))  # noqa: E731
-    slide.path(plot_x, plot_y, plot_w, plot_h, [to_box(i, ev) for i, _, ev in points], AMBER, 1.75, name="EV all-in")
-    slide.path(plot_x, plot_y, plot_w, plot_h, [to_box(i, net) for i, net, _ in points], FELT, 2.5,
-               name="Résultat réel")
+    for k in (4, 3, 2, 1):  # le résultat réel par-dessus
+        label, color, width = CURVES[k - 1]
+        slide.path(plot_x, plot_y, plot_w, plot_h, [to_box(p[0], p[k]) for p in points], color, width, name=label)
     slide.text(plot_x + plot_w - 2.0, plot_y + plot_h + 0.08, 2.0, 0.25,
                [para(f"{num(n, 0)} mains", 12, MUTED, align="r")], name="Axe")
     x = plot_x + 0.15
-    for label, color in (("Résultat réel", FELT), ("EV all-in", AMBER)):
+    for k, (label, color, _) in enumerate(CURVES, start=1):
+        text = f"{label} {num(points[-1][k], 0, sign=True)}"
         slide.line(x, plot_y + 0.2, x + 0.4, plot_y + 0.2, color, 3)
-        slide.text(x + 0.5, plot_y + 0.08, 1.8, 0.26, [para(label, 12, INK2)], name="Légende")
-        x += 0.5 + px.width(label, 12) + 0.45
+        slide.text(x + 0.5, plot_y + 0.08, px.width(text, 12) + 0.2, 0.26, [para(text, 12, INK2)], name="Légende")
+        x += 0.5 + px.width(text, 12) + 0.4
     luck = res["net_bb"] - res["ev_bb"]
     facts = [f"EV all-in : {num(res['ev_bb'], 1, sign=True)} bb (chance : {num(luck, 1, sign=True)} bb sur "
              f"{res['allin']} all-in)",
@@ -215,6 +219,8 @@ def curve_slide(deck: px.Presentation, s: Synthesis, number: int) -> bool:
                                                Run(facts[1], 14, INK2)])], name="Détail")
     slide.notes = ("La courbe verte est le résultat réel, la jaune l'EV all-in (les tapis payés avant la river comptés "
                    f"à leur espérance). Écart dû à la chance : {num(luck, 1, sign=True)} bb.\n"
+                   "La bleue : les mains allées à l'abattage ; la rouge : celles finies sans abattage (pots pris ou "
+                   "lâchés avant). Une rouge qui descend : trop de folds ou des bluffs qui ne passent pas.\n"
                    "Un gros écart entre réel et EV vient de la variance, pas du jeu : c'est le moment de le dire.")
     return True
 
