@@ -108,6 +108,7 @@ document.querySelectorAll('button.del').forEach(function (b) {
 });
 document.querySelectorAll('.spot-head').forEach(function (box) {
   var card = box.closest('.card'), family = box.dataset.family, done = Number(box.dataset.done), timer = null;
+  var q = box.dataset.ranges ? '?ranges=' + box.dataset.ranges : '';  // les ranges des hautes limites
   var run = card.querySelector('.spot-run'), stop = card.querySelector('.spot-stop');
   var status = card.querySelector('.spot-status');
   function show(s) {
@@ -152,7 +153,7 @@ document.querySelectorAll('.spot-head').forEach(function (box) {
     post('/api/precision', { precision: Number(prec.value) }).then(showEstimate);
   });
   function refresh() {
-    fetch('/api/spots/' + family).then(function (r) { return r.json(); }).then(function (s) {
+    fetch('/api/spots/' + family + q).then(function (r) { return r.json(); }).then(function (s) {
       if (s.precision) prec.value = String(s.precision);
       var todo = (s.rows || []).filter(function (r) { return !r.done; });
       missing = todo.length;
@@ -165,9 +166,9 @@ document.querySelectorAll('.spot-head').forEach(function (box) {
   }
   run.addEventListener('click', function () {
     run.disabled = true;
-    post('/api/spots/' + family + '/resoudre').then(show);
+    post('/api/spots/' + family + '/resoudre' + q).then(show);
   });
-  stop.addEventListener('click', function () { post('/api/spots/' + family + '/arreter').then(show); });
+  stop.addEventListener('click', function () { post('/api/spots/' + family + '/arreter' + q).then(show); });
   // résolutions déjà lancées, solveur installé ou non (une série 6-max cachée se lit quand on l'affiche)
   if (!box.closest('[hidden]')) refresh();
   box.addEventListener('show', refresh);
@@ -188,6 +189,7 @@ document.querySelectorAll('.spot-head').forEach(function (box) {
 // Toutes les séries d'un onglet (heads-up, 6-max) : un bouton pour mettre en file tous les flops manquants.
 document.querySelectorAll('.group-head').forEach(function (box) {
   var group = box.dataset.group, label = box.dataset.label, upto = box.dataset.upto === '1';
+  var q = box.dataset.ranges ? '?ranges=' + box.dataset.ranges : '';
   var run = box.querySelector('.group-run'), stop = box.querySelector('.group-stop'), status = box.querySelector('.group-status');
   var count = box.querySelector('.group-count'), done = null, timer = null, last = null;
   function show(s) {
@@ -216,16 +218,16 @@ document.querySelectorAll('.group-head').forEach(function (box) {
     clearTimeout(timer);
     if (s.busy) timer = setTimeout(refresh, 4000);
   }
-  function refresh() { fetch('/api/spots/' + group).then(function (r) { return r.json(); }).then(show); }
+  function refresh() { fetch('/api/spots/' + group + q).then(function (r) { return r.json(); }).then(show); }
   run.addEventListener('click', function () {
     var n = last ? last.total - last.done : 0;
     if (!confirm('Mettre en file les ' + n + ' flops ' + label + ' manquants ? Chacun passe par le choix de ses tailles puis '
         + 'par sa résolution : ' + (upto ? 'au plus ' : '') + '≈ ' + duration(last ? last.seconds : 0) + ' sur 4 cœurs. '
         + 'Tu peux tout arrêter à tout moment ; les flops déjà résolus restent.')) return;
     run.disabled = true;
-    post('/api/spots/' + group + '/resoudre').then(show);
+    post('/api/spots/' + group + '/resoudre' + q).then(show);
   });
-  stop.addEventListener('click', function () { post('/api/spots/' + group + '/arreter').then(show); });
+  stop.addEventListener('click', function () { post('/api/spots/' + group + '/arreter' + q).then(show); });
   refresh();
 });
 """
@@ -428,22 +430,22 @@ def _spot_section(family: str = "srp", shown_now: bool = True, rset: str = "peti
         title += " · hautes limites"
         origin = ("Ranges des hautes limites : leurs charts (Paramètres › Ranges préflop) là où ils en donnent, sinon "
                   "celles de la référence ; " + origin[0].lower() + origin[1:])
-        controls = (f'<p class="note"><b>{done} / {total}</b> flops résolus avec ces ranges. <b>Explorer ↗</b> '
-                    "résout un flop avec elles (une étude à part : les séries, leurs plans de jeu et l'entraîneur "
-                    "restent faits avec la référence) ; les tailles de mise sont celles choisies pour le flop.</p>")
-    else:
-        controls = (
-            f'<div class="spot-head" data-family="{escape(family)}" data-done="{done}">'
-            f'<span><b>{done} / {total}</b> flops résolus{" · " + _size(size) if size else ""}</span>'
-            f'<button type="button" class="go spot-run"{" hidden" if not missing else ""}>Résoudre les {missing} '
-            'flops manquants</button><button type="button" class="spot-stop" hidden>Arrêter</button>'
-            f'<label class="spot-prec"{" hidden" if not missing else ""}>Précision <select aria-label="Précision '
-            f'visée">{PRECISION_OPTIONS}</select></label><span class="spot-est muted small"></span>'
-            '<span class="spot-status"></span></div>'
-            f'<p class="note">Un flop sans tailles choisies passe d\'abord par leur choix, puis par sa résolution : '
-            f"{escape(cost)} (sur 4 cœurs ; moins avec plus de cœurs). Les flops se traitent l'un après l'autre en "
-            "arrière-plan, tant que l'application reste ouverte ; tu peux fermer cette page. En ligne de commande : "
-            f"<code>python -m analyzer gtopen --spots {escape(family)}</code>.</p>")
+    ranges_attr = f' data-ranges="{rset}"' if high else ""  # la page lit l'état de ces ranges-là
+    controls = (
+        f'<div class="spot-head" data-family="{escape(family)}" data-done="{done}"{ranges_attr}>'
+        f'<span><b>{done} / {total}</b> flops résolus{" · " + _size(size) if size else ""}</span>'
+        f'<button type="button" class="go spot-run"{" hidden" if not missing else ""}>Résoudre les {missing} '
+        'flops manquants</button><button type="button" class="spot-stop" hidden>Arrêter</button>'
+        f'<label class="spot-prec"{" hidden" if not missing else ""}>Précision <select aria-label="Précision '
+        f'visée">{PRECISION_OPTIONS}</select></label><span class="spot-est muted small"></span>'
+        '<span class="spot-status"></span></div>'
+        f'<p class="note">Un flop sans tailles choisies passe d\'abord par leur choix, puis par sa résolution : '
+        f"{escape(cost)} (sur 4 cœurs ; moins avec plus de cœurs). Les flops se traitent l'un après l'autre en "
+        "arrière-plan, tant que l'application reste ouverte ; tu peux fermer cette page."
+        + (" Avec les ranges des hautes limites, chaque flop est une étude à part (les séries, leurs plans de jeu "
+           "et l'entraîneur restent faits avec la référence) ; il prend les tailles choisies pour ce flop."
+           if high else f" En ligne de commande : <code>python -m analyzer gtopen --spots {escape(family)}</code>.")
+        + "</p>")
     return f"""
 <section class="spot-family" data-family="{escape(family)}"{"" if shown_now else " hidden"}>
 <h2>{escape(title, quote=False)}</h2>
@@ -503,7 +505,7 @@ def _ring_section(rset: str = "petites") -> str:
             f'{escape(studyspots.RING_FAMILIES[f]["name"])}</button>' for f in group) + "</div>"
         for pair, group in pairs.items())
     sections = "".join(_ring_family_section(f, f == families[0], rset) for f in families)
-    group = _group_all("6max") if rset == "petites" else ""
+    group = _group_all("6max", rset)
     return (f'<div class="fam-group" data-group="6max"><h2>Spots d\'étude 6-max</h2>{intro}{group}'
             f'<div class="fam-switch" role="group" aria-label="Paire de positions et type de pot">{switch}</div>'
             f'{sections}{_ring_others() if rset == "petites" else ""}</div>')
@@ -520,7 +522,7 @@ def _hu_section(first: str = "srp", rset: str = "petites") -> str:
         f'<button type="button" data-family="{escape(f)}" aria-pressed="{str(f == first).lower()}">'
         f'{escape(studyspots.FAMILIES[f]["name"])}</button>' for f in families) + "</div>")
     sections = "".join(_spot_section(f, f == first, rset) for f in families)
-    group = _group_all("hu") if rset == "petites" else ""
+    group = _group_all("hu", rset)
     return (f'<div class="fam-group" data-group="hu"><h2>Spots d\'étude heads-up</h2>{intro}{group}'
             f'<div class="fam-switch" role="group" aria-label="Type de pot">{switch}</div>{sections}</div>')
 
@@ -564,19 +566,26 @@ GROUP_NOTES = {
 }
 
 
-def _group_all(group: str) -> str:
+def _group_all(group: str, rset: str = "petites") -> str:
     """Le bouton qui met en file tous les flops manquants des séries d'un onglet (état lu par la page :
-    /api/spots/hu ou /api/spots/6max)."""
+    /api/spots/hu ou /api/spots/6max, « ?ranges=hautes » avec les ranges des hautes limites)."""
     label = "heads-up" if group == "hu" else "6-max"
+    if rset == "hautes":
+        label += " hautes limites"
     upto = "1" if group == "6max" else "0"  # ranges des charts plus serrées : au plus la durée heads-up
-    return (f'<div class="card"><div class="group-head" data-group="{group}" data-label="{label}" data-upto="{upto}">'
-            '<span class="group-count"></span>'
+    ranges = f' data-ranges="{rset}"' if rset != "petites" else ""
+    return (f'<div class="card"><div class="group-head" data-group="{group}" data-label="{escape(label)}" '
+            f'data-upto="{upto}"{ranges}><span class="group-count"></span>'
             f'<button type="button" class="go group-run" hidden>Résoudre tous les flops {label} manquants</button>'
             '<button type="button" class="group-stop" hidden>Tout arrêter</button>'
             '<span class="spot-status group-status"></span></div>'
             f'<p class="note">{escape(GROUP_NOTES[group])} Chaque flop passe d\'abord par le choix de ses tailles, puis '
-            'par sa résolution, à la précision réglée ; son plan de jeu est lu aussitôt. La file vit dans l\'application '
-            ': si elle s\'arrête, relance le bouton, il reprend avec les flops qui manquent.</p></div>')
+            "par sa résolution, à la précision réglée ; "
+            + ("avec les ranges des hautes limites, chaque flop est une étude à part, sans plan de jeu (les séries, "
+               "leurs plans et l'entraîneur restent faits avec la référence). " if rset == "hautes"
+               else "son plan de jeu est lu aussitôt. ")
+            + "La file vit dans l'application : si elle s'arrête, relance le bouton, il reprend avec les flops qui "
+            "manquent.</p></div>")
 
 
 ADJUSTED = ' <span class="muted small" title="Résolu avec tes ranges préflop ajustées">· tes ranges</span>'

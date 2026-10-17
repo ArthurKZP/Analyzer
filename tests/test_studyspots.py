@@ -278,6 +278,20 @@ class SolveSpotsTest(unittest.TestCase):
             self.assertLess(time.time(), deadline)
             with self.assertRaises(KeyError):
                 lib.spot_set("inconnue")
+            # avec les ranges des hautes limites : chaque flop a son étude, en file à part
+            with mock.patch.dict(os.environ, {"FAKE_SOLVER_SLEEP": "30"}):
+                high = lib.spot_set("srp", start=True, rset="hautes")
+                self.assertEqual((high["ranges"], high["total"], high["done"], high["busy"]), ("hautes", 24, 0, 24))
+                self.assertTrue(all(r["id"].endswith(":hautes") for r in high["rows"]))
+                self.assertEqual(lib.spot_set("srp")["busy"], 0)  # la série de la référence n'est pas en file
+                self.assertEqual(lib.group_spot_sets("hu", rset="hautes")["busy"], 24)
+            lib.group_spot_cancel("hu", "hautes")
+            deadline = time.time() + 10
+            while lib.spot_set("srp", rset="hautes")["busy"] and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(lib.spot_set("srp", rset="hautes")["busy"], 0)
+            with self.assertRaises(KeyError):
+                lib.spot_set("srp", rset="moyennes")
         finally:
             lib.solves.shutdown()
 

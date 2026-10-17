@@ -167,7 +167,9 @@ class SetsTest(HomeTest):
         for text in ("Heads-up · SRP · hautes limites", 'aria-current="page">Hautes limites', "spot:srp:KsKd4c:hautes",
                      'data-suffix=":hautes"'):
             self.assertIn(text, page)
-        self.assertNotIn("Résoudre tous les flops", page)  # la file des séries reste celle de la référence
+        # leurs flops manquants se résolvent aussi en lot, dans leur propre file
+        self.assertIn("Résoudre tous les flops heads-up hautes limites manquants", page)
+        self.assertIn('class="spot-head" data-family="srp" data-done="0" data-ranges="hautes"', page)
 
 
 class SpotTest(HomeTest):

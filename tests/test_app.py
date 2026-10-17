@@ -625,6 +625,17 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((status, json.loads(body)["total"], json.loads(body)["covered"]), (200, 0, 0))
         status, _, body = self.request("POST", "/api/spots/6max/arreter", "{}", headers)
         self.assertEqual((status, json.loads(body)["busy"]), (200, 0))
+        # les ranges des hautes limites : leurs flops manquants se résolvent aussi en lot
+        status, _, body = self.request("GET", "/etudes?ranges=hautes")
+        for text in ("Résoudre tous les flops heads-up hautes limites manquants", 'data-ranges="hautes"',
+                     "0 / 24</b> flops résolus"):
+            self.assertIn(text.encode(), body)
+        state = json.loads(self.request("GET", "/api/spots/hu?ranges=hautes")[2])
+        self.assertEqual((state["ranges"], state["total"]), ("hautes", 72))
+        series = json.loads(self.request("GET", "/api/spots/srp?ranges=hautes")[2])
+        self.assertEqual((series["ranges"], series["rows"][0]["id"]), ("hautes", "spot:srp:KsKd4c:hautes"))
+        status, _, body = self.request("POST", "/api/spots/srp/resoudre?ranges=hautes", "{}", headers)
+        self.assertEqual((status, json.loads(body)["ranges"]), (200, "hautes"))
 
     def test_study_spots(self):
         status, _, body = self.request("GET", "/explorateur/spot:srp:KsKd4c")

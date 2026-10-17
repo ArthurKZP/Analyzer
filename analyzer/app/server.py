@@ -305,9 +305,10 @@ class Handler(BaseHTTPRequestHandler):
                 villain = parse_qs(urlsplit(self.path).query).get("adversaire", [None])[0]
                 return self._json(library.review_state(villain))
             if parts[:2] == ["api", "spots"] and len(parts) == 3 and parts[2] in library.SPOT_GROUPS:
-                return self._json(library.group_spot_sets(parts[2]))  # toutes les séries heads-up, ou 6-max
+                # toutes les séries heads-up, ou 6-max (« ?ranges=hautes » : avec les ranges des hautes limites)
+                return self._json(library.group_spot_sets(parts[2], rset=self._ranges_set()))
             if len(parts) == 3 and parts[:2] == ["api", "spots"]:
-                return self._json(library.spot_set(parts[2]))
+                return self._json(library.spot_set(parts[2], rset=self._ranges_set()))
             if len(parts) == 2 and parts[0] == "explorateur" and (parts[1] == "preflop" or library.find_hand(parts[1])
                                                                    or studyspots.is_ident(parts[1])):
                 page = (STATIC / "explorer.html").read_text(encoding="utf-8")
@@ -668,15 +669,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(404, "Adversaire inconnu.")
         if (parts[:2] == ["api", "spots"] and len(parts) == 4 and parts[2] in library.SPOT_GROUPS
                 and parts[3] in ("resoudre", "arreter")):
-            group = parts[2]
-            return self._json(library.group_spot_cancel(group) if parts[3] == "arreter"
-                              else library.group_spot_sets(group, start=True))
+            group, rset = parts[2], self._ranges_set()
+            return self._json(library.group_spot_cancel(group, rset) if parts[3] == "arreter"
+                              else library.group_spot_sets(group, start=True, rset=rset))
         if len(parts) == 4 and parts[:2] == ["api", "spots"] and parts[3] in ("resoudre", "arreter"):
             if not studyspots.is_series(parts[2]):
                 return self._error(404, "Série inconnue.")
             if parts[3] == "arreter":
-                return self._json(library.spot_cancel(parts[2]))
-            return self._json(library.spot_set(parts[2], start=True))
+                return self._json(library.spot_cancel(parts[2], self._ranges_set()))
+            return self._json(library.spot_set(parts[2], start=True, rset=self._ranges_set()))
         if len(parts) == 4 and parts[:2] == ["api", "resoudre"] and parts[3] == "arreter":
             job = library.solves.cancel(parts[2])
             return self._json(job) if job else self._error(404, "Résolution inconnue.")
