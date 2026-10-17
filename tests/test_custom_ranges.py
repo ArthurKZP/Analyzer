@@ -280,6 +280,33 @@ class LibraryTest(HomeTest):
         self.lib = Library(folder)
         self.addCleanup(self.lib.solves.shutdown)
 
+    def test_choices(self):
+        """Les ranges dont un coup peut partir : la référence, tes charts de chaque niveau, tes ranges de ligne."""
+        lib = self.lib
+        self.assertEqual([(c["label"], c["base"]) for c in lib.ranges_state("HAND01")["choices"]],
+                         [("Référence (micro limites, rake élevé)", True)])
+        stake_charts.save("HU", "hautes", {"source": "Essai", "nodes": {"sb_open": {"raise": "AA,KK"},
+                                                                        "bb_vs_open": {"call": "QQ"}}})
+        custom_ranges.save("ligne", "HU|BTN:raise BB:call", {"BB": "JJ"}, "hautes")
+        state = lib.ranges_state("HAND01")  # NL500, jugée avec les petites limites (le réglage de l'essai)
+        self.assertEqual([(c["id"], c["base"]) for c in state["choices"]],
+                         [("charts:reference", True), ("charts:hautes", False), ("ligne:hautes", False)])
+        self.assertEqual([c["label"] for c in state["choices"][1:]],
+                         ["Tes charts · Hautes limites", "Tes ranges de la ligne · Hautes limites"])
+        self.assertEqual([p["position"] for p in state["players"]], ["BB", "BTN"])
+        self.assertEqual(state["choices"][1]["ranges"], [{"QQ": 1.0}, {"AA": 1.0, "KK": 1.0}])
+        self.assertEqual(state["choices"][2]["ranges"], [{"JJ": 1.0}, {"AA": 1.0, "KK": 1.0}])  # BTN : leur base
+        self.assertIsNone(state["other"])
+        # partir des charts des hautes limites pour ce coup : réglé pour lui, il se résout à nouveau
+        texts = {p["position"]: postflop.range_text(r) for p, r in zip(state["players"], state["choices"][1]["ranges"])}
+        self.assertEqual(lib.save_ranges("HAND01", "coup", texts)["adjusted"], "coup")
+        # un spot d'étude : le même flop avec l'autre jeu de ranges, une étude à part
+        spot = lib.ranges_state("spot:srp:KsKd4c")
+        self.assertEqual((spot["other"]["href"], spot["other"]["set"]),
+                         ("/explorateur/spot:srp:KsKd4c:hautes", "hautes"))
+        self.assertEqual([c["id"] for c in spot["choices"]], ["charts:reference", "charts:hautes", "ligne:hautes"])
+        self.assertEqual(lib.ranges_state("spot:srp:KsKd4c:hautes")["other"]["href"], "/explorateur/spot:srp:KsKd4c")
+
     def test_state_save_clear(self):
         lib = self.lib
         state = lib.ranges_state("HAND01")

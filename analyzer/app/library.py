@@ -1645,11 +1645,72 @@ class Library:
             players.append({"position": pos, "role": role, "source": source, "reference": spot.reference[name],
                             "line": ring_ranges.parse_range(by_line[pos]) if pos in by_line else None,
                             "current": current})
+        names = self._range_players(spot)
+        other = None
+        if study:  # le même flop avec l'autre jeu de ranges : une étude à part
+            twin = next(k for k in stake_charts.SETS if k != rset)
+            ident = f"spot:{spot.family}:{''.join(spot.board)}" + ("" if twin == "petites" else ":hautes")
+            other = {"set": twin, "href": "/explorateur/" + ident,
+                     "label": f"Ouvrir ce flop avec les ranges des {stake_charts.SET_NAMES[twin].lower()} ↗"}
         return {"hand": hand_id, "supported": True, "spot": study, "format": table_format, "set": rset,
                 "set_name": stake_charts.SET_NAMES[rset],
                 "line": ring_ranges.describe(steps), "can_line": can_line, "for_spots": data["spots"],
                 "adjusted": spot.adjusted, "reference": reference, "players": players,
+                "choices": self._range_choices(spot, names, data), "other": other,
                 "order": custom_ranges.hand_order()}
+
+    @staticmethod
+    def _base_ranges(spot, band: Optional[str], names) -> dict[str, dict[str, float]]:
+        """Les ranges de base du coup (position -> poids) avec les charts de ce niveau de limites (None : la
+        référence) ; postflop.Unsupported quand ils ne donnent pas cette ligne."""
+        if isinstance(spot, studyspots.StudySpot):
+            info = studyspots.family_info(spot.family)
+            if spot.family not in studyspots.FAMILIES:
+                return studyspots.ring_spot_ranges(spot.family, band)
+            solution = stake_charts.hu_solution(band) if band else studyspots.load_solution()
+            return {spot.oop: postflop.range_weights(solution, *info["oop"]),
+                    spot.ip: postflop.range_weights(solution, *info["ip"])}
+        other = postflop.build_spot(spot.hand, spot.hero, custom=False, band=band)
+        return {pos: other.reference[name] for name, pos, _ in names}
+
+    def _range_choices(self, spot, names, data: dict) -> list[dict]:
+        """Les ranges dont le coup peut partir (onglet Ranges de l'explorateur) : celles de la référence, celles de tes
+        charts de chaque niveau de limites, et tes ranges de sa ligne dans chaque jeu (petites, hautes limites) ;
+        « base » : celles dont le coup part sans réglage. Les mêmes ranges ne sont proposées qu'une fois."""
+        positions = [pos for _, pos, _ in names]
+        base = [spot.reference[name] for name, _, _ in names]
+        heads_up = isinstance(spot, studyspots.StudySpot) and spot.family in studyspots.FAMILIES or (
+            not isinstance(spot, studyspots.StudySpot) and len(spot.hand.seats) == 2)
+        found = stake_charts.available()
+        levels = (found.get(stake_charts.HU, []) if heads_up else
+                  sorted({b for fmt, bands in found.items() if fmt != stake_charts.HU for b in bands},
+                         key=stakes.BANDS.index))
+        out, bases = [], {}
+        for band in (None, *levels):
+            try:
+                ranges = self._base_ranges(spot, band, names)
+            except postflop.Unsupported:
+                continue
+            bases[band] = ranges
+            label = "Référence (micro limites, rake élevé)" if band is None else f"Tes charts · {stakes.NAMES[band]}"
+            out.append({"id": f"charts:{band or 'reference'}", "label": label,
+                        "ranges": [ranges[pos] for pos in positions]})
+        for rset in stake_charts.SETS:
+            line = data[custom_ranges.lines_key(rset)].get(spot.context, {})
+            fallback = bases.get(stake_charts.set_band(rset)) or bases.get(None)
+            if not line or fallback is None:
+                continue
+            out.append({"id": f"ligne:{rset}",
+                        "label": f"Tes ranges de la ligne · {stake_charts.SET_NAMES[rset]}",
+                        "ranges": [ring_ranges.parse_range(line[pos]) if pos in line else fallback[pos]
+                                   for pos in positions]})
+        kept = []
+        for choice in out:
+            if any(all(custom_ranges.same(a, b) for a, b in zip(choice["ranges"], k["ranges"])) for k in kept):
+                continue
+            choice["base"] = all(custom_ranges.same(a, b) for a, b in zip(choice["ranges"], base))
+            kept.append(choice)
+        return kept
 
     def save_ranges(self, hand_id: str, scope: str, ranges: dict) -> dict:
         """Enregistre tes ranges pour ce coup (scope « coup ») ou pour sa ligne (« ligne ») ; seules celles qui

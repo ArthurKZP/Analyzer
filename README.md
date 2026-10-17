@@ -334,16 +334,21 @@ adversaire qui défend plus large, un open plus serré, une réponse au 4bet qui
 de chaque joueur : grille 13 × 13 à peindre au clic ou en glissant (100, 75, 50, 25 % ou retirer), texte à coller
 (« AA,AKs,KQo:0.5,… »), *Plus serré* / *Plus large* (environ 10 % des combos retirés en partant des mains les plus
 faibles de la range, ou ajoutés en partant des plus fortes ; force = équité contre une main au hasard). Contour
-orange : différent de la référence. Deux portées : **pour ce coup seulement** (ou ce spot d'étude), ou **par défaut
-pour la ligne** et le format (« BTN open, BB call » en HU, « CO open, BB 3bet, CO call » en 6-max…) : elle
-s'applique alors à tes autres coups de cette ligne, à leur analyse et au leakfinding (et aux spots d'étude ouverts
-dans l'explorateur, avec l'option de *Paramètres › Ranges préflop*) ; le réglage d'un coup passe avant celui de sa
-ligne. Les ranges par défaut de toutes les lignes se règlent aussi sans ouvrir de coup, dans *Paramètres › Ranges
-préflop* (voir *Paramètres*). *Résoudre avec ces ranges* relance le solveur sur une étude à part : celle de la
-référence reste, et *Revenir à la référence* la rouvre en quelques secondes. Un badge *tes ranges* le rappelle en
-haut de l'explorateur, et la page *Études du solveur* marque ces études. Les séries de spots d'étude, leurs plans de
-jeu et la référence livrée restent faits avec la théorie. Tes ranges sont gardées dans la base (sauvegardée) ;
-code : `theory/custom_ranges.py`.
+orange : différent de la référence. **Partir des ranges** : un menu pour charger d'un coup les ranges des deux
+joueurs — celles de la référence (micro limites, rake élevé), celles de tes charts de chaque niveau de limites
+enregistrés (*Tes charts · Hautes limites*…), ou tes ranges de la ligne dans chaque jeu (*Tes ranges de la ligne ·
+Petites limites* / *Hautes limites*) ; « celles du coup » marque celles dont il part sans réglage. Ajuste-les si tu
+veux, puis *Résoudre avec ces ranges*. Un spot d'étude propose aussi *Ouvrir ce flop avec les ranges des hautes
+limites ↗* (ou des petites) : la même étude que dans *Études du solveur*. Deux portées : **pour ce coup seulement**
+(ou ce spot d'étude), ou **par défaut pour la ligne** et le format (« BTN open, BB call » en HU, « CO open, BB 3bet,
+CO call » en 6-max…) : elle s'applique alors à tes autres coups de cette ligne, à leur analyse et au leakfinding (et
+aux spots d'étude ouverts dans l'explorateur, avec l'option de *Paramètres › Ranges préflop*) ; le réglage d'un coup
+passe avant celui de sa ligne. Les ranges par défaut de toutes les lignes se règlent aussi sans ouvrir de coup, dans
+*Paramètres › Ranges préflop* (voir *Paramètres*). *Résoudre avec ces ranges* relance le solveur sur une étude à
+part : celle de la référence reste, et *Revenir à la référence* la rouvre en quelques secondes. Un badge *tes
+ranges* le rappelle en haut de l'explorateur, et la page *Études du solveur* marque ces études. Les séries de spots
+d'étude, leurs plans de jeu et la référence livrée restent faits avec la théorie. Tes ranges sont gardées dans la
+base (sauvegardée) ; code : `theory/custom_ranges.py`.
 
 **Construire l'arbre avant la résolution** (*Construire l'arbre* en haut de l'explorateur, sur un coup ou un spot
 d'étude, résolu ou non ; dans le choix du flop des *Études du solveur* : *Construire l'arbre d'abord*) : street

@@ -1092,10 +1092,11 @@
   // Tes ranges à la place de celles de la référence, pour ce coup ou par défaut pour toute sa ligne : le coup
   // se résout à nouveau, dans une étude à part (celle de la référence reste et se rouvre en quelques secondes).
   const { BRUSHES, combosOf, sameRange, rangeText, parseRange, resize } = window.AnalyzerRanges;  // rangekit.js
-  const rg = { data: null, edit: null, player: 0, brush: 1, scope: 'coup', busy: false, msg: '', ui: null };
+  const rg = { data: null, edit: null, player: 0, brush: 1, scope: 'coup', busy: false, msg: '', ui: null, picked: '' };
 
   function setRanges(data) {
     rg.data = data;
+    rg.picked = '';
     rg.edit = data.supported ? data.players.map((p) => ({ ...p.current })) : null;
     const line = data.supported && data.players.some((p) => p.source === 'ligne') && !data.players.some((p) => p.source === 'coup');
     rg.scope = data.can_line && line ? 'ligne' : 'coup';
@@ -1146,6 +1147,27 @@
     const what = SPOT ? 'ce spot' : 'ce coup';
     wrap.append(el('p', { class: 'small muted' }, 'Ligne préflop : ' + d.line + (d.format !== 'HU' ? ' en ' + d.format : '')
       + ' · référence : ' + d.reference + '. Ajuste les ranges, puis résous ' + what + ' avec elles.'));
+
+    // les ranges dont partir : la référence, tes charts de chaque niveau de limites, tes ranges de la ligne
+    if ((d.choices || []).length > 1) {
+      const pick = el('select', { 'aria-label': 'Ranges de départ', disabled: rg.busy, onchange: () => {
+        const c = d.choices[Number(pick.value)];
+        if (!c) return;
+        rg.picked = pick.value;
+        rg.edit = c.ranges.map((r) => ({ ...r }));
+        rg.msg = '';
+        renderRanges();
+      } }, el('option', { value: '' }, 'Choisir des ranges…'),
+      d.choices.map((c, k) => el('option', { value: String(k), selected: rg.picked === String(k) },
+        c.label + (c.base ? ' — celles du coup' : ''))));
+      wrap.append(el('div', { class: 'rg-row' }, el('label', { class: 'small' }, 'Partir des ranges : ', pick),
+        el('span', { class: 'small muted' }, 'pour les deux joueurs ; puis « Résoudre avec ces ranges »')));
+    }
+    if (d.other) {
+      const link = el('a', { href: d.other.href, target: '_blank', rel: 'noopener' }, d.other.label);
+      wrap.append(el('p', { class: 'small' }, link,
+        el('span', { class: 'muted' }, ' (une étude à part, comme dans Études du solveur)')));
+    }
 
     const seg = el('div', { class: 'seg', role: 'group', 'aria-label': 'Range modifiée' });
     ui.players = d.players.map((q, k) => seg.appendChild(el('button', {

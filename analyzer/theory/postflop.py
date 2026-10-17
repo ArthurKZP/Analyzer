@@ -492,7 +492,7 @@ POSTFLOP_ORDER = ("SB", "BB", "UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN") 
 
 
 def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custom: bool = True,
-               theory: bool = True, stakes: bool = True) -> PostflopSpot:
+               theory: bool = True, stakes: bool = True, band: Optional[str] = "auto") -> PostflopSpot:
     """Le spot postflop d'une main : heads-up (ranges de la solution HU), ou table à plusieurs quand il ne reste que
     deux joueurs au flop (ranges de ta solution du format, voir ring_ranges). Tes ranges ajustées pour ce coup ou
     pour sa ligne (custom_ranges) remplacent celles de la référence, sauf avec custom=False.
@@ -503,7 +503,8 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
     tailles fixes (DEFAULT_BETS), pour retrouver les analyses déjà faites.
 
     Ranges : celles des charts du niveau de limites de la main quand tu en as importé pour lui (stake_charts), sinon
-    celles de la référence ; stakes=False : celles de la référence, pour retrouver les analyses déjà faites."""
+    celles de la référence ; stakes=False : celles de la référence, pour retrouver les analyses déjà faites ; band :
+    les charts de ce niveau de limites (None : la référence) plutôt que ceux de la main (« auto »)."""
     from . import custom_ranges, stake_charts, studyspots
     if len(hand.seats) == 2 and (not hand.button or not hand.big_blind or hand.opponent_of(hero) is None):
         raise Unsupported("Seules les mains heads-up se résolvent.")
@@ -512,7 +513,8 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
         raise Unsupported("Tapis préflop : il n'y a plus de décision après le flop.")
     if len(hand.board) < 3 or not any(a.street == "flop" for a in hand.actions):
         raise Unsupported("La main s'arrête avant le flop : rien à résoudre après le flop.")
-    band = stake_charts.band_for(hand) if stakes else None
+    if band == "auto":
+        band = stake_charts.band_for(hand) if stakes else None
     if len(hand.seats) == 2:
         default = stake_charts.hu_solution(band) if band else load_solution()
         oop, ip, pot_type, ranges = _heads_up_ranges(hand, pre, solution or default)
