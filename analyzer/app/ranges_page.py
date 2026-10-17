@@ -100,6 +100,7 @@ SCRIPT = r"""
     $('rp-spots-box').checked = view.for_spots;
     $('rp-charts').hidden = view.charts;
     $('rp-choice').value = view.choice;
+    $('rp-reference').value = view.reference;
     renderSets();
     renderList();
   }
@@ -123,6 +124,22 @@ SCRIPT = r"""
     box.append(el('span', { class: 'note', style: 'margin:0' }, 'Régler les ranges des'), seg,
       el('span', { class: 'muted small' }, current ? current.level : ''));
   }
+
+  $('rp-reference').addEventListener('change', async (e) => {
+    const out = $('rp-reference-status');
+    out.textContent = 'Enregistrement…';
+    out.classList.remove('err');
+    try {
+      const data = await api('/api/ranges/defaut/reference', { reference: e.target.value });
+      e.target.value = data.reference;
+      out.textContent = 'Enregistré : les études du solveur (séries, plans de jeu, entraîneur) et l\'explorateur '
+        + 'préflop partent maintenant de ces ranges.';
+      if (window.parent !== window) window.parent.postMessage({ type: 'analyzer-refresh' }, location.origin);
+    } catch (err) {
+      out.textContent = err.message;
+      out.classList.add('err');
+    }
+  });
 
   $('rp-choice').addEventListener('change', async (e) => {
     const out = $('rp-choice-status');
@@ -397,6 +414,15 @@ coups, en deux jeux — les petites limites (NL100 et moins) et les hautes limit
 moins).</div>
 <h2>Tes ranges par défaut</h2>
 <div class="card">
+<div class="rp-choice"><label for="rp-reference"><b>La référence</b></label>
+<select id="rp-reference"><option value="petites">Petites limites (solution heads-up, charts 6-max fournis)</option>
+<option value="hautes">Hautes limites (tes charts des hautes limites)</option></select></div>
+<div class="rp-status" id="rp-reference-status" aria-live="polite"></div>
+<p class="note">Les ranges de ce qui ne dépend pas de la limite d'une main : les études du solveur (leurs séries, leurs
+plans de jeu, l'entraîneur, les repères du Leakfinding après le flop) et l'explorateur préflop. Avec les hautes
+limites, leurs charts là où ils en donnent, sinon ceux des petites limites ; les flops résolus avec l'autre jeu restent
+gardés, à part (Études du solveur, « Ranges »), et les plans de jeu se lisent à nouveau sur les flops de la
+référence.</p>
 <div class="rp-choice"><label for="rp-choice"><b>Pour tes mains</b></label>
 <select id="rp-choice"><option value="auto">Selon la limite de chaque main</option>
 <option value="petites">Toujours les petites limites</option><option value="hautes">Toujours les hautes limites</option>

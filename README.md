@@ -508,6 +508,12 @@ au début du spot aussi. Les autres onglets de *Études du solveur* séparent le
 la fois : *SRP*, *pot 3bet*, *pot 4bet*, comme les séries de l'onglet *6-max*), le 6-max et les coups joués
 résolus : plus besoin de dérouler toute la page. La série choisie reste affichée quand la page se recharge.
 
+**Les ranges préflop de l'explorateur** : à côté, *Petites limites* / *Hautes limites* (« réf. » marque la référence
+de *Paramètres › Ranges préflop*, choisie par défaut ; `#jeu=hautes` dans l'adresse) : en heads-up, la solution
+préflop ou tes charts des hautes limites ; à plusieurs, les charts 6-max fournis ou ceux des hautes limites, là où
+ils en donnent. La ligne reste quand ces charts l'ont, et les flops proposés au call ouvrent les études faites avec
+ces ranges (`spot:srp:KsKd4c:hautes`) ; un spot ouvert ainsi remonte au préflop avec les mêmes ranges.
+
 **Un coup à plusieurs** : en haut de l'explorateur, *Heads-up* / *À plusieurs (6-max)* (le dernier choisi est gardé ;
 `/explorateur/preflop#table=6-max` ; sans tes charts 6-max, un bouton les charge, même sans main à plusieurs). À plusieurs, le déroulé suit l'ordre de parole d'une table 6-max (UTG, HJ, CO,
 BTN, SB, BB) et la grille montre les fréquences de tes charts 6-max pour la position qui parle : premier à parler,
@@ -1080,7 +1086,13 @@ L'onglet *Joueurs et alias* : le type de chaque adversaire (régulier ou récré
 Code : `analyzer/settings.py`, `analyzer/app/settings_page.py`.
 
 L'onglet *Ranges préflop* : tes ranges préflop, en **deux jeux** — les **petites limites** (NL100 et moins) et les
-**hautes limites** (NL200 et plus, où le rake pèse moins). En tête, **Tes ranges par défaut** : *selon la limite de
+**hautes limites** (NL200 et plus, où le rake pèse moins). En tête, **La référence** : *Petites limites* (la
+solution heads-up, les charts 6-max fournis) ou *Hautes limites* (leurs charts, là où ils en donnent) — les ranges
+de ce qui ne dépend pas de la limite d'une main : les études du solveur (leurs séries, leurs plans de jeu,
+l'entraîneur, les repères du Leakfinding après le flop) et l'explorateur préflop ; par défaut, les hautes limites
+quand tes ranges par défaut le sont toujours, sinon les petites. Changer de référence garde les flops déjà résolus
+avec l'autre jeu (à part, dans *Études du solveur*) ; les plans de jeu se lisent alors sur les flops de la nouvelle
+référence (à résoudre en lot, voir plus bas). Puis **Tes ranges par défaut**, pour tes mains : *selon la limite de
 chaque main* (par défaut), *toujours les petites limites* ou *toujours les hautes limites* ; le préflop
 (Leakfinding, mains de départ, page Préflop, suivi) juge tes mains avec ce jeu, et le solveur en part pour tes coups
 (explorateur, mains face au solveur). Les petites limites partent des ranges de la référence (la solution heads-up,
@@ -1098,14 +1110,14 @@ enregistrement. *Aussi pour les spots d'étude ouverts dans l'explorateur* (déc
 part alors des ranges de sa ligne ; les séries, leurs plans de jeu et les repères restent faits avec la référence.
 Les réglages d'une ligne qui n'a plus de base (charts retirés, format que tu ne joues plus) restent listés, à
 effacer. Dans *Études du solveur*, **Ranges : Petites limites / Hautes limites** (en tête des onglets *Heads-up* et
-*6-max* ; par défaut les hautes quand tes ranges par défaut le sont toujours) : avec les hautes limites, chaque flop
-s'ouvre dans l'explorateur avec leurs ranges (une étude à part, `spot:srp:KsKd4c:hautes`, aux tailles choisies pour
-le flop) ; les séries, leurs plans de jeu et l'entraîneur restent faits avec la référence. Leurs flops manquants se
-résolvent aussi en lot : *Résoudre les N flops manquants* pour une série, *Résoudre tous les flops heads-up hautes
-limites manquants* (ou 6-max) pour l'onglet, avec la même file, l'estimation de la durée et *Tout arrêter* ; un flop
-sans tailles choisies passe d'abord par leur choix (le même que pour la série). Code : `analyzer/app/ranges_page.py`
-(l'éditeur, partagé avec l'explorateur : `static/rangekit.js`), `theory/custom_ranges.py` (`reference_lines`),
-`theory/stake_charts.py` (`choice`, `set_of`).
+*6-max* ; « la référence » marque celle des Paramètres, ouverte par défaut) : les séries sont celles de la référence
+(leurs plans de jeu, l'entraîneur) ; avec l'autre jeu, chaque flop s'ouvre dans l'explorateur avec ses ranges (une
+étude à part, `spot:srp:KsKd4c:hautes` pour les hautes limites, aux tailles choisies pour le flop). Les flops
+manquants de chaque jeu se résolvent en lot : *Résoudre les N flops manquants* pour une série, *Résoudre tous les
+flops heads-up (hautes limites) manquants* (ou 6-max) pour l'onglet, avec la même file, l'estimation de la durée et
+*Tout arrêter* ; un flop sans tailles choisies passe d'abord par leur choix (le même pour les deux jeux). Code :
+`analyzer/app/ranges_page.py` (l'éditeur, partagé avec l'explorateur : `static/rangekit.js`),
+`theory/custom_ranges.py` (`reference_lines`), `theory/stake_charts.py` (`choice`, `reference_set`, `set_of`).
 
 ### Charts selon les limites (rake)
 

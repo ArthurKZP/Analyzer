@@ -137,6 +137,38 @@ class SetsTest(HomeTest):
         with self.assertRaises(ValueError):
             custom_ranges.save("ligne", line, {"BB": "AA"}, "moyennes")
 
+    def test_reference(self):
+        """La référence des études : petites limites par défaut, hautes limites au choix (ou quand tes ranges par
+        défaut le sont toujours) ; les séries, leurs plans et l'entraîneur la suivent."""
+        self.assertEqual(stake_charts.reference_set(), "petites")
+        stake_charts.set_choice("hautes")
+        self.assertEqual(stake_charts.reference_set(), "hautes")  # tes ranges toujours des hautes limites
+        stake_charts.set_reference("petites")
+        self.assertEqual((stake_charts.reference_set(), stake_charts.choice()), ("petites", "hautes"))
+        stake_charts.set_choice("auto")  # le choix pour tes mains garde la référence
+        self.assertEqual(stake_charts.reference_set(), "petites")
+        with self.assertRaises(ValueError):
+            stake_charts.set_reference("moyennes")
+        stake_charts.set_reference("hautes")
+        spot = studyspots.StudySpot("srp", studyspots.cards_of("KsKd4c"))  # la série : la référence
+        self.assertEqual((spot.ranges_set, spot.ident), ("hautes", "spot:srp:KsKd4c:hautes"))
+        self.assertEqual(studyspots.parse_ident("spot:srp:KsKd4c").ranges_set, "petites")  # une étude, un jeu
+        self.assertEqual((studyspots.ident_of("srp", "KsKd4c"), studyspots.ident_of("srp", "KsKd4c", "petites")),
+                         ("spot:srp:KsKd4c:hautes", "spot:srp:KsKd4c"))
+        session = SimpleNamespace()
+        with mock.patch("analyzer.theory.coach.extract_and_save") as extract:
+            spot.after_solve(session)  # les plans de jeu se lisent sur la référence
+            studyspots.parse_ident("spot:srp:KsKd4c").after_solve(session)  # pas sur l'autre jeu
+        self.assertEqual(extract.call_count, 1)
+        listed = [{"kind": "spot", "id": i, "family": "srp", "ranges": r, "summary": []}
+                  for i, r in (("spot:srp:KsKd4c", "petites"), ("spot:srp:KsKd4c:hautes", "hautes"))]
+        with mock.patch.object(postflop, "list_studies", lambda: listed), \
+                mock.patch.object(studyspots, "_current", lambda m: True):
+            studyspots._SPOT_STUDIES.clear()
+            self.assertEqual(list(studyspots.spot_studies()), ["spot:srp:KsKd4c:hautes"])
+            self.assertEqual(list(studyspots.spot_studies(None, "petites")), ["spot:srp:KsKd4c"])
+            studyspots._SPOT_STUDIES.clear()
+
     def test_older_document(self):
         """Un document d'avant les deux jeux : ses lignes valaient pour toutes tes mains, les hautes limites aussi."""
         from analyzer import db

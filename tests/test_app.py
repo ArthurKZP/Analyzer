@@ -584,6 +584,32 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((state["adjusted"], state["set"]), ("ligne", "petites"))
         self.assertEqual(self.request("POST", "/api/ranges/defaut/choix", json.dumps({"choix": "x"}), headers)[0], 400)
         self.request("POST", "/api/ranges/defaut/choix", json.dumps({"choix": "auto"}), headers)
+        # la référence : les études et l'explorateur préflop partent des ranges des hautes limites
+        self.assertEqual(json.loads(self.request("GET", "/api/ranges/defaut")[2])["reference"], "petites")
+        status, _, body = self.request("POST", "/api/ranges/defaut/reference", json.dumps({"reference": "hautes"}),
+                                       headers)
+        self.assertEqual((status, json.loads(body)), (200, {"reference": "hautes"}))
+        node = json.loads(self.request("POST", "/api/explorateur/preflop", json.dumps({"line": ["raise", "call"]}),
+                                       headers)[2])
+        self.assertEqual((node["preflop"]["set"], node["preflop"]["spots"][0]["id"]),
+                         ("hautes", "spot:srp:KsKd4c:hautes"))
+        self.assertEqual([x["reference"] for x in node["preflop"]["sets"]], [False, True])
+        node = json.loads(self.request("POST", "/api/explorateur/preflop",
+                                       json.dumps({"line": ["raise", "call"], "set": "petites"}), headers)[2])
+        self.assertEqual(node["preflop"]["spots"][0]["id"], "spot:srp:KsKd4c")  # l'autre jeu, au choix
+        flop = json.loads(self.request("POST", "/api/explorateur/flop", json.dumps(
+            {"family": "srp", "board": ["Ah", "7d", "2c"]}), headers)[2])
+        self.assertEqual(flop["id"], "spot:srp:Ah7d2c:hautes")
+        page = self.request("GET", "/etudes")[2].decode()  # les études s'ouvrent sur la référence
+        self.assertIn("Heads-up · SRP · hautes limites", page)
+        self.assertIn("NL200 et plus · la référence", page)
+        self.assertNotIn("ne sont pas la référence", page)
+        self.assertIn("ne sont pas la référence", self.request("GET", "/etudes?ranges=petites")[2].decode())
+        for path, bad in (("/api/ranges/defaut/reference", {"reference": "moyennes"}),
+                          ("/api/explorateur/preflop", {"line": [], "set": "moyennes"}),
+                          ("/api/explorateur/flop", {"family": "srp", "board": ["Ah", "7d", "2c"], "set": "x"})):
+            self.assertEqual(self.request("POST", path, json.dumps(bad), headers)[0], 400, (path, bad))
+        self.request("POST", "/api/ranges/defaut/reference", json.dumps({"reference": "petites"}), headers)
         for path, bad in (("/api/ranges/defaut/enregistrer", {"context": context, "ranges": {"SB": "AA"}}),
                           ("/api/ranges/defaut/enregistrer", {"context": context, "ranges": {"BB": "AXo"}}),
                           ("/api/ranges/defaut/enregistrer", {"context": context}),

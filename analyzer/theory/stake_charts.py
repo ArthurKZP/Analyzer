@@ -88,20 +88,54 @@ SETS = ("petites", "hautes")
 SET_NAMES = {"petites": "Petites limites", "hautes": "Hautes limites"}
 SET_LEVELS = {"petites": "NL100 et moins", "hautes": "NL200 et plus"}
 CHOICES = ("auto", "petites", "hautes")
-CHOICE_KEY = "choix"  # documents KIND : {"ranges": choix}
+CHOICE_KEY = "choix"  # documents KIND : {"ranges": choix, "reference": jeu}
+
+
+def _choices() -> dict:
+    data = documents.get(db.current(), KIND, CHOICE_KEY)
+    return dict(data) if isinstance(data, dict) else {}
 
 
 def choice() -> str:
     """Tes ranges par défaut : « auto » (selon la limite de chaque main), « petites » ou « hautes »."""
-    data = documents.get(db.current(), KIND, CHOICE_KEY)
-    found = data.get("ranges") if isinstance(data, dict) else None
+    found = _choices().get("ranges")
     return found if found in CHOICES else "auto"
 
 
 def set_choice(value: str) -> str:
     if value not in CHOICES:
         raise ValueError(f"Choix inconnu : {value} ({', '.join(CHOICES)}).")
-    documents.put(db.current(), KIND, CHOICE_KEY, {"ranges": value})
+    documents.put(db.current(), KIND, CHOICE_KEY, dict(_choices(), ranges=value))
+    return value
+
+
+# La référence : le jeu de ranges de ce qui ne dépend pas de la limite d'une main — les études du solveur (leurs
+# séries, plans de jeu, l'entraîneur, les repères du Leakfinding après le flop) et l'explorateur préflop. Par défaut,
+# celui de tes ranges par défaut quand elles sont toujours les hautes limites, sinon les petites limites.
+
+def reference_set() -> str:
+    """« petites » (la solution heads-up et les charts 6-max fournis) ou « hautes » (tes charts des hautes limites,
+    sinon la référence là où ils ne donnent rien)."""
+    data = _choices()
+    found = data.get("reference")
+    if found in SETS:
+        return found
+    return "hautes" if data.get("ranges") == "hautes" else "petites"
+
+
+def set_choices(table_format: str) -> list[dict]:
+    """Les deux jeux de ranges d'un format (« HU », « 6-max »), pour les choisir : leur nom, d'où viennent leurs ranges
+    (custom_ranges.reference_name) et lequel est la référence."""
+    from . import custom_ranges
+    reference = reference_set()
+    return [{"set": k, "name": SET_NAMES[k], "level": SET_LEVELS[k],
+             "source": custom_ranges.reference_name(table_format, k), "reference": k == reference} for k in SETS]
+
+
+def set_reference(value: str) -> str:
+    if value not in SETS:
+        raise ValueError(f"Référence inconnue : {value} ({', '.join(SETS)}).")
+    documents.put(db.current(), KIND, CHOICE_KEY, dict(_choices(), reference=value))
     return value
 
 

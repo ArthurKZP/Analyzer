@@ -143,11 +143,11 @@ class Handler(BaseHTTPRequestHandler):
         return found if found in stake_charts.SETS else "petites"
 
     def _study_set(self) -> str:
-        """Les ranges des études demandées (« ?ranges=hautes »), sinon celles de tes ranges par défaut quand elles sont
-        toujours celles des hautes limites."""
+        """Les ranges des études demandées (« ?ranges=hautes »), sinon celles de la référence (Paramètres › Ranges
+        préflop)."""
         if "ranges" in parse_qs(urlsplit(self.path).query):
             return self._ranges_set()
-        return "hautes" if stake_charts.choice() == "hautes" else "petites"
+        return stake_charts.reference_set()
 
     def _stakes(self) -> Optional[str]:
         """Le niveau de limites demandé (« ?limites=micro ») pour l'Étude du field (stakes.BANDS), ou None."""
@@ -306,9 +306,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.review_state(villain))
             if parts[:2] == ["api", "spots"] and len(parts) == 3 and parts[2] in library.SPOT_GROUPS:
                 # toutes les séries heads-up, ou 6-max (« ?ranges=hautes » : avec les ranges des hautes limites)
-                return self._json(library.group_spot_sets(parts[2], rset=self._ranges_set()))
+                return self._json(library.group_spot_sets(parts[2], rset=self._study_set()))
             if len(parts) == 3 and parts[:2] == ["api", "spots"]:
-                return self._json(library.spot_set(parts[2], rset=self._ranges_set()))
+                return self._json(library.spot_set(parts[2], rset=self._study_set()))
             if len(parts) == 2 and parts[0] == "explorateur" and (parts[1] == "preflop" or library.find_hand(parts[1])
                                                                    or studyspots.is_ident(parts[1])):
                 page = (STATIC / "explorer.html").read_text(encoding="utf-8")
@@ -389,6 +389,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.set_ranges_choice(payload.get("choix")))
             except ValueError as exc:
                 return self._error(400, str(exc))
+        if action == "reference":  # la référence des études et de l'explorateur préflop : petites ou hautes limites
+            try:
+                return self._json(library.set_ranges_reference(payload.get("reference")))
+            except ValueError as exc:
+                return self._error(400, str(exc))
         context = payload.get("context")
         rset = payload.get("jeu", "petites")
         if not isinstance(context, str) or len(context) > 200 or rset not in stake_charts.SETS:
@@ -423,10 +428,12 @@ class Handler(BaseHTTPRequestHandler):
             if not studyspots.is_ring(family):
                 return self._error(400, "Requête invalide.")
             line = ring_tree.line_for_family(family)
-        if not (isinstance(line, list) and len(line) <= 16 and all(a in ring_tree.ACTIONS for a in line)):
+        rset = payload.get("set")
+        if not (isinstance(line, list) and len(line) <= 16 and all(a in ring_tree.ACTIONS for a in line)
+                and rset in (None, *stake_charts.SETS)):
             return self._error(400, "Requête invalide.")
         try:
-            return self._json(ring_tree.node(line))
+            return self._json(ring_tree.node(line, ranges_set=rset))
         except ring_tree.NoCharts as exc:
             return self._error(404, str(exc))
         except ValueError:
@@ -481,20 +488,23 @@ class Handler(BaseHTTPRequestHandler):
             line = payload.get("line")
             if payload.get("family") in preflop_tree.FAMILY_LINES:
                 line = list(preflop_tree.FAMILY_LINES[payload["family"]])
-            if not (isinstance(line, list) and len(line) <= 6 and all(a in preflop_tree.ACTIONS for a in line)):
+            rset = payload.get("set")  # le jeu de ranges (petites ou hautes limites) ; par défaut, la référence
+            if not (isinstance(line, list) and len(line) <= 6 and all(a in preflop_tree.ACTIONS for a in line)
+                    and rset in (None, *stake_charts.SETS)):
                 return self._error(400, "Requête invalide.")
             try:
-                return self._json(preflop_tree.node(line))
+                return self._json(preflop_tree.node(line, ranges_set=rset))
             except ValueError:
                 return self._error(404, "Ligne préflop hors de la solution.")
         if parts == ["api", "explorateur", "flop"]:
             payload = self._small_json()
             board = payload.get("board") if isinstance(payload, dict) else None
             if not (isinstance(payload, dict) and isinstance(payload.get("family"), str)
-                    and studyspots.known_family(payload["family"]) and trainer.valid_cards(board, 3)):
+                    and studyspots.known_family(payload["family"]) and trainer.valid_cards(board, 3)
+                    and payload.get("set") in (None, *stake_charts.SETS)):
                 return self._error(400, "Requête invalide.")
             try:
-                return self._json(studyspots.flop_options(payload["family"], board))
+                return self._json(studyspots.flop_options(payload["family"], board, payload.get("set")))
             except postflop.Unsupported as exc:  # spot 6-max sans tes charts
                 return self._error(400, str(exc))
         if parts == ["api", "estimation"]:  # durée d'une résolution selon la précision
@@ -669,15 +679,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(404, "Adversaire inconnu.")
         if (parts[:2] == ["api", "spots"] and len(parts) == 4 and parts[2] in library.SPOT_GROUPS
                 and parts[3] in ("resoudre", "arreter")):
-            group, rset = parts[2], self._ranges_set()
+            group, rset = parts[2], self._study_set()
             return self._json(library.group_spot_cancel(group, rset) if parts[3] == "arreter"
                               else library.group_spot_sets(group, start=True, rset=rset))
         if len(parts) == 4 and parts[:2] == ["api", "spots"] and parts[3] in ("resoudre", "arreter"):
             if not studyspots.is_series(parts[2]):
                 return self._error(404, "Série inconnue.")
             if parts[3] == "arreter":
-                return self._json(library.spot_cancel(parts[2], self._ranges_set()))
-            return self._json(library.spot_set(parts[2], start=True, rset=self._ranges_set()))
+                return self._json(library.spot_cancel(parts[2], self._study_set()))
+            return self._json(library.spot_set(parts[2], start=True, rset=self._study_set()))
         if len(parts) == 4 and parts[:2] == ["api", "resoudre"] and parts[3] == "arreter":
             job = library.solves.cancel(parts[2])
             return self._json(job) if job else self._error(404, "Résolution inconnue.")

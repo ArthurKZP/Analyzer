@@ -353,18 +353,20 @@ def _reading(family: str) -> str:
     return f"la c-bet {de(ip)} après le check {de(oop)}, la réponse {de(oop)}, puis celle {de(ip)} face au check-raise"
 
 
-def _spot_section(family: str = "srp", shown_now: bool = True, rset: str = "petites") -> str:
+def _spot_section(family: str = "srp", shown_now: bool = True, rset: Optional[str] = None) -> str:
     info = studyspots.family_info(family)
     ring = family in studyspots.RING_FAMILIES
-    high = rset == "hautes"  # les ranges des hautes limites : une étude à part, hors des séries
+    rset = rset or studyspots.reference_set()
+    high = rset == "hautes"  # les ranges des hautes limites
+    apart = rset != studyspots.reference_set()  # pas celles de la référence : une étude à part, hors des séries
     studies = studyspots.spot_studies((family,), rset)
     boards = studyspots.family_boards(family)
-    if high:
+    if apart:
         boards += sorted({"".join(m["board"]) for m in studies.values()} - set(boards))
     spots = [studyspots.StudySpot(family, studyspots.cards_of(b), ranges_set=rset) for b in boards]
     metas = {s.ident: studies[s.ident] for s in spots if s.ident in studies and studies[s.ident].get("summary")}
     series = set(studyspots.flop_set(family))
-    refs = {} if high else {i: r for i, r in studyspots.reference(family).items() if i not in metas}
+    refs = {} if high else {i: r for i, r in studyspots.reference(family).items() if i not in metas}  # livrées
     shown = {**refs, **metas}  # une étude de cet ordinateur passe avant la référence
     columns = _columns(list(shown.values()), family)
     width = len(columns) + 3
@@ -429,8 +431,8 @@ def _spot_section(family: str = "srp", shown_now: bool = True, rset: str = "peti
     if high:
         title += " · hautes limites"
         origin = ("Ranges des hautes limites : leurs charts (Paramètres › Ranges préflop) là où ils en donnent, sinon "
-                  "celles de la référence ; " + origin[0].lower() + origin[1:])
-    ranges_attr = f' data-ranges="{rset}"' if high else ""  # la page lit l'état de ces ranges-là
+                  "celles des petites limites ; " + origin[0].lower() + origin[1:])
+    ranges_attr = f' data-ranges="{rset}"'  # la page lit l'état de ces ranges-là
     controls = (
         f'<div class="spot-head" data-family="{escape(family)}" data-done="{done}"{ranges_attr}>'
         f'<span><b>{done} / {total}</b> flops résolus{" · " + _size(size) if size else ""}</span>'
@@ -442,9 +444,10 @@ def _spot_section(family: str = "srp", shown_now: bool = True, rset: str = "peti
         f'<p class="note">Un flop sans tailles choisies passe d\'abord par leur choix, puis par sa résolution : '
         f"{escape(cost)} (sur 4 cœurs ; moins avec plus de cœurs). Les flops se traitent l'un après l'autre en "
         "arrière-plan, tant que l'application reste ouverte ; tu peux fermer cette page."
-        + (" Avec les ranges des hautes limites, chaque flop est une étude à part (les séries, leurs plans de jeu "
-           "et l'entraîneur restent faits avec la référence) ; il prend les tailles choisies pour ce flop."
-           if high else f" En ligne de commande : <code>python -m analyzer gtopen --spots {escape(family)}</code>.")
+        + (f" Ces ranges ne sont pas la référence (Paramètres › Ranges préflop) : chaque flop est une étude à part "
+           "(les séries, leurs plans de jeu et l'entraîneur sont faits avec la référence) ; il prend les tailles "
+           "choisies pour ce flop." if apart
+           else f" En ligne de commande : <code>python -m analyzer gtopen --spots {escape(family)}</code>.")
         + "</p>")
     return f"""
 <section class="spot-family" data-family="{escape(family)}"{"" if shown_now else " hidden"}>
@@ -469,11 +472,11 @@ f"la synthèse livrée avec {NAME} (même arbre, calculée à l'avance) : résou
 """
 
 
-def _ring_family_section(family: str, shown_now: bool, rset: str = "petites") -> str:
+def _ring_family_section(family: str, shown_now: bool, rset: Optional[str] = None) -> str:
     """La série d'une famille 6-max ; si tes charts n'ont pas sa ligne, pourquoi elle ne s'affiche pas."""
     from ..theory import stake_charts
     try:
-        studyspots.ring_spot_ranges(family, stake_charts.set_band(rset))
+        studyspots.ring_spot_ranges(family, stake_charts.set_band(rset or studyspots.reference_set()))
     except postflop.Unsupported as exc:
         info = studyspots.RING_FAMILIES[family]
         title = f"6-max · {info['pair']} · {info['name']}"
@@ -483,7 +486,7 @@ def _ring_family_section(family: str, shown_now: bool, rset: str = "petites") ->
     return _spot_section(family, shown_now, rset)
 
 
-def _ring_section(rset: str = "petites") -> str:
+def _ring_section(rset: Optional[str] = None) -> str:
     """Les spots d'étude 6-max : une famille à la fois (paire de positions et type de pot)."""
     from ..theory import ring_ranges
     families = list(studyspots.RING_FAMILIES)
@@ -508,10 +511,10 @@ def _ring_section(rset: str = "petites") -> str:
     group = _group_all("6max", rset)
     return (f'<div class="fam-group" data-group="6max"><h2>Spots d\'étude 6-max</h2>{intro}{group}'
             f'<div class="fam-switch" role="group" aria-label="Paire de positions et type de pot">{switch}</div>'
-            f'{sections}{_ring_others() if rset == "petites" else ""}</div>')
+            f'{sections}{_ring_others() if rset in (None, studyspots.reference_set()) else ""}</div>')
 
 
-def _hu_section(first: str = "srp", rset: str = "petites") -> str:
+def _hu_section(first: str = "srp", rset: Optional[str] = None) -> str:
     """Les spots d'étude heads-up (bouton contre BB) : une série à la fois (SRP, pot 3bet, pot 4bet), first d'abord."""
     families = list(studyspots.FAMILIES)
     first = first if first in families else families[0]
@@ -528,11 +531,13 @@ def _hu_section(first: str = "srp", rset: str = "petites") -> str:
 
 
 def ranges_switch(rset: str) -> str:
-    """Le choix des ranges des études : petites ou hautes limites (« ?ranges=… »)."""
+    """Le choix des ranges des études : petites ou hautes limites (« ?ranges=… ») ; la référence est marquée."""
     from ..theory import stake_charts
+    reference = studyspots.reference_set()
     links = "".join(
         f'<a href="?ranges={k}" aria-current="{"page" if k == rset else "false"}">{escape(stake_charts.SET_NAMES[k])} '
-        f'<span>{escape(stake_charts.SET_LEVELS[k])}</span></a>' for k in stake_charts.SETS)
+        f'<span>{escape(stake_charts.SET_LEVELS[k])}{" · la référence" if k == reference else ""}</span></a>'
+        for k in stake_charts.SETS)
     return f'<nav class="lk-fmt" aria-label="Ranges des études">{links}</nav>'
 
 
@@ -566,14 +571,16 @@ GROUP_NOTES = {
 }
 
 
-def _group_all(group: str, rset: str = "petites") -> str:
+def _group_all(group: str, rset: Optional[str] = None) -> str:
     """Le bouton qui met en file tous les flops manquants des séries d'un onglet (état lu par la page :
     /api/spots/hu ou /api/spots/6max, « ?ranges=hautes » avec les ranges des hautes limites)."""
+    rset = rset or studyspots.reference_set()
+    apart = rset != studyspots.reference_set()
     label = "heads-up" if group == "hu" else "6-max"
     if rset == "hautes":
         label += " hautes limites"
     upto = "1" if group == "6max" else "0"  # ranges des charts plus serrées : au plus la durée heads-up
-    ranges = f' data-ranges="{rset}"' if rset != "petites" else ""
+    ranges = f' data-ranges="{rset}"'
     return (f'<div class="card"><div class="group-head" data-group="{group}" data-label="{escape(label)}" '
             f'data-upto="{upto}"{ranges}><span class="group-count"></span>'
             f'<button type="button" class="go group-run" hidden>Résoudre tous les flops {label} manquants</button>'
@@ -581,8 +588,8 @@ def _group_all(group: str, rset: str = "petites") -> str:
             '<span class="spot-status group-status"></span></div>'
             f'<p class="note">{escape(GROUP_NOTES[group])} Chaque flop passe d\'abord par le choix de ses tailles, puis '
             "par sa résolution, à la précision réglée ; "
-            + ("avec les ranges des hautes limites, chaque flop est une étude à part, sans plan de jeu (les séries, "
-               "leurs plans et l'entraîneur restent faits avec la référence). " if rset == "hautes"
+            + ("ces ranges ne sont pas la référence : chaque flop est une étude à part, sans plan de jeu (les séries, "
+               "leurs plans et l'entraîneur sont faits avec la référence). " if apart
                else "son plan de jeu est lu aussitôt. ")
             + "La file vit dans l'application : si elle s'arrête, relance le bouton, il reprend avec les flops qui "
             "manquent.</p></div>")
@@ -631,11 +638,12 @@ quelques secondes, sans recalculer.</p>{table}</div>
 SECTIONS = ("hu", "6max", "coups") + tuple(studyspots.FAMILIES)
 
 
-def build_studies_page(embed: bool = True, section: Optional[str] = None, rset: str = "petites") -> str:
+def build_studies_page(embed: bool = True, section: Optional[str] = None, rset: Optional[str] = None) -> str:
     """Toutes les études, ou une seule section (onglets de l'application) : hu (SRP, pots 3bet et 4bet heads-up), 6max
-    ou coups ; rset : les ranges des séries, petites ou hautes limites."""
+    ou coups ; rset : les ranges des séries, petites ou hautes limites (par défaut, la référence)."""
     if section is not None and section not in SECTIONS:
         raise NotFound(section)
+    rset = rset or studyspots.reference_set()
     studies = postflop.list_studies()
     total = sum(s["size"] for s in studies)
     switch = ranges_switch(rset) if section != "coups" else ""

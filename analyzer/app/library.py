@@ -1585,10 +1585,10 @@ class Library:
             if (isinstance(spot, studyspots.StudySpot) and not spot.plan and not spot.adjusted and not spot.edits
                     and board in studyspots.flop_set(spot.family) and postflop.solved_request(spot.request()) is None):
                 # flop de la série sans tailles choisies : le choix d'abord, comme pour la série entière
-                family = spot.family
+                family, rset = spot.family, spot.ranges_set
                 view = self.solves.choose_and_solve(
                     spot.ident, lambda job: self._choose(family, board, job),
-                    lambda: studyspots.StudySpot(family, studyspots.cards_of(board)))
+                    lambda: studyspots.StudySpot(family, studyspots.cards_of(board), ranges_set=rset))
             else:
                 view = self.solves.start(spot, force=reopen)
         if view["state"] == "absent":
@@ -1827,7 +1827,7 @@ class Library:
                 "charts": bool(ring_ranges.available()) or not ring_played, "set": rset,
                 "sets": [{"set": k, "name": stake_charts.SET_NAMES[k], "level": stake_charts.SET_LEVELS[k],
                           "hands": sets.get(k, 0)} for k in stake_charts.SETS],
-                "choice": stake_charts.choice()}
+                "choice": stake_charts.choice(), "reference": stake_charts.reference_set()}
 
     def default_range_line(self, context: str, rset: str = "petites") -> dict:
         """Une ligne pour l'éditeur, dans ce jeu de ranges : la range de base de chaque position, et la tienne.
@@ -1885,6 +1885,14 @@ class Library:
         with self._lock:
             self._cache.clear()
         return {"choice": stake_charts.choice()}
+
+    def set_ranges_reference(self, value: object) -> dict:
+        """La référence : le jeu de ranges des études du solveur (séries, plans de jeu, entraîneur, repères du
+        Leakfinding après le flop) et de l'explorateur préflop. ValueError si le jeu est inconnu."""
+        stake_charts.set_reference(str(value))
+        with self._lock:
+            self._cache.clear()
+        return {"reference": stake_charts.reference_set()}
 
     def set_ranges_for_spots(self, value: bool) -> dict:
         """Tes ranges par défaut valent aussi (ou non) pour les spots d'étude ouverts dans l'explorateur."""
@@ -2085,6 +2093,7 @@ class Library:
         base = {s.key: list(base_plan[s.key]) if s.key in base_plan else spot.default_sizes_for(s.key)
                 for s in sizing.situations(family) if s.key not in fixed and s.key not in waiting}
         ident = spot.ident
+        rset = spot.ranges_set if isinstance(spot, studyspots.StudySpot) else ""  # celles du spot, ou la référence
 
         def choose(job) -> None:
             def log(message: str) -> None:
@@ -2094,7 +2103,7 @@ class Library:
                 job.process = proc
                 if job.cancelled:
                     proc.terminate()
-            study = studyspots.StudySpot(family, studyspots.cards_of(board), plan={})
+            study = studyspots.StudySpot(family, studyspots.cards_of(board), plan={}, ranges_set=rset)
             result = sizing.Selection(study, log, on_start=started, stopped=lambda: job.cancelled, fixed=fixed,
                                       auto=waiting, base=base).run()
             custom_tree.set_chosen(ident, {k: result["plan"][k] for k in waiting}, result["report"])
@@ -2210,17 +2219,19 @@ class Library:
         if family in studyspots.RING_FAMILIES:
             studyspots.ring_spot_ranges(family)  # tes charts 6-max (Unsupported sinon)
         board = "".join(studyspots.normalize_board(family, spot.board))
-        study = lambda: studyspots.StudySpot(family, studyspots.cards_of(board))  # noqa: E731
+        study = lambda: studyspots.StudySpot(family, studyspots.cards_of(board))  # noqa: E731  (la référence)
         return self.solves.choose_and_solve(
-            f"spot:{family}:{board}", lambda job: self._choose(family, board, job), lambda: self._spot(hand_id),
+            studyspots.ident_of(family, board), lambda job: self._choose(family, board, job),
+            lambda: self._spot(hand_id),
             aliases=(hand_id,), keep_live=True, after=lambda: self.solves.start(study(), keep_live=False))
 
-    def spot_set(self, family: str = "srp", start: bool = False, rset: str = "petites") -> dict:
+    def spot_set(self, family: str = "srp", start: bool = False, rset: Optional[str] = None) -> dict:
         """Série de spots d'étude : état de chaque flop ; start=True met en file ceux qui manquent ; rset : avec les
         ranges des petites limites (la série) ou des hautes limites (une étude à part par flop).
 
         Un flop de la série sans tailles choisies passe d'abord par le choix des tailles (long) ; avec les ranges des
-        hautes limites, il prend les mêmes tailles."""
+        hautes limites, il prend les mêmes tailles. Par défaut, les ranges de la référence."""
+        rset = rset or studyspots.reference_set()
         if not studyspots.is_series(family) or rset not in stake_charts.SETS:
             raise NotFound(family)
         try:
@@ -2269,13 +2280,14 @@ class Library:
         """« srp », « 3bet » ou « 4bet »."""
         return studyspots.RING_FAMILIES[family]["kind"] if family in studyspots.RING_FAMILIES else family
 
-    def group_spot_sets(self, group: str, start: bool = False, rset: str = "petites") -> dict:
+    def group_spot_sets(self, group: str, start: bool = False, rset: Optional[str] = None) -> dict:
         """Toutes les séries d'un onglet (« hu » : SRP, pots 3bet et 4bet heads-up ; « 6max » : celles que tes charts
         couvrent) : leur état et la durée de ce qui manque ; start=True met en file tous les flops manquants, un flop
         de chaque série à tour de rôle (pots 4bet et 3bet d'abord) : chaque plan de jeu se dessine vite, au lieu
         d'une série après l'autre ; rset : avec les ranges des petites ou des hautes limites. KeyError pour un autre
         onglet."""
         families = list(self.SPOT_GROUPS[group])
+        rset = rset or studyspots.reference_set()
         sets = {family: self.spot_set(family, rset=rset) for family in families}
         ready = postflop.status()["ready"]
         if start and ready:
@@ -2308,7 +2320,7 @@ class Library:
                               "max_iterations": row.get("max_iterations")}
         return out
 
-    def group_spot_cancel(self, group: str, rset: str = "petites") -> dict:
+    def group_spot_cancel(self, group: str, rset: Optional[str] = None) -> dict:
         """Arrête toutes les résolutions des séries de cet onglet (en attente ou en cours), avec ces ranges."""
         for family in self.SPOT_GROUPS[group]:
             for row in self.spot_set(family, rset=rset)["rows"]:
@@ -2335,7 +2347,7 @@ class Library:
                 proc.terminate()
         studyspots.choose_sizes(family, board, log, on_start=started, stopped=lambda: job.cancelled)
 
-    def spot_cancel(self, family: str = "srp", rset: str = "petites") -> dict:
+    def spot_cancel(self, family: str = "srp", rset: Optional[str] = None) -> dict:
         """Arrête les résolutions en lot de cette série (en attente ou en cours), avec ces ranges."""
         for row in self.spot_set(family, rset=rset)["rows"]:
             if row.get("state") in ("waiting", "running"):
