@@ -214,6 +214,12 @@ class Leak:
     effects: list = field(default_factory=list)  # ceux qu'il entraîne sans doute (leur titre)
     freq: Optional[tuple] = None     # (sa fréquence, celle de la théorie ou None, sa fourchette ou None, occasions)
     examples: Optional[leak_examples.Examples] = None  # ses décisions où se joue l'écart (le détail du leak)
+    headline: str = ""               # le leak en une phrase, en clair (« Tu mises trop souvent : 2e barrel… »)
+
+    @property
+    def summary(self) -> str:
+        """Le leak en une phrase (headline), sinon son titre."""
+        return self.headline or self.title
 
     @property
     def verified(self) -> str:
@@ -410,6 +416,115 @@ def _cap(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
+# --- Le leak en une phrase, en clair -------------------------------------------------------------------------------
+
+VERBS = {  # (sens de l'action, sens de l'écart) -> ce qu'il fait
+    ("bet", "plus"): "Tu mises trop souvent", ("bet", "moins"): "Tu ne mises pas assez",
+    ("fold", "plus"): "Tu te couches trop souvent", ("fold", "moins"): "Tu ne te couches pas assez",
+    ("raise", "plus"): "Tu relances trop souvent", ("raise", "moins"): "Tu ne relances pas assez",
+    ("call", "plus"): "Tu paies trop souvent", ("call", "moins"): "Tu ne paies pas assez",
+    ("aggr", "plus"): "Range trop large", ("aggr", "moins"): "Range trop serrée",
+    ("limp", "plus"): "Trop de limps", ("limp", "moins"): "Pas assez de limps",
+}
+SOLVER_VERBS = {  # catégorie d'actions du solveur (review.CATEGORIES), jouée plus ou moins que lui
+    ("aggressive", True): "Tu mises ou relances trop souvent", ("aggressive", False): "Tu ne mises pas assez",
+    ("passive", True): "Tu checkes ou paies trop souvent", ("passive", False): "Tu ne checkes ou ne paies pas assez",
+    ("fold", True): "Tu te couches trop souvent", ("fold", False): "Tu ne te couches pas assez",
+}
+ERROR_VERBS = {  # (ce qu'il a joué, ce que voulait le solveur) dans ses erreurs, les catégories de review.CATEGORIES
+    ("aggressive", "passive"): "Tu mises ou relances là où le solveur checke ou paie",
+    ("aggressive", "fold"): "Tu relances là où le solveur se couche",
+    ("passive", "aggressive"): "Tu checkes ou paies là où le solveur mise ou relance",
+    ("passive", "fold"): "Tu paies là où le solveur se couche",
+    ("fold", "passive"): "Tu te couches là où le solveur paie",
+    ("fold", "aggressive"): "Tu te couches là où le solveur relance",
+    ("aggressive", "aggressive"): "Tes mises ne sont pas à la bonne taille",
+}
+PLACES = {"Bouton": "au bouton", "BTN": "au bouton", "SB": "en SB", "BB": "en BB", "CO": "au CO", "HJ": "au HJ",
+          "LJ": "au LJ", "UTG": "en UTG", "UTG+1": "en UTG+1", "UTG+2": "en UTG+2"}
+LEADS = {"fold": ("fold ",), "raise": ("relance ", "sur-relance "), "call": ("call ",)}  # le verbe déjà dit
+
+
+def lower_first(text: str) -> str:
+    """« C-bet » -> « c-bet », « Pot 3bet » -> « pot 3bet » ; « SRP », « BTN » restent."""
+    return text if text[:2].isupper() and text[:2].isalpha() else text[:1].lower() + text[1:]
+
+
+def headline(title: str, kind: str, direction: str) -> str:
+    """Un écart à la théorie en une phrase : ce qu'il fait, puis où (« Tu mises trop souvent : 2e barrel (turn), au
+    bouton, en SRP » ; « Range trop large : open, au bouton »). title : « section · position : situation » (la
+    section : le type de pot, ou « Préflop » et sa situation aux tables à plusieurs)."""
+    verb = VERBS.get((kind, direction))
+    if verb is None:
+        return ""
+    section, _, label = title.rpartition(" · ")
+    who, _, what = label.rpartition(" : ")
+    what = lower_first(what)
+    place = PLACES.get(who, "")
+    # le type de pot ; avant le flop, la situation quand la section la dit (« Préflop · face à l'open »)
+    pot = section.partition(" · ")[2] if section.startswith("Préflop") else f"en {lower_first(section)}"
+    lead = next((w for w in LEADS.get(kind, ()) if what.startswith(w)), None)
+    if lead:  # « fold face à l'open » : « Tu te couches trop souvent face à l'open »
+        text = f"{verb} {what[len(lead):]}"
+    elif kind == "limp":
+        text = verb
+    else:
+        text = f"{verb} : {what}"
+    where = ", ".join(x for x in (place, pot) if x)
+    return f"{text}, {where}" if where else text
+
+
+def error_kind(digests: list[dict], group: dict) -> Optional[tuple[str, str]]:
+    """Ses erreurs d'une situation face au solveur, en gros : (ce qu'il joue, ce que joue le solveur) qui lui coûte
+    le plus d'EV, en catégories d'actions (fold, check ou call, mise ou relance) ; None sans erreur lisible."""
+    costs: dict[tuple[str, str], float] = {}
+    for g, d in review.decisions_of(digests, "H"):
+        if g["family"] != group["family"] or d["key"] != group["key"] or (review.loss(d) or 0.0) < review.ERROR:
+            continue
+        lost, evs, actions = review.loss(d), d.get("evs") or [], d.get("actions") or []
+        known = [k for k, e in enumerate(evs) if e is not None]
+        if d.get("chosen") is None or not known or len(evs) != len(actions):
+            continue
+        best = max(known, key=lambda k: evs[k])
+        pair = (review.category(actions[d["chosen"]]["kind"]), review.category(actions[best]["kind"]))
+        costs[pair] = costs.get(pair, 0.0) + lost
+    return max(costs, key=costs.get) if costs else None
+
+
+def solver_headline(group: dict, devs: list[dict], pot: str, errors: Optional[tuple[str, str]] = None) -> str:
+    """Une situation qui coûte face au solveur, en une phrase : son écart de fréquence le plus net (« Tu mises ou
+    relances trop souvent : c-bet, en pot 3bet »), sinon ce qui coûte dans ses erreurs (errors : error_kind), sinon ce
+    qu'elle coûte."""
+    label = group["label"]
+    what = f"face à {lower_first(label[len('Face à : '):])}" if label.startswith("Face à : ") else lower_first(label)
+    if devs:
+        dev = max(devs, key=lambda d: abs(d["z"]))
+        verb = SOLVER_VERBS.get((dev["category"], dev["observed"] > dev["expected"]))
+        if verb:
+            return f"{verb} : {what}, en {pot}"
+    if errors in ERROR_VERBS:
+        return f"{ERROR_VERBS[errors]} : {what}, en {pot}"
+    return f"Tu y perds de l'EV face au solveur : {what}, en {pot}"
+
+
+STREET_CODES = {"f": "flop", "t": "turn", "r": "river"}
+SITUATION_STREETS = {"cbet": "flop", "barrel": "turn", "delayed": "turn", "barrel3": "river", "stab": "flop"}
+STREET_NAMES = {"flop": "Au flop", "turn": "À la turn", "river": "À la river", "": "Après le flop"}
+
+
+def street_of(leak: Leak) -> str:
+    """La street où se joue un leak (« preflop », « flop », « turn », « river ») ; "" quand elle ne se dit pas (face à
+    une relance, à toutes les streets)."""
+    if leak.source == "préflop":
+        return "preflop"
+    if leak.key.startswith("solveur:"):
+        situation = leak.key.split(":", 2)[2]
+        return STREET_CODES.get(situation.split(":")[1][:1], "") if ":" in situation else ""
+    text = f"{leak.key} {leak.title}".lower()
+    found = next((s for s in ("river", "turn", "flop") if s in text), None)
+    return found or SITUATION_STREETS.get(leak.key.rsplit(":", 1)[-1], "")
+
+
 SCOPE_WORDS = {"reg": " contre les réguliers", "rec": " contre les récréatifs", "all": ""}
 
 
@@ -436,14 +551,15 @@ def _stat_leak(stat: Stat, scope: str = "reg") -> Optional[Leak]:
     preflop_stat = stat.section.startswith("Préflop")
     link = stat.link or (("preflop", "Voir l'onglet Préflop") if preflop_stat else ("plan", "Voir le plan de jeu"))
     advice = (stat.advice or {}).get(direction) or ADVICE.get((stat.kind, direction), "écart à la théorie à corriger")
-    return Leak(f"{stat.section} · {stat.label}",
+    title = f"{stat.section} · {stat.label}"
+    return Leak(title,
                 f"{round(100 * p)} % sur {r.opps} occasions{SCOPE_WORDS.get(scope, '')}, contre {stat.ref_text()}"
                 + (f" ({stat.note})" if stat.note else ""),
                 _cap(advice) + ".", "préflop" if preflop_stat else "postflop", conf, importance(stat, scope),
                 link[0], link[1], check=check, confirmed=check is not None and check.verdict == "fuite",
                 note=stat.size_note(), key=stat.key, direction=direction,
                 focus=frozenset() if preflop_stat else frozenset({stat.key}),
-                freq=(p, stat.ref_for(scope), stat.band, r.opps))
+                freq=(p, stat.ref_for(scope), stat.band, r.opps), headline=headline(title, stat.kind, direction))
 
 
 KEPT_ADVICE = {
@@ -605,10 +721,12 @@ def _solver_leak(group: dict, analyzed: int, digests: Optional[list[dict]] = Non
                 "bb n'est pas perdue.")
     focus = frozenset(x for x in (leakcheck.solver_stat(group["family"], group["key"], c)
                                   for c in ("fold", "passive", "aggressive")) if x)
-    return Leak(f"{family_name(group['family'])} · {group['label']}", evidence, advice, "solveur", conf,
+    pot = family_name(group["family"])
+    return Leak(f"{pot} · {group['label']}", evidence, advice, "solveur", conf,
                 100 * group["lost"] / max(analyzed, 1), f"drill:{group['family']}:{group['key']}", "S'entraîner",
                 _worst(digests or [], group), confirmed=exploited is None, note=note,
-                key=f"solveur:{group['family']}:{group['key']}", focus=focus)
+                key=f"solveur:{group['family']}:{group['key']}", focus=focus,
+                headline=solver_headline(group, devs, lower_first(pot), error_kind(digests or [], group)))
 
 
 def _hand_leak(x: "handplay.Loser", hands: int, scope: str = "reg", fmt: str = "HU", plays: Optional[list] = None,
@@ -653,7 +771,8 @@ def _hand_leak(x: "handplay.Loser", hands: int, scope: str = "reg", fmt: str = "
         example = (hand_id, 0, -ev)
     return Leak(f"Préflop · {x.label}", evidence, advice, "préflop", "solide", -100 * x.gap * x.n / max(hands, 1),
                 link, "Voir d'où vient la perte", example, confirmed=True,
-                examples=leak_examples.hand_loser(x, plays, hero) if plays else None)
+                examples=leak_examples.hand_loser(x, plays, hero) if plays else None,
+                headline=f"Une main de départ qui perd plus que le fold : {x.label}")
 
 
 # --- Leaks liés -----------------------------------------------------------------------------------------------------
@@ -813,6 +932,32 @@ def category(leak: Leak) -> str:
     else:
         role = _role_of(leak.key)
     return {"agresseur": "initiative", "defenseur": "defense"}.get(role or "", "postflop")
+
+
+def themes(items: list[tuple[int, Leak]]) -> list[tuple[str, list[tuple[int, Leak]]]]:
+    """Les leaks d'une catégorie (avec leur rang) regroupés par street, dans l'ordre de leur leak le plus important :
+    [(street, leaks)] (street_of)."""
+    groups: dict[str, list[tuple[int, Leak]]] = {}
+    for k, x in items:
+        groups.setdefault(street_of(x), []).append((k, x))
+    return sorted(groups.items(), key=lambda kv: kv[1][0][0])
+
+
+def theme_name(category_key: str, street: str) -> str:
+    """« Préflop », « À la turn, à l'initiative », « Au flop, en défense »."""
+    if street == "preflop" or category_key == "preflop":
+        return "Préflop"
+    role = {"initiative": "à l'initiative", "defense": "en défense"}.get(category_key, "")
+    return STREET_NAMES.get(street, "Après le flop") + (f", {role}" if role else "")
+
+
+def overview(found: list[Leak], n: int = 3) -> list[tuple[str, list[tuple[int, Leak]]]]:
+    """L'essentiel des leaks : leurs thèmes (catégorie et street) les plus importants d'abord, au plus n :
+    [(nom du thème, ses leaks avec leur rang)]."""
+    out = []
+    for (key, _, _), items in by_category(found):
+        out += [(theme_name(key, street), group) for street, group in themes(items)]
+    return sorted(out, key=lambda t: t[1][0][0])[:n]
 
 
 def by_category(found: list[Leak]) -> list[tuple[tuple[str, str, str], list[tuple[int, Leak]]]]:

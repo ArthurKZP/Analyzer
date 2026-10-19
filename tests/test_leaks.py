@@ -232,15 +232,23 @@ class ExamplesTest(unittest.TestCase):
 
     def test_page(self):
         x = leaks.Leak("Préflop · Bouton : open", "90 % sur 40 occasions", "Resserre.", "préflop", "solide", 2.0,
-                       key="sb_first.raise", direction="plus", freq=(0.9, 0.8, None, 40))
+                       key="sb_first.raise", direction="plus", freq=(0.9, 0.8, None, 40),
+                       headline=leaks.headline("Préflop · Bouton : open", "aggr", "plus"))
         x.examples = leak_examples.preflop("sb_first.raise", "plus",
                                            [ExamplesTest.play("T2o", ["Ts", "2d"], "raise", {"fold": 1.0})], "Hero")
         y = leaks.Leak("SRP · BTN : C-bet flop", "80 % sur 30 occasions", "Checke plus.", "postflop", "indicatif",
                        1.0, key="srp:cbet", direction="plus", freq=(0.8, None, (0.5, 0.6), 30))
         report = SimpleNamespace(leaks=[y, x], table_format="HU")
         page = leaks_html(report, "/eleve/paul", False)
+        self.assertEqual(x.summary, "Range trop large : open, au bouton")  # le leak en une phrase
+        self.assertEqual(y.summary, y.title)  # sans phrase : son titre
         for text in ('<a class="nm" href="#lk-c-initiative">Après le flop, à l&#x27;initiative</a>',
-                     '<li value="2"><a href="#lk-2">Bouton : open</a></li>', '<li value="2" id="lk-2">',
+                     '<li value="2"><a href="#lk-2" title="Préflop · Bouton : open">Range trop large : open, au bouton'
+                     "</a></li>", '<div class="lk-h">Range trop large : open, au bouton</div>',
+                     '<div class="lk-t">Préflop · Bouton : open <span', '<li value="2" id="lk-2">',
+                     # en bref : le moment du coup de chacun, dans l'ordre d'importance
+                     '<b>Au flop, à l&#x27;initiative</b> — <a href="#lk-1">SRP · BTN : C-bet flop</a>',
+                     '<b>Préflop</b> — <a href="#lk-2">range trop large : open, au bouton</a>',
                      "1 leak, solide", "1 leak, indicatif", "<summary>Le détail : fréquence et mains (1)</summary>",
                      'href="/rejouer/H-T2o?api=/api/eleves/paul&amp;at=3"', "1 fois : des mains que la théorie joue",
                      '<span class="lb">Repère</span>', '<span class="v">50–60 %</span>'):
@@ -249,6 +257,41 @@ class ExamplesTest(unittest.TestCase):
         alone = leaks_html(report, "/moi", True)
         self.assertNotIn("/rejouer/", alone)
         self.assertIn('<td class="small">H-T2o</td>', alone)  # le coup, sans lien
+
+
+class HeadlineTest(unittest.TestCase):
+    def test_headlines_and_themes(self):
+        """Chaque leak en une phrase, en clair ; les leaks d'une catégorie regroupés par street."""
+        self.assertEqual(leaks.headline("SRP · BTN : 2e barrel (turn)", "bet", "plus"),
+                         "Tu mises trop souvent : 2e barrel (turn), au bouton, en SRP")
+        self.assertEqual(leaks.headline("pot 3bet · BB : Fold face à la c-bet", "fold", "plus"),
+                         "Tu te couches trop souvent face à la c-bet, en BB, en pot 3bet")
+        self.assertEqual(leaks.headline("Préflop · premier à parler · CO : limp", "limp", "plus"),
+                         "Trop de limps, au CO, premier à parler")
+        self.assertEqual(leaks.headline("SRP, l'ouvreur en position · À l'initiative : C-bet flop", "bet", "moins"),
+                         "Tu ne mises pas assez : c-bet flop, en SRP, l'ouvreur en position")
+        group = {"label": "Face à : Relance turn du BTN"}
+        dev = {"category": "passive", "observed": 0.8, "expected": 0.4, "z": 3.0}
+        self.assertEqual(leaks.solver_headline(group, [dev], "pot 3bet"),
+                         "Tu checkes ou paies trop souvent : face à relance turn du BTN, en pot 3bet")
+        self.assertTrue(leaks.solver_headline(group, [], "SRP").startswith("Tu y perds de l'EV face au solveur"))
+        # sans écart de fréquence net : ce qui coûte dans ses erreurs (il paie, le solveur se couche)
+        call = {"who": "H", "key": "face:to:i:2", "d": 3, "chosen": 1, "ev_loss": 4.0, "frequency": 0.0,
+                "evs": [0.0, -4.0, -6.0], "actions": [{"kind": "fold"}, {"kind": "call"}, {"kind": "raise"}]}
+        digests = [{"hand": "H1", "family": "3bet", "decisions": [call, dict(call, ev_loss=0.1)]}]
+        situation = dict(group, family="3bet", key="face:to:i:2")
+        self.assertEqual(leaks.error_kind(digests, situation), ("passive", "fold"))
+        self.assertEqual(leaks.solver_headline(situation, [], "pot 3bet", ("passive", "fold")),
+                         "Tu paies là où le solveur se couche : face à relance turn du BTN, en pot 3bet")
+        make = lambda title, key, source="postflop": leaks.Leak(title, "", "", source, "solide", 1.0, key=key)  # noqa
+        found = [make("SRP · BTN : 2e barrel (turn)", "srp:barrel"),  # en pot 3bet, la BB 3bettrice hors de position
+                 make("pot 3bet · C-bet", "solveur:3bet:bet:fo:", "solveur"),
+                 make("pot 3bet · 2e barrel", "solveur:3bet:bet:to:o", "solveur"),
+                 make("Préflop · Bouton : open", "sb_first.raise", "préflop")]
+        self.assertEqual([leaks.street_of(x) for x in found], ["turn", "flop", "turn", "preflop"])
+        themes = leaks.overview(found)
+        self.assertEqual([(name, [k for k, _ in group]) for name, group in themes],
+                         [("À la turn, à l'initiative", [1, 3]), ("Au flop, à l'initiative", [2]), ("Préflop", [4])])
 
 
 class SolveOrderTest(unittest.TestCase):

@@ -757,13 +757,18 @@ les héros de ses historiques sont lui, le choix par défaut). **Deux rapports**
 (toutes ses tables de 3 à 9 joueurs ensemble ; les boutons en haut de la page, le dernier choisi est gardé), voir
 plus bas pour les tables à plusieurs.
 
-- **Les leaks à travailler** : les huit plus importants, **par catégorie d'abord** — *Préflop* (ses ranges, et les
-  mains de départ qui perdent), *Après le flop, à l'initiative* (c-bet, barrels, face aux relances), *Après le flop,
-  en défense* (face aux mises, mises quand l'agresseur checke) : une carte par catégorie, avec le nombre de leaks,
-  leur confiance et leurs titres numérotés du plus important au moins important (un clic ouvre son détail). Puis
-  chaque catégorie et ses leaks, l'essentiel visible — le titre, la confiance et le verdict en jeu, la preuve en une
-  ligne, puis quoi faire et où (entraîneur sur la situation, onglet Préflop, plan de jeu). **Le détail : fréquence
-  et mains** déplie sa fréquence face à la théorie (deux barres : joué, théorie ou repère), **ses mains** — ses
+- **Les leaks à travailler** : les huit plus importants. **En bref** d'abord : les moments du coup où se jouent les
+  plus importants (« À la turn, à l'initiative », « Préflop »…), chacun avec son leak le plus important en une
+  phrase et les numéros des autres. Puis **par catégorie** — *Préflop* (ses ranges, et les mains de départ qui
+  perdent), *Après le flop, à l'initiative* (c-bet, barrels, face aux relances), *Après le flop, en défense* (face
+  aux mises, mises quand l'agresseur checke) : une carte par catégorie, avec le nombre de leaks, leur confiance et
+  leurs leaks numérotés du plus important au moins important (un clic ouvre son détail). Puis chaque catégorie et
+  ses leaks, regroupés par street (au flop, à la turn, à la river), l'essentiel visible — **le leak en une phrase,
+  en clair** (« Tu mises trop souvent : 2e barrel (turn), au bouton, en SRP » ; face au solveur, son écart de
+  fréquence le plus net, sinon ce qui coûte dans ses erreurs : « Tu paies là où le solveur se couche : face à… »),
+  puis où il se joue (« SRP · BTN : 2e barrel (turn) »), la confiance et le verdict en jeu, la preuve en une ligne,
+  puis quoi faire et où (entraîneur sur la situation, onglet Préflop, plan de jeu). **Le détail : fréquence et
+  mains** déplie sa fréquence face à la théorie (deux barres : joué, théorie ou repère), **ses mains** — ses
   décisions dans le sens de l'écart, les plus parlantes d'abord : avant le flop, celles que la théorie joue le plus
   souvent autrement (un open de T2o que la théorie folde à 100 %), avec ce qu'elle fait de sa main et le résultat
   par rapport au fold ; après le flop, ses mains les plus faibles quand il en fait trop (miser, payer, relancer),

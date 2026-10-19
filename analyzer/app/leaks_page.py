@@ -22,6 +22,15 @@ STYLE = """
 .lk-list { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; }
 .lk-list li::marker { font-weight: 700; }
 .lk-t { font-weight: 600; }
+.lk-h { font-weight: 600; color: var(--ink); }
+.lk-h + .lk-t { font-weight: 400; font-size: 12px; color: var(--muted); }
+.lk-brief { border: 1px solid var(--border); border-left: 3px solid var(--series-1); border-radius: 8px;
+  padding: 10px 14px; margin: 4px 0 14px; background: var(--page); }
+.lk-brief b.ttl { display: block; margin-bottom: 4px; }
+.lk-brief ol { margin: 0; padding-left: 20px; font-size: 14px; }
+.lk-brief li { margin: 3px 0; }
+.lk-brief .more { color: var(--muted); font-size: 12px; }
+.lk-th { margin: 12px 0 6px; font-size: 13px; color: var(--ink-2); text-transform: none; }
 .lk-e { font-size: 13px; color: var(--ink-2); margin-top: 2px; }
 .lk-a { font-size: 13px; margin-top: 2px; }
 .lk-a a { font-weight: 600; margin-left: 6px; }
@@ -352,8 +361,10 @@ def _items(found: list[leaks.Leak], pages: str, standalone: bool, badge: bool = 
         rank = f' value="{ranks[k]}" id="lk-{ranks[k]}"' if ranks else ""
         folded = (f'<details class="lk-det"><summary>{escape(label)}</summary><div class="lk-det-body">{detail}'
                   "</div></details>") if detail else ""
-        out.append(f'<li{rank}><div class="lk-t">{escape(x.title)} {_conf(x.confidence)}'
-                   f'{f" {_badge(x.check)}" if badge and x.check else ""}</div>'
+        marks = f'{_conf(x.confidence)}{f" {_badge(x.check)}" if badge and x.check else ""}'
+        head = (f'<div class="lk-h">{escape(x.headline)}</div><div class="lk-t">{escape(x.title)} {marks}</div>'
+                if x.headline else f'<div class="lk-t">{escape(x.title)} {marks}</div>')
+        out.append(f'<li{rank}>{head}'
                    f'<div class="lk-e">{escape(x.evidence)}</div>'
                    f'<div class="lk-a">→ {escape(x.advice)}{_leak_link(x, pages, drills, standalone)}</div>'
                    f'{_related(x)}{folded}{action}</li>')
@@ -387,16 +398,41 @@ def leaks_html(report: leaks.Report, pages: str, standalone: bool, follows: Opti
         n = len(items)
         solid = sum(x.confidence == "solide" for _, x in items)
         s_ = "s" if n > 1 else ""
-        mini = "".join(f'<li value="{k}"><a href="#lk-{k}">{escape(_short(x.title, key))}</a></li>' for k, x in items)
+        mini = "".join(f'<li value="{k}"><a href="#lk-{k}" title="{escape(x.title)}">{escape(_short(x.summary, key))}'
+                       "</a></li>" for k, x in items)
         cards.append(f'<div class="lk-cat"><a class="nm" href="#lk-c-{key}">{escape(name)}</a>'
                      f'<div class="ct">{n} leak{s_}, {_solidity(solid, n)}</div>'
                      f'<div class="sub">{escape(what)}</div><ol class="lk-mini">{mini}</ol></div>')
-        body = _items([x for _, x in items], pages, standalone, solve=True, follows=follows, track=track,
-                      ranks=[k for k, _ in items])
+        groups = leaks.themes(items)
+        body = ""
+        for street, group in groups:  # par street : les leaks d'un même moment du coup ensemble
+            heading = (f'<h4 class="lk-th">{escape(leaks.STREET_NAMES.get(street, "Après le flop"))}</h4>'
+                       if len(groups) > 1 and street != "preflop" else "")
+            body += heading + '<ol class="lk-list">' + _items(
+                [x for _, x in group], pages, standalone, solve=True, follows=follows, track=track,
+                ranks=[k for k, _ in group]) + "</ol>"
         sections.append(f'<section class="lk-sec" id="lk-c-{key}"><h3>{escape(name)} <span class="n">{n} leak{s_}'
-                        f'</span></h3><ol class="lk-list">{body}</ol></section>')
-    return (f'<p class="lk-xi">Par catégorie, numérotés du plus important au moins important : choisis-en un pour son '
-            f'détail (sa fréquence, ses mains).</p><div class="lk-cats">{"".join(cards)}</div>{"".join(sections)}')
+                        f'</span></h3>{body}</section>')
+    return (f'{brief_html(report.leaks)}<p class="lk-xi">Par catégorie, puis par street, numérotés du plus important '
+            "au moins important : chaque leak en une phrase, puis où il se joue et ses chiffres ; choisis-en un pour "
+            f'son détail (sa fréquence, ses mains).</p><div class="lk-cats">{"".join(cards)}</div>{"".join(sections)}')
+
+
+def brief_html(found: list[leaks.Leak]) -> str:
+    """En bref : les thèmes (moment du coup) où se jouent les leaks les plus importants, chacun en une phrase."""
+    themes = leaks.overview(found)
+    if not themes:
+        return ""
+    items = []
+    for name, group in themes:
+        k, best = group[0]
+        others = len(group) - 1
+        more = (f' <span class="more">(et {others} autre{"s" if others > 1 else ""} : '
+                + ", ".join(f'<a href="#lk-{r}">n° {r}</a>' for r, _ in group[1:]) + ")</span>") if others else ""
+        text = leaks.lower_first(best.headline) if best.headline else best.title
+        items.append(f'<li><b>{escape(name)}</b> — <a href="#lk-{k}">{escape(text)}</a>{more}</li>')
+    return f'<div class="lk-brief"><b class="ttl">En bref</b><ol>{"".join(items)}</ol></div>'
+
 
 
 def kept_html(report: leaks.Report, pages: str, standalone: bool) -> str:
