@@ -5,17 +5,18 @@
   const frame = $('frame');
   // Les onglets de chaque vue : une page [page, libellé], ou un groupe de pages proches [libellé, [[page, libellé], …]]
   // dont les pages forment une seconde barre (sous-onglets). Les adresses restent celles des pages (#/moi/suivi).
-  const LEAKS_GROUP = ['Leaks', [['leaks', 'À travailler'], ['suivi', 'Suivi dans le temps'], ['solveur', 'Face au solveur']]];
+  const LEAKS_GROUP = ['Leaks', [['leaks', 'À travailler'], ['suivi', 'Suivi dans le temps']]];
+  // tes mains : chacune avec ce qu'en dit le solveur (à résoudre sinon), puis le bilan de tes mains face au solveur
+  const HANDS_TABS = [['spots', 'Heads-up'], ['tables', 'Tables à plusieurs'], ['solveur', 'Face au solveur']];
   const PREFLOP_GROUP = ['Préflop', [['preflop', 'Face à la théorie'], ['mains', 'Mains de départ']]];
   const TABS = {
-    moi: [['bilan', 'Bilan'], ['stats', 'Statistiques'], LEAKS_GROUP, PREFLOP_GROUP,
-      ['Mes mains', [['spots', 'Heads-up'], ['tables', 'Tables à plusieurs']]]],
+    moi: [['bilan', 'Bilan'], ['stats', 'Statistiques'], LEAKS_GROUP, PREFLOP_GROUP, ['Mes mains', HANDS_TABS]],
     // étude du field : tes adversaires, réguliers et récréatifs, chacun avec son leakfinding, ses bluffs et sa value
     field: [['Réguliers', [['regs', 'Leakfinding'], ['bluffs', 'Bluffs'], ['value', 'Value']]],
       ['Récréatifs', [['recs', 'Leakfinding'], ['rec-bluffs', 'Bluffs'], ['rec-value', 'Value']]]],
     parametres: [['general', 'Général'], ['joueurs', 'Joueurs et alias'], ['ranges', 'Ranges préflop']],
-    eleve: [['bilan', 'Bilan'], ['stats', 'Statistiques'], LEAKS_GROUP, PREFLOP_GROUP,
-      ['Ses mains', [['spots', 'Heads-up'], ['tables', 'Tables à plusieurs']]], ['importer', 'Importer']],
+    eleve: [['bilan', 'Bilan'], ['stats', 'Statistiques'], LEAKS_GROUP, PREFLOP_GROUP, ['Ses mains', HANDS_TABS],
+      ['importer', 'Importer']],
     // un joueur de référence : la comparaison avec toi, sa value et ses bluffs, puis son jeu analysé comme le tien
     reference: [['comparaison', 'Toi et lui'], ['lignes', 'Value et bluffs'], ['bilan', 'Bilan'], PREFLOP_GROUP,
       ['tables', 'Ses coups à plusieurs']],

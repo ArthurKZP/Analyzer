@@ -91,6 +91,28 @@ def _excluded_note(excluded: dict) -> str:
             "contre eux, l'exploitation prime sur la théorie.")
 
 
+def _solver_match(status: Optional[dict], wanted: str) -> bool:
+    """Le filtre « Solveur » du visualiseur : « done » (analysée), « todo » (à résoudre), « err » (une erreur)."""
+    if status is None:
+        return False
+    if wanted == "todo":
+        return "todo" in status
+    return "todo" not in status and (wanted == "done" or status["errors"] > 0)
+
+
+def _solver_sorts(status: dict[str, dict]) -> dict:
+    """Le tri du visualiseur sur ce que dit le solveur : l'EV perdue, les plus chères d'abord (puis les autres)."""
+    return {"evloss": (lambda r: (status.get(r["id"]) or {}).get("lost", -1.0), True)}
+
+
+def _solver_summary(found: list[dict]) -> dict:
+    """Ce que dit le solveur d'une sélection de mains : analysées, EV perdue et erreurs, mains à résoudre."""
+    done = [s for s in found if "todo" not in s]
+    return {"done": len(done), "todo": len(found) - len(done), "lost": round(sum(s["lost"] for s in done), 2),
+            "errors": sum(s["errors"] for s in done),
+            "minutes": round(sum(s["todo"] for s in found if "todo" in s), 1)}
+
+
 def _note(text: str) -> str:
     return (f'<p class="note">{escape(text)} Le type de chaque adversaire se règle dans Paramètres › Joueurs et alias '
             "(ou en haut de sa fiche).</p>")
@@ -121,6 +143,13 @@ def _round(x: Optional[float], digits: int = 1) -> Optional[float]:
 def _digest_count() -> int:
     """Le nombre de mains passées au solveur : les pages qui s'en servent sont recalculées quand il change."""
     return db_analyses.count(db.current())
+
+
+def _solver_key() -> tuple:
+    """Ce qui change quand une main passe au solveur (analyse, résolution, étude) ou quand ses réglages changent : les
+    pages qui montrent tes mains face au solveur sont recalculées."""
+    solved = postflop.solved_keys()
+    return _digest_count(), len(solved[0]), len(solved[1]), review.signature()
 
 
 def _formats(hands: list[Hand]) -> dict[str, int]:
@@ -183,6 +212,7 @@ class Library:
         self._lock = threading.Lock()
         self._key_locks: dict[tuple, threading.Lock] = {}
         self._cache: dict[tuple, object] = {}
+        self._solver_status: dict[bool, tuple] = {}  # format -> (clé, statuts) : le dernier calculé seulement
         self.hands: list[Hand] = []  # tes mains heads-up de la période
         self.ring: list[Hand] = []  # … et aux tables à plusieurs
         self._all_hands: list[Hand] = []  # toutes, quelle que soit la période
@@ -791,7 +821,7 @@ class Library:
             raise NotFound(page)
         if page == "tables":  # tables à 3 joueurs et plus : pas besoin de mains heads-up
             changes = _theory_changes()  # charts, plans des flops 6-max
-            return self._cached(("self", "tables") + changes + self._ring_kinds_key(), self._ring_page)
+            return self._cached(("self", "tables") + changes + self._ring_kinds_key() + _solver_key(), self._ring_page)
         if page == "mains":  # heads-up et tables à plusieurs ; les analyses du solveur s'y ajoutent
             key = (("self", "mains", tuple(sorted(ring_ranges.available().items())), _digest_count()) + self._kinds_key()
                    + self._ring_kinds_key())
@@ -868,7 +898,8 @@ class Library:
         """Tes coups à deux joueurs au flop aux tables à plusieurs, à ouvrir au solveur."""
         scopes, _ = self._ring_overview()
         return build_ring_page(scopes, self.hero or "", spots=self.ring_spots(MAX_RING_SPOTS),
-                               ranges=ring_ranges.available())
+                               ranges=ring_ranges.available(), status=self.solver_status(ring_game=True),
+                               api=f"{self.api}/coups")
 
     def _bilan_head(self, fmt: str, filters: Optional[dict] = None) -> str:
         """En tête du bilan : le filtre des gains, tes résultats tous formats confondus (puis en heads-up et aux tables
@@ -987,6 +1018,7 @@ class Library:
 
     # --- visualiseur de spots : recherche côté serveur -----------------------------------
     SPOT_FILTERS = ("opp", "pot", "pfa", "pos", "reach", "st", "cb", "h", "v", "l", "end", "known", "res", "sort", "q")
+    SOLVER_FILTERS = ("done", "todo", "err")  # le filtre « Solveur » : analysées, à résoudre, avec une erreur
 
     def _spot_index(self, villain: Optional[str]) -> list[dict]:
         """Les fiches de tes mains (sans le détail), contre cet adversaire ou tous."""
@@ -995,14 +1027,69 @@ class Library:
             return spots.list_records(hands, self.hero, villain) if self.hero else []
         return self._cached(("spot_index", villain or ""), build)
 
-    def spots_search(self, query: dict[str, str]) -> dict:
-        """Une page de mains du visualiseur : filtres (ceux de la page), tri, offset, limit ; adversaire : ses mains."""
+    def _spot_selection(self, query: dict[str, str]) -> tuple[list[dict], dict, dict[str, dict]]:
+        """Les fiches de la sélection du visualiseur (ses filtres, dont « sv » : face au solveur), ses filtres et le
+        statut de tes mains face au solveur (solver_status)."""
         index = self._spot_index(query.get("adversaire") or None)
         filters = {k: query[k] for k in self.SPOT_FILTERS if query.get(k)}
         if "reach" in filters and not filters["reach"].isdigit():
             del filters["reach"]
+        status = self.solver_status()
+        wanted = query.get("sv") if query.get("sv") in self.SOLVER_FILTERS else None
+        found = [r for r in index if spots.matches(r, filters)
+                 and (wanted is None or _solver_match(status.get(r["id"]), wanted))]
+        return found, filters, status
+
+    def spots_search(self, query: dict[str, str]) -> dict:
+        """Une page de mains du visualiseur : filtres (ceux de la page), tri, offset, limit ; adversaire : ses mains.
+        Chaque ligne porte ce qu'en dit le solveur (« sv ») ; la sélection, combien de ses mains sont analysées."""
+        found, filters, status = self._spot_selection(query)
         number = lambda key, default: int(query[key]) if (query.get(key) or "").isdigit() else default  # noqa: E731
-        return spots.search(index, filters, number("offset", 0), number("limit", 150))
+        out = spots.search(found, filters, number("offset", 0), number("limit", 150), extra_sorts=_solver_sorts(status))
+        for row in out["rows"]:
+            if row["id"] in status:
+                row["sv"] = status[row["id"]]
+        out["solver"] = _solver_summary([status[r["id"]] for r in found if r["id"] in status])
+        return out
+
+    def solver_status(self, ring_game: bool = False) -> dict[str, dict]:
+        """Tes mains allées au flop face au solveur (review.statuses) : en heads-up, ou tes pots à deux joueurs au
+        flop aux tables à plusieurs. Recalculé quand une analyse, une résolution ou un réglage du solveur change."""
+        if not self.hero:
+            return {}
+        key = (self.version,) + _solver_key()
+        with self._lock:
+            known = self._solver_status.get(ring_game)
+        if known is not None and known[0] == key:
+            return known[1]
+        hands = [h for h in self.ring if self.hero in (postflop.flop_pair(h) or ())] if ring_game else self.hands
+        found = review.statuses(hands, self.hero)
+        with self._lock:
+            self._solver_status[ring_game] = (key, found)
+        return found
+
+    def spots_solve(self, query: dict[str, str], action: str = "etat", limit: Optional[int] = None,
+                    ids: Optional[list[str]] = None) -> dict:
+        """Les mains de la sélection du visualiseur (ses filtres) ou ces mains (ids, des tables à plusieurs aussi) face
+        au solveur : « etat » (l'avancement), « resoudre » (met en file les limit premières qui restent à résoudre, dans
+        l'ordre de la liste ; toutes sans limit), « arreter »."""
+        if ids is not None:
+            status = {**self.solver_status(), **self.solver_status(ring_game=True)}
+            chosen = [i for i in ids if i in status]
+        else:
+            found, _, status = self._spot_selection(query)
+            sorts = {**spots.SORTS, **_solver_sorts(status)}
+            key, reverse = sorts.get(query.get("sort") or "date", spots.SORTS["date"])
+            found.sort(key=key, reverse=reverse)
+            chosen = [r["id"] for r in found if r["id"] in status]
+        todo = [i for i in chosen if "todo" in status[i]]
+        if action == "resoudre":
+            self._queue_hands(todo[:limit] if limit else todo)
+        elif action == "arreter":
+            for view in self.solves.active_for(todo):
+                self.solves.cancel(view["job"])
+        return dict(self._solve_view(todo, len(chosen) - len(todo)),
+                    minutes=round(sum(status[i]["todo"] for i in todo), 1))
 
     def hand_fiche(self, hand_id: str) -> dict:
         """La fiche complète d'une de tes mains heads-up (pour la rejouer)."""

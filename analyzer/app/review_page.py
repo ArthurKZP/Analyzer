@@ -313,8 +313,11 @@ voir ses cartes, toutes ses décisions comptent.</p></div>
                      "occurrences et 10 points d'écart ; « solide » quand le hasard l'explique très mal.</p></div>",
                      "situation par situation : tes erreurs, l'EV perdue et tes fréquences face au solveur",
                      "recurrentes")
+    hands = ("" if villain else " Chaque main, avec son EV théorique et l'EV perdue (ou à résoudre) : <b>Heads-up</b> "
+             "et <b>Tables à plusieurs</b>, à côté (filtre et tri <i>Solveur</i>).")
     body = f"""
-<div class="meta">Tes mains allées au flop {who}, comparées au solveur (pots simples, 3bet et 4bet).</div>
+<div class="meta">Tes mains heads-up allées au flop {who}, comparées au solveur (pots simples, 3bet et 4bet).
+{hands}</div>
 {tiles}
 <div class="card">{head}{kind_line}</div>
 <h2>Les erreurs qui coûtent le plus</h2>

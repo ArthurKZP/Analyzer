@@ -20,6 +20,16 @@ STYLE = """<style>
 table.stats td.pos { font-weight: 600; white-space: nowrap; }
 table.stats td.nowrap { white-space: nowrap; }
 a.rg-open { font-weight: 600; text-decoration: none; color: var(--series-1); white-space: nowrap; }
+.rg-tools { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: end; margin: 0 0 10px; font-size: 12px;
+  color: var(--ink-2); }
+.rg-tools label { display: flex; flex-direction: column; gap: 2px; }
+.rg-tools select { font: inherit; font-size: 13px; padding: 3px 6px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--page); color: var(--ink); }
+.rg-count { margin-left: auto; align-self: center; }
+.rg-sv-bad { color: var(--alert); font-weight: 600; }
+button.rg-solve { font: inherit; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 6px;
+  cursor: pointer; border: 1px solid var(--series-1); background: none; color: var(--series-1); white-space: nowrap; }
+button.rg-solve:disabled { opacity: .6; cursor: default; }
 </style>"""
 
 SCRIPT = """
@@ -32,6 +42,52 @@ document.querySelectorAll('.rg-load').forEach((b) => b.addEventListener('click',
   if (res && res.ok) location.reload();
   else { msg.textContent = data.error || 'Téléchargement impossible.'; b.disabled = false; }
 }));
+// Tes coups à deux joueurs au flop : filtres et tri sur la page, et « Résoudre » qui met le coup en file au solveur
+const rgTable = document.querySelector('table.rg-spots');
+if (rgTable) {
+  const rows = Array.from(rgTable.tBodies[0].rows);
+  const tools = document.querySelector('.rg-tools');
+  const value = (name) => tools.querySelector('[name="' + name + '"]').value;
+  const SORTS = { pot: (r) => -r.dataset.pot, date: (r) => -Date.parse(r.dataset.date), loss: (r) => +r.dataset.net,
+    win: (r) => -r.dataset.net, lost: (r) => -(r.dataset.lost === '' ? -1 : +r.dataset.lost) };
+  const apply = () => {
+    const f = { fmt: value('fmt'), pos: value('pos'), sv: value('sv'), res: value('res') };
+    let n = 0;
+    rows.forEach((r) => {
+      const d = r.dataset;
+      const ok = (!f.fmt || d.fmt === f.fmt) && (!f.pos || d.pos === f.pos)
+        && (!f.sv || (f.sv === 'err' ? d.err === '1' : d.sv === f.sv))
+        && (!f.res || (f.res === 'w' ? +d.net > 0 : +d.net < 0));
+      r.hidden = !ok;
+      n += ok;
+    });
+    const key = SORTS[value('sort')] || SORTS.pot;
+    rows.slice().sort((a, b) => key(a) - key(b)).forEach((r) => rgTable.tBodies[0].append(r));
+    tools.querySelector('.rg-count').textContent = n + ' coup' + (n > 1 ? 's' : '') + ' affiché' + (n > 1 ? 's' : '');
+  };
+  tools.querySelectorAll('select').forEach((s) => s.addEventListener('change', apply));
+  apply();
+  const api = rgTable.dataset.api;
+  const call = (body) => fetch(api, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body) }).then((res) => res.json().then((data) => (res.ok ? data : Promise.reject(data))));
+  rgTable.querySelectorAll('button.rg-solve').forEach((b) => b.addEventListener('click', () => {
+    b.disabled = true;
+    b.textContent = 'En file…';
+    const ids = [b.dataset.id];
+    call({ action: 'resoudre', ids }).then((first) => {
+      if (!first.ready) { b.textContent = 'Solveur absent'; return; }
+      const watch = () => setTimeout(() => call({ action: 'etat', ids }).then((v) => {
+        if (v.done > first.done) { location.reload(); return; }
+        const c = v.current;
+        b.textContent = c && c.progress && c.progress.iteration
+          ? 'Résolution… ' + Math.round(100 * Math.min(1, c.progress.iteration / c.max_iterations)) + ' %'
+          : (v.busy ? 'En file…' : 'Résoudre');
+        if (v.busy) watch(); else b.disabled = false;
+      }).catch(() => { b.disabled = false; b.textContent = 'Résoudre'; }), 3000);
+      watch();
+    }).catch(() => { b.disabled = false; b.textContent = 'Réessayer'; });
+  }));
+}
 document.querySelectorAll('.rg-switch button').forEach((b) => b.addEventListener('click', () => {
   document.querySelectorAll('.rg-fmt').forEach((s) => { s.hidden = s.dataset.scope !== b.dataset.scope; });
   document.querySelectorAll('.rg-switch button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
@@ -69,7 +125,7 @@ def _table(fs: ring.FormatStats, keys: tuple[str, ...], with_result: bool,
             f'<tbody>{"".join(rows)}</tbody></table></div>')
 
 
-MAX_SPOTS = 60
+MAX_SPOTS = 200
 WHY = (("Pas de range", "pas de range préflop"), ("Ta solution ne donne pas", "range manquante"),
        ("Un troisième joueur", "argent mort d'un 3e joueur"), ("Tapis préflop", "tapis préflop"))
 
@@ -79,20 +135,74 @@ def _why(status: str) -> str:
     return f'<span class="muted" title="{escape(status)}">{escape(short)}</span>'
 
 
-def _spots(rows: list[dict], ready: bool, opened: bool = False) -> str:
-    """Les coups à deux joueurs au flop (toutes tables), à ouvrir au solveur postflop."""
+def _solver_cells(r: dict, sv: Optional[dict]) -> str:
+    """EV théorique, EV perdue et ce qu'on peut faire du coup au solveur : le revoir (analysé), le résoudre (en file)
+    ou l'ouvrir dans l'explorateur, ou pourquoi il ne se résout pas."""
+    href = f'/explorateur/{quote(r["id"], safe="")}'
+    if r["status"] is not None:
+        return f'<td></td><td></td><td>{_why(r["status"])}</td>'
+    if sv and "todo" not in sv:
+        ev = "–" if sv["ev"] is None else f'{num(sv["ev"], 2, sign=True)} bb'
+        lost = (f'<span class="{"rg-sv-bad" if sv["errors"] else ""}">{num(sv["lost"], 2)} bb</span>'
+                + (f' <span class="muted">({sv["errors"]} err.)</span>' if sv["errors"] else ""))
+        at = f'#d={sv["d"]}' if sv.get("d") is not None else ""
+        return (f'<td class="num">{ev}</td><td class="num">{lost}</td><td><a class="rg-open" href="{href}{at}" '
+                'target="_blank" rel="noopener">Revoir ↗</a></td>')
+    return (f'<td class="num muted">–</td><td class="num muted">–</td><td class="nowrap">'
+            f'<button type="button" class="rg-solve" data-id="{escape(r["id"])}">Résoudre</button> '
+            f'<a class="rg-open" href="{href}" target="_blank" rel="noopener" title="Ouvrir au solveur">↗</a></td>')
+
+
+def _sv_state(r: dict, sv: Optional[dict]) -> str:
+    if r["status"] is not None:
+        return "none"
+    return "done" if sv and "todo" not in sv else "todo"
+
+
+def _tools(rows: list[dict]) -> str:
+    """Les filtres et le tri des coups (sur la page)."""
+    def select(name: str, label: str, options: list[tuple[str, str]]) -> str:
+        opts = "".join(f'<option value="{escape(v)}">{escape(t)}</option>' for v, t in options)
+        return f'<label>{label}<select name="{name}">{opts}</select></label>'
+    formats = sorted({r["format"] for r in rows})
+    order = ("UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN", "SB", "BB")
+    positions = sorted({r["hero"] for r in rows}, key=lambda p: order.index(p) if p in order else len(order))
+    return ('<div class="rg-tools">'
+            + (select("fmt", "Table", [("", "Toutes")] + [(f, f) for f in formats]) if len(formats) > 1
+               else '<input type="hidden" name="fmt" value="">')
+            + select("pos", "Ta position", [("", "Toutes")] + [(p, p) for p in positions])
+            + select("sv", "Solveur", [("", "Tous"), ("done", "Analysés"), ("todo", "À résoudre"),
+                                       ("err", "Avec une erreur (0,25 bb et plus)")])
+            + select("res", "Résultat", [("", "Tous"), ("w", "Gagnés"), ("l", "Perdus")])
+            + select("sort", "Tri", [("pot", "Plus gros pots"), ("date", "Plus récents"),
+                                     ("loss", "Plus grosses pertes"), ("win", "Plus gros gains"),
+                                     ("lost", "Plus d'EV perdue (solveur)")])
+            + '<span class="rg-count muted"></span></div>')
+
+
+def _spots(rows: list[dict], ready: bool, opened: bool = False, status: Optional[dict] = None,
+           api: str = "/api/coups") -> str:
+    """Les coups à deux joueurs au flop (toutes tables), à ouvrir au solveur postflop ; status : ce qu'en dit le
+    solveur (Library.solver_status), pour leur EV théorique et l'EV perdue, ou les résoudre ; api : où les mettre en
+    file (tes mains, ou celles d'un élève)."""
     mine = rows
     if not mine:
         return ""
-    body = "".join(
-        f'<tr><td class="nowrap">{r["date"]:%d/%m %H:%M}</td><td class="nowrap">{escape(r["format"])}</td>'
-        f'<td>{escape(r["line"])}</td>'
-        f'<td class="pos">{escape(r["hero"])} <span class="muted">vs {escape(r["villain"])}</span></td>'
-        f'<td>{cards_html(r["cards"])}</td><td>{cards_html(r["board"])}</td><td class="num">{num(r["total_bb"], 1)}</td>'
-        f'<td class="num">{num(r["net_bb"], 1, sign=True)}</td>'
-        + (f'<td><a class="rg-open" href="/explorateur/{quote(r["id"], safe="")}" target="_blank" rel="noopener">'
-           f'Ouvrir au solveur ↗</a></td>' if r["status"] is None else f"<td>{_why(r['status'])}</td>")
-        + "</tr>" for r in mine[:MAX_SPOTS])
+    status = status or {}
+
+    def row(r: dict) -> str:
+        sv = status.get(r["id"])
+        lost = "" if not sv or "todo" in sv else f'{sv["lost"]:.2f}'
+        data = (f' data-date="{r["date"]:%Y-%m-%dT%H:%M}" data-pot="{r["total_bb"]}" data-net="{r["net_bb"]}"'
+                f' data-fmt="{escape(r["format"])}" data-pos="{escape(r["hero"])}" data-sv="{_sv_state(r, sv)}"'
+                f' data-err="{int(bool(sv and sv.get("errors")))}" data-lost="{lost}"')
+        return (f'<tr{data}><td class="nowrap">{r["date"]:%d/%m %H:%M}</td>'
+                f'<td class="nowrap">{escape(r["format"])}</td><td>{escape(r["line"])}</td>'
+                f'<td class="pos">{escape(r["hero"])} <span class="muted">vs {escape(r["villain"])}</span></td>'
+                f'<td>{cards_html(r["cards"])}</td><td>{cards_html(r["board"])}</td>'
+                f'<td class="num">{num(r["total_bb"], 1)}</td><td class="num">{num(r["net_bb"], 1, sign=True)}</td>'
+                f"{_solver_cells(r, sv)}</tr>")
+    body = "".join(row(r) for r in mine[:MAX_SPOTS])
     note = "" if ready else (
         '<p class="note">Tes ranges préflop ne sont pas encore là : ces coups s\'ouvriront au solveur dès qu\'elles '
         "seront ajoutées.</p>")
@@ -101,16 +211,21 @@ def _spots(rows: list[dict], ready: bool, opened: bool = False) -> str:
                  '</button> <span class="muted small">pots simples, 3bet et 4bet ; téléchargés sur ta machine, pour ton '
                  "usage personnel (conditions du site)</span> <span class=\"rg-load-msg small\"></span></p>")
     extra = f" Les {MAX_SPOTS} plus gros pots sur {len(mine)}." if len(mine) > MAX_SPOTS else ""
-    table = ('<div class="card scroll"><table class="stats"><thead><tr><th>Date</th><th>Table</th>'
+    done = sum(1 for r in mine if _sv_state(r, status.get(r["id"])) == "done")
+    table = (f'<div class="card">{_tools(mine[:MAX_SPOTS])}<div class="scroll">'
+             f'<table class="stats rg-spots" data-api="{escape(api)}"><thead><tr><th>Date</th><th>Table</th>'
              '<th>Ligne préflop</th><th>Toi</th><th>Main</th><th>Flop</th><th class="num">Pot (bb)</th>'
-             '<th class="num">Résultat</th>'
-             f"<th>Solveur</th></tr></thead><tbody>{body}</tbody></table></div>"
+             '<th class="num">Résultat</th><th class="num">EV théorique</th><th class="num">EV perdue</th>'
+             f"<th>Solveur</th></tr></thead><tbody>{body}</tbody></table></div></div>"
              f'<p class="note">Résolus comme un coup heads-up à partir du flop, avec les ranges de ta solution préflop '
              "pour la ligne jouée (à une table sans solution à elle, les charts 6-max à même nombre de joueurs "
-             f"derrière) ; le pot compte l'argent mort des joueurs qui ont foldé.{extra}</p>")
+             f"derrière) ; le pot compte l'argent mort des joueurs qui ont foldé. EV théorique : ce que vaut ta main à "
+             "ta première décision au flop, jouée comme le solveur ; EV perdue : ce que tes décisions ont coûté face "
+             "à lui (une erreur : 0,25 bb et plus). <b>Résoudre</b> met le coup en file au solveur (quelques "
+             f"minutes) ; la page se met à jour quand il est analysé.{extra}</p>")
     return fold("Coups à deux joueurs au flop", note + table,
-                f"{len(mine)} coup{'s' if len(mine) > 1 else ''} à ouvrir au solveur, les plus gros pots d'abord",
-                "coups", opened=opened or not ready)
+                f"{len(mine)} coup{'s' if len(mine) > 1 else ''}, dont {done} analysé{'s' if done > 1 else ''} au "
+                "solveur", "coups", opened=opened or not ready)
 
 
 def _gaps(found: Optional[list]) -> str:
@@ -161,10 +276,12 @@ def positions_html(shown: list[tuple[str, str, ring.FormatStats]], positions: Op
 
 
 def build_ring_page(scopes: list[tuple[str, str, list]], hero: str, embed: bool = True,
-                    spots: Optional[list[dict]] = None, ranges: Optional[dict[str, int]] = None) -> str:
+                    spots: Optional[list[dict]] = None, ranges: Optional[dict[str, int]] = None,
+                    status: Optional[dict] = None, api: str = "/api/coups") -> str:
     """Tes coups à deux joueurs au flop aux tables à plusieurs, à ouvrir au solveur. scopes : [(portée, libellé,
     ring.analyze(…, merge=True))] — toutes tes mains, contre les réguliers, contre les récréatifs ; spots :
-    Library.ring_spots() ; ranges : formats dont la solution préflop est là (ring_ranges.available)."""
+    Library.ring_spots() ; ranges : formats dont la solution préflop est là (ring_ranges.available) ; status : ce
+    qu'en dit le solveur (Library.solver_status) ; api : où mettre un coup en file au solveur."""
     shown = [(scope, label, stats[0]) for scope, label, stats in scopes if stats]
     if not shown:
         body = ('<p class="note">Aucune main à une table de 3 joueurs ou plus. Importe des historiques 3-max, 6-max ou de '
@@ -182,7 +299,7 @@ def build_ring_page(scopes: list[tuple[str, str, list]], hero: str, embed: bool 
             f"{period}tes stats position par position et tes écarts à la théorie sont dans le "
             f'<a href="bilan{escape(format_query(FORMAT))}">bilan des tables à plusieurs</a> et le '
             f'<a href="leaks{escape(format_query(FORMAT))}">Leakfinding</a>.</div>')
-    found = _spots(spots or [], bool(ranges), opened=True)
+    found = _spots(spots or [], bool(ranges), opened=True, status=status, api=api)
     if not found:
         found = ('<p class="note">Aucun coup à deux joueurs au flop pour l\'instant : tes pots à plusieurs joueurs au '
                  "flop ne se résolvent pas.</p>")

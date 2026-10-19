@@ -168,6 +168,10 @@ class HeadsUpPotTest(unittest.TestCase):
             page = lib.self_page("tables")
             self.assertIn("Ouvrir au solveur", page)
             self.assertIn("BTN open, BB 3bet, BTN call", page)
+            # chaque coup avec ce qu'en dit le solveur, ici à résoudre ; filtres et tri sur la page
+            for text in ('<th class="num">EV théorique</th>', 'class="rg-solve" data-id="' + rows[0]["id"],
+                         'class="rg-tools"', '<select name="sv">', 'data-sv="todo"', "dont 0 analysé au solveur"):
+                self.assertIn(text, page)
         finally:
             lib.solves.shutdown()
 

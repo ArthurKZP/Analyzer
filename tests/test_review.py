@@ -71,6 +71,16 @@ class AggregateTest(unittest.TestCase):
         self.assertEqual((groups["bet:fi:"]["n"], groups["bet:fi:"]["errors"], groups["bet:fi:"]["lost"]), (2, 1, 1.5))
         self.assertAlmostEqual(groups["bet:fi:"]["expected"]["aggressive"], 1.2)
 
+    def test_hand_summary(self):
+        """Une main analysée dans les listes de mains : son EV théorique (ta première décision), l'EV perdue, tes
+        erreurs et ta décision la plus chère."""
+        mine = [dict(d, d=k) for k, d in enumerate(self.digests[0]["decisions"]) if d["who"] == "H"]
+        mine[0]["evs"] = [2.5, None]  # check : 2,5 bb (la mise jouée : hors de l'arbre)
+        summary = review.hand_summary({"decisions": mine})
+        self.assertEqual(summary, {"ev": 2.5, "lost": 1.6, "errors": 1, "d": mine[0]["d"]})  # la c-bet checkée
+        clean = review.hand_summary({"decisions": [dict(mine[1], d=3)]})
+        self.assertEqual(clean, {"ev": None, "lost": 0.0, "errors": 0, "d": None})
+
     def test_mixed_action_costs_nothing(self):
         # Le solveur paie 35 % du temps avec cette main : l'écart d'EV (nœud peu convergé) ne compte pas.
         mixed = dict(decision("H", "face:ri:oo:2", ["fold", "call"], 1, [0.6, 0.4], ev_loss=16.6), frequency=0.35)
@@ -178,6 +188,42 @@ class AnalyzeTest(unittest.TestCase):
             page = lib.self_page("solveur")
             for text in ('class="rv-pick"', '<option value="pertes"', "les plus chères (1)", "1 / 2</b>"):
                 self.assertIn(text, page)
+        finally:
+            lib.solves.shutdown()
+
+    def test_library_hand_lists(self):
+        """Mes mains : chaque main avec ce qu'en dit le solveur, le filtre et le tri « Solveur », et les mains de la
+        sélection mises en file, dans l'ordre de la liste."""
+        import time
+        lib = Library(FIXTURES)
+        try:
+            todo = lib.spots_search({"sv": "todo"})
+            self.assertEqual((todo["total"], todo["solver"]["todo"], todo["solver"]["done"]), (2, 2, 0))
+            self.assertTrue(all(r["sv"]["todo"] > 0 for r in todo["rows"]))
+            self.assertGreater(todo["solver"]["minutes"], 0)
+            self.assertEqual(lib.spots_search({"sv": "done"})["total"], 0)
+            everything = lib.spots_search({})
+            self.assertGreater(everything["total"], 2)  # les mains sans flop n'ont pas de statut
+            self.assertTrue(any("sv" not in r for r in everything["rows"]))
+            first = lib.spots_solve({"sv": "todo", "sort": "pot"}, "resoudre", limit=1)
+            self.assertEqual((first["total"], first["done"]), (2, 0))
+            deadline = time.time() + 30
+            while lib.spots_solve({}, "etat")["busy"] and time.time() < deadline:
+                time.sleep(0.05)
+            done = lib.spots_search({"sv": "done"})
+            self.assertEqual(done["total"], 1)
+            biggest = lib.spots_search({"sv": "todo", "sort": "pot"})
+            self.assertNotIn(done["rows"][0]["id"], [r["id"] for r in biggest["rows"]])
+            self.assertEqual(set(done["rows"][0]["sv"]), {"ev", "lost", "errors", "d"})
+            self.assertEqual(lib.spots_search({"sort": "evloss"})["rows"][0]["id"], done["rows"][0]["id"])
+            state = lib.spots_solve({}, "etat")
+            self.assertEqual((state["total"], state["done"], state["busy"]), (2, 1, 0))
+            other = biggest["rows"][0]["id"]
+            lib.spots_solve({}, "resoudre", ids=[other, "inconnue"])  # par ses numéros (tables à plusieurs aussi)
+            deadline = time.time() + 30
+            while lib.spots_solve({}, "etat", ids=[other])["busy"] and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(lib.spots_search({"sv": "done"})["solver"]["done"], 2)
         finally:
             lib.solves.shutdown()
 

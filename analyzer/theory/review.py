@@ -193,6 +193,12 @@ def _signature() -> tuple:
     return documents.revision(db.current(), *DEPENDS, KIND)
 
 
+def signature() -> tuple:
+    """Ce dont dépend l'analyse de tes mains hors les mains (tailles choisies, ranges, précision) : quand elle change,
+    les statuts de tes mains face au solveur sont à revoir."""
+    return _signature()
+
+
 def _variant(spot: postflop.PostflopSpot, stakes: bool = True) -> dict:
     """Les clés d'un spot ; stakes=False : construit avec les ranges de la référence (pas celles de tes charts par
     limites)."""
@@ -373,6 +379,29 @@ def saved_digests() -> list[dict]:
             out.append(upgrade(data))
         except (ValueError, KeyError):
             continue
+    return out
+
+
+def hand_summary(data: dict) -> dict:
+    """Ce que dit le solveur d'une main analysée, pour les listes de mains : l'EV théorique de ta main à ta première
+    décision (sa meilleure action, en bb), l'EV que tes décisions ont perdue, tes erreurs (ERROR bb et plus) et ta
+    décision la plus chère (où l'explorateur s'ouvre, None sans erreur)."""
+    mine = [d for d in data["decisions"] if d["who"] == "H"]
+    first = next((d for d in mine if any(e is not None for e in d.get("evs") or [])), None)
+    losses = [(loss(d) or 0.0, d["d"]) for d in mine if d["ev_loss"] is not None]
+    worst = max(losses, default=(0.0, None), key=lambda x: x[0])
+    return {"ev": round(max(e for e in first["evs"] if e is not None), 2) if first else None,
+            "lost": round(sum(x for x, _ in losses), 2), "errors": sum(x >= ERROR for x, _ in losses),
+            "d": worst[1] if worst[0] >= ERROR else None}
+
+
+def statuses(hands: list[Hand], hero: str) -> dict[str, dict]:
+    """Où en est chaque main allée au flop face au solveur : son résumé (hand_summary) quand elle est analysée,
+    {"todo": durée de sa résolution en minutes} quand elle reste à résoudre ; les autres (pas de flop, un coup que le
+    solveur ne sait pas jouer) n'y sont pas."""
+    done, todo = collect(hands, hero)
+    out = {h.hand_id: {"todo": minutes(pot_type)} for h, pot_type in zip(todo.hands, todo.pot_types)}
+    out.update({d["hand"]: hand_summary(d) for d in done})
     return out
 
 

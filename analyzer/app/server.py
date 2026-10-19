@@ -457,6 +457,22 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "reload"]:
             library.reload()
             return self._json(library.summary())
+        if parts == ["api", "coups"] or (len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] == "coups"):
+            # tes mains face au solveur : la sélection du visualiseur (ses filtres) ou des mains (ids)
+            payload = self._small_json()
+            if not (isinstance(payload, dict) and payload.get("action") in ("etat", "resoudre", "arreter")
+                    and isinstance(payload.get("query", {}), dict)):
+                return self._error(400, "Requête invalide.")
+            ids, limit = payload.get("ids"), payload.get("limit")
+            if ids is not None and not (isinstance(ids, list) and all(isinstance(i, str) for i in ids)):
+                return self._error(400, "Requête invalide.")
+            query = {str(k): str(v) for k, v in payload.get("query", {}).items()}
+            try:
+                owner = library if len(parts) == 2 else library.student(parts[2])
+            except UnknownPlayer:
+                return self._error(404, "Élève inconnu.")
+            return self._json(owner.spots_solve(query, payload["action"],
+                                                limit if isinstance(limit, int) and limit > 0 else None, ids))
         if parts == ["api", "resoudre"]:
             payload = self._small_json()
             if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
