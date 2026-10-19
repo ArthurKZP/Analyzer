@@ -44,27 +44,31 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   à exploiter). En haut de la fiche, son type : régulier ou récréatif (voir « Face au solveur »). Les liens « voir les mains » et « rejouer » ouvrent directement l'onglet Spots
   sur la bonne ligne ou la bonne main. Dans le replayer, **Résoudre ce coup** lance le solveur GTOpen
   (voir plus bas).
-- **Mon jeu** : quatre onglets, et dans chacun des sous-onglets pour les analyses proches (un onglet rouvre le
-  dernier sous-onglet choisi ; les adresses restent les mêmes). **Bilan** : contre tous tes adversaires — en tête,
-  tes résultats **tous formats confondus**, en heads-up et aux tables à plusieurs (avec leur rake) ; puis, au choix
+- **Mon jeu** : cinq onglets, et dans chacun des sous-onglets pour les analyses proches (un onglet rouvre le dernier
+  sous-onglet choisi ; les adresses restent les mêmes). **Bilan** : contre tous tes adversaires — en tête, tes
+  résultats **tous formats confondus**, en heads-up et aux tables à plusieurs (avec leur rake) ; puis, au choix
   *Heads-up* / *Tables à plusieurs* (retenu avec les Leaks et le Préflop), le même plan : résultat et courbe (réel
   en vert, EV all-in en jaune, à l'abattage en bleu, sans abattage en rouge : les couleurs des trackers, avec le
   cumul de chacune en bout de courbe), le **rake payé** (en € et en bb/100, avec ton winrate avant rake : ta part du
   rake de chaque pot, au prorata de ce que tu y as mis, la méthode des sites pour le rakeback), **tes écarts les
-  plus importants** aux repères avant le détail de tes stats (aux tables à plusieurs, sur toutes tes mains, contre
-  les réguliers et contre les récréatifs, puis **par position**), résultats par adversaire avec recherche, filtre
-  par type et tri par mains, résultat, bb/100, date ou nom (aux tables à plusieurs : mains ensemble, pots disputés
-  et ton résultat dans ces pots), pertes sans abattage (heads-up). Tout en haut, **Filtrer tes gains** : par limite
-  (NL500…), room, mois, moment du mois (début du 1er au 10, milieu du 11 au 20, fin) et créneau horaire (nuit 0h–6h,
-  matin, après-midi, soir 18h–24h, l'heure de tes historiques) ; seules les dimensions où tes mains varient sont
-  proposées, et le choix du format garde le filtre. Les tuiles, la courbe et les résultats tous formats confondus
-  suivent le filtre (tes stats et tes écarts restent sur toutes tes mains de la période) ; *Tes gains en détail*,
-  sous la courbe, compare valeur par valeur sur les mains que les autres filtres gardent : une ligne par valeur, ses
-  mains, une barre de son winrate centrée sur zéro (vert au-dessus, rouge en dessous) traversée de sa marge du hasard à
-  95 %, et sa valeur en bb/100 ; les lignes de moins de 300 mains sont pâles et hors de l'échelle (‹ › : la barre
-  déborde). Le survol et *Les chiffres* donnent les bb, l'EV all-in et les euros ; un clic sur une ligne l'applique. **Leaks** : *À travailler* (le
-  Leakfinding, voir plus bas), *Suivi dans le temps* (tes leaks période par période, avant et après le jour où tu as
-  commencé à les travailler, voir plus bas) et *Face au solveur* (tes erreurs postflop, voir plus bas).
+  plus importants** aux repères avant l'essentiel de tes stats (VPIP, PFR, open, 3bet, fold face au 3bet, abattage,
+  gain à l'abattage et WWSF, la part des flops vus que tu gagnes ; aux tables à plusieurs, sur toutes tes mains,
+  contre les réguliers et contre les récréatifs, puis **par position**, de l'UTG à la BB), résultats par adversaire
+  avec recherche, filtre par type et tri par mains, résultat, bb/100, date ou nom (aux tables à plusieurs : mains
+  ensemble, pots disputés et ton résultat dans ces pots), pertes sans abattage (heads-up). Tout en haut, **Filtrer
+  tes gains** : par limite (NL500…), room, mois, moment du mois (début du 1er au 10, milieu du 11 au 20, fin) et
+  créneau horaire (nuit 0h–6h, matin, après-midi, soir 18h–24h, l'heure de tes historiques) ; seules les dimensions
+  où tes mains varient sont proposées, et le choix du format garde le filtre. Les tuiles, la courbe et les résultats
+  tous formats confondus suivent le filtre (tes stats et tes écarts restent sur toutes tes mains de la période) ;
+  *Tes gains en détail*, sous la courbe, compare valeur par valeur sur les mains que les autres filtres gardent :
+  une ligne par valeur, ses mains, une barre de son winrate centrée sur zéro (vert au-dessus, rouge en dessous)
+  traversée de sa marge du hasard à 95 %, et sa valeur en bb/100 ; les lignes de moins de 300 mains sont pâles et
+  hors de l'échelle (‹ › : la barre déborde). Le survol et *Les chiffres* donnent les bb, l'EV all-in et les euros ;
+  un clic sur une ligne l'applique. **Statistiques** : toutes tes stats et leurs repères, sur toutes tes mains,
+  contre les réguliers et contre les récréatifs (heads-up : au bouton, en BB, après le flop, abattage ; tables à
+  plusieurs : toutes positions confondues puis position par position, de 3 à 9 joueurs). **Leaks** : *À travailler*
+  (le Leakfinding, voir plus bas), *Suivi dans le temps* (tes leaks période par période, avant et après le jour où
+  tu as commencé à les travailler, voir plus bas) et *Face au solveur* (tes erreurs postflop, voir plus bas).
   **Préflop** : *Face à la théorie* et *Mains de départ* (ce que rapporte chaque main, voir plus bas). *Face à la
   théorie* compare tes décisions préflop à la solution heads-up, ou, aux tables à plusieurs (choix *Heads-up* /
   *Tables à plusieurs* en haut de la page), à tes charts avec les mêmes cartes : un nœud par situation et positions
@@ -72,8 +76,8 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   tes fréquences face aux charts et tes écarts main par main ; une table sans charts à elle prend ceux du 6-max à
   même nombre de joueurs derrière, et les mains contre les récréatifs sont exclues. **Mes mains** : *Heads-up* (le
   visualiseur de spots, voir plus bas) et *Tables à plusieurs* (tes coups à deux joueurs au flop, à ouvrir au
-  solveur). Un élève a les mêmes onglets (*Bilan* avec ses courbes, *Leaks*, *Préflop*, *Ses mains*), plus
-  *Importer*.
+  solveur). Un élève a les mêmes onglets (*Bilan* avec ses courbes, *Statistiques*, *Leaks*, *Préflop*, *Ses
+  mains*), plus *Importer*.
 - **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Réguliers* et *Récréatifs* : le
   leakfinding de ceux que tu croises le plus, par limites (micro, milieu, hautes), chacun avec ses leaks à exploiter
   et ce que montrent ses lignes, puis sa fiche détaillée (voir *Étude du field : le leakfinding de tes
@@ -1737,15 +1741,17 @@ jusqu'au bout sans se coucher (la ligne « Showdown » de l'historique ne compte
 format, elle manque, ou figure quand un joueur montre ses cartes après le fold des autres). Quand le code de lecture
 change, l'application relit une fois tes historiques gardés au lancement (elle l'annonce).
 
-**Stats par position** (dans le *Bilan* des tables à plusieurs) : toutes tes tables de 3 à
-9 joueurs ensemble (une position compte ses mains de chaque taille de table), sur toutes tes mains, contre les
-réguliers et contre les récréatifs (comme en heads-up) — mains et bb/100, VPIP, PFR, open quand tu parles le
-premier, limp, 3bet et call face à une ouverture, fold face au 3bet après ton open, défense des blindes face à un
-vol (ouverture du CO, du bouton ou de la SB sans caller), c-bet au flop en pot à deux ou à plusieurs, fold face à
-la c-bet, abattage et gain à l'abattage. Des repères indicatifs d'un régulier 6-max à 100 bb (stats de tracker
-courantes) colorent les écarts. Plus haut dans le bilan, **tes écarts les plus importants** contre les réguliers face
-aux charts (avec les mêmes cartes) et aux plans de jeu des flops 6-max résolus, le détail étant dans le Leakfinding.
-Code : `analyzer/ring.py` (lecture des mains), `analyzer/ring_leaks.py` (face à la théorie), `app/bilan_page.py` et
+**Stats par position** (dans l'onglet *Statistiques* des tables à plusieurs) : toutes tes tables de 3 à 9 joueurs
+ensemble (une position compte ses mains de chaque taille de table), sur toutes tes mains, contre les réguliers et
+contre les récréatifs (comme en heads-up) — mains et bb/100, VPIP, PFR, open quand tu parles le premier, limp, 3bet
+et call face à une ouverture, fold face au 3bet après ton open, défense des blindes face à un vol (ouverture du CO,
+du bouton ou de la SB sans caller), c-bet au flop en pot à deux ou à plusieurs, fold face à la c-bet, abattage, gain
+à l'abattage et WWSF (la part des flops vus que tu gagnes, abattage ou non). Le *Bilan* n'en garde que l'essentiel
+(VPIP, PFR, open, 3bet, fold face au 3bet, abattage, gain à l'abattage, WWSF), et ses positions du 6-max (UTG à BB).
+Des repères indicatifs d'un régulier 6-max à 100 bb (stats de tracker courantes) colorent les écarts. Dans le
+*Bilan*, au-dessus de ces stats, **tes écarts les plus importants** contre les réguliers face aux charts (avec les
+mêmes cartes) et aux plans de jeu des flops 6-max résolus, le détail étant dans le Leakfinding. Code :
+`analyzer/ring.py` (lecture des mains), `analyzer/ring_leaks.py` (face à la théorie), `app/bilan_page.py` et
 `app/ring_page.py` (les pages).
 
 **Pots à deux joueurs au flop** (3-max, 6-max) : quand il ne reste que deux joueurs au flop, le coup se résout au

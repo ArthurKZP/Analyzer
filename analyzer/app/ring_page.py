@@ -39,18 +39,21 @@ document.querySelectorAll('.rg-switch button').forEach((b) => b.addEventListener
 """
 
 PREFLOP = ("vpip", "pfr", "open", "limp", "threebet", "flat", "fold_3bet", "fold_steal", "threebet_steal")
-POSTFLOP = ("cbet_hu", "cbet_multi", "fold_cbet", "wtsd", "wsd")
+POSTFLOP = ("cbet_hu", "cbet_multi", "fold_cbet", "wtsd", "wsd", "wwsf")
 
 
 def _ref_text(r) -> str:
     return f'<span class="rg-ref">repère {r[0]:.0f}–{r[1]:.0f}&nbsp;%</span>' if r else ""
 
 
-def _table(fs: ring.FormatStats, keys: tuple[str, ...], with_result: bool) -> str:
+def _table(fs: ring.FormatStats, keys: tuple[str, ...], with_result: bool,
+           positions: Optional[tuple[str, ...]] = None) -> str:
+    """Une ligne par position (positions : seulement celles-là), puis toutes ensemble."""
     head = "".join(f'<th class="num">{escape(ring.LABEL[k])}</th>' for k in keys)
     lead = '<th class="num">Mains</th><th class="num">bb/100</th>' if with_result else ""
     rows = []
-    for ps in fs.positions + [fs.total]:
+    shown = [ps for ps in fs.positions if positions is None or ps.position in positions]
+    for ps in shown + [fs.total]:
         cells = []
         for k in keys:
             stat = ring.stat_def(fs.table_format, k, ps.position if ps is not fs.total else None)
@@ -133,22 +136,27 @@ def _gaps(found: Optional[list]) -> str:
 LABELS = {"all": "Toutes tes mains", "reg": "Contre les réguliers", "rec": "Contre les récréatifs"}
 
 
-def positions_html(shown: list[tuple[str, str, ring.FormatStats]]) -> str:
+def positions_html(shown: list[tuple[str, str, ring.FormatStats]], positions: Optional[tuple[str, ...]] = None,
+                   preflop: tuple[str, ...] = PREFLOP, postflop: tuple[str, ...] = POSTFLOP) -> str:
     """Tes stats position par position (avant et après le flop), une portée à la fois : shown, [(portée, libellé,
-    stats de toutes tes tables ensemble)] — toutes tes mains, contre les réguliers, contre les récréatifs. Avec STYLE et
-    SCRIPT."""
+    stats de toutes tes tables ensemble)] — toutes tes mains, contre les réguliers, contre les récréatifs ; positions :
+    seulement celles-là (ring.SIX_MAX : le bilan). Avec STYLE et SCRIPT."""
     switch = ('<div class="rg-switch" role="group" aria-label="Adversaires">' + "".join(
         f'<button type="button" data-scope="{escape(scope)}" aria-pressed="{str(k == 0).lower()}">'
         f"{escape(LABELS.get(scope, label))} ({fs.total.hands})</button>" for k, (scope, label, fs) in enumerate(shown))
         + "</div>") if len(shown) > 1 else ""
     sections = "".join(
         f'<section class="rg-fmt" data-scope="{escape(scope)}"{"" if k == 0 else " hidden"}>'
-        f'<h3>Préflop par position</h3>{_table(fs, PREFLOP, True)}'
-        f'<h3>Après le flop</h3>{_table(fs, POSTFLOP, False)}</section>' for k, (scope, _, fs) in enumerate(shown))
+        f'<h3>Préflop par position</h3>{_table(fs, preflop, True, positions)}'
+        f'<h3>Après le flop</h3>{_table(fs, postflop, False, positions)}</section>'
+        for k, (scope, _, fs) in enumerate(shown))
+    only = (" Les positions d'une table 6-max seulement (les autres, à 7-9 joueurs : onglet Statistiques) ; « Toutes » "
+            "compte toutes tes mains." if positions else "")
     note = ('<p class="note">Une position compte ses mains de chaque taille de table. Repères indicatifs d\'un régulier '
             "en 6-max à 100 bb ; chiffres en gris : moins de 15 occasions. Open : tu parles le premier. Vol : ouverture "
             "du CO, du bouton ou de la SB sans caller ; la défense se lit en SB et BB. C-bet : tu étais le dernier "
-            "relanceur préflop et on te laisse miser au flop.</p>")
+            "relanceur préflop et on te laisse miser au flop. WWSF : tu as gagné le pot après avoir vu le flop."
+            f"{only}</p>")
     return switch + sections + note
 
 

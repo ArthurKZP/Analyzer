@@ -8,11 +8,12 @@
   const LEAKS_GROUP = ['Leaks', [['leaks', 'À travailler'], ['suivi', 'Suivi dans le temps'], ['solveur', 'Face au solveur']]];
   const PREFLOP_GROUP = ['Préflop', [['preflop', 'Face à la théorie'], ['mains', 'Mains de départ']]];
   const TABS = {
-    moi: [['bilan', 'Bilan'], LEAKS_GROUP, PREFLOP_GROUP, ['Mes mains', [['spots', 'Heads-up'], ['tables', 'Tables à plusieurs']]]],
+    moi: [['bilan', 'Bilan'], ['stats', 'Statistiques'], LEAKS_GROUP, PREFLOP_GROUP,
+      ['Mes mains', [['spots', 'Heads-up'], ['tables', 'Tables à plusieurs']]]],
     // étude du field : le leakfinding de tes adversaires (réguliers, récréatifs), les bluffs des réguliers en heads-up
     field: [['regs', 'Réguliers'], ['recs', 'Récréatifs'], ['bluffs', 'Bluffs des réguliers']],
     parametres: [['general', 'Général'], ['joueurs', 'Joueurs et alias'], ['ranges', 'Ranges préflop']],
-    eleve: [['bilan', 'Bilan'], LEAKS_GROUP, PREFLOP_GROUP,
+    eleve: [['bilan', 'Bilan'], ['stats', 'Statistiques'], LEAKS_GROUP, PREFLOP_GROUP,
       ['Ses mains', [['spots', 'Heads-up'], ['tables', 'Tables à plusieurs']]], ['importer', 'Importer']],
     // un joueur de référence : la comparaison avec toi, sa value et ses bluffs, puis son jeu analysé comme le tien
     reference: [['comparaison', 'Toi et lui'], ['lignes', 'Value et bluffs'], ['bilan', 'Bilan'], PREFLOP_GROUP,
@@ -26,7 +27,8 @@
     etudes: [['explorateur', 'Explorateur'], ['plan', 'Plan de jeu suggéré'], ['hu', 'Heads-up'], ['6max', '6-max'],
       ['coups', 'Coups joués']],
   };
-  const FORMAT_TABS = ['bilan', 'leaks', 'suivi', 'preflop', 'comparaison', 'lignes'];  // pages qui ont un choix heads-up / tables à plusieurs
+  // pages qui ont un choix heads-up / tables à plusieurs
+  const FORMAT_TABS = ['bilan', 'stats', 'leaks', 'suivi', 'preflop', 'comparaison', 'lignes'];
   // Les formats que tu joues (Paramètres) : sans choix, tous. Un format que tu ne joues pas sort des menus.
   const plays = (fmt) => !state || !state.settings || !state.settings.plays || state.settings.plays.includes(fmt);
   const HIDDEN_TABS = { HU: { moi: ['spots', 'solveur'], field: ['bluffs'], etudes: ['hu'], entraineur: ['solveur'] },

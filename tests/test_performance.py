@@ -87,8 +87,8 @@ class RingReadTest(unittest.TestCase):
         bb = next(p for p in steal.seats if steal.position(p) == "BB")
         btn = next(p for p in steal.seats if steal.position(p) == "BTN")
         self.assertEqual(every[bb], {"threebet": False, "flat": True, "fold_steal": False, "threebet_steal": False,
-                                     "vpip": True, "pfr": False, "fold_cbet": True, "wtsd": False})
-        self.assertEqual(every[btn]["cbet_hu"], True)
+                                     "vpip": True, "pfr": False, "fold_cbet": True, "wtsd": False, "wwsf": False})
+        self.assertEqual((every[btn]["cbet_hu"], every[btn]["wwsf"]), (True, True))  # il gagne le pot après le flop
         self.assertIs(ring.read(steal, bb), ring.read(steal, bb))  # gardée sur la main
         self.assertEqual(ring.read(steal, bb), every[bb])
 

@@ -39,7 +39,7 @@ MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
 MAX_SMALL_BODY = 64 * 1024
 MAX_CHARTS_BODY = 4 * 1024 * 1024  # des charts préflop importés (Paramètres › Ranges préflop)
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "bluffs", "tables", "mains", "suivi")
+STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "stats", "bluffs", "tables", "mains", "suivi")
 REFINE_SIDES = {"attaque": "attack", "defense": "defense"}  # affiner un niveau du plan : le côté
 
 

@@ -94,12 +94,20 @@ def result_tiles(res: dict) -> str:
     )) + "</div>"
 
 
-def stats_table(scopes: list[tuple[str, str, ring.FormatStats]]) -> str:
+# Le bilan : l'essentiel (le reste, limps, calls d'une ouverture, vols, c-bets : l'onglet Statistiques).
+BILAN_STATS = ("vpip", "pfr", "open", "threebet", "fold_3bet", "wtsd", "wsd", "wwsf")
+
+
+def stats_table(scopes: list[tuple[str, str, ring.FormatStats]], keys: Optional[tuple[str, ...]] = None,
+                more_href: str = "") -> str:
     """Tes stats toutes positions confondues, sur toutes tes mains, contre les réguliers et contre les récréatifs,
-    face aux repères indicatifs d'un régulier 6-max."""
+    face aux repères indicatifs d'un régulier 6-max ; keys : seulement celles-là ; more_href : la page de toutes tes
+    stats."""
     head = "".join(f'<th class="num">{escape(label)}</th>' for _, label, _ in scopes)
     rows = []
     for key, label in ring.STATS:
+        if keys is not None and key not in keys:
+            continue
         stat = ring.stat_def(ring.MERGED, key)
         if not any(fs.total.ratios[key].opps for _, _, fs in scopes):
             continue
@@ -108,8 +116,10 @@ def stats_table(scopes: list[tuple[str, str, ring.FormatStats]]) -> str:
         rows.append(f'<tr><td>{escape(label)}</td>{cells}<td class="num muted">{ref}</td></tr>')
     return (f'<div class="card scroll"><table class="stats"><thead><tr><th></th>{head}<th class="num">Repère</th></tr>'
             f'</thead><tbody>{"".join(rows)}</tbody></table>'
-            '<p class="note">Toutes positions confondues (le détail : « Par position », plus bas). Repères indicatifs '
-            "d'un régulier 6-max à 100 bb.</p></div>")
+            '<p class="note">Toutes positions confondues (le détail : « Par position »). Repères indicatifs '
+            "d'un régulier 6-max à 100 bb. WWSF : tu gagnes le pot après avoir vu le flop."
+            + (" Toutes tes stats (limps, calls d'une ouverture, vols, c-bets…) : "
+               f'<a href="{escape(more_href)}">onglet Statistiques</a>.' if more_href else "") + "</p></div>")
 
 
 def _by_scope(scopes: list[tuple[str, str, ring.FormatStats]]) -> str:
@@ -159,11 +169,12 @@ RING_NOTE = ('<p class="note">Toutes tes tables de 3 joueurs et plus ensemble. U
 
 def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, Optional[ring.FormatStats]]],
                      opponents: list[dict], gaps: Optional[list], head: str = "", embed: bool = True,
-                     filters: Optional[dict] = None) -> str:
+                     filters: Optional[dict] = None, stats_href: str = "") -> str:
     """hands : tes mains aux tables à plusieurs ; scopes : [(portée, libellé, ring.analyze(…, merge=True)[0])] ;
     opponents : Library.ring_opponents_view() ; gaps : tes écarts les plus importants contre les réguliers ; head : le
     filtre des gains, le choix du format et tes résultats tous formats confondus ; filters : le filtre des gains
-    (gains.clean), pour tes résultats et leur répartition."""
+    (gains.clean), pour tes résultats et leur répartition ; stats_href : l'onglet de toutes tes stats (sans lui,
+    toutes au bilan, toutes les positions comprises)."""
     filters = filters or {}
     res = results(hands, hero)
     shown_res = results(gains.apply(hands, filters), hero) if filters else res
@@ -188,10 +199,12 @@ def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, 
 
 {_gaps(gaps) if gaps is not None else ""}
 
-{fold("Tes statistiques", stats_table(shown), "préflop et après le flop, contre les réguliers et les récréatifs",
-      "stats")}
+{fold("Tes statistiques", stats_table(shown, BILAN_STATS, stats_href),
+      "l'essentiel, contre les réguliers et les récréatifs (le détail : onglet Statistiques)", "stats")
+ if stats_href else fold("Tes statistiques", stats_table(shown), "contre les réguliers et les récréatifs", "stats")}
 
-{fold("Par position", positions_html(shown), "open, défense, 3bet, vols, c-bet et barrels, position par position",
+{fold("Par position", positions_html(shown, ring.SIX_MAX if stats_href else None),
+      ("les positions du 6-max : " if stats_href else "") + "open, défense, 3bet, vols, c-bet, gains après le flop",
       "positions")}
 
 {fold("Résultats par adversaire", _by_scope(shown) + opponents_table(opponents) + RING_NOTE,
@@ -199,3 +212,25 @@ def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, 
 """
     return html_page(f"Mon jeu — {hero}", body, embed,
                      script=SCRIPT + RING_SCRIPT + (OPP_SCRIPT if tools else "") + gains_page.SCRIPT)
+
+
+def build_ring_stats(hands: list[Hand], hero: str, scopes: list[tuple[str, str, Optional[ring.FormatStats]]],
+                     head: str = "", embed: bool = True) -> str:
+    """L'onglet Statistiques aux tables à plusieurs : toutes tes stats (toutes positions, puis position par position,
+    toutes les positions), sur toutes tes mains, contre les réguliers et contre les récréatifs."""
+    shown = [(scope, label, fs) for scope, label, fs in scopes if fs is not None]
+    if not shown:
+        body = (f'{head}<p class="note">Aucune main à une table de 3 joueurs ou plus. Importe des historiques 3-max, '
+                "6-max ou de 7 à 9 joueurs.</p>")
+        return html_page(f"Statistiques — {hero}", body, embed)
+    total = shown[0][2].total.hands
+    body = f"""<style>{OPP_STYLE}{REVIEW_STYLE}{LEAK_STYLE}</style>{RING_STYLE}
+{head}
+<div class="meta">Toutes tes stats aux tables à plusieurs ({total} mains), face aux repères indicatifs d'un régulier
+6-max à 100 bb ; l'essentiel est dans le bilan.</div>
+<h2>Toutes positions confondues</h2>
+{stats_table(shown)}
+<h2>Position par position</h2>
+<div class="card">{positions_html(shown)}</div>
+"""
+    return html_page(f"Statistiques — {hero}", body, embed, script=SCRIPT + RING_SCRIPT)

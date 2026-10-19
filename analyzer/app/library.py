@@ -31,7 +31,7 @@ from ..lines import villain_lines
 from ..models import CALL, RAISE, Hand
 from ..parsers import count_hands, read_zip
 from ..report import build_plan_page, build_report, format_switch, html_page
-from ..selfreport import build_self_report, opponent_results
+from ..selfreport import build_self_report, build_stats_page, opponent_results
 from ..stats import analyze
 from ..theory import (coach, custom_ranges, custom_tree, handclass, postflop, review, ring_preflop, ring_ranges, sizing,
                       stake_charts, studyspots)
@@ -62,7 +62,7 @@ PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur", "bluffs")
 HEADS_UP_ONLY = ('<p class="note">Aucune main heads-up : cette page analyse tes parties en heads-up. Tes tables à '
                  'plusieurs (3 à 9 joueurs, ensemble) ont leur bilan (avec leurs stats par position), leur Leakfinding, '
                  'leur préflop et leurs mains de départ : choisis « Tables à plusieurs » en haut de ces pages.</p>')
-SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks", "tables", "mains", "suivi")
+SELF_PAGES = ("bilan", "stats", "preflop", "spots", "solveur", "bluffs", "leaks", "tables", "mains", "suivi")
 REFERENCE_PAGES = ("comparaison", "lignes", "bilan", "tables", "preflop", "mains")  # un joueur de référence
 REFERENCE_PREFIX = "ref:"  # sa période d'analyse se garde sous cette clé
 FIELD_PAGES = ("regs", "recs", "bluffs", "joueurs")  # Étude du field (« joueurs » : aussi dans Paramètres)
@@ -799,6 +799,8 @@ class Library:
             return self._ring_preflop_page()
         if page == "bilan" and self._leak_format(table_format) != "HU":
             return self._ring_bilan(filters)
+        if page == "stats" and self._leak_format(table_format) != "HU":
+            return self._ring_stats_page()
         if not self.hands:
             if self.ring:  # seulement des tables à plusieurs : la page heads-up le dit
                 return html_page("Heads-up", HEADS_UP_ONLY, True)
@@ -813,7 +815,14 @@ class Library:
                 return build_self_report(self.hands, self.all_stats(), self.hero, embed=True, spots_href="",
                                          kinds=self.kinds(), head=self._bilan_head("HU", filters),
                                          leaks_href="" if self.pages.startswith("/reference/") else "leaks",
-                                         gains=self._hu_gains(filters))
+                                         gains=self._hu_gains(filters), stats_href=self._stats_href())
+            if page == "stats":  # toutes tes stats heads-up : toutes tes mains, contre les réguliers, les récréatifs
+                recs = {h.hand_id for h in self.hands} - {h.hand_id for h in regular}
+                others = [("Contre réguliers", analyze(regular).get(self.hero) if recs else None),
+                          ("Contre récréatifs", analyze([h for h in self.hands if h.hand_id in recs]).get(self.hero)
+                           if recs else None)]
+                return build_stats_page(self.all_stats()[self.hero], self.hero, others,
+                                        head=format_switch(self.leak_formats(), "HU"), hands=len(self.hands))
             if page == "preflop":  # les charts du niveau de limites où tu as le plus de mains
                 band, charts = stake_charts.page_band("HU", regular)
                 note = " ".join(x for x in (_excluded_note(excluded), charts) if x)
@@ -824,7 +833,7 @@ class Library:
                 return self._population_bluffs()
             return build_viewer(self.hands, self.hero, None, embed=True, solver=True, api=f"{self.api}/coups",
                                 records=self._spot_index(None))
-        kinds = self._kinds_key() if page in ("bilan", "preflop", "bluffs") else ()
+        kinds = self._kinds_key() if page in ("bilan", "stats", "preflop", "bluffs") else ()
         charts = stake_charts.revision()[2:] if page == "preflop" else ()
         return self._cached(("self", page) + kinds + charts + tuple(sorted(filters.items())), build)
 
@@ -890,9 +899,25 @@ class Library:
             shown = [(scope, labels[scope], found[0] if found else None) for scope, _, found in scopes]
             return bilan_page.build_ring_bilan(ring_leaks.mine(self.ring, hero), hero, shown,
                                                self.ring_opponents_view(), gaps, head=self._bilan_head("ring", filters),
-                                               filters=filters)
+                                               filters=filters, stats_href=self._stats_href())
         filters = filters or {}
         key = ("self", "bilan", "ring") + _theory_changes() + self._ring_kinds_key() + tuple(sorted(filters.items()))
+        return self._cached(key, build)
+
+    def _stats_href(self) -> str:
+        """L'onglet de toutes tes stats, depuis le bilan (rien pour un joueur de référence : pas d'onglet)."""
+        return "" if self.pages.startswith("/reference/") else "stats"
+
+    def _ring_stats_page(self) -> str:
+        """L'onglet Statistiques aux tables à plusieurs : toutes tes stats, toutes les positions."""
+        def build():
+            hero = self.hero or ""
+            scopes, _ = self._ring_overview()
+            labels = {"all": "Toutes tes mains", "reg": "Contre les réguliers", "rec": "Contre les récréatifs"}
+            shown = [(scope, labels[scope], found[0] if found else None) for scope, _, found in scopes]
+            return bilan_page.build_ring_stats(ring_leaks.mine(self.ring, hero), hero, shown,
+                                               head=format_switch(self.leak_formats(), "ring"))
+        key = ("self", "stats", "ring") + _theory_changes() + self._ring_kinds_key()
         return self._cached(key, build)
 
     def _ring_preflop_page(self) -> str:

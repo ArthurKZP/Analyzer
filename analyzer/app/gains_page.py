@@ -30,7 +30,8 @@ a.gn-row:hover { background: var(--surface); }
 .gn-row .n, .gn-row .v { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .gn-row .v .pm { color: var(--muted); font-size: 11px; font-weight: 400; margin-left: 3px; }
 .gn-bar { position: relative; height: 14px; }
-.gn-bar::before { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--axis); }
+.gn-bar::before { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px;
+  background: var(--axis); }
 .gn-bar i { position: absolute; top: 3px; height: 8px; }
 .gn-bar i.up { background: var(--good); border-radius: 0 4px 4px 0; }
 .gn-bar i.down { background: var(--alert); border-radius: 4px 0 0 4px; }
@@ -119,7 +120,8 @@ def _bar(r, scale: float) -> str:
         return max(0.0, min(100.0, 50 + 50 * v / scale))
     value = r.bb100 or 0.0
     left, right = sorted((x(0.0), x(value)))
-    out = f'<i class="{"up" if value >= 0 else "down"}" style="left:{left:.1f}%;width:{max(right - left, 0.6):.1f}%"></i>'
+    width = max(right - left, 0.6)
+    out = f'<i class="{"up" if value >= 0 else "down"}" style="left:{left:.1f}%;width:{width:.1f}%"></i>'
     if r.margin:
         lo, hi = x(value - r.margin), x(value + r.margin)
         out += f'<b style="left:{lo:.1f}%;width:{max(hi - lo, 0.5):.1f}%"></b>'

@@ -147,6 +147,26 @@ class BilanTest(unittest.TestCase):
         self.assertGreater(res["ev_bb"], 50)
         self.assertEqual(res["curve"][-1][0], -100.0)
 
+    def test_six_max_positions(self):
+        """Le bilan ne montre que les positions du 6-max (avec « Toutes », toutes les mains) ; l'onglet Statistiques
+        et le bilan d'un joueur de référence (sans cet onglet), toutes."""
+        from analyzer.app.bilan_page import build_ring_bilan
+        from analyzer.app.ring_page import positions_html
+        eight = ("UTG", "UTG+1", "LJ", "HJ", "CO", "BTN", "SB", "BB")
+        pre = [("UTG", FOLD), ("UTG+1", FOLD), ("LJ", RAISE, 5.0)] + [(p, FOLD) for p in eight[3:]]
+        hand = table_hand(1, "LJ", ["Ah", "Kd"], pre, positions=eight, board=())
+        shown = [("all", "Toutes tes mains", ring.analyze([hand], "Hero", merge=True)[0])]
+        self.assertIn('<td class="pos">LJ</td>', positions_html(shown))
+        six = positions_html(shown, ring.SIX_MAX)
+        self.assertNotIn('<td class="pos">LJ</td>', six)
+        self.assertIn('<td class="pos">Toutes</td>', six)
+        mine = build_ring_bilan([hand], "Hero", shown, [], None, stats_href="stats")
+        reference = build_ring_bilan([hand], "Hero", shown, [], None)
+        self.assertNotIn('<td class="pos">LJ</td>', mine)
+        self.assertIn('<td class="pos">LJ</td>', reference)
+        self.assertNotIn("<td>Limp d&#x27;entrée</td>", mine)
+        self.assertIn("<td>Limp d&#x27;entrée</td>", reference)
+
 
 class VersusTest(unittest.TestCase):
     """Une main compte contre les récréatifs quand un récréatif a mis de l'argent dans le pot pendant que le joueur y
@@ -423,6 +443,27 @@ class AppTest(IsolatedHome):
             self.assertIn(text, ring_bilan)
         status, _, page = self.request("GET", "/moi/bilan?format=ring")
         self.assertEqual((status, page), (200, ring_bilan))
+        # le bilan : l'essentiel de tes stats ; tout le détail dans l'onglet Statistiques
+        stats_part = ring_bilan[ring_bilan.index("Tes statistiques"):ring_bilan.index("<h2>Par position")]
+        for text in ("Limp d&#x27;entrée", "Call d&#x27;une ouverture", "Fold vs vol", "3bet vs vol",
+                     "C-bet flop (pot à deux)", "Fold vs c-bet"):
+            self.assertNotIn(text, stats_part)
+        for text in ("<td>VPIP</td>", "<td>Gagne après le flop (WWSF)</td>", 'href="stats">onglet Statistiques'):
+            self.assertIn(text, stats_part)
+        positions = ring_bilan[ring_bilan.index("<h2>Par position"):]
+        self.assertIn("Gagne après le flop (WWSF)", positions)  # après le flop, par position
+        self.assertNotIn("UTG+1", positions)  # les positions du 6-max seulement
+        stats = self.lib.self_page("stats", table_format="ring")
+        for text in ("Toutes positions confondues", "<td>Limp d&#x27;entrée</td>", "<td>Fold vs vol</td>",
+                     "<td>Gagne après le flop (WWSF)</td>", "Position par position", 'aria-current="page">Tables'):
+            self.assertIn(text, stats)
+        heads_up_stats = self.lib.self_page("stats")
+        for text in ("Toutes tes stats heads-up", "Préflop — au bouton (SB)", "Open-raise",
+                     "WWSF (gagne après le flop)"):
+            self.assertIn(text, heads_up_stats)
+        self.assertIn('href="stats">onglet Statistiques', heads_up)  # le bilan heads-up : l'essentiel, puis le lien
+        self.assertNotIn("Préflop — au bouton (SB)", heads_up)
+        self.assertEqual(self.request("GET", "/moi/stats?format=ring")[0], 200)
 
     def test_ring_opponent_kind(self):
         """Le type d'un adversaire des tables à plusieurs se règle comme en heads-up, et change le découpage."""
