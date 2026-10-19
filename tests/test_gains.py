@@ -75,7 +75,10 @@ class BreakdownTest(unittest.TestCase):
         page = breakdown_html(self.hands, "Hero", {"room": "Betclic"}, "HU")
         self.assertIn("Tes gains en détail", page)
         self.assertIn('href="?format=HU&amp;room=Betclic&amp;mois=2026-10"', page)
-        self.assertIn('<tr class="on"><td><a href="?format=HU&amp;room=Betclic">Betclic</a>', page)
+        self.assertIn('<a class="gn-row on few" href="?format=HU&amp;room=Betclic"', page)  # la valeur filtrée
+        self.assertIn('<span class="gn-bar"><i class="up" style="left:50.0%;width:40.0%">', page)  # +400 sur ±500
+        self.assertIn("<summary>Les chiffres</summary>", page)
+        self.assertNotIn("± 0", page)  # pas de marge sur des résultats identiques
         self.assertEqual(filter_bar([], {}, "HU"), "")
 
 

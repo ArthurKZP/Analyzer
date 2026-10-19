@@ -59,8 +59,10 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   matin, après-midi, soir 18h–24h, l'heure de tes historiques) ; seules les dimensions où tes mains varient sont
   proposées, et le choix du format garde le filtre. Les tuiles, la courbe et les résultats tous formats confondus
   suivent le filtre (tes stats et tes écarts restent sur toutes tes mains de la période) ; *Tes gains en détail*,
-  sous la courbe, compare valeur par valeur (mains, bb, bb/100 avec la marge du hasard à 95 %, EV all-in, €) sur les
-  mains que les autres filtres gardent, et un clic sur une ligne l'applique. **Leaks** : *À travailler* (le
+  sous la courbe, compare valeur par valeur sur les mains que les autres filtres gardent : une ligne par valeur, ses
+  mains, une barre de son winrate centrée sur zéro (vert au-dessus, rouge en dessous) traversée de sa marge du hasard à
+  95 %, et sa valeur en bb/100 ; les lignes de moins de 300 mains sont pâles et hors de l'échelle (‹ › : la barre
+  déborde). Le survol et *Les chiffres* donnent les bb, l'EV all-in et les euros ; un clic sur une ligne l'applique. **Leaks** : *À travailler* (le
   Leakfinding, voir plus bas), *Suivi dans le temps* (tes leaks période par période, avant et après le jour où tu as
   commencé à les travailler, voir plus bas) et *Face au solveur* (tes erreurs postflop, voir plus bas).
   **Préflop** : *Face à la théorie* et *Mains de départ* (ce que rapporte chaque main, voir plus bas). *Face à la
