@@ -266,10 +266,14 @@ existante. Elle compile ensuite `analyzer-solve`, un petit programme de Merlin
 `--gpu` compile aussi le moteur CUDA de GTOpen pour une carte NVIDIA (expérimental, voir le README de
 GTOpen pour les bibliothèques CUDA nécessaires).
 
-**Utilisation** : dans l'application, ouvre un coup dans *Spots* et clique sur **Résoudre ce coup**. Le calcul
-tourne en arrière-plan (une résolution à la fois) ; tu peux continuer à naviguer et revenir plus tard. En
-ligne de commande : `python -m analyzer gtopen -m <numéro de main>` (options `--precision`, `--iterations`,
-`--threads`). Chaque résolution est enregistrée dans la base : un coup déjà résolu s'affiche tout de suite.
+**Utilisation** : dans l'application, ouvre un coup dans *Spots* et clique sur **Résoudre ce coup ↗** :
+l'explorateur s'ouvre dans un nouvel onglet et lance la résolution (`/explorateur/<main>#resoudre`), le panneau du
+coup suit son avancement ; les liens *Revoir ↗* et *Au solveur ↗* du Leakfinding ouvrent eux aussi un nouvel onglet.
+Dans l'explorateur d'une main jouée (la tienne ou celle d'un élève), **Rejouer ↗** la revoit au replayer, dans un
+nouvel onglet. Le calcul tourne en arrière-plan (une résolution à la fois) ; tu peux continuer à naviguer et revenir
+plus tard. En ligne de commande : `python -m analyzer gtopen -m <numéro de main>` (options `--precision`,
+`--iterations`, `--threads`). Chaque résolution est enregistrée dans la base : un coup déjà résolu s'affiche tout de
+suite.
 
 **Le spot** construit pour une main :
 

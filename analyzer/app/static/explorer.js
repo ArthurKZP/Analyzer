@@ -1943,8 +1943,9 @@
     // L'étude se rouvre seule, en quelques secondes (aussi quand le résultat en cache manque, par exemple
     // après une mise à jour du solveur).
     if (['done', 'absent'].includes(state.state) && !live && state.study) solve();
-    else if (state.state === 'absent' && (solveNow || (SPOT && /resoudre/.test(location.hash)))) {
-      if (!solveNow) history.replaceState(null, '', location.pathname);  // choisi dans le sélecteur de flop
+    else if (state.state === 'absent' && (solveNow || /resoudre/.test(location.hash))) {
+      // « #resoudre » : un flop choisi dans le sélecteur, ou une main envoyée au solveur (nouvel onglet)
+      if (!solveNow) history.replaceState(null, '', location.pathname);
       solve();
     } else poll();
   }
@@ -1959,6 +1960,10 @@
   $('b-line').onclick = () => state && state.result && goTo(state.result.decisions[0].path);
   $('b-train').onclick = () => window.open('/entraineur?spot=' + encodeURIComponent(HAND) + '&chemin='
     + encodeURIComponent(JSON.stringify(path)), '_blank', 'noopener');
+  if (!PRE && !SPOT) {  // une main jouée (la tienne, celle d'un élève) : le replayer, dans un nouvel onglet
+    $('b-replay').href = '/rejouer/' + encodeURIComponent(HAND);
+    $('b-replay').hidden = false;
+  }
   if (SPOT) {  // pas de ligne jouée ni de main adverse à dévoiler
     $('b-line').hidden = true;
     $('reveal').closest('label').hidden = true;

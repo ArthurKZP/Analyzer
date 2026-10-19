@@ -667,6 +667,7 @@ class ServerTest(unittest.TestCase):
         status, _, body = self.request("GET", "/explorateur/spot:srp:KsKd4c")
         self.assertEqual(status, 200)
         self.assertIn(b'data-hand="spot:srp:KsKd4c"', body)
+        self.assertIn(b'id="b-replay"', body)  # « Rejouer ↗ » : montré pour une main jouée, pas pour un spot
         for bad in ("/explorateur/spot:srp:KsKs4c", "/explorateur/spot:autre:KsKd4c", "/api/spots/autre"):
             self.assertEqual(self.request("GET", bad)[0], 404, bad)
         series = json.loads(self.request("GET", "/api/spots/srp")[2])

@@ -218,7 +218,8 @@ def _example(leak: leaks.Leak, standalone: bool) -> str:
     hand, index, lost = leak.example
     text = f"Main la plus chère : {escape(hand)} (−{num(lost, 2)} bb)"
     if not standalone:
-        text += f' <a class="open" href="/explorateur/{quote(hand, safe="")}#d={index}">Revoir ↗</a>'
+        text += (f' <a class="open" href="/explorateur/{quote(hand, safe="")}#d={index}" target="_blank" '
+                 'rel="noopener">Revoir ↗</a>')
     return f'<div class="lk-e">{text}</div>'
 
 
@@ -554,7 +555,8 @@ def _pick_row(p: leaks.Pick, hero: str, pages: str, standalone: bool) -> str:
         href = (f"{pages}/spots#hand={quote(p.hand.hand_id, safe='')}" if heads_up
                 else f"/explorateur/{quote(p.hand.hand_id, safe='')}" if p.spot is not None
                 else replay.href(p.hand.hand_id, replay.api_of(pages)))
-    blank = ' target="_blank" rel="noopener"' if href.startswith("/rejouer/") else ""
+    # le replayer et le solveur dans un nouvel onglet ; Mes spots, dans l'application
+    blank = ' target="_blank" rel="noopener"' if href.startswith(("/rejouer/", "/explorateur/")) else ""
     link = "" if standalone else f'<a class="open" href="{escape(href)}"{blank}>Revoir ↗</a>'
     return (f'<tr><td>{escape(p.line)}</td><td>{cards}</td><td class="num">{num(p.pot_bb, 0)} bb</td>'
             f'<td class="num">{num(p.net_bb, 1, sign=True)} bb</td><td class="small">{status_html or escape(status)}</td>'

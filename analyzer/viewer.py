@@ -816,7 +816,11 @@ SCRIPT = r"""
     if (v.state === 'absent' || v.state === 'cancelled' || v.state === 'error') {
       if (v.error) box.append(el('p', { class: 'err' }, v.error));
       box.append(el('p', { class: 'muted' }, 'Calcule la stratégie d\'équilibre à partir du flop (ranges de ta solution préflop, tailles jouées dans la main) puis la compare à chaque décision du coup. Compte quelques minutes ; tu peux continuer à naviguer pendant le calcul.'));
-      box.append(el('button', { type: 'button', class: 'go', onclick: () => gtoLoad(r, true) }, v.state === 'error' ? 'Réessayer' : 'Résoudre ce coup'));
+      // la résolution s'ouvre dans l'explorateur, dans un nouvel onglet ; ce panneau suit son avancement
+      box.append(el('button', { type: 'button', class: 'go', onclick: () => {
+        window.open('/explorateur/' + encodeURIComponent(r.id) + '#resoudre', '_blank', 'noopener');
+        setTimeout(() => gtoLoad(r, false), 1500);
+      } }, v.state === 'error' ? 'Réessayer' : 'Résoudre ce coup ↗'));
       return;
     }
     if (v.state === 'waiting' || v.state === 'running') {
