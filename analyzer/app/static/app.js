@@ -10,8 +10,9 @@
   const TABS = {
     moi: [['bilan', 'Bilan'], ['stats', 'Statistiques'], LEAKS_GROUP, PREFLOP_GROUP,
       ['Mes mains', [['spots', 'Heads-up'], ['tables', 'Tables à plusieurs']]]],
-    // étude du field : le leakfinding de tes adversaires (réguliers, récréatifs), les bluffs des réguliers en heads-up
-    field: [['regs', 'Réguliers'], ['recs', 'Récréatifs'], ['bluffs', 'Bluffs des réguliers']],
+    // étude du field : tes adversaires, réguliers et récréatifs, chacun avec son leakfinding, ses bluffs et sa value
+    field: [['Réguliers', [['regs', 'Leakfinding'], ['bluffs', 'Bluffs'], ['value', 'Value']]],
+      ['Récréatifs', [['recs', 'Leakfinding'], ['rec-bluffs', 'Bluffs'], ['rec-value', 'Value']]]],
     parametres: [['general', 'Général'], ['joueurs', 'Joueurs et alias'], ['ranges', 'Ranges préflop']],
     eleve: [['bilan', 'Bilan'], ['stats', 'Statistiques'], LEAKS_GROUP, PREFLOP_GROUP,
       ['Ses mains', [['spots', 'Heads-up'], ['tables', 'Tables à plusieurs']]], ['importer', 'Importer']],
@@ -31,7 +32,7 @@
   const FORMAT_TABS = ['bilan', 'stats', 'leaks', 'suivi', 'preflop', 'comparaison', 'lignes'];
   // Les formats que tu joues (Paramètres) : sans choix, tous. Un format que tu ne joues pas sort des menus.
   const plays = (fmt) => !state || !state.settings || !state.settings.plays || state.settings.plays.includes(fmt);
-  const HIDDEN_TABS = { HU: { moi: ['spots', 'solveur'], field: ['bluffs'], etudes: ['hu'], entraineur: ['solveur'] },
+  const HIDDEN_TABS = { HU: { moi: ['spots', 'solveur'], etudes: ['hu'], entraineur: ['solveur'] },
     ring: { moi: ['tables'], etudes: ['6max'] } };
   function groupsOf(view) {  // [{ label, tabs: [[page, libellé], …] }] : les groupes dont une page au moins est jouée
     const hidden = ['HU', 'ring'].filter((f) => !plays(f)).flatMap((f) => HIDDEN_TABS[f][view] || []);

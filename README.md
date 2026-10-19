@@ -78,10 +78,12 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   visualiseur de spots, voir plus bas) et *Tables à plusieurs* (tes coups à deux joueurs au flop, à ouvrir au
   solveur). Un élève a les mêmes onglets (*Bilan* avec ses courbes, *Statistiques*, *Leaks*, *Préflop*, *Ses
   mains*), plus *Importer*.
-- **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Réguliers* et *Récréatifs* : le
-  leakfinding de ceux que tu croises le plus, par limites (micro, milieu, hautes), chacun avec ses leaks à exploiter
-  et ce que montrent ses lignes, puis sa fiche détaillée (voir *Étude du field : le leakfinding de tes
-  adversaires*) ; *Bluffs des réguliers* (où ils bluffent en heads-up, ensemble puis un par un, voir plus bas).
+- **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Réguliers* et *Récréatifs*, chacun en
+  trois sous-onglets, en heads-up ou aux tables à plusieurs et par limites (micro, milieu, hautes) : *Leakfinding*
+  (ceux que tu croises le plus, chacun avec ses leaks à exploiter et ce que montrent ses lignes, puis sa fiche
+  détaillée, voir *Étude du field : le leakfinding de tes adversaires*), *Bluffs* (où ils bluffent, tous ensemble :
+  en heads-up face au solveur puis un par un, voir *Bluffs des adversaires*) et *Value* (où leurs mises sont presque
+  toujours de la value, à quelle taille, jusqu'où ils vont en value fine, ce que cachent leurs checks).
 - **Joueurs de référence** : un bon joueur dont tu as importé les historiques, étudié pour apprendre de lui et
   comparé à toi : *Toi et lui*, *Value et bluffs*, et son jeu analysé comme le tien (voir *Joueurs de référence*).
 - **Paramètres** : *Général* (tes pseudos réunis sous un nom, les formats que tu joues, coach ou non, le seuil de
@@ -1003,6 +1005,17 @@ agressif, et s'adapte vite : les exploits se font par petites touches (3bet ligh
 solveur, le même à tous les niveaux. Fourchettes indicatives, comme les autres (`field.BAND_REFS`, `HU_BAND_REFS`,
 `BAND_EXPLOITS` ; les niveaux : `analyzer/stakes.py`).
 
+**Bluffs et Value** : les deux autres sous-onglets des *Réguliers* et des *Récréatifs* réunissent tous les joueurs
+de ce type, au format et au niveau de limites choisis. *Ce qui ressort* d'abord : les lignes dont les mises montrées
+disent nettement bluff (« souvent sans main faite : défends plus large ») ou value (« presque toujours une main
+faite : folde tes mains faibles »), les tailles qui trahissent leur main, ce que cachent leurs checks (une main
+forte : méfie-toi des pièges ; rien : mise derrière) ; en heads-up, la *Value* ajoute leurs fréquences de mise face
+au solveur (là où ils misent bien moins que la théorie, leurs mises sont de la value), et les *Bluffs* sont ceux de
+*Bluffs des adversaires* (plus bas). Puis leurs mises montrées **taille par taille** à chaque street (petite,
+grosse, overbet, relances) : la part de value (et de value fine) ou de mains sans rien de fait, la taille médiane de
+leur value ou de leurs bluffs ; et, repliés, ce qui distingue leur value de leurs bluffs, leurs checks, leurs lignes
+et leurs mains montrées. Code : `app/field_lines_page.py`.
+
 **Un leak** : une fréquence nettement hors des repères d'un régulier solide (l'intervalle de confiance à 90 % hors du
 repère, au moins 15 occasions ; « à confirmer » quand l'écart est net sur peu de mains), avec l'exploit qui en
 découle : « Folde trop face à la c-bet — Fold vs c-bet 62 % sur 45 (repère 35–52 %) → c-bet large et petit contre
@@ -1191,10 +1204,12 @@ charts par limites valent pour toi et tes élèves (gardés dans la base, et dan
 
 ## Bluffs des adversaires
 
-L'onglet *Ses bluffs* (fiche d'un adversaire) et *Bluffs des réguliers* (*Étude du field*, tous les réguliers ensemble,
-puis un par un) cherchent où un joueur bluffe : dans quelles lignes, sur quelles cartes, avec quelles tailles. Chaque
-constat dit de qui il parle : le joueur par son nom (« Villain mise bien plus que la théorie… »), les réguliers au
-pluriel (« les réguliers misent… »). Deux sources :
+L'onglet *Ses bluffs* (fiche d'un adversaire) et le sous-onglet *Bluffs* des *Réguliers* et des *Récréatifs* (*Étude
+du field*, en heads-up : tous les joueurs de ce type ensemble, puis un par un) cherchent où un joueur bluffe : dans
+quelles lignes, sur quelles cartes, avec quelles tailles. Chaque constat dit de qui il parle : le joueur par son nom
+(« Villain mise bien plus que la théorie… »), les réguliers au pluriel (« les réguliers misent… »). Pour les
+réguliers ou les récréatifs, *Ce qui ressort* ne garde que ce qui dit où ils bluffent ; ce qui dit leur value est
+dans le sous-onglet *Value*. Deux sources :
 
 - **Ses fréquences**, sur toutes ses mains : à chaque situation (c-bet, 2e et 3e barrels, c-bet retardée, probe, mise
   quand l'agresseur checke, autres mises à la river), sa fréquence de mise selon la carte qui vient de tomber
@@ -1664,9 +1679,10 @@ analyzer/
   app/                 application : serveur local (server.py), bibliothèque de mains, cache et préchargement
                        des pages (library.py), résolutions et sessions du solveur (solves.py), page « Face au
                        solveur » (review_page.py), leakfinding (leaks_page.py), bluffs des adversaires
-                       (bluffs_page.py), étude du field (field_page.py : les joueurs et les alias ; field_leaks_page.py : le
-                       leakfinding des adversaires), joueurs de référence (reference_page.py : toi et lui, sa value
-                       et ses bluffs), paramètres (settings_page.py), bilan des tables à plusieurs
+                       (bluffs_page.py), étude du field (field_page.py : les joueurs et les alias ;
+                       field_leaks_page.py : le leakfinding des adversaires ; field_lines_page.py : les bluffs et la
+                       value des réguliers et des récréatifs), joueurs de référence (reference_page.py : toi et
+                       lui, sa value et ses bluffs), paramètres (settings_page.py), bilan des tables à plusieurs
                        (bilan_page.py) et son filtre des gains (gains_page.py), mains de départ (hands_page.py),
                        synthèse du Leakfinding
                        (synthesis.py), son rapport PDF (report_pdf.py) et sa présentation (report_pptx.py),

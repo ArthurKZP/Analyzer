@@ -59,14 +59,15 @@ def _pattern_items(patterns: list, plural: bool = False) -> str:
         f'<div class="bl-a">→ {escape(p.advice)}</div></li>' for p in patterns)
 
 
-def patterns_html(report: bluffs.Report, top: int = 4) -> str:
+def patterns_html(report: bluffs.Report, top: int = 4, patterns: Optional[list] = None) -> str:
     """Ce qui ressort : les patterns solides les plus nets d'abord (top), les autres solides et les pistes à confirmer
-    repliés."""
+    repliés ; patterns : ceux à montrer (tous ceux du rapport sinon)."""
     plural = len(report.names) > 1
-    solid = [p for p in report.patterns if p.confidence == "solide"]
+    patterns = report.patterns if patterns is None else patterns
+    solid = [p for p in patterns if p.confidence == "solide"]
     shown, more_solid = solid[:top], solid[top:]
-    rest = [p for p in report.patterns if p.confidence != "solide"]
-    if not report.patterns:
+    rest = [p for p in patterns if p.confidence != "solide"]
+    if not patterns:
         return ('<p class="note">Rien de net pour l\'instant : pas assez de mains, ou un jeu proche de la théorie dans '
                 'les situations mesurées.</p>')
     out = ""
@@ -262,7 +263,7 @@ def examples_html(report: bluffs.Report, limit: int = 30) -> str:
             '</tr></thead><tbody>' + "".join(rows) + "</tbody></table></div></details>")
 
 
-def players_html(rows: list[dict]) -> str:
+def players_html(rows: list[dict], crowd: str = "réguliers") -> str:
     if len(rows) < 2:
         return ""
     weighted = any(r.get("weight") is not None for r in rows)
@@ -276,13 +277,13 @@ def players_html(rows: list[dict]) -> str:
     if len(rows) > MAX_PLAYERS:  # les autres, sur demande : la page reste lisible avec beaucoup de réguliers
         width = 8 if weighted else 5
         body += (f'<tr class="more"><td colspan="{width}"><details><summary>Les {len(rows) - MAX_PLAYERS} autres '
-                 f'réguliers</summary><table class="bl"><tbody>{"".join(row(r) for r in rows[MAX_PLAYERS:])}</tbody>'
+                 f'{crowd}</summary><table class="bl"><tbody>{"".join(row(r) for r in rows[MAX_PLAYERS:])}</tbody>'
                  '</table></details></td></tr>')
     head = ('<th class="num">Part des occasions</th><th class="num">Poids</th><th class="num">Groupe</th>'
             if weighted else "")
-    note = ('<p class="note">Part des occasions : ses situations de mise parmi celles de tous les réguliers. Poids : sa part '
-            'dans les fréquences de la population, où chaque joueur pèse au plus autant qu\'un autre. Groupe : son profil '
-            'de bluff (ci-dessus).</p>' if weighted else "")
+    note = (f'<p class="note">Part des occasions : ses situations de mise parmi celles de tous les {crowd}. Poids : '
+            'sa part dans les fréquences de la population, où chaque joueur pèse au plus autant qu\'un autre. Groupe : '
+            'son profil de bluff (ci-dessus).</p>' if weighted else "")
     return ('<h2>Adversaire par adversaire</h2><div class="card"><div class="bl-scroll"><table class="bl"><thead><tr>'
             f'<th>Joueur</th><th class="num">Mains</th>{head}<th class="num">Mises vues</th>'
             '<th class="num">Bluffs river vus</th><th>Son pattern le plus net</th></tr></thead><tbody>' + body
@@ -301,12 +302,13 @@ def _gap_cell(gap: Optional[float]) -> str:
     return f'<td class="num {cls}">{round(100 * gap):+d}</td>'
 
 
-def clusters_html(report: bluffs.Report, groups: list[dict]) -> str:
-    """Les réguliers regroupés par profil de bluff : leurs écarts au solveur, situation par situation."""
+def clusters_html(report: bluffs.Report, groups: list[dict], crowd: str = "réguliers") -> str:
+    """Les réguliers (ou les récréatifs : crowd) regroupés par profil de bluff : leurs écarts au solveur, situation par
+    situation."""
     if not report.profiles:
         return ""
     if not groups:
-        return ('<h2>Profils des réguliers</h2><div class="card"><p class="note">Pas encore assez de mains par régulier '
+        return (f'<h2>Profils des {crowd}</h2><div class="card"><p class="note">Pas encore assez de mains par joueur '
                 f'pour un profil (au moins {bluffs.PROFILE_MIN} occasions de miser chacun).</p></div>')
     dims = list(groups[0]["cluster"].gaps)
     head = "".join(f'<th class="num">{escape(DIMENSION_SHORT.get(d, d))}</th>' for d in dims)
@@ -323,24 +325,28 @@ def clusters_html(report: bluffs.Report, groups: list[dict]) -> str:
             details.append(f'<details><summary>Groupe {k} : ce qui ressort ({len(c.members)} joueurs, {c.hands} mains)'
                            f'</summary><div style="padding:10px 16px">{items}</div></details>')
     alone = [p for p in report.profiles if p.occasions < bluffs.PROFILE_MIN]
-    rest = (f'<p class="note">Trop peu de mains pour un profil : {len(alone)} régulier(s) (ils comptent quand même dans '
+    rest = (f'<p class="note">Trop peu de mains pour un profil : {len(alone)} joueur(s) (ils comptent quand même dans '
             'la population, avec un petit poids).</p>' if alone else "")
     return f"""
-<h2>Profils des réguliers</h2>
+<h2>Profils des {crowd}</h2>
 <div class="card"><div class="bl-scroll"><table class="bl"><thead><tr><th>Groupe</th>{head}</tr></thead><tbody>
 {"".join(rows)}</tbody></table></div>{"".join(details)}{rest}
-<p class="note">Les réguliers regroupés par façon de bluffer : pour chacun, son écart au solveur (en points de fréquence de
-mise, à cartes égales) dans chaque situation, et sa part de bluffs montrés à la river face à la théorie ; un joueur avec
-peu d'occasions est rapproché de la moyenne des réguliers. Deux joueurs vont ensemble quand leurs écarts diffèrent de
-moins de {round(100 * bluffs.CLUSTER_GAP)} points en moyenne. Le titre d'un groupe dit ce qui le distingue des autres
-réguliers ; en rouge, le groupe mise ou bluffe plus que la théorie, en bleu moins.</p></div>"""
+<p class="note">Les {crowd} regroupés par façon de bluffer : pour chacun, son écart au solveur (en points de
+fréquence de mise, à cartes égales) dans chaque situation, et sa part de bluffs montrés à la river face à la théorie ;
+un joueur avec peu d'occasions est rapproché de la moyenne des {crowd}. Deux joueurs vont ensemble quand leurs écarts
+diffèrent de moins de {round(100 * bluffs.CLUSTER_GAP)} points en moyenne. Le titre d'un groupe dit ce qui le
+distingue des autres {crowd} ; en rouge, le groupe mise ou bluffe plus que la théorie, en bleu moins.</p></div>"""
 
 
 def build_bluffs_page(report: bluffs.Report, who: str, embed: bool = True, note: str = "",
                       players: Optional[list[dict]] = None, groups: Optional[list[dict]] = None,
-                      catch: Optional[list] = None) -> str:
+                      catch: Optional[list] = None, head: str = "", direction: Optional[str] = None,
+                      crowd: str = "réguliers") -> str:
     """who : « de Villain » ou « des réguliers » ; players : résumé par adversaire, groups : les groupes de profils
-    (report.clusters) et ce qui ressort de chacun (population) ; catch : le bluffcatch à la river (bluffcatch.spots)."""
+    (report.clusters) et ce qui ressort de chacun (population) ; catch : le bluffcatch à la river (bluffcatch.spots) ;
+    head : en tête (le choix du format et des limites) ; direction : « plus », seulement ce qui dit où ils bluffent (ce
+    qui dit leur value a son onglet) ; crowd : la population (réguliers, récréatifs)."""
+    patterns = [p for p in report.patterns if direction is None or p.direction == direction]
     river = sum(1 for s in report.shown if s.street == "river")
     tiles = (
         '<div class="tiles">'
@@ -350,8 +356,8 @@ def build_bluffs_page(report: bluffs.Report, who: str, embed: bool = True, note:
         f'<div class="tile"><div class="label">Vues à l\'abattage</div><div class="value">{len(report.shown)}</div>'
         f'<div class="sub">dont {river} à la river</div></div>'
         f'<div class="tile"><div class="label">Patterns solides</div>'
-        f'<div class="value">{sum(p.confidence == "solide" for p in report.patterns)}</div>'
-        f'<div class="sub">{sum(p.confidence != "solide" for p in report.patterns)} à confirmer</div></div>'
+        f'<div class="value">{sum(p.confidence == "solide" for p in patterns)}</div>'
+        f'<div class="sub">{sum(p.confidence != "solide" for p in patterns)} à confirmer</div></div>'
         '</div>')
     plural = len(report.names) > 1
     weighting = (" Plusieurs joueurs : chaque fréquence est la <b>moyenne des joueurs</b>, chacun pesant selon ses occasions "
@@ -382,13 +388,14 @@ def build_bluffs_page(report: bluffs.Report, who: str, embed: bool = True, note:
         "coups où tu as payé puis foldé plus tard.")
     body = f"""
 <div class="meta">Les bluffs {escape(who)} : dans quelles lignes, sur quelles cartes, avec quelles tailles.</div>
+{head}
 {note}
 {tiles}
 <h2>Ce qui ressort</h2>
-<div class="card">{patterns_html(report)}
+<div class="card">{patterns_html(report, patterns=patterns)}
 {more("Comment c'est mesuré", sources_note)}</div>
 {catch_html(catch, plural) if catch is not None else ""}
-{clusters_html(report, groups or [])}
+{clusters_html(report, groups or [], crowd)}
 {fold(f"{w['Ses']} mises selon la carte",
       f'<div class="card">{frequencies_html(report)}<p class="note">{cards_note}</p></div>',
       "à chaque situation, selon la carte qui tombe, face au solveur", "cartes")}
@@ -396,6 +403,6 @@ def build_bluffs_page(report: bluffs.Report, who: str, embed: bool = True, note:
       f'<p class="note">{shown_note}</p></div>', f"{len(report.shown)} mise{'s' if len(report.shown) > 1 else ''} ou "
       f"relance{'s' if len(report.shown) > 1 else ''} vue{'s' if len(report.shown) > 1 else ''} à l'abattage, par "
       "intention", "montrees")}
-{players_html(players or [])}
+{players_html(players or [], crowd)}
 """
     return html_page(f"Bluffs {who}", f"<style>{STYLE}</style>{body}", embed)

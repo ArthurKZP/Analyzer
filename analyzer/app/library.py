@@ -43,6 +43,7 @@ from .report_pptx import build_pptx
 from .bluffs_page import build_bluffs_page
 from .import_job import ImportJob
 from .field_leaks_page import build_group_page, build_list_page, build_player_page, stakes_switch
+from .field_lines_page import build_crowd_page
 from .field_page import build_players_page
 from .ranges_page import build_ranges_page
 from .settings_page import build_settings_page
@@ -65,7 +66,11 @@ HEADS_UP_ONLY = ('<p class="note">Aucune main heads-up : cette page analyse tes 
 SELF_PAGES = ("bilan", "stats", "preflop", "spots", "solveur", "bluffs", "leaks", "tables", "mains", "suivi")
 REFERENCE_PAGES = ("comparaison", "lignes", "bilan", "tables", "preflop", "mains")  # un joueur de référence
 REFERENCE_PREFIX = "ref:"  # sa période d'analyse se garde sous cette clé
-FIELD_PAGES = ("regs", "recs", "bluffs", "joueurs")  # Étude du field (« joueurs » : aussi dans Paramètres)
+# Étude du field : réguliers et récréatifs, chacun avec son leakfinding, ses bluffs et sa value (« joueurs » : aussi
+# dans Paramètres)
+FIELD_PAGES = ("regs", "recs", "bluffs", "value", "rec-bluffs", "rec-value", "joueurs")
+FIELD_LINES = {"bluffs": ("reg", "bluffs"), "value": ("reg", "value"), "rec-bluffs": ("rec", "bluffs"),
+               "rec-value": ("rec", "value")}
 MAX_IMPORT_FILES = 5000  # fichiers (ou archives zip) par import
 MAX_REMOVED_PSEUDOS = 200  # pseudos dont on supprime les mains d'un coup
 
@@ -1010,16 +1015,16 @@ class Library:
     # Chaque adversaire est étudié à un niveau de limites (stakes) : ses mains de ce niveau, face aux repères et aux
     # exploits de ce niveau (field.band_defs) ; les pages partent du niveau où tu as le plus de mains.
     def field_page(self, page: str, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
-        """Étude du field : le leakfinding des réguliers et des récréatifs, les bluffs des réguliers (heads-up), tes
-        adversaires et leur type."""
+        """Étude du field : le leakfinding, les bluffs et la value des réguliers et des récréatifs, tes adversaires et
+        leur type."""
         if page not in FIELD_PAGES:
             raise NotFound(page)
-        if page == "bluffs":
-            return self.self_page("bluffs")
         if not self.hands and not self.ring:
             raise UnknownPlayer("moi")
         if page in ("regs", "recs"):
             return self.field_list(page[:3], table_format, band)
+        if page in FIELD_LINES:
+            return self.field_lines(*FIELD_LINES[page], table_format, band)
         return build_players_page(self.summary()["opponents"] if self.hands else [], self.ring_opponents_view(),
                                   aliases.groups())
 
@@ -1118,6 +1123,28 @@ class Library:
                                    groups, band=band)
         return self._cached(("field", kind, fmt, band, min_hands) + tuple(kinds_key), build)
 
+    def field_lines(self, kind: str, focus: str, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
+        """Les bluffs (focus « bluffs ») ou la value (« value ») des réguliers (« reg ») ou des récréatifs (« rec »)
+        d'un format et d'un niveau de limites, tous ensemble ; en heads-up, les bluffs face au solveur
+        (bluffs.analyze)."""
+        fmt = self._field_format(table_format)
+        band = self._field_band(fmt, band)
+        kinds_key = self._kinds_key() if fmt == "HU" else (self._ring_kinds_key(),)
+        switch = self._field_switch(fmt, band)
+
+        def build():
+            names = tuple(r["name"] for r in self._field_rows(fmt, band) if r["info"]["kind"] == kind)
+            if fmt == "HU" and focus == "bluffs":
+                return self._population_bluffs(kind, band, switch)
+            study = self.field_study(fmt, names, band) if names else None
+            patterns = []
+            if fmt == "HU" and names:  # là où ils misent bien moins que la théorie : de la value
+                voice = bluffs.Voice(f"les {'réguliers' if kind == 'reg' else 'récréatifs'}", plural=True)
+                report = bluffs.analyze(self._band_hands(fmt, band), names, self.hero, voice)
+                patterns = [p for p in report.patterns if p.direction == "moins"]
+            return build_crowd_page(kind, focus, fmt, study, switch, band, patterns)
+        return self._cached(("field_lines", kind, focus, fmt, band) + tuple(kinds_key), build)
+
     def field_player(self, name: str, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
         """La fiche d'un adversaire dans l'Étude du field, à un niveau de limites (celui demandé, sinon celui où il
         a le plus de mains) : ses leaks, sa value et ses bluffs par ligne."""
@@ -1153,22 +1180,31 @@ class Library:
         study = self.field_study(fmt, tuple(r["name"] for r, _ in members), band)
         return build_group_page(style, fmt, study, members, self._field_switch(fmt, band), band=band)
 
-    def _population_bluffs(self) -> str:
-        """Les bluffs des réguliers, ensemble puis un par un."""
-        regs = [n for n, info in self.kinds().items() if info["kind"] == "reg"]
-        recs = sorted(n for n, info in self.kinds().items() if info["kind"] == "rec")
+    def _population_bluffs(self, kind: str = "reg", band: Optional[str] = None, head: str = "") -> str:
+        """Les bluffs des réguliers (ou des récréatifs) en heads-up, ensemble puis un par un ; band : leurs mains d'un
+        niveau de limites (toutes sinon) ; head : le choix du format et des limites."""
+        crowd, others = ("réguliers", "récréatifs") if kind == "reg" else ("récréatifs", "réguliers")
+        hands = self.hands if band is None else self._band_hands("HU", band)
+        index = None if band is None else self._field_index("HU", band)
+        names = [n for n, info in self.kinds().items() if info["kind"] == kind]
+        if index is not None:
+            names = [n for n in names if index.get(n)]
+        rest = sum(1 for n, info in self.kinds().items() if info["kind"] != kind and (index is None or index.get(n)))
+        if not names:
+            return build_crowd_page(kind, "bluffs", "HU", None, head, band)
         rows = []
-        for name in regs:
-            report = bluffs.analyze(self.hands_against(name), [name], self.hero)
-            top = next((p for p in report.patterns if p.confidence == "solide"), None)
+        for name in names:
+            report = bluffs.analyze(self.hands_against(name) if index is None else index[name], [name], self.hero)
+            top = next((p for p in report.patterns if p.confidence == "solide" and p.direction == "plus"), None)
             rows.append({"name": name, "hands": report.hands, "shown": len(report.shown),
                          "river": sum(1 for s in report.shown if s.street == "river" and s.bluff),
                          "top": top.title if top else None})
-        note = (f"Les {len(regs)} réguliers ensemble (chacun dans « Adversaire par adversaire », en bas de page)."
-                if len(regs) > 1 else "Un seul régulier." if regs else "Aucun adversaire classé régulier.")
-        if recs:
-            note += f" Les {len(recs)} récréatifs n'y sont pas : ils ont leur page, dans l'onglet Récréatifs."
-        report = bluffs.analyze(self.hands, regs, self.hero, bluffs.Voice("les réguliers", plural=True))
+        note = (f"Les {len(names)} {crowd} ensemble (chacun dans « Adversaire par adversaire », en bas de page)."
+                if len(names) > 1 else f"Un seul joueur parmi les {crowd}.")
+        if rest:
+            note += f" Les {others} ({rest}) ont leur propre page : {others.capitalize()} › Bluffs."
+        note += " Là où leurs mises sont surtout de la value : le sous-onglet Value."
+        report = bluffs.analyze(hands, names, self.hero, bluffs.Voice(f"les {crowd}", plural=True))
         profile = {p.name: p for p in report.profiles}
         for row in rows:
             prof = profile.get(row["name"])
@@ -1176,12 +1212,14 @@ class Library:
                        group=prof.group if prof else None)
         groups = []
         for cluster in report.clusters:  # ce qui ressort de chaque groupe, ses membres pesant chacun au plus 1
-            sub = (bluffs.analyze(self.hands, cluster.names, self.hero, bluffs.Voice("les joueurs du groupe", plural=True))
+            sub = (bluffs.analyze(hands, cluster.names, self.hero, bluffs.Voice("les joueurs du groupe", plural=True))
                    if len(cluster.members) > 1 else None)
-            groups.append({"cluster": cluster, "patterns": (sub.patterns if sub else [])[:3]})
-        return build_bluffs_page(report, "des réguliers", note=_note(note),
+            found = [p for p in (sub.patterns if sub else []) if p.direction == "plus"]
+            groups.append({"cluster": cluster, "patterns": found[:3]})
+        return build_bluffs_page(report, f"des {crowd}", note=_note(note),
                                  players=sorted(rows, key=lambda r: -r["hands"]), groups=groups,
-                                 catch=bluffcatch.spots(bluffcatch.faced(self.hands, regs, self.hero)))
+                                 catch=bluffcatch.spots(bluffcatch.faced(hands, names, self.hero)), head=head,
+                                 direction="plus", crowd=crowd)
 
     # --- élèves -----------------------------------------------------------------------
     def student(self, ident: str) -> "Library":

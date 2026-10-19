@@ -167,7 +167,8 @@ class PopulationTest(unittest.TestCase):
                                  players=[{"name": n, "hands": h, "shown": 0, "river": 0, "top": None,
                                            "weight": profs[n].weight, "share": profs[n].share, "group": profs[n].group}
                                           for n, h in hands.items()])
-        for text in ("Profils des réguliers", "A (900), B (400), C (200)", "Trop peu de mains pour un profil : 1 régulier",
-                     "Part des occasions", "moyenne des joueurs", "Leurs mises selon la carte", "Ils misent"):
+        for text in ("Profils des réguliers", "A (900), B (400), C (200)",
+                     "Trop peu de mains pour un profil : 1 joueur", "Part des occasions", "moyenne des joueurs",
+                     "Leurs mises selon la carte", "Ils misent"):
             self.assertIn(text, page)
         self.assertNotIn("Il mise", page)  # plusieurs joueurs : on parle d'eux au pluriel

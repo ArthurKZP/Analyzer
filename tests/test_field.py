@@ -301,6 +301,28 @@ class FieldLibraryTest(IsolatedHome):
             self.lib._all_ring = ring
             self.lib._select()
 
+    def test_bluffs_and_value(self):
+        """Réguliers et Récréatifs : leurs bluffs et leur value tous ensemble, aux tables à plusieurs."""
+        bluffs = self.lib.field_page("bluffs", "ring")  # le CO c-bette et barrelle, deux fois sur trois sans rien
+        for text in ("Les bluffs des réguliers aux tables à plusieurs", "Ce qui ressort",
+                     "Flop, c-bet · petite (≤ 55 %)", "Souvent sans main faite (40/60)",
+                     "Leurs bluffs, taille par taille", "Rien de fait dans 40 checks sur 60", "Leurs bluffs montrés",
+                     "sous-onglet Value"):
+            self.assertIn(text, bluffs)
+        value = self.lib.field_page("value", "ring")
+        for text in ("La value des réguliers aux tables à plusieurs", "Leur value, taille par taille",
+                     "33 % <span class=\"muted\">(dont fine 0 %)</span>", "Leur value montrée", "sous-onglet Bluffs"):
+            self.assertIn(text, value)
+        self.assertNotIn("Souvent sans main faite (40/60)</div>", value)  # ce qui ressort : seulement la value
+        self.assertIn("leurs mises montrées y sont mêlées", value)
+        rec_value = self.lib.field_page("rec-value", "ring")  # la BB, récréative : elle checke ses top paires
+        self.assertIn("La value des récréatifs", rec_value)
+        self.assertIn("Une main forte dans 60 checks sur 60", rec_value)
+        players.set_kind(CO, "rec")
+        recs = self.lib.field_page("rec-bluffs", "ring")
+        self.assertIn("Les bluffs des récréatifs", recs)
+        self.assertIn("Souvent sans main faite (40/60)", recs)
+
     def test_lists_player_and_group(self):
         lib = self.lib
         settings.save({"min_hands": 50})

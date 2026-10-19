@@ -60,8 +60,17 @@ class LibraryTest(IsolatedHome):
         self.assertIn("Les bluffs de Villain", lib.player_page("Villain", "bluffs"))
         population = lib.self_page("bluffs")
         self.assertIn("Les bluffs des réguliers", population)
-        self.assertIn("Un seul régulier.", population)  # plus de liste de noms en tête de page
-        self.assertIs(lib.field_page("bluffs"), population)  # Étude du field : le même onglet
+        self.assertIn("Un seul joueur parmi les réguliers.", population)  # plus de liste de noms en tête de page
+        # Étude du field : Réguliers et Récréatifs, chacun avec ses bluffs et sa value (format et limites en tête)
+        bluffs = lib.field_page("bluffs")
+        for text in ("Les bluffs des réguliers", "sous-onglet Value"):
+            self.assertIn(text, bluffs)
+        value = lib.field_page("value")
+        for text in ("La value des réguliers en heads-up", "Ce qui ressort", "Leur value, taille par taille",
+                     "Leur value montrée", "sous-onglet Bluffs"):
+            self.assertIn(text, value)
+        self.assertIn("Aucun joueur classé parmi les récréatifs", lib.field_page("rec-bluffs"))
+        self.assertIn("Aucun joueur classé parmi les récréatifs", lib.field_page("rec-value"))
         field = lib.field_page("joueurs")
         self.assertIn("<h2>En heads-up</h2>", field)
         self.assertIn('data-name="Villain"', field)
@@ -435,7 +444,8 @@ class ServerTest(unittest.TestCase):
                 s.close()
             time.sleep(1.5)
             self.assertEqual(self.request("GET", "/moi/bluffs")[0], 200)
-            self.assertEqual(self.request("GET", "/field/bluffs")[0], 200)
+            for page in ("bluffs", "value", "rec-bluffs", "rec-value"):
+                self.assertEqual(self.request("GET", f"/field/{page}")[0], 200, page)
             self.assertEqual(self.request("GET", "/field/joueurs")[0], 200)
             self.assertEqual(self.request("GET", "/field/inconnue")[0], 404)
         self.assertNotIn("Traceback", err.getvalue())
