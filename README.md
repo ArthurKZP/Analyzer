@@ -108,12 +108,16 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   sous-dossiers) ou une **archive `.zip`** avec ses dossiers (et les archives qu'elle contient). Chaque historique
   qui apporte des mains entre dans la base de données (son texte d'origine compris, voir « Base de données ») ; les
   doublons, les formats non reconnus et les autres fichiers de l'archive (PDF, images…) sont signalés. Une archive :
-  20 000 historiques et 1 Go décompressé au plus, 200 Mo par envoi (une archive de 150 Mo environ). Le dossier des
-  mains (`hands/` par défaut) reste une boîte d'arrivée : un historique ou un `.zip` qu'on y dépose est importé au
-  lancement de l'application. Une **barre d'avancement** suit l'import : lecture et envoi des fichiers, lecture des
-  historiques (fichier par fichier, mains lues sur le total), puis mise à jour de tes analyses (mains relues), avec
-  le temps qu'il reste ; on peut quitter la page et y revenir, un seul import à la fois. Sous l'import, **les mains
-  par pseudo** : chaque historique marque un pseudo comme héros (les mains importées de son compte), listé avec ses
+  20 000 historiques et 1 Go décompressé au plus. **Les gros imports passent** (des milliers de fichiers, des
+  historiques de plusieurs centaines de Mo) : la page envoie les petits historiques par lots de 8 Mo et les gros
+  fichiers (et les archives) seuls, tels quels, jusqu'à 1 Go chacun ; le serveur lit et enregistre chaque envoi à
+  son arrivée, un gros historique par blocs de 2 000 mains, et ne relit les mains qu'une fois, à la fin : ni le
+  navigateur ni le serveur n'ont jamais tous les historiques en mémoire. Le dossier des mains (`hands/` par défaut)
+  reste une boîte d'arrivée : un historique ou un `.zip` qu'on y dépose est importé au lancement de l'application.
+  Une **barre d'avancement** suit l'import : envoi et lecture des historiques (fichier par fichier, mains lues),
+  puis mise à jour de tes analyses (mains relues), avec le temps qu'il reste ; une erreur en route garde ce qui est
+  déjà lu ; on peut quitter la page et y revenir, un seul import à la fois. Sous l'import, **les mains par
+  pseudo** : chaque historique marque un pseudo comme héros (les mains importées de son compte), listé avec ses
   sites et ses mains (toi, décoché dans *Paramètres*, joueur de référence). Coche un ou plusieurs pseudos puis
   *Supprimer leurs mains* : ces mains quittent la base et toutes les analyses (pas celles où le pseudo n'est qu'un
   joueur de la table) ; une main qu'un autre historique contient aussi, vue par un autre de tes pseudos, revient de

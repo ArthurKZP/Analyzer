@@ -8,7 +8,7 @@ import zipfile
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Iterator, Optional
 
 from .. import store
 from ..models import Hand
@@ -21,20 +21,28 @@ MAX_ZIP_SIZE = 1024 ** 3       # 1 Go une fois décompressée (garde-fou contre 
 MAX_ZIP_DEPTH = 2              # archives dans l'archive
 
 
+UNKNOWN_FORMAT = ("Format d'historique non reconnu (sites supportés : Betclic, Winamax, Unibet, PokerStars, GGPoker, "
+                  "HHPoker, WPN, iPoker, partypoker).")
+
+
+def iter_hands(text: str, on_hands: Optional[Callable[[int], None]] = None) -> Iterator[Hand]:
+    """Les mains d'un historique, lues une à une : un très gros historique n'est jamais entier en mémoire une fois lu
+    (ValueError tout de suite si le format n'est pas reconnu) ; on_hands(n) : n mains lues, toutes les 100."""
+    parser = next((p for p in PARSERS if p.looks_like(text)), None)
+    if parser is None:
+        raise ValueError(UNKNOWN_FORMAT)
+
+    def walk() -> Iterator[Hand]:
+        for k, hand in enumerate(parser.parse(text), start=1):
+            if on_hands is not None and k % 100 == 0:
+                on_hands(k)
+            yield hand
+    return walk()
+
+
 def parse_text(text: str, on_hands: Optional[Callable[[int], None]] = None) -> list[Hand]:
     """Les mains d'un historique (ValueError : format non reconnu) ; on_hands(n) : n mains lues, toutes les 100."""
-    for parser in PARSERS:
-        if parser.looks_like(text):
-            if on_hands is None:
-                return list(parser.parse(text))
-            hands = []
-            for hand in parser.parse(text):
-                hands.append(hand)
-                if len(hands) % 100 == 0:
-                    on_hands(len(hands))
-            return hands
-    raise ValueError("Format d'historique non reconnu (sites supportés : Betclic, Winamax, Unibet, PokerStars, "
-                     "GGPoker, HHPoker, WPN, iPoker, partypoker).")
+    return list(iter_hands(text, on_hands))
 
 
 def count_hands(text: str) -> int:

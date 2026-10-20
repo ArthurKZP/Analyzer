@@ -35,7 +35,8 @@ STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css
                 "coach.js": "text/javascript; charset=utf-8", "coach.css": "text/css; charset=utf-8",
                 "rangekit.js": "text/javascript; charset=utf-8"}
 MAX_PATH = 40  # étapes d'un chemin dans l'arbre (bien plus qu'un coup réel)
-MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
+MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import (un envoi)
+MAX_FILE = 1024 ** 3  # un historique (ou une archive) envoyé seul, en octets : 1 Go
 MAX_SMALL_BODY = 64 * 1024
 MAX_CHARTS_BODY = 4 * 1024 * 1024  # des charts préflop importés (Paramètres › Ranges préflop)
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
@@ -713,6 +714,8 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "import", "lancer"]:  # en arrière-plan : son avancement, GET /api/import/<id>
             files = self._import_files()
             return files if files is None else self._json(library.start_import(files))
+        if len(parts) >= 3 and parts[:2] == ["api", "import"]:  # un import envoyé en plusieurs fois
+            return self._import_step(library, parts[2:])
         if len(parts) == 3 and parts[:2] == ["api", "fichiers"] and parts[2] in ("retirer", "retablir"):
             return self._file_action(library, parts[2])
         if len(parts) == 3 and parts[:2] == ["api", "pseudos"] and parts[2] in ("supprimer", "retablir"):
@@ -789,6 +792,8 @@ class Handler(BaseHTTPRequestHandler):
             if parts[3:] == ["import", "lancer"]:
                 files = self._import_files()
                 return files if files is None else self._json(student.start_import(files))
+            if len(parts) >= 5 and parts[3] == "import":
+                return self._import_step(student, parts[4:])
             if len(parts) == 5 and parts[3] == "fichiers" and parts[4] in ("retirer", "retablir"):
                 return self._file_action(student, parts[4])
             if len(parts) == 5 and parts[3] == "pseudos" and parts[4] in ("supprimer", "retablir"):
@@ -851,6 +856,34 @@ class Handler(BaseHTTPRequestHandler):
         if leak is not None and not (isinstance(leak, str) and len(leak) <= 200):
             return None
         return {"order": order, "limit": limit or None, "leak": leak}
+
+    def _import_step(self, owner, rest: list[str]):
+        """Un import envoyé en plusieurs fois (le tien, ou celui d'un élève) : « ouvrir », puis « <id>/lot » (des
+        historiques en JSON, comme /lancer) ou « <id>/fichier?nom=… » (un historique ou une archive zip, ses octets
+        tels quels), et « <id>/terminer » (les analyses se mettent à jour ; l'avancement : GET …/import/<id>)."""
+        try:
+            if rest == ["ouvrir"]:
+                self._small_json()  # (le corps, vide, est lu)
+                return self._json(owner.open_import())
+            if len(rest) == 2 and rest[1] == "lot":
+                files = self._import_files()
+                return files if files is None else self._json(owner.import_part(rest[0], files))
+            if len(rest) == 2 and rest[1] == "fichier":
+                length = int(self.headers.get("Content-Length") or 0)
+                if length <= 0 or length > MAX_FILE:
+                    return self._error(413, "Historique trop volumineux (1 Go maximum par fichier).")
+                name = (parse_qs(urlsplit(self.path).query).get("nom") or ["fichier"])[0]
+                data = self.rfile.read(length)
+                return self._json(owner.import_part(rest[0], [{"name": name, "data": data}]))
+            if len(rest) == 2 and rest[1] == "terminer":
+                self._small_json()
+                return self._json(owner.close_import(rest[0]))
+        except NotFound:
+            return self._error(404, "Import inconnu ou déjà fini.")
+        except Exception as exc:  # noqa: BLE001 — un envoi qui échoue : la page le dit, l'import reste ouvert
+            traceback.print_exc()
+            return self._error(500, f"Import impossible : {exc}")
+        return self._error(404, "Page introuvable.")
 
     def _import_files(self) -> Optional[list]:
         """Les fichiers d'un import (ou None, la réponse d'erreur déjà envoyée)."""

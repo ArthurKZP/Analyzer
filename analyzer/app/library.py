@@ -29,7 +29,7 @@ from ..db import hands as db_hands
 from ..cli import detect_hero, unify_hero
 from ..lines import villain_lines
 from ..models import CALL, RAISE, Hand
-from ..parsers import count_hands, read_zip
+from ..parsers import count_hands, decode, read_zip
 from ..report import build_plan_page, build_report, format_switch, html_page
 from ..selfreport import build_self_report, build_stats_page, opponent_results
 from ..stats import analyze
@@ -152,13 +152,6 @@ def _solver_key() -> tuple:
     return _digest_count(), len(solved[0]), len(solved[1]), review.signature()
 
 
-def _formats(hands: list[Hand]) -> dict[str, int]:
-    """Mains par format de table (HU, 3-max, 6-max…), dans cet ordre."""
-    counts: dict[str, int] = {}
-    for h in sorted(hands, key=lambda h: h.size):
-        counts[h.table_format] = counts.get(h.table_format, 0) + 1
-    return counts
-
 _LABEL_RE = re.compile(r'(<(?:(?:th|h[1-4])\b[^>]*|div class="label")>)([^<]+)')
 _SCRIPT_RE = re.compile(r"(<script\b.*?</script>)", re.S)
 _HIS = (("Tes ", "Ses "), ("Ton ", "Son "), ("Ta ", "Sa "))
@@ -230,6 +223,7 @@ class Library:
         self._snapshot: Optional[dict] = None  # ce qui a décidé de tes mains au dernier chargement (_load_new)
         self._imports: dict[str, ImportJob] = {}  # les imports suivis (barre d'avancement), les derniers
         self._import_pool: Optional[ThreadPoolExecutor] = None  # un import à la fois, en arrière-plan
+        self._import_lock = threading.Lock()  # les historiques s'enregistrent un envoi à la fois
         self.solves = solves or SolveQueue()
         self.backups = backups or Backups()
         self.coach = Coach(self)
@@ -2735,49 +2729,107 @@ class Library:
         """Importe dans la base les historiques reconnus (le texte d'origine est gardé ; un historique ou une main
         déjà importés ne le sont pas deux fois) ; job : son avancement, pour la barre de la page Importer.
 
-        Chaque fichier : {"name", "content"} (texte), ou {"name", "zip"} (archive zip en base64, dossiers compris :
-        chacun de ses historiques s'importe comme un fichier)."""
-        items = files[:MAX_IMPORT_FILES]
-        if job is not None:  # les mains à lire, comptées d'abord (les archives s'ouvrent deux fois : c'est rapide)
+        Chaque fichier : {"name", "content"} (texte), {"name", "zip"} (archive zip en base64, dossiers compris : chacun
+        de ses historiques s'importe comme un fichier) ou {"name", "data"} (ses octets : un historique ou une archive
+        zip)."""
+        job = job or ImportJob("", 0)
+        self._import_part(job, files[:MAX_IMPORT_FILES])
+        return self._finish_import(job)
+
+    def _import_part(self, job: ImportJob, files: list[dict]) -> None:
+        """Enregistre ces historiques dans la base (un envoi à la fois), sans relire les mains de l'espace : leurs
+        résultats et les mains ajoutées s'accumulent dans job."""
+        with self._import_lock:
+            items = [self._import_item(item) for item in files]
             job.plan([count_hands(text) for text in self._import_texts(items)])
-        results: list[dict] = []
-        added = 0
-        removed = frozenset(db_hands.removed_pseudos(self.db, self.space_id))  # leurs mains sont écartées
-        for item in items:
-            name = str(item.get("name") or "fichier")[:200]
-            if isinstance(item.get("zip"), str):
-                added += self._import_zip(name, item["zip"], results, job, removed)
-            else:
-                added += self._import_one(name, item.get("content"), results, job, removed)
-        if added:  # seulement les mains ajoutées, quand rien d'autre n'a changé
-            self.reload(job.loading if job is not None else None, new_only=True)
-        skipped = sum(r.get("skipped", 0) for r in results if not r.get("archive"))
-        return {"files": results, "added": added, "skipped": skipped, "state": self.summary()}
+            removed = frozenset(db_hands.removed_pseudos(self.db, self.space_id))  # leurs mains sont écartées
+            for name, kind, payload in items:
+                if kind == "zip":
+                    job.added += self._import_zip(name, payload, job.results, job, removed)
+                elif kind == "bad":
+                    job.results.append({"name": name, "status": payload, "hands": 0, "new": 0})
+                else:
+                    job.added += self._import_one(name, payload, job.results, job, removed)
+
+    def _finish_import(self, job: ImportJob) -> dict:
+        """Après le dernier envoi : les mains ajoutées rejoignent les analyses (seulement elles, quand rien d'autre n'a
+        changé) ; le résultat de l'import."""
+        if job.added:
+            self.reload(job.loading, new_only=True)
+        skipped = sum(r.get("skipped", 0) for r in job.results if not r.get("archive"))
+        return {"files": job.results, "added": job.added, "skipped": skipped, "state": self.summary()}
 
     @staticmethod
-    def _import_texts(items: list[dict]):
-        """Les textes d'un import, archives ouvertes (ceux qui ne se lisent pas sont laissés de côté)."""
-        for item in items:
-            if isinstance(item.get("zip"), str):
+    def _import_item(item: dict) -> tuple[str, str, object]:
+        """(nom, nature, contenu) d'un fichier envoyé : « text » et son texte, « zip » et ses octets, ou « bad » et
+        pourquoi il ne se lit pas."""
+        name = str(item.get("name") or "fichier")[:200]
+        data = item.get("data")
+        if isinstance(data, (bytes, bytearray)):
+            if name.lower().endswith(".zip") or bytes(data[:4]) == b"PK\x03\x04":
+                return name, "zip", bytes(data)
+            return name, "text", decode(bytes(data))
+        if isinstance(item.get("zip"), str):
+            try:
+                return name, "zip", base64.b64decode(item["zip"], validate=True)
+            except (binascii.Error, ValueError):
+                return name, "bad", "archive zip illisible (envoi abîmé)"
+        return name, "text", item.get("content")
+
+    @staticmethod
+    def _import_texts(items: list[tuple[str, str, object]]):
+        """Les textes d'un envoi, archives ouvertes (ceux qui ne se lisent pas sont laissés de côté)."""
+        for _, kind, payload in items:
+            if kind == "zip":
                 try:
-                    yield from (text for _, text in read_zip(base64.b64decode(item["zip"], validate=True)).files)
-                except (binascii.Error, ValueError):
+                    yield from (text for _, text in read_zip(payload).files)
+                except ValueError:
                     continue
-            elif isinstance(item.get("content"), str):
-                yield item["content"]
+            elif kind == "text" and isinstance(payload, str):
+                yield payload
 
     def start_import(self, files: list[dict]) -> dict:
         """Lance l'import en arrière-plan (un à la fois) ; son avancement se lit avec import_status."""
+        job = self._new_import()
+        self._import_pool_of().submit(self._run_import, job, files)
+        return job.view()
+
+    def open_import(self) -> dict:
+        """Ouvre un import envoyé en plusieurs fois (la page Importer : des lots de petits historiques, les gros un par
+        un, pour que ni la page ni le serveur n'aient tout en mémoire) : import_part pour chaque envoi, puis
+        close_import ; son avancement se lit avec import_status."""
+        return self._new_import().view()
+
+    def import_part(self, job_id: str, files: list[dict]) -> dict:
+        """Un envoi d'un import ouvert (open_import), enregistré tout de suite ; NotFound : import inconnu ou fini.
+        Un envoi qui échoue laisse l'import ouvert : ce qui est déjà enregistré rejoint les analyses à close_import."""
+        job = self._imports.get(job_id)
+        if job is None or job.state != "running" or job.step != "lecture":
+            raise NotFound(job_id)
+        self._import_part(job, files[:MAX_IMPORT_FILES])
+        return job.view()
+
+    def close_import(self, job_id: str) -> dict:
+        """Le dernier envoi est arrivé : les analyses se mettent à jour en arrière-plan (import_status)."""
+        job = self._imports.get(job_id)
+        if job is None or job.state != "running":
+            raise NotFound(job_id)
+        self._import_pool_of().submit(self._run_finish, job)
+        return job.view()
+
+    def _new_import(self) -> ImportJob:
         job = ImportJob(secrets.token_hex(8), db_hands.count(self.db, self.space_id))
         with self._lock:
             self._imports[job.id] = job
             for old in list(self._imports)[:-10]:  # les 10 derniers
                 del self._imports[old]
+        return job
+
+    def _import_pool_of(self) -> ThreadPoolExecutor:
+        with self._lock:
             if self._import_pool is None:
                 self._import_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="import")
-            pool = self._import_pool
-        pool.submit(self._run_import, job, files)
-        return job.view()
+            return self._import_pool
 
     def _run_import(self, job: ImportJob, files: list[dict]) -> None:
         try:
@@ -2786,17 +2838,22 @@ class Library:
             traceback.print_exc()
             job.fail(f"Import impossible : {exc}")
 
+    def _run_finish(self, job: ImportJob) -> None:
+        try:
+            job.finish(self._finish_import(job))
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            job.fail(f"Import impossible : {exc}")
+
     def import_status(self, job_id: str) -> Optional[dict]:
         """L'avancement d'un import lancé par start_import (None : inconnu)."""
         job = self._imports.get(job_id)
         return job.view() if job is not None else None
 
-    def _import_zip(self, name: str, data: str, results: list[dict], job: Optional[ImportJob] = None,
+    def _import_zip(self, name: str, data: bytes, results: list[dict], job: Optional[ImportJob] = None,
                     removed: frozenset = frozenset()) -> int:
         try:
-            content = read_zip(base64.b64decode(data, validate=True))
-        except binascii.Error:
-            content, reason = None, "archive zip illisible (envoi abîmé)"
+            content, reason = read_zip(data), ""
         except ValueError as exc:  # illisible, trop grosse
             content, reason = None, str(exc)
         if content is None:
@@ -2825,17 +2882,17 @@ class Library:
         try:
             # le nom d'origine n'est qu'une étiquette (jamais un chemin) : celui du fichier, ou sa place dans l'archive
             label = name if " › " in name else Path(name.replace("\\", "/")).name
-            hands, new, _ = db_hands.import_text(self.db, self.space_id, label, content,
-                                                 on_hands=job.reading if job is not None else None)
+            read, new, _ = db_hands.import_text(self.db, self.space_id, label, content,
+                                                on_hands=job.reading if job is not None else None)
         except ValueError:
             results.append({"name": name, "status": "format non reconnu", "hands": 0, "new": 0})
             return 0
         finally:
             if job is not None:
                 job.file_done(count_hands(content))
-        detail = {"sites": sorted({h.site for h in hands}), "formats": _formats(hands)}
-        skipped = sum(1 for h in hands if h.hero in removed) if removed else 0
-        status = ("importé" if new else "écarté (pseudo supprimé)" if skipped else "déjà importé" if hands
+        detail = {"sites": sorted(read.sites), "formats": read.formats}
+        skipped = sum(read.heroes[pseudo] for pseudo in removed) if removed else 0
+        status = ("importé" if new else "écarté (pseudo supprimé)" if skipped else "déjà importé" if read.hands
                   else "aucune main lue")  # (aucune main lue : ex. des tournois)
-        results.append(dict(detail, name=name, status=status, hands=len(hands), new=new, skipped=skipped))
+        results.append(dict(detail, name=name, status=status, hands=read.hands, new=new, skipped=skipped))
         return new

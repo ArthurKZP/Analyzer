@@ -336,6 +336,39 @@ class LibraryTest(IsolatedHome):
         self.assertEqual(len(lib.hands), 4)
         self.assertIsNone(lib.import_status("inconnu"))
 
+    def test_import_in_parts(self):
+        """Un gros import arrive en plusieurs envois (la page Importer : des lots de petits historiques, les gros et les
+        archives seuls, leurs octets tels quels) ; les analyses ne se mettent à jour qu'une fois, à la fin."""
+        from analyzer.errors import NotFound
+        lib = Library(self.folder)
+        self.addCleanup(lib.solves.shutdown)
+        content = FIXTURE.read_text(encoding="utf-8")
+        job = lib.open_import()
+        self.assertEqual((job["state"], job["step"]), ("running", "lecture"))
+        with mock.patch.object(lib, "reload", wraps=lib.reload) as reload:
+            view = lib.import_part(job["id"], [{"name": "a.txt", "content": content},
+                                               {"name": "vide.txt", "content": ""}])
+            self.assertEqual((view["files"], view["hands"]), ([2, 2], [4, 4]))
+            data = make_zip({"b/hu.txt": renumbered(content, "1").encode("cp1252")})
+            lib.import_part(job["id"], [{"name": "archive.zip", "data": data}])
+            view = lib.import_part(job["id"], [{"name": "c.txt", "data": renumbered(content, "2").encode("utf-16")}])
+            self.assertEqual(view["hands"], [12, 12])
+            reload.assert_not_called()  # rien n'est relu avant la fin
+            lib.close_import(job["id"])
+            deadline = time.time() + 30
+            while lib.import_status(job["id"])["state"] == "running" and time.time() < deadline:
+                time.sleep(0.02)
+            reload.assert_called_once()
+        done = lib.import_status(job["id"])
+        self.assertEqual((done["state"], done["result"]["added"]), ("done", 12))
+        self.assertEqual([f["status"] for f in done["result"]["files"]],
+                         ["importé", "vide", "importé", "archive : 1 historique(s)", "importé"])
+        self.assertEqual(len(lib.hands), 12)
+        with self.assertRaises(NotFound):  # fini
+            lib.import_part(job["id"], [{"name": "d.txt", "content": content}])
+        with self.assertRaises(NotFound):
+            lib.close_import("inconnu")
+
 
 def make_zip(entries: dict) -> bytes:
     import io
@@ -889,6 +922,28 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(job["result"]["files"][0]["status"], "déjà importé")
         self.assertEqual(self.request("GET", "/api/import/inconnu")[0], 404)
         self.assertEqual(self.request("POST", "/api/import/lancer", "pas du json")[0], 400)
+
+    def test_import_in_parts_endpoint(self):
+        """La page Importer envoie un gros historique tel quel (ses octets), puis termine l'import (ici, le même
+        historique : les mains du serveur, partagé par ces tests, ne changent pas)."""
+        job = json.loads(self.request("POST", "/api/import/ouvrir", "{}")[2])
+        raw = FIXTURE.read_text(encoding="utf-8").encode("utf-8")
+        status, _, data = self.request("POST", f"/api/import/{job['id']}/fichier?nom=gros%20historique.txt", raw,
+                                       {"Content-Type": "application/octet-stream"})
+        self.assertEqual((status, json.loads(data)["hands"]), (200, [4, 4]))
+        status, _, data = self.request("POST", f"/api/import/{job['id']}/lot", json.dumps({"files": []}),
+                                       {"Content-Type": "application/json"})
+        self.assertEqual(status, 200)
+        job = json.loads(self.request("POST", f"/api/import/{job['id']}/terminer", "{}")[2])
+        deadline = time.time() + 20
+        while job["state"] == "running" and time.time() < deadline:
+            time.sleep(0.05)
+            job = json.loads(self.request("GET", f"/api/import/{job['id']}")[2])
+        self.assertEqual((job["state"], job["result"]["added"]), ("done", 0))
+        self.assertEqual([(f["name"], f["status"], f["hands"]) for f in job["result"]["files"]],
+                         [("gros historique.txt", "déjà importé", 4)])
+        self.assertEqual(self.request("POST", f"/api/import/{job['id']}/terminer", "{}")[0], 404)  # déjà fini
+        self.assertEqual(self.request("POST", "/api/import/inconnu/fichier?nom=a.txt", b"x")[0], 404)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ import json
 import zlib
 from bisect import bisect_left
 from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
@@ -32,6 +33,7 @@ from ..models import Hand, hand_from_dict, hand_to_dict
 from . import Database, now
 
 CHUNK = 500  # numéros de main par requête « IN (…) »
+IMPORT_CHUNK = 2000  # mains lues puis enregistrées à la fois : un très gros historique n'est jamais lu en entier
 CACHE_BLOCK = 5000  # lignes de la table des mains par bloc du cache des mains lues (selon leur numéro de ligne)
 
 
@@ -105,35 +107,85 @@ def _insert_hands(db: Database, space_id: int, file_id: Optional[int], hands: li
     return added
 
 
+@dataclass
+class Read:
+    """Ce qu'un import a lu d'un historique, sans garder ses mains : leur nombre (len), leurs sites, leurs formats de
+    table et leurs héros marqués. Un historique déjà importé n'est pas relu : son nombre de mains seulement."""
+    hands: int = 0
+    sites: set = field(default_factory=set)
+    heroes: Counter = field(default_factory=Counter)  # héros marqué -> mains
+    sizes: dict = field(default_factory=dict)  # format de table -> (sa taille, ses mains)
+
+    def add(self, hands: list[Hand]) -> None:
+        self.hands += len(hands)
+        for h in hands:
+            self.sites.add(h.site)
+            if h.hero:
+                self.heroes[h.hero] += 1
+            size, n = self.sizes.get(h.table_format, (h.size, 0))
+            self.sizes[h.table_format] = (size, n + 1)
+
+    @property
+    def formats(self) -> dict[str, int]:
+        """Mains par format de table (HU, 3-max, 6-max…), dans cet ordre."""
+        return {f: n for f, (_, n) in sorted(self.sizes.items(), key=lambda kv: kv[1][0])}
+
+    def __len__(self) -> int:
+        return self.hands
+
+
+def _chunks(hands, n: int):
+    chunk: list[Hand] = []
+    for h in hands:
+        chunk.append(h)
+        if len(chunk) >= n:
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
+
+
 def import_text(db: Database, space_id: int, name: str, text: str, path: Optional[str] = None,
                 size: Optional[int] = None, mtime: Optional[int] = None,
-                on_hands: Optional[Callable[[int], None]] = None) -> tuple[list[Hand], int, bool]:
-    """Importe un historique : (ses mains, combien sont nouvelles, déjà importé ?). ValueError : format inconnu.
-    on_hands(n) : n mains lues (l'avancement d'un import)."""
-    from ..parsers import parse_text
+                on_hands: Optional[Callable[[int], None]] = None) -> tuple[Read, int, bool]:
+    """Importe un historique : (ce qui en est lu, combien de mains sont nouvelles, déjà importé ?). ValueError : format
+    inconnu. Ses mains sont lues et enregistrées par blocs (IMPORT_CHUNK) : un historique de plusieurs centaines de Mo
+    n'est jamais entier en mémoire une fois lu. on_hands(n) : n mains lues (l'avancement d'un import)."""
+    from ..parsers import iter_hands
     digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
-    existing = db.one("SELECT id, retire_le FROM fichiers WHERE espace_id = ? AND empreinte = ?", (space_id, digest))
-    hands = parse_text(text, on_hands)  # ValueError : format non reconnu
+    existing = db.one("SELECT id, retire_le, mains FROM fichiers WHERE espace_id = ? AND empreinte = ?",
+                      (space_id, digest))
+    hands = iter_hands(text, on_hands)  # ValueError : format non reconnu, avant de rien écrire
     if existing is not None and existing[1] is not None and path is None:  # retiré, puis importé à nouveau
-        return hands, restore_file(db, space_id, existing[0]), False
+        return Read(existing[2] or 0), restore_file(db, space_id, existing[0]), False
     if existing is not None:
         if path is not None:  # le même historique, retrouvé dans le dossier : on note où, pour ne plus le relire
             db.execute("UPDATE fichiers SET chemin = ?, taille = ?, date_fichier = ? WHERE id = ?",
                        (path, size, mtime, existing[0]))
-        return hands, 0, True
+        return Read(existing[2] or 0), 0, True
     version = reader_version()
+    read, added, fresh, aside = Read(), 0, 0, Counter()
+    removed = removed_pseudos(db, space_id)
     with db.transaction():
-        known = _known(db, space_id, hands)
-        new = [h for h in hands if (h.site, h.hand_id) not in known]
-        if not new and path is None:
-            return hands, 0, True  # toutes ses mains sont déjà là : rien à garder
         file_id = db.one("INSERT INTO fichiers (espace_id, nom, chemin, taille, date_fichier, empreinte, contenu, mains, "
                          "importe_le) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
                          (space_id, name[:300], path, size, mtime, digest, zlib.compress(text.encode("utf-8"), 6),
-                          len(hands), now()))[0]
-        new = _set_aside(db, space_id, file_id, new)  # (gardé quand même : de quoi rétablir un pseudo supprimé)
-        added = _insert_hands(db, space_id, file_id, new, version)
-    return hands, added, False
+                          0, now()))[0]
+        for chunk in _chunks(hands, IMPORT_CHUNK):
+            read.add(chunk)
+            known = _known(db, space_id, chunk)
+            new = [h for h in chunk if (h.site, h.hand_id) not in known]
+            fresh += len(new)
+            kept = [h for h in new if h.hero not in removed]  # (écartées, gardées quand même : de quoi les rétablir)
+            aside.update(h.hero for h in new if h.hero in removed)
+            added += _insert_hands(db, space_id, file_id, kept, version)
+        if not fresh and path is None:  # toutes ses mains sont déjà là : rien à garder
+            db.execute("DELETE FROM fichiers WHERE id = ?", (file_id,))
+            return read, 0, True
+        db.execute("UPDATE fichiers SET mains = ? WHERE id = ?", (read.hands, file_id))
+        for pseudo, n in aside.items():
+            _note(db, space_id, pseudo, n, {file_id})
+    return read, added, False
 
 
 def sync_folder(db: Database, space_id: int, folder: Path) -> int:

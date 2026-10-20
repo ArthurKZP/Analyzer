@@ -799,15 +799,29 @@
     return out;
   }
 
-  // Un historique part en texte ; une archive zip en base64 (le serveur l'ouvre, dossiers compris).
-  function readUpload(f) {
-    if (!/\.zip$/i.test(f.name)) return f.text().then((content) => ({ name: f.name, content }));
-    return new Promise((ok, ko) => {
-      const reader = new FileReader();
-      reader.onload = () => ok({ name: f.name, zip: String(reader.result).split(',')[1] || '' });
-      reader.onerror = () => ko(reader.error);
-      reader.readAsDataURL(f);
-    });
+  // L'envoi par lots : les petits historiques ensemble, en texte (au plus BATCH_BYTES ou BATCH_FILES par envoi), les
+  // gros et les archives zip seuls, tels quels (le navigateur les lit au fil de l'envoi) : ni la page ni le serveur
+  // n'ont jamais tous les historiques en mémoire, quel que soit leur nombre ou leur taille.
+  const BATCH_BYTES = 8 * 1024 * 1024;
+  const BATCH_FILES = 200;
+  const alone = (f) => f.size > BATCH_BYTES || /\.zip$/i.test(f.name);
+
+  function batches(list) {
+    const out = [];
+    let current = [];
+    let size = 0;
+    for (const f of list) {
+      if (alone(f)) { out.push([f]); continue; }
+      if (current.length && (size + f.size > BATCH_BYTES || current.length >= BATCH_FILES)) {
+        out.push(current);
+        current = [];
+        size = 0;
+      }
+      current.push(f);
+      size += f.size;
+    }
+    if (current.length) out.push(current);
+    return out;
   }
 
   // L'import en cours (un à la fois) : à qui il est ('' : toi, sinon l'élève) et son dernier avancement, que la page
@@ -845,12 +859,13 @@
     box.querySelector('.progress-detail').textContent = view.detail || '';
   }
 
-  // POST avec l'avancement de l'envoi (fetch ne le donne pas) ; la réponse JSON, ou une erreur.
-  function postWithProgress(url, body, onProgress) {
+  // POST avec l'avancement de l'envoi (fetch ne le donne pas) ; la réponse JSON, ou une erreur. body : du texte (JSON),
+  // ou un fichier envoyé tel quel (type : application/octet-stream).
+  function postWithProgress(url, body, onProgress, type) {
     return new Promise((ok, ko) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url);
-      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.setRequestHeader('Content-Type', type || 'application/json');
       xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
       xhr.onload = () => {
         let data = {};
@@ -862,28 +877,17 @@
     });
   }
 
-  // Ce que fait le serveur : lire les historiques, puis mettre les analyses à jour ; et le temps qu'il reste, estimé
-  // d'après l'avancement depuis le début.
-  function jobView(job, student, started) {
-    const done = job.progress || 0;
+  // Le temps qu'il reste, estimé d'après l'avancement depuis le début.
+  function timeLeft(done, started) {
     const elapsed = (Date.now() - started) / 1000;
-    let left = '';
-    if (done > 0.05 && elapsed > 3) {
-      const s = Math.max(1, Math.round(elapsed * (1 - done) / done));
-      left = ' · encore environ ' + (s < 60 ? s + ' s' : Math.round(s / 60) + ' min');
-    }
-    if (job.step === 'analyses') {
-      return { step: student ? 'Mise à jour de ses analyses' : 'Mise à jour de tes analyses', value: 0.15 + 0.85 * done,
-        detail: count(job.loaded[0]) + ' mains relues sur ' + count(job.loaded[1]) + left };
-    }
-    const [files, total] = job.files, [hands, all] = job.hands;
-    return { step: 'Lecture des historiques', value: 0.15 + 0.85 * done,
-      detail: !total ? 'Préparation…' : 'Fichier ' + count(Math.min(files + 1, total)) + ' sur ' + count(total) + ' · '
-        + count(hands) + ' mains lues sur ' + count(all) + left };
+    if (done <= 0.03 || elapsed <= 3) return '';
+    const s = Math.max(1, Math.round(elapsed * (1 - done) / done));
+    return ' · encore environ ' + (s < 60 ? s + ' s' : Math.round(s / 60) + ' min');
   }
 
-  // Importer : lire les fichiers (5 % de la barre), les envoyer (10 %), puis le serveur les lit et met les analyses à
-  // jour (85 %, son avancement demandé toutes les 0,4 s).
+  // Importer : envoyer les historiques par lots, chacun lu et enregistré par le serveur à son arrivée (80 % de la
+  // barre, selon les octets et les fichiers envoyés et les mains lues du lot en cours, demandées toutes les 0,5 s),
+  // puis le serveur met les analyses à jour une seule fois (20 %, son avancement demandé toutes les 0,4 s).
   async function upload(fileList, result, student) {
     if (!fileList || !fileList.length) {
       result.textContent = 'Aucun historique (.txt) ni archive .zip dans ce que tu as déposé.';
@@ -897,26 +901,67 @@
     }
     importing = { owner, view: null };
     const list = [...fileList];
+    const total = list.reduce((s, f) => s + f.size, 0) || 1;
+    const base = student ? '/api/eleves/' + encodeURIComponent(student) + '/import' : '/api/import';
+    const status = (id) => fetch(base + '/' + encodeURIComponent(id)).then(async (res) => {
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Import impossible.');
+      return data;
+    });
+    const started = Date.now();
+    let job = null;
+    let closing = false;
     try {
-      let read = 0;
-      showProgress(owner, { step: 'Lecture des fichiers', value: 0, detail: '0 sur ' + count(list.length) });
-      const files = await Promise.all(list.map((f) => readUpload(f).then((item) => {
-        read += 1;
-        showProgress(owner, { step: 'Lecture des fichiers', value: 0.05 * read / list.length,
-          detail: count(read) + ' sur ' + count(list.length) });
-        return item;
-      })));
-      const base = student ? '/api/eleves/' + encodeURIComponent(student) + '/import' : '/api/import';
-      let job = await postWithProgress(base + '/lancer', JSON.stringify({ files }), (f) =>
-        showProgress(owner, { step: 'Envoi des fichiers', value: 0.05 + 0.1 * f, detail: Math.floor(100 * f) + ' %' }));
-      const started = Date.now();
+      showProgress(owner, { step: 'Envoi des historiques', value: 0, detail: 'Préparation…' });
+      job = await postWithProgress(base + '/ouvrir', '{}', () => {});
+      let sent = 0;   // octets des lots déjà lus par le serveur
+      let files = 0;  // fichiers déjà lus
+      for (const batch of batches(list)) {
+        const bytes = batch.reduce((s, f) => s + f.size, 0);
+        const from = job.hands[0];  // mains lues avant ce lot
+        let upFrac = 0;
+        let readFrac = 0;
+        const show = () => {
+          // les octets pour les gros historiques, le nombre de fichiers pour les nombreux petits
+          const frac = 0.3 * upFrac + 0.7 * readFrac;
+          const done = 0.7 * (sent + bytes * frac) / total + 0.3 * (files + batch.length * frac) / list.length;
+          showProgress(owner, { step: 'Envoi et lecture des historiques', value: 0.8 * done,
+            detail: 'Fichier ' + count(Math.min(files + batch.length, list.length)) + ' sur ' + count(list.length)
+              + ' · ' + count(job.hands[0]) + ' mains lues' + timeLeft(done, started) });
+        };
+        show();
+        const poll = setInterval(() => status(job.id).then((v) => {
+          job = v;
+          readFrac = v.hands[1] > from ? (v.hands[0] - from) / (v.hands[1] - from) : 0;
+          show();
+        }).catch(() => {}), 500);
+        const progress = (f) => { upFrac = f; show(); };
+        try {
+          if (batch.length === 1 && alone(batch[0])) {
+            job = await postWithProgress(base + '/' + job.id + '/fichier?nom=' + encodeURIComponent(batch[0].name),
+              batch[0], progress, 'application/octet-stream');
+          } else {
+            const items = await Promise.all(batch.map((f) => f.text().then((content) => ({ name: f.name, content }))));
+            job = await postWithProgress(base + '/' + job.id + '/lot', JSON.stringify({ files: items }), progress);
+          }
+        } finally {
+          clearInterval(poll);
+        }
+        if (job.state === 'error') throw new Error(job.error || 'Import impossible.');
+        sent += bytes;
+        files += batch.length;
+      }
+      closing = true;
+      job = await postWithProgress(base + '/' + job.id + '/terminer', '{}', () => {});
+      const analysing = Date.now();
       while (job.state === 'running') {
-        showProgress(owner, jobView(job, student, started));
+        const [loaded, toLoad] = job.loaded;
+        const done = job.step === 'analyses' && toLoad ? loaded / toLoad : 0;
+        showProgress(owner, { step: student ? 'Mise à jour de ses analyses' : 'Mise à jour de tes analyses',
+          value: 0.8 + 0.2 * done,
+          detail: count(loaded) + ' mains relues sur ' + count(toLoad) + timeLeft(done, analysing) });
         await new Promise((ok) => setTimeout(ok, 400));
-        const res = await fetch(base + '/' + encodeURIComponent(job.id));
-        const next = await res.json();
-        if (!res.ok) throw new Error(next.error || 'Import impossible.');
-        job = next;
+        job = await status(job.id);
       }
       if (job.state === 'error') throw new Error(job.error || 'Import impossible.');
       const data = job.result;
@@ -935,10 +980,15 @@
         refreshImported(student);
       }
     } catch (err) {
+      // ce qui est déjà enregistré rejoint les analyses
+      if (job && job.id && !closing) {
+        postWithProgress(base + '/' + job.id + '/terminer', '{}', () => {}).catch(() => {});
+      }
       importing = null;
       const box = importResult(owner) || result;
       box.textContent = '';
-      box.append(el('p', { class: 'error' }, err.message || String(err)));
+      box.append(el('p', { class: 'error' }, (err.message || String(err))
+        + (job && job.id ? ' Les historiques lus avant l\'erreur sont gardés.' : '')));
     }
   }
 

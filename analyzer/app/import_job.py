@@ -5,6 +5,10 @@ l'espace pour mettre les analyses à jour (seulement s'il y a des mains nouvelle
 celles des historiques, comptées avant de les lire, puis celles de l'espace ; lire et enregistrer une main coûte environ
 READ_COST fois plus que la relire (mesuré : 0,46 ms contre 0,12 ms), et les analyses recalculées après la relecture
 environ FINISH_COST fois la relecture.
+
+Un gros import arrive en plusieurs envois (la page Importer : des lots de petits historiques, les gros un par un) :
+chacun s'ajoute au plan (plan), ses résultats s'accumulent (results, added), et les analyses ne se mettent à jour
+qu'une fois, à la fin.
 """
 from __future__ import annotations
 
@@ -25,14 +29,17 @@ class ImportJob:
         self.loaded, self.to_load = 0, known    # mains de l'espace relues (estimé : celles d'avant + les nouvelles)
         self.result: Optional[dict] = None
         self.error: Optional[str] = None
+        self.results: list[dict] = []  # ce qu'a donné chaque historique lu jusqu'ici
+        self.added = 0                 # mains ajoutées jusqu'ici
         self._finished = 0  # mains des historiques déjà lus
         self._lock = threading.Lock()
 
     def plan(self, counts: list[int]) -> None:
-        """Les historiques à lire et le nombre de mains de chacun."""
+        """Des historiques à lire (ceux d'un envoi de plus) et le nombre de mains de chacun."""
         with self._lock:
-            self.files_total, self.hands_total = len(counts), sum(counts)
-            self.to_load += self.hands_total
+            self.files_total += len(counts)
+            self.hands_total += sum(counts)
+            self.to_load += sum(counts)
 
     def reading(self, n: int) -> None:
         """n mains lues dans l'historique en cours."""
