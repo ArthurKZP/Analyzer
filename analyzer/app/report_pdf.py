@@ -243,10 +243,11 @@ def _leaks(flow: Flow) -> None:
     text_x, width = M + 22, CW - 22
     for k, leak in enumerate(items, start=1):
         conf_w = pw.text_width(leak.confidence, "regular", 7.5) + 14
-        title = pw.wrap(leak.title, width - conf_w, "bold", 10)
+        title = pw.wrap(leak.summary, width - conf_w, "bold", 10)  # le leak en une phrase, en clair
+        where = pw.wrap(leak.title, width, "regular", 8) if leak.headline else []  # puis où il se joue
         evidence = pw.wrap(leak.verified, width, "regular", 8.6)
         advice = pw.wrap("› " + leak.advice, width, "regular", 9)
-        height = len(title) * 13 + len(evidence) * 11.2 + len(advice) * 11.8 + 10
+        height = len(title) * 13 + len(where) * 10.5 + len(evidence) * 11.2 + len(advice) * 11.8 + 10
         flow.need(height)
         page, y = flow.page, flow.y
         page.rect(M, y + 1, 15, 15, fill=ACCENT, radius=7.5)
@@ -255,6 +256,9 @@ def _leaks(flow: Flow) -> None:
             page.text(text_x, y + 12 + j * 13, line, "bold", 10, INK)
         pill(page, W - M, y + 11.5, leak.confidence, leak.confidence == "solide", align="right")
         y += len(title) * 13 + 2
+        for line in where:
+            page.text(text_x, y + 8, line, "regular", 8, MUTED)
+            y += 10.5
         for line in evidence:
             page.text(text_x, y + 9, line, "regular", 8.6, INK2)
             y += 11.2

@@ -173,6 +173,23 @@ class ReportPdfTest(IsolatedHome):
         lib.set_period({"kind": "last", "n": 2})
         self.assertIn("Période : 2 dernières mains", pdf_strings(lib.report_pdf()))
 
+    def test_leaks_in_clear(self):
+        """Le PDF et la présentation donnent chaque leak en une phrase claire, puis où il se joue."""
+        from analyzer import leaks
+        lib = Library(self.folder)
+        title = "SRP · BTN : 2e barrel (turn)"
+        summary = "Tu mises trop souvent : 2e barrel (turn), au bouton, en SRP"
+        lib.leaks_report("HU").leaks = [leaks.Leak(title, "54 % sur 50 occasions.", "Checke davantage.", "postflop",
+                                                   "solide", 6.0, key="srp:barrel", direction="plus",
+                                                   headline=leaks.headline(title, "bet", "plus"))]
+        text = pdf_strings(lib.report_pdf())
+        self.assertLess(text.index(summary), text.index(title))  # la phrase d'abord, puis où
+        slides = slide_texts(check_pptx(self, lib.report_pptx()))
+        flat = [t for slide in slides for t in slide]
+        self.assertGreaterEqual(flat.count(summary), 3)  # les priorités, la diapositive du leak, le plan de travail
+        self.assertIn("LEAK 1 / 1 · SOLIDE · SRP · BTN : 2E BARREL (TURN)", flat)
+        self.assertIn(f"{title} · 54 % sur 50 occasions.", flat)
+
     def test_student(self):
         lib = Library(self.folder)
         student = lib.create_student("Paul")

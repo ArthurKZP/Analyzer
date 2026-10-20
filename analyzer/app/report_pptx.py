@@ -89,7 +89,8 @@ def card_runs(cards: Sequence[str], size: float, gap: str = " ") -> list[Run]:
 
 def header(slide: px.Slide, kicker: str, title: str, number: int) -> None:
     """Le haut d'une diapositive de contenu : sa rubrique, son titre ; en bas à droite, son numéro."""
-    slide.text(LEFT, 0.38, WIDTH, 0.3, [para(kicker.upper(), 12, AMBER, bold=True)], name="Rubrique")
+    kicker = fit(kicker.upper(), WIDTH, 12, True, 1, 10)
+    slide.text(LEFT, 0.38, WIDTH, 0.3, [para(kicker[0], kicker[1], AMBER, bold=True)], name="Rubrique")
     text, size, _ = fit(title, WIDTH, 30, True, 1, 22)
     slide.text(LEFT, 0.66, WIDTH, 0.6, [para(text, size, FELT, bold=True)], name="Titre")
     slide.text(RIGHT - 1.0, 7.0, 1.0, 0.25, [para(str(number), 10, MUTED, align="r")], name="Numéro")
@@ -238,13 +239,14 @@ def leaks_slide(deck: px.Presentation, s: Synthesis, number: int) -> None:
     for k, leak in enumerate(items):
         y = 1.65 + k * row
         badge(slide, LEFT, y + 0.04, 0.5, str(k + 1))
-        text_block(slide, LEFT + 0.75, y, WIDTH - 2.25, leak.title, 18, INK, bold=True, min_size=15)
-        text_block(slide, LEFT + 0.75, y + 0.36, WIDTH - 2.25, first_sentence(leak.evidence), 14, INK2,
+        text_block(slide, LEFT + 0.75, y, WIDTH - 2.25, leak.summary, 18, INK, bold=True, min_size=14)
+        where = f"{leak.title} · " if leak.headline else ""  # où il se joue, puis sa preuve
+        text_block(slide, LEFT + 0.75, y + 0.36, WIDTH - 2.25, where + first_sentence(leak.evidence), 14, INK2,
                    max_lines=1 if row < 0.9 else 2)
         pill(slide, RIGHT - 1.25, y + 0.05, leak.confidence)
         if k < len(items) - 1:
             slide.line(LEFT + 0.75, y + row - 0.05, RIGHT, y + row - 0.05, RULE, 0.75)
-    slide.notes = "\n".join(f"{k}. {x.title} ({x.confidence}) : {x.evidence} {x.advice}"
+    slide.notes = "\n".join(f"{k}. {x.summary} — {x.title} ({x.confidence}) : {x.evidence} {x.advice}"
                             for k, x in enumerate(items, start=1))
 
 
@@ -273,7 +275,9 @@ def _stat_panel(slide: px.Slide, s: Synthesis, stat: leaks.Stat, x: float, y: fl
 
 def leak_slide(deck: px.Presentation, s: Synthesis, leak: leaks.Leak, k: int, total: int, number: int) -> None:
     slide = deck.add_slide()
-    header(slide, f"Leak {k} / {total} · {leak.confidence}", leak.title, number)
+    # le leak en une phrase pour titre ; où il se joue, dans la rubrique
+    kicker = f"Leak {k} / {total} · {leak.confidence}" + (f" · {leak.title}" if leak.headline else "")
+    header(slide, kicker, leak.summary, number)
     panel_x, panel_w = LEFT, 5.2
     slide.shape(panel_x, 1.6, panel_w, 4.85, fill=CARD, geom="roundRect", radius=0.16, name="Panneau")
     inner_x, inner_w = panel_x + 0.4, panel_w - 0.8
@@ -309,7 +313,8 @@ def leak_slide(deck: px.Presentation, s: Synthesis, leak: leaks.Leak, k: int, to
     slide.shape(right_x, y, right_w, box_h, fill="FFF6E0", geom="roundRect", radius=0.12,
                 paras=[para(advice, size, FELT, bold=False)], anchor="ctr", inset=0.25, name="Conseil")
     proofs = "".join(f"\n· {p}" for p in (leak.check.proofs if leak.check else []))
-    slide.notes = (f"{leak.title} ({leak.confidence}).\n{leak.verified}{proofs}\nÀ travailler : {leak.advice}\n"
+    slide.notes = (f"{leak.summary} — {leak.title} ({leak.confidence}).\n{leak.verified}{proofs}\n"
+                   f"À travailler : {leak.advice}\n"
                    "Questions à poser : qu'est-ce qui te fait jouer ainsi dans cette situation ? Que ferait un "
                    "régulier solide ? Puis rejouez ensemble la main la plus chère dans l'explorateur ou l'entraîneur.")
 
@@ -445,9 +450,10 @@ def plan_slide(deck: px.Presentation, s: Synthesis, number: int) -> None:
         gap = 0.3
         w = (WIDTH - gap * (len(items) - 1)) / len(items)
         inner = w - 0.7
-        title_size = common_size([x.title for x in items], inner, 18, True, 2, 14)
+        title_size = common_size([x.summary for x in items], inner, 18, True, 3, 14)
         advice_size = common_size([x.advice for x in items], inner, 15, False, 7, 13)
-        texts = [(fit(x.title, inner, title_size, True, 3), fit(x.advice, inner, advice_size, False, 7)) for x in items]
+        texts = [(fit(x.summary, inner, title_size, True, 3), fit(x.advice, inner, advice_size, False, 7))
+                 for x in items]
         height = max(0.35 + 0.55 + 0.3 + t[2] * px.line_height(t[1]) + 0.12 + a[2] * px.line_height(a[1]) + 0.35
                      for t, a in texts)
         height = max(height, 2.4)
@@ -469,7 +475,8 @@ def plan_slide(deck: px.Presentation, s: Synthesis, number: int) -> None:
                min_size=14)
     slide.text(RIGHT - 1.0, 7.0, 1.0, 0.25, [para(str(number), 10, "9DBFAF", align="r")])
     slide.notes = ("Fais reformuler les objectifs à l'élève avec ses propres mots, et fixez ensemble la date du "
-                   "prochain point.\n" + "\n".join(f"{k}. {x.title} : {x.advice}" for k, x in enumerate(items, start=1)))
+                   "prochain point.\n" + "\n".join(f"{k}. {x.summary} : {x.advice}"
+                                                    for k, x in enumerate(items, start=1)))
 
 
 def build_pptx(s: Synthesis) -> bytes:

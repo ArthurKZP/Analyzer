@@ -777,21 +777,21 @@ plus bas pour les tables à plusieurs.
   perd, ses coups les plus coûteux. Chacune se rejoue d'un clic (*Rejouer ↗* : le replayer s'ouvre sur la décision,
   la main entière à dérouler ; *Au solveur ↗* pour une main analysée). Sous les mains, la vérification en jeu (voir
   plus bas) et ses preuves, et pour une perte face au solveur la main la plus chère à revoir. Le PDF et la
-  présentation gardent les cinq premiers. **Les grosses erreurs d'abord** : les pertes confirmées (mesurées sur ses
-  mains, face au fold ou au solveur, ou confirmées par les réponses de ses adversaires) passent devant les écarts
-  encore à vérifier ; puis par confiance et par poids — ce qu'elles coûtent en bb/100 quand c'est mesuré, sinon
-  fréquence de la situation × écart × ce que la décision met en jeu (le pot double à peu près à chaque street et
-  grossit dans les pots 3bet et 4bet : la même erreur pèse plus à la river qu'à l'open), jamais plus que ce que la
-  mesure en jeu lui permet de coûter. **Les leaks liés** : un écart en entraîne souvent un autre. Une BB qui défend
-  trop large avant le flop arrive au flop avec plus de mains faibles, et folde plus face à la c-bet sans que ce soit
-  une fuite à part ; payer trop la c-bet amène plus de mains faibles à la turn ; c-better trop souvent affaiblit la
-  range qui continue (moins de 2es barrels, plus de folds face aux relances) ; ouvrir trop large au bouton fait
-  c-better moins et folder plus face au check-raise ; 3bet ou payer le 3bet trop large, de même dans les pots 3bet.
-  L'écart qui en explique un autre (dans un même type de pot d'une street à la suivante, ou du préflop au flop ; aux
-  tables à plusieurs, toutes positions et structures du type de pot) passe devant ; l'autre le rappelle (« Sans
-  doute une conséquence de … : corrige d'abord celui-là », ou « ce n'est sans doute pas une fuite à part » quand la
-  cause est un écart justifié) et le tableau des écarts le signale. Seules les mains contre les réguliers comptent :
-  contre un récréatif, l'exploitation prime.
+  présentation gardent les cinq premiers, chacun en une phrase claire puis où il se joue. **Les grosses erreurs
+  d'abord** : les pertes confirmées (mesurées sur ses mains, face au fold ou au solveur, ou confirmées par les
+  réponses de ses adversaires) passent devant les écarts encore à vérifier ; puis par confiance et par poids — ce
+  qu'elles coûtent en bb/100 quand c'est mesuré, sinon fréquence de la situation × écart × ce que la décision met en
+  jeu (le pot double à peu près à chaque street et grossit dans les pots 3bet et 4bet : la même erreur pèse plus à
+  la river qu'à l'open), jamais plus que ce que la mesure en jeu lui permet de coûter. **Les leaks liés** : un écart
+  en entraîne souvent un autre. Une BB qui défend trop large avant le flop arrive au flop avec plus de mains
+  faibles, et folde plus face à la c-bet sans que ce soit une fuite à part ; payer trop la c-bet amène plus de mains
+  faibles à la turn ; c-better trop souvent affaiblit la range qui continue (moins de 2es barrels, plus de folds
+  face aux relances) ; ouvrir trop large au bouton fait c-better moins et folder plus face au check-raise ; 3bet ou
+  payer le 3bet trop large, de même dans les pots 3bet. L'écart qui en explique un autre (dans un même type de pot
+  d'une street à la suivante, ou du préflop au flop ; aux tables à plusieurs, toutes positions et structures du type
+  de pot) passe devant ; l'autre le rappelle (« Sans doute une conséquence de … : corrige d'abord celui-là », ou
+  « ce n'est sans doute pas une fuite à part » quand la cause est un écart justifié) et le tableau des écarts le
+  signale. Seules les mains contre les réguliers comptent : contre un récréatif, l'exploitation prime.
 - **Les écarts justifiés** : les écarts à la théorie qui, vérifiés en jeu, rapportent contre ses adversaires (ou que
   leurs réponses justifient), et ceux qui suivent le plan de jeu suggéré. Ils sortent des leaks : ce ne sont pas des
   fuites, mais des exploitations ou des simplifications, à surveiller si les adversaires s'adaptent.
