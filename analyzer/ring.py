@@ -74,8 +74,10 @@ def read(hand: Hand, player: str) -> dict[str, bool]:
     if memo is None:
         memo = hand.__dict__["_ring_reads"] = {}
     found = memo.get(player)
-    if found is None:
-        found = memo[player] = read_all(hand).get(player, {})
+    if found is None:  # une lecture pour tous les joueurs de la main (le field les lit tous)
+        for name, reads in read_all(hand).items():
+            memo.setdefault(name, reads)
+        found = memo.setdefault(player, {})
     return found
 
 
@@ -177,6 +179,36 @@ def analyze(hands: list[Hand], hero: str, merge: bool = False) -> list[FormatSta
                                mine[0].date if mine else None, mine[-1].date if mine else None,
                                sorted({h.table_format for h in mine}, key=lambda f: (h_size(f), f))))
     return out
+
+
+def population(hands: list[Hand], names: set[str]) -> Optional[FormatStats]:
+    """Les stats d'un groupe de joueurs (le field : tes adversaires réguliers, récréatifs…) à toutes les tables de 3
+    joueurs et plus ensemble (MERGED), par position : chaque main compte une fois pour chaque joueur du groupe qui y est
+    servi (ses fréquences et son résultat). None : aucun d'eux dans ces mains."""
+    total = PositionStats("Toutes")
+    by_pos: dict[str, PositionStats] = {}
+    seen = []
+    for h in hands:
+        here = names & h.seats.keys() if h.bb and h.size > 2 else set()
+        if not here:
+            continue
+        seen.append(h)
+        for player in here:
+            pos = h.position(player) or "?"
+            at = by_pos.get(pos)
+            if at is None:
+                at = by_pos[pos] = PositionStats(pos)
+            for ps in (total, at):
+                ps.hands += 1
+                ps.net_bb += h.net(player) / h.bb
+            for key, made in read(h, player).items():
+                total.ratios[key].add(made)
+                at.ratios[key].add(made)
+    if not seen:
+        return None
+    positions = sorted(by_pos.values(), key=lambda p: ORDER.index(p.position) if p.position in ORDER else len(ORDER))
+    return FormatStats(MERGED, total, positions, sorted({h.site for h in seen}), seen[0].date, seen[-1].date,
+                       sorted({h.table_format for h in seen}, key=lambda f: (h_size(f), f)))
 
 
 def h_size(table_format: str) -> int:

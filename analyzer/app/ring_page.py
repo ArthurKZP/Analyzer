@@ -269,10 +269,12 @@ LABELS = {"all": "Toutes tes mains", "reg": "Contre les réguliers", "rec": "Con
 
 
 def positions_html(shown: list[tuple[str, str, ring.FormatStats]], positions: Optional[tuple[str, ...]] = None,
-                   preflop: tuple[str, ...] = PREFLOP, postflop: tuple[str, ...] = POSTFLOP) -> str:
+                   preflop: tuple[str, ...] = PREFLOP, postflop: tuple[str, ...] = POSTFLOP,
+                   note: Optional[str] = None) -> str:
     """Tes stats position par position (avant et après le flop), une portée à la fois : shown, [(portée, libellé,
     stats de toutes tes tables ensemble)] — toutes tes mains, contre les réguliers, contre les récréatifs ; positions :
-    seulement celles-là (ring.SIX_MAX : le bilan). Avec STYLE et SCRIPT."""
+    seulement celles-là (ring.SIX_MAX : le bilan) ; note : la note sous les tableaux (HTML ; celle de tes stats sinon).
+    Avec STYLE et SCRIPT."""
     switch = ('<div class="rg-switch" role="group" aria-label="Adversaires">' + "".join(
         f'<button type="button" data-scope="{escape(scope)}" aria-pressed="{str(k == 0).lower()}">'
         f"{escape(LABELS.get(scope, label))} ({fs.total.hands})</button>" for k, (scope, label, fs) in enumerate(shown))
@@ -284,12 +286,12 @@ def positions_html(shown: list[tuple[str, str, ring.FormatStats]], positions: Op
         for k, (scope, _, fs) in enumerate(shown))
     only = (" Les positions d'une table 6-max seulement (les autres, à 7-9 joueurs : onglet Statistiques) ; « Toutes » "
             "compte toutes tes mains." if positions else "")
-    note = ('<p class="note">Une position compte ses mains de chaque taille de table. Repères indicatifs d\'un régulier '
-            "en 6-max à 100 bb ; chiffres en gris : moins de 15 occasions. Open : tu parles le premier. Vol : ouverture "
-            "du CO, du bouton ou de la SB sans caller ; la défense se lit en SB et BB. C-bet : tu étais le dernier "
-            "relanceur préflop et on te laisse miser au flop. WWSF : tu as gagné le pot après avoir vu le flop."
-            f"{only}</p>")
-    return switch + sections + note
+    default = ('<p class="note">Une position compte ses mains de chaque taille de table. Repères indicatifs d\'un '
+               "régulier en 6-max à 100 bb ; chiffres en gris : moins de 15 occasions. Open : tu parles le premier. "
+               "Vol : ouverture du CO, du bouton ou de la SB sans caller ; la défense se lit en SB et BB. C-bet : tu "
+               "étais le dernier relanceur préflop et on te laisse miser au flop. WWSF : tu as gagné le pot après "
+               f"avoir vu le flop.{only}</p>")
+    return switch + sections + (note if note is not None else default)
 
 
 def build_ring_page(scopes: list[tuple[str, str, list]], hero: str, embed: bool = True,

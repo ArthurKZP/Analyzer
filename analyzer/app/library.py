@@ -30,7 +30,7 @@ from ..cli import detect_hero, unify_hero
 from ..lines import villain_lines
 from ..models import CALL, RAISE, Hand
 from ..parsers import count_hands, decode, read_zip
-from ..report import build_plan_page, build_report, format_switch, html_page
+from ..report import build_plan_page, build_report, format_query, format_switch, html_page
 from ..selfreport import build_self_report, build_stats_page, opponent_results
 from ..stats import analyze
 from ..theory import (coach, custom_ranges, custom_tree, handclass, postflop, review, ring_preflop, ring_ranges, sizing,
@@ -44,6 +44,7 @@ from .bluffs_page import build_bluffs_page
 from .import_job import ImportJob
 from .field_leaks_page import build_group_page, build_list_page, build_player_page, stakes_switch
 from .field_lines_page import build_crowd_page
+from .field_stats_page import build_field_stats_page
 from .field_page import build_players_page
 from .ranges_page import build_ranges_page
 from .settings_page import build_settings_page
@@ -67,9 +68,9 @@ HEADS_UP_ONLY = ('<p class="note">Aucune main heads-up : cette page analyse tes 
 SELF_PAGES = ("bilan", "stats", "preflop", "spots", "solveur", "bluffs", "leaks", "tables", "mains", "suivi")
 REFERENCE_PAGES = ("comparaison", "lignes", "bilan", "tables", "preflop", "mains")  # un joueur de référence
 REFERENCE_PREFIX = "ref:"  # sa période d'analyse se garde sous cette clé
-# Étude du field : réguliers et récréatifs, chacun avec son leakfinding, ses bluffs et sa value (« joueurs » : aussi
-# dans Paramètres)
-FIELD_PAGES = ("regs", "recs", "bluffs", "value", "rec-bluffs", "rec-value", "joueurs")
+# Étude du field : leurs stats globales, puis réguliers et récréatifs, chacun avec son leakfinding, ses bluffs et sa
+# value (« joueurs » : aussi dans Paramètres)
+FIELD_PAGES = ("stats", "regs", "recs", "bluffs", "value", "rec-bluffs", "rec-value", "joueurs")
 FIELD_LINES = {"bluffs": ("reg", "bluffs"), "value": ("reg", "value"), "rec-bluffs": ("rec", "bluffs"),
                "rec-value": ("rec", "value")}
 MAX_IMPORT_FILES = 5000  # fichiers (ou archives zip) par import
@@ -1124,6 +1125,8 @@ class Library:
             raise NotFound(page)
         if not self.hands and not self.ring:
             raise UnknownPlayer("moi")
+        if page == "stats":
+            return self.field_stats(table_format, band)
         if page in ("regs", "recs"):
             return self.field_list(page[:3], table_format, band)
         if page in FIELD_LINES:
@@ -1225,6 +1228,43 @@ class Library:
             return build_list_page(kind, fmt, rows, population, min_hands, len(every), self._field_switch(fmt, band),
                                    groups, band=band)
         return self._cached(("field", kind, fmt, band, min_hands) + tuple(kinds_key), build)
+
+    def field_stats(self, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
+        """Les stats globales de tes adversaires d'un format à un niveau de limites : réguliers, récréatifs, tous, face
+        aux repères de ce niveau et à toi ; aux tables à plusieurs, par position ; puis tes écarts que leurs réponses
+        justifient et ceux qui te rapporteraient (le Leakfinding de ce format)."""
+        fmt = self._field_format(table_format)
+        band = self._field_band(fmt, band)
+        kinds_key = self._kinds_key() if fmt == "HU" else (self._ring_kinds_key(),)
+        hero = self.hero or ""
+
+        def build():
+            rows = self._field_rows(fmt, band)
+            groups = {kind: [r["name"] for r in rows if r["info"]["kind"] == kind] for kind in ("reg", "rec")}
+            groups["all"] = groups["reg"] + groups["rec"]
+            index = self._field_index(fmt, band)
+            players = {k: len(names) for k, names in groups.items()}
+            hands = {k: sum(len(index.get(n, [])) for n in names) for k, names in groups.items()}
+            labels = {"reg": "Réguliers", "rec": "Récréatifs", "all": "Tous"}
+            # les populations qui ont des joueurs (« Tous » : quand il y a des deux)
+            shown = [k for k in ("reg", "rec") if groups[k]] + (["all"] if groups["reg"] and groups["rec"] else [])
+            positions = None
+            if fmt == "HU":
+                stats = self._band_stats(band)
+                merged = {k: field.merge_stats([stats[n] for n in names if n in stats]) for k, names in groups.items()}
+                columns = [(labels[k], dict(merged[k].ratios)) for k in shown]
+                columns.append(("Toi", dict(stats[hero].ratios) if hero in stats else {}))
+            else:
+                hands_list = self._band_hands(fmt, band)
+                columns = [(labels[k], field.ring_ratios(hands_list, groups[k])) for k in shown]
+                columns.append(("Toi", field.ring_ratios(hands_list, [hero]) if hero else {}))
+                found = [(f"pop-{k}", labels[k], ring.population(hands_list, set(groups[k]))) for k in shown]
+                positions = [x for x in found if x[2] is not None]
+            report = self.leaks_report(fmt) if hero else None
+            return build_field_stats_page(fmt, band, self._field_switch(fmt, band), columns, players, hands, positions,
+                                          report.exploits if report else [], report.opportunities if report else [],
+                                          leaks_href=f"{self.pages}/leaks{format_query(fmt)}")
+        return self._cached(("field_stats", fmt, band, _digest_count()) + _theory_changes() + tuple(kinds_key), build)
 
     def field_lines(self, kind: str, focus: str, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
         """Les bluffs (focus « bluffs ») ou la value (« value ») des réguliers (« reg ») ou des récréatifs (« rec »)

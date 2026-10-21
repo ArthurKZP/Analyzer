@@ -80,12 +80,14 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   son panneau *Face au solveur* (ses mains analysées à parcourir, ses erreurs) et chaque main avec ce qu'en dit le
   solveur (son EV théorique et l'EV perdue, ou *Résoudre*), filtres et tri compris. Un élève a les mêmes onglets
   (*Bilan* avec ses courbes, *Statistiques*, *Leaks*, *Préflop*, *Ses mains*), plus *Importer*.
-- **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Réguliers* et *Récréatifs*, chacun en
-  trois sous-onglets, en heads-up ou aux tables à plusieurs et par limites (micro, milieu, hautes) : *Leakfinding*
-  (ceux que tu croises le plus, chacun avec ses leaks à exploiter et ce que montrent ses lignes, puis sa fiche
-  détaillée, voir *Étude du field : le leakfinding de tes adversaires*), *Bluffs* (où ils bluffent, tous ensemble :
-  en heads-up face au solveur puis un par un, voir *Bluffs des adversaires*) et *Value* (où leurs mises sont presque
-  toujours de la value, à quelle taille, jusqu'où ils vont en value fine, ce que cachent leurs checks).
+- **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Statistiques* (leurs stats globales à
+  chaque niveau de limites, par position, et ce que leurs écarts changent pour ton jeu, voir plus bas), puis
+  *Réguliers* et *Récréatifs*, chacun en trois sous-onglets, en heads-up ou aux tables à plusieurs et par limites
+  (micro, milieu, hautes) : *Leakfinding* (ceux que tu croises le plus, chacun avec ses leaks à exploiter et ce que
+  montrent ses lignes, puis sa fiche détaillée, voir *Étude du field : le leakfinding de tes adversaires*), *Bluffs*
+  (où ils bluffent, tous ensemble : en heads-up face au solveur puis un par un, voir *Bluffs des adversaires*) et
+  *Value* (où leurs mises sont presque toujours de la value, à quelle taille, jusqu'où ils vont en value fine, ce
+  que cachent leurs checks).
 - **Joueurs de référence** : un bon joueur dont tu as importé les historiques, étudié pour apprendre de lui et
   comparé à toi : *Toi et lui*, *Value et bluffs*, et son jeu analysé comme le tien (voir *Joueurs de référence*).
 - **Paramètres** : *Général* (tes pseudos réunis sous un nom, les formats que tu joues, coach ou non, le seuil de
@@ -1018,6 +1020,19 @@ heads-up et aux tables à plusieurs (3 à 9 joueurs ensemble).
 
 ## Étude du field : le leakfinding de tes adversaires
 
+Onglet *Statistiques* (au choix *Heads-up* / *Tables à plusieurs*, et le niveau de limites : micro, milieu, hautes) :
+les **stats globales du field**, les fréquences réunies de tes adversaires classés réguliers, récréatifs et tous
+ensemble, face au repère d'un régulier solide de ce niveau et à toi. Aux tables à plusieurs : VPIP, PFR, open (RFI),
+limp, 3bet, call d'une ouverture, fold face au 3bet, défense des blindes face au vol et 3bet de vol, c-bet (à deux et
+à plusieurs), fold face à la c-bet, 2e barrel, fold face aux mises turn et river, check-raise, mise quand
+l'agresseur checke, agressivité, WTSD, W$SD et WWSF, puis le même détail **par position** (une population à la fois,
+avec son résultat). En heads-up, les stats du bouton et de la BB (open, limp, 3bet, 4bet, défense…) et d'après le
+flop. Une valeur hors du repère est en couleur. En bas, **ce que ça change pour ton jeu** : un écart à la théorie
+n'est pas forcément une fuite (tu 3bet plus que la théorie, mais ils se couchent plus qu'elle face au 3bet : c'est
+une exploitation). Le Leakfinding le vérifie en jeu, contre les réguliers (ce que l'écart te rapporte sur tes mains,
+sinon leurs réponses dans la situation miroir) : la page liste tes écarts que le field justifie et les écarts qui te
+rapporteraient là où tu joues comme la théorie (« Les écarts justifiés » et les opportunités du Leakfinding).
+
 Onglets *Réguliers* et *Récréatifs* de l'*Étude du field* (au choix *Heads-up* / *Tables à plusieurs*, retenu) : les
 joueurs de ce type que tu as croisés au moins N mains (*Paramètres*, 50 par défaut ; aux tables à plusieurs, les
 mains à la même table), du plus fréquent au moins fréquent. Pour chacun, une carte : ses mains, ton résultat contre
@@ -1712,12 +1727,13 @@ analyzer/
                        pages (library.py), résolutions et sessions du solveur (solves.py), face au solveur
                        (solver_pages.py : le bilan et le panneau de chaque format ; review_page.py : la fiche d'un
                        adversaire), leakfinding (leaks_page.py), bluffs des adversaires (bluffs_page.py), étude du
-                       field (field_page.py : les joueurs et les alias ; field_leaks_page.py : le leakfinding des
-                       adversaires ; field_lines_page.py : les bluffs et la value des réguliers et des récréatifs),
-                       joueurs de référence (reference_page.py : toi et lui, sa value et ses bluffs), paramètres
-                       (settings_page.py), bilan des tables à plusieurs (bilan_page.py) et son filtre des gains
-                       (gains_page.py), mains de départ (hands_page.py), synthèse du Leakfinding (synthesis.py), son
-                       rapport PDF (report_pdf.py) et sa présentation (report_pptx.py), entraîneur (trainer.py,
+                       field (field_page.py : les joueurs et les alias ; field_stats_page.py : leurs stats
+                       globales ; field_leaks_page.py : le leakfinding des adversaires ; field_lines_page.py : les
+                       bluffs et la value des réguliers et des récréatifs), joueurs de référence
+                       (reference_page.py : toi et lui, sa value et ses bluffs), paramètres (settings_page.py),
+                       bilan des tables à plusieurs (bilan_page.py) et son filtre des gains (gains_page.py), mains
+                       de départ (hands_page.py), synthèse du Leakfinding (synthesis.py), son rapport PDF
+                       (report_pdf.py) et sa présentation (report_pptx.py), entraîneur (trainer.py,
                        static/trainer.*), plan de jeu suggéré (plan_page.py), coach (coach_chat.py, static/coach.*)
                        et son serveur MCP pour l'abonnement Claude (mcp_server.py), sauvegardes en arrière-plan
                        (backups.py), avancement d'un import (import_job.py), interface (static/, dont l'explorateur

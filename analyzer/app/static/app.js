@@ -11,8 +11,10 @@
   const PREFLOP_GROUP = ['Préflop', [['preflop', 'Face à la théorie'], ['mains', 'Mains de départ']]];
   const TABS = {
     moi: [['bilan', 'Bilan'], ['stats', 'Statistiques'], LEAKS_GROUP, PREFLOP_GROUP, ['Mes mains', HANDS_TABS]],
-    // étude du field : tes adversaires, réguliers et récréatifs, chacun avec son leakfinding, ses bluffs et sa value
-    field: [['Réguliers', [['regs', 'Leakfinding'], ['bluffs', 'Bluffs'], ['value', 'Value']]],
+    // étude du field : leurs stats globales, puis réguliers et récréatifs, chacun avec son leakfinding, ses bluffs et
+    // sa value
+    field: [['stats', 'Statistiques'],
+      ['Réguliers', [['regs', 'Leakfinding'], ['bluffs', 'Bluffs'], ['value', 'Value']]],
       ['Récréatifs', [['recs', 'Leakfinding'], ['rec-bluffs', 'Bluffs'], ['rec-value', 'Value']]]],
     parametres: [['general', 'Général'], ['joueurs', 'Joueurs et alias'], ['ranges', 'Ranges préflop']],
     eleve: [['bilan', 'Bilan'], ['stats', 'Statistiques'], LEAKS_GROUP, PREFLOP_GROUP, ['Ses mains', HANDS_TABS],
@@ -248,7 +250,8 @@
       subtitle.textContent = 'Étude du field : comment les jouer, leurs leaks et leurs lignes réunis';
     } else if (route.view === 'field') {
       title.textContent = 'Étude du field';
-      subtitle.textContent = 'Comment jouent tes adversaires : leurs leaks à exploiter, leur value et leurs bluffs';
+      subtitle.textContent = 'Comment jouent tes adversaires : leurs stats, leurs leaks à exploiter, leur value et '
+        + 'leurs bluffs';
     } else if (route.view === 'parametres') {
       title.textContent = 'Paramètres';
       subtitle.textContent = 'Tes pseudos réunis, ce que tu joues, tes élèves, le type de tes adversaires et leurs alias, tes ranges préflop';
@@ -1315,7 +1318,7 @@
       const query = new URLSearchParams(e.data.search || '');
       const fmt = query.get('format');
       const stakes = ['micro', 'milieu', 'hautes'].includes(query.get('limites')) ? query.get('limites') : null;
-      if (fmt && ['regs', 'recs'].includes(r.tab)) {
+      if (fmt && ['stats', 'regs', 'recs'].includes(r.tab)) {
         pref('format:/field', fmt === 'HU' ? 'HU' : 'ring');
         pref('limites:/field', stakes);
       }

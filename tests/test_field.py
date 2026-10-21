@@ -11,7 +11,7 @@ import unittest
 from collections import Counter
 from pathlib import Path
 
-from analyzer import field, players, settings, stakes
+from analyzer import field, players, ring, settings, stakes
 from analyzer.app.library import Library
 from analyzer.app.server import start
 from analyzer.models import BET, CALL, CHECK, FOLD, RAISE
@@ -300,6 +300,23 @@ class FieldLibraryTest(IsolatedHome):
         with self.lib._lock:  # des mains de tables à plusieurs, jouées par « Hero »
             self.lib._all_ring = ring
             self.lib._select()
+
+    def test_field_stats(self):
+        """Statistiques : les stats globales du field (réguliers, récréatifs, tous), face aux repères et à toi, puis par
+        position ; et ce que ses écarts changent pour ton jeu."""
+        page = self.lib.field_page("stats", "ring")
+        for text in ("Le field en chiffres", '<th class="num">Réguliers</th><th class="num">Récréatifs</th>'
+                     '<th class="num">Tous</th><th class="num">Repère</th><th class="num">Toi</th>',
+                     "Open (RFI : premier à entrer)", "Par position", 'data-scope="pop-reg"', "Ce que ça change pour "
+                     "ton jeu", "si tu 3bet plus que la théorie"):
+            self.assertIn(text, page)
+        cbet = page[page.index("C-bet flop (pot à deux)"):]
+        self.assertIn('60/60</span>', cbet[:cbet.index("</tr>")])  # le CO, régulier, c-bette à chaque fois
+        population = ring.population(self.lib.ring, {CO})
+        self.assertEqual([(p.position, p.hands) for p in population.positions], [("CO", 60)])
+        self.assertEqual((population.total.ratios["cbet_hu"].hits, population.total.ratios["cbet_hu"].opps), (60, 60))
+        self.assertIsNone(ring.population(self.lib.ring, {"Personne"}))
+        self.assertIn("Statistiques du field", self.lib.field_page("stats", "HU"))
 
     def test_bluffs_and_value(self):
         """Réguliers et Récréatifs : leurs bluffs et leur value tous ensemble, aux tables à plusieurs."""
