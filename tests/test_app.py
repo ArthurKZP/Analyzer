@@ -13,6 +13,7 @@ from unittest import mock
 from analyzer.app.import_job import FINISH_COST, READ_COST, ImportJob
 from analyzer.app.library import Library, UnknownPlayer
 from analyzer.app.server import start
+from analyzer.errors import NotFound
 
 try:
     from .base import IsolatedHome, renumbered, seen_by
@@ -201,6 +202,38 @@ class LibraryTest(IsolatedHome):
             self.assertEqual(student.leaks_report().scope_hands["rec"], 4)
             with self.assertRaises(UnknownPlayer):
                 main.student("inconnu")
+            main.solves.shutdown()
+
+    def test_student_formats(self):
+        """Ce que joue un élève : un format qu'il ne joue pas sort de ses onglets et de ses analyses (ses mains
+        restent), et son bilan du solveur ne garde que les formats qu'il joue."""
+        with mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.folder / "home")}):
+            main = Library(self.folder / "moi")
+            main.create_student("Léa", None)
+            student = main.student("lea")
+            six_max = (Path(__file__).parent / "sites" / "betclic_6max.txt").read_text(encoding="utf-8")
+            student.import_files([{"name": "hu.txt", "content": FIXTURE.read_text(encoding="utf-8")},
+                                  {"name": "6max.txt", "content": six_max}])
+            self.assertEqual([fmt for fmt, _ in student.leak_formats()], ["HU", "ring"])
+            self.assertIsNone(student.summary()["settings"]["plays"])
+            self.assertIn('<option value="all">', student.self_page("solveur"))  # toutes ses mains, ou un format
+            summary = student.set_formats(["ring"])
+            self.assertEqual(summary["settings"]["plays"], ["ring"])
+            self.assertEqual([fmt for fmt, _ in student.leak_formats()], ["ring"])
+            self.assertEqual(len(student.hands), 4)  # ses mains heads-up restent gardées
+            bilan = student.self_page("solveur")
+            self.assertNotIn('<h2 id="hu">', bilan)
+            self.assertNotIn('<option value="all">', bilan)
+            with self.assertRaises(NotFound):
+                student.solver_panel("HU")
+            self.assertIsNone(main.summary()["settings"]["plays"])  # tes formats à toi ne changent pas
+            for wrong in ([], ["6max"], "ring"):
+                with self.assertRaises(ValueError):
+                    student.set_formats(wrong)
+            student.set_formats(None)  # tout, de nouveau
+            self.assertEqual([fmt for fmt, _ in student.leak_formats()], ["HU", "ring"])
+            with self.assertRaises(ValueError):
+                main.set_formats(["HU"])  # seulement pour un élève
             main.solves.shutdown()
 
     def test_solve_states(self):
@@ -779,6 +812,10 @@ class ServerTest(unittest.TestCase):
         for page in ("leaks", "preflop", "solveur", "spots", "mains"):
             self.assertEqual(self.request("GET", f"/eleve/anna/{page}")[0], 200, page)
         self.assertEqual(self.request("GET", "/api/eleves/anna/mains?main=AA")[0], 200)
+        for wrong in ({"formats": ["6max"]}, {"formats": []}, ["HU"]):  # ce qu'elle joue
+            self.assertEqual(self.request("POST", "/api/eleves/anna/formats", json.dumps(wrong), headers)[0], 400)
+        status, _, data = self.request("POST", "/api/eleves/anna/formats", json.dumps({"formats": None}), headers)
+        self.assertEqual((status, json.loads(data)["settings"]["plays"]), (200, None))
         panel = self.request("GET", "/api/eleves/anna/revue/panneau?format=HU")[2].decode("utf-8")
         self.assertIn('data-api="/api/eleves/anna/revue"', panel)
         self.assertEqual(json.loads(self.request("GET", "/api/eleves/anna/revue?format=HU")[2])["total"], 2)

@@ -802,6 +802,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file_action(student, parts[4])
             if len(parts) == 5 and parts[3] == "pseudos" and parts[4] in ("supprimer", "retablir"):
                 return self._pseudo_action(student, parts[4])
+            if parts[3:] == ["formats"]:  # ce qu'il joue : heads-up et/ou tables à plusieurs (null : tout)
+                payload = self._small_json()
+                try:
+                    return self._json(student.set_formats(payload.get("formats") if isinstance(payload, dict)
+                                                          else []))
+                except ValueError as exc:
+                    return self._error(400, str(exc))
             if parts[3:] == ["pseudos", "choisir"]:  # ses pseudos, parmi ceux de ses historiques
                 payload = self._small_json()
                 try:

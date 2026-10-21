@@ -434,6 +434,24 @@ class Library:
                 mine.append(h)
         return mine
 
+    def chosen_formats(self) -> list[str]:
+        """Les formats joués : les tiens (Paramètres), ceux de l'élève ; vide : tous."""
+        if self.is_me:
+            return settings.load()["formats"] or []
+        if (self.space_key or "").startswith(students.PREFIX) and self.space_id is not None:
+            return students.formats(self.space_key[len(students.PREFIX):])
+        return []
+
+    def set_formats(self, chosen: object) -> dict:
+        """Les formats que joue l'élève (None : tous) ; ValueError : pas un élève, ou aucun format valide. Un format
+        qu'il ne joue pas sort de ses onglets et de ses analyses ; ses mains restent gardées."""
+        if not (self.space_key or "").startswith(students.PREFIX):
+            raise ValueError("Seulement pour un élève.")
+        students.set_formats(self.space_key[len(students.PREFIX):], chosen)
+        with self._lock:
+            self._select()
+        return self.summary()
+
     def set_chosen_pseudos(self, names: object) -> dict:
         """Choisit les pseudos de l'élève parmi ceux de ses historiques (une liste vide : tous les héros de ses
         historiques) ; ValueError : pas un élève, ou un pseudo absent de ses mains."""
@@ -711,7 +729,7 @@ class Library:
         """Ce que le menu de l'application montre : les formats que tu joues (None : tous), les Élèves, le seuil
         de l'Étude du field."""
         conf = settings.load()
-        return {"plays": conf["formats"] if self.is_me else None,
+        return {"plays": self.chosen_formats() or None,
                 "coach": settings.coach_shown(len(students.all_students()), conf["coach"]),
                 "min_hands": conf["min_hands"]}
 
@@ -1542,12 +1560,13 @@ class Library:
     # --- leakfinding ----------------------------------------------------------------------
     def leak_formats(self) -> list[tuple[str, int]]:
         """Les formats de tes mains et leur nombre : le heads-up, puis les tables à plusieurs (3 à 9 joueurs
-        ensemble) ; un rapport chacun. Dans ton espace, seulement ceux que tu joues (Paramètres)."""
+        ensemble) ; un rapport chacun. Seulement ceux que tu joues (Paramètres), ou que joue l'élève."""
         out = [("HU", len(self.hands))] if self.hands else []
         out += [(ring_leaks.FORMAT, len(self.ring))] if self.ring else []
-        if not self.is_me:
+        chosen = self.chosen_formats()
+        if not chosen:
             return out
-        kept = settings.enabled_formats([fmt for fmt, _ in out])
+        kept = settings.enabled_formats([fmt for fmt, _ in out], chosen)
         return [(fmt, n) for fmt, n in out if fmt in kept]
 
     def _leak_format(self, table_format: Optional[str]) -> str:

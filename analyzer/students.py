@@ -19,6 +19,8 @@ from .theory import postflop
 
 PREFIX = "eleve:"
 PSEUDOS = "eleve-pseudos"  # documents : les pseudos choisis de chaque élève
+FORMATS = "eleve-formats"  # documents : les formats que joue chaque élève
+TABLE_FORMATS = ("HU", "ring")  # le heads-up, les tables à plusieurs
 MAX_PSEUDOS = 200
 
 
@@ -66,6 +68,24 @@ def pseudos(ident: str) -> list[str]:
     """Les pseudos choisis de l'élève (vide : tous les héros de ses historiques)."""
     data = documents.get(db.current(), PSEUDOS, ident)
     return list(data.get("pseudos") or []) if isinstance(data, dict) else []
+
+
+def formats(ident: str) -> list[str]:
+    """Les formats que joue l'élève (« HU », « ring ») ; vide : tous."""
+    data = documents.get(db.current(), FORMATS, ident)
+    return [f for f in TABLE_FORMATS if f in (data.get("formats") or [])] if isinstance(data, dict) else []
+
+
+def set_formats(ident: str, chosen: object) -> list[str]:
+    """Enregistre les formats que joue l'élève ; None (ou tous) : tous. ValueError sans format valide."""
+    if chosen is not None and (not isinstance(chosen, list) or not chosen or not set(chosen) <= set(TABLE_FORMATS)):
+        raise ValueError("Choisis au moins un format : heads-up ou tables à plusieurs.")
+    kept = [f for f in TABLE_FORMATS if chosen is not None and f in chosen]
+    if kept and len(kept) < len(TABLE_FORMATS):
+        documents.put(db.current(), FORMATS, ident, {"formats": kept})
+        return kept
+    documents.delete(db.current(), FORMATS, ident)
+    return []
 
 
 def set_pseudos(ident: str, names: list[str]) -> list[str]:

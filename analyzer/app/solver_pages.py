@@ -19,7 +19,7 @@ from .review_page import costly_table, family_tag, situations_table
 LIMITS = (5, 10, 20, 0)  # mains passées au solveur d'un clic (0 : toutes)
 ORDERS = (("leaks", "liées à tes leaks, les plus chères d'abord"), ("pertes", "les plus chères"),
           ("pots", "les plus gros pots"))
-FORMAT_LABELS = {"all": "toutes tes mains", "HU": "heads-up", "ring": "tables à plusieurs"}
+FORMAT_LABELS = {"all": "toutes les mains", "HU": "heads-up", "ring": "tables à plusieurs"}
 STREETS = (("flop", "Flop"), ("turn", "Turn"), ("river", "River"))
 POT_TYPES = (("SRP", "SRP"), ("pot 3bet", "Pots 3bet"), ("pot 4bet", "Pots 4bet"))
 POT_WORDS = {"SRP": "SRP", "pot 3bet": "pots 3bet", "pot 4bet": "pots 4bet"}  # dans une phrase

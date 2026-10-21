@@ -766,7 +766,9 @@ la table si tu le connais), importe les historiques qu'il t'envoie (de tous les 
 compris : son pseudo y est « Hero »), et son rapport se construit. Dans son onglet *Importer*, **Ses pseudos** :
 coche ceux qui sont les siens parmi les héros de ses historiques (sur tous ses sites), ou ajoute un pseudo qui joue
 dans ses mains ; seules les mains où l'un d'eux est le héros sont analysées, sous un seul nom (tous cochés : tous
-les héros de ses historiques sont lui, le choix par défaut). **Deux rapports** : *Heads-up* et *Tables à plusieurs*
+les héros de ses historiques sont lui, le choix par défaut). **Ce qu'il joue** (quand ses mains ont les deux
+formats) : heads-up et/ou tables à plusieurs ; un format qu'il ne joue pas sort de ses onglets et de ses analyses
+(bilan, leaks, préflop, solveur), ses mains restant gardées. **Deux rapports** : *Heads-up* et *Tables à plusieurs*
 (toutes ses tables de 3 à 9 joueurs ensemble ; les boutons en haut de la page, le dernier choisi est gardé), voir
 plus bas pour les tables à plusieurs.
 

@@ -31,17 +31,22 @@
   };
   // pages qui ont un choix heads-up / tables à plusieurs
   const FORMAT_TABS = ['bilan', 'stats', 'leaks', 'suivi', 'preflop', 'comparaison', 'lignes'];
-  // Les formats que tu joues (Paramètres) : sans choix, tous. Un format que tu ne joues pas sort des menus.
-  const plays = (fmt) => !state || !state.settings || !state.settings.plays || state.settings.plays.includes(fmt);
-  const HIDDEN_TABS = { HU: { moi: ['spots'], etudes: ['hu'], entraineur: ['solveur'] },
-    ring: { moi: ['tables'], etudes: ['6max'] } };
-  function groupsOf(view) {  // [{ label, tabs: [[page, libellé], …] }] : les groupes dont une page au moins est jouée
-    const hidden = ['HU', 'ring'].filter((f) => !plays(f)).flatMap((f) => HIDDEN_TABS[f][view] || []);
+  // Les formats que tu joues (Paramètres), ou que joue l'élève affiché (sa page Importer) : sans choix, tous. Un
+  // format qui n'est pas joué sort des menus.
+  function playsIn(view, fmt, student) {
+    const conf = view === 'eleve' ? (students.find((s) => s.id === student) || {}).settings : state && state.settings;
+    return !conf || !conf.plays || conf.plays.includes(fmt);
+  }
+  const plays = (fmt) => playsIn('moi', fmt);
+  const HIDDEN_TABS = { HU: { moi: ['spots'], eleve: ['spots'], etudes: ['hu'], entraineur: ['solveur'] },
+    ring: { moi: ['tables'], eleve: ['tables'], etudes: ['6max'] } };
+  function groupsOf(view, student) {  // [{ label, tabs: [[page, libellé], …] }] : les groupes dont une page est jouée
+    const hidden = ['HU', 'ring'].filter((f) => !playsIn(view, f, student)).flatMap((f) => HIDDEN_TABS[f][view] || []);
     return (TABS[view] || []).map(([a, b]) => (Array.isArray(b) ? { label: a, tabs: b } : { label: b, tabs: [[a, b]] }))
       .map((g) => Object.assign(g, { tabs: g.tabs.filter(([id]) => !hidden.includes(id)) }))
       .filter((g) => g.tabs.length);
   }
-  const tabsOf = (view) => groupsOf(view).flatMap((g) => g.tabs);
+  const tabsOf = (view, student) => groupsOf(view, student).flatMap((g) => g.tabs);
   const HU_SERIES = ['srp', '3bet', '4bet'];  // anciens onglets des études : l'onglet Heads-up
   let state = null;
   let route = null;
@@ -88,8 +93,8 @@
   // ---------- navigation ----------
   function parseRoute() {
     const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
-    const tabOf = (view, name, fallback) => {
-      const list = tabsOf(view);
+    const tabOf = (view, name, fallback, student) => {
+      const list = tabsOf(view, student);
       return list.some(([id]) => id === name) ? name : list.some(([id]) => id === fallback) ? fallback : (list[0] || [fallback])[0];
     };
     if (parts[0] === 'importer') return { view: 'importer' };
@@ -106,7 +111,9 @@
     if (parts[0] === 'field') return { view: 'field', tab: tabOf('field', parts[1], 'regs') };
     if (parts[0] === 'parametres') return { view: 'parametres', tab: tabOf('parametres', parts[1], 'general') };
     if (parts[0] === 'eleves') return { view: 'eleves' };
-    if (parts[0] === 'eleve' && parts[1]) return { view: 'eleve', student: parts[1], tab: tabOf('eleve', parts[2], 'leaks') };
+    if (parts[0] === 'eleve' && parts[1]) {
+      return { view: 'eleve', student: parts[1], tab: tabOf('eleve', parts[2], 'leaks', parts[1]) };
+    }
     if (parts[0] === 'references') return { view: 'references' };
     if (parts[0] === 'reference' && parts[1]) return { view: 'reference', ref: parts[1], tab: tabOf('reference', parts[2], 'comparaison') };
     return hasHands() || hasAnyHands() ? { view: 'moi', tab: 'bilan' } : { view: 'importer' };
@@ -172,7 +179,10 @@
     route = parseRoute();
     closePeriod();  // une autre page : le panneau de la période se ferme
     if (route.view === 'field' && location.hash !== hashFor(route)) history.replaceState(null, '', hashFor(route));  // #/moi/bluffs
-    if (route.view === 'eleves' || route.view === 'eleve') await loadStudents();
+    if (route.view === 'eleves' || route.view === 'eleve') {
+      await loadStudents();
+      route = parseRoute();  // les onglets de l'élève suivent les formats qu'il joue
+    }
     if (route.view === 'references' || route.view === 'reference') await loadReferences();
     closeDrawer();
     renderHeader();
@@ -305,7 +315,7 @@
     const tabs = $('tabs'), subtabs = $('subtabs');
     tabs.textContent = '';
     subtabs.textContent = '';
-    const groups = groupsOf(route.view);
+    const groups = groupsOf(route.view, route.student);
     const always = ['etudes', 'eleve', 'parametres', 'reference', 'entraineur'];  // des onglets même sans tes mains
     tabs.hidden = !groups.length || (!hasHands() && !hasAnyHands() && !always.includes(route.view));
     subtabs.hidden = true;
@@ -549,11 +559,58 @@
         el('button', { type: 'button', class: 'link', onclick: () => reload(result) }, 'Relire le dossier'),
         ' (si tu y as déposé des historiques à la main)');
     const pseudos = el('div', { class: 'imported pseudos' });
+    const formats = el('div', { class: 'imported formats' });
     const imported = el('div', { class: 'imported files' });
-    showPanel(el('div', { class: 'import', 'data-owner': student || '' }, drop, input, result, folder, pseudos, imported));
+    showPanel(el('div', { class: 'import', 'data-owner': student || '' }, drop, input, result, folder, pseudos, formats,
+      imported));
     if (importing && importing.owner === (student || '') && importing.view) showProgress(importing.owner, importing.view);
     showPseudos(pseudos, student);
+    if (student) showFormats(formats, student);
     showFiles(imported, student);
+  }
+
+  // Ce que joue l'élève : heads-up et/ou tables à plusieurs (sans choix, tout). Un format qu'il ne joue pas sort de
+  // ses onglets et de ses analyses ; ses mains restent gardées.
+  function showFormats(box, student) {
+    const s = students.find((x) => x.id === student);
+    box.textContent = '';
+    const counts = { HU: (s && s.period && s.period.all_hands) || 0, ring: (s && s.period && s.period.all_ring) || 0 };
+    if (!counts.HU || !counts.ring) return;  // un seul format dans ses mains : rien à choisir
+    const chosen = (s.settings && s.settings.plays) || ['HU', 'ring'];
+    const message = el('p', { class: 'small', 'aria-live': 'polite' });
+    const option = (fmt, label) => el('label', { class: 'ref-opt' },
+      el('input', { type: 'checkbox', value: fmt, checked: chosen.includes(fmt) }),
+      el('span', {}, el('b', {}, label), ' ', el('span', { class: 'muted small' }, count(counts[fmt]) + ' main(s)')));
+    const list = el('div', { class: 'pseudo-pick' }, option('HU', 'Heads-up'), option('ring', 'Tables à plusieurs'));
+    const save = el('button', { type: 'submit', class: 'primary' }, 'Enregistrer');
+    const form = el('form', { class: 'pseudo-form', onsubmit: async (e) => {
+      e.preventDefault();
+      const picked = [...list.querySelectorAll('input:checked')].map((i) => i.value);
+      if (!picked.length) { message.textContent = 'Coche au moins un format.'; return; }
+      save.disabled = true;
+      message.textContent = '';
+      try {
+        const res = await fetch('/api/eleves/' + encodeURIComponent(student) + '/formats', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ formats: picked.length === 2 ? null : picked }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Enregistrement impossible.');
+        frame.dataset.src = '';
+        await loadStudents();
+        renderHeader();
+        renderTabs();
+        markActive();
+        message.textContent = 'Enregistré : ses onglets et ses analyses suivent.';
+      } catch (err) {
+        message.textContent = err.message || String(err);
+      }
+      save.disabled = false;
+    } }, list, el('div', { class: 'student-form' }, save));
+    box.append(el('div', { class: 'pseudo-choice' }, el('h3', {}, 'Ce qu\'il joue'),
+      el('p', { class: 'muted small' }, 'Heads-up et/ou tables à plusieurs : un format qu\'il ne joue pas sort de ses '
+        + 'onglets et de ses analyses (bilan, leaks, préflop, solveur) ; ses mains restent gardées. Le solveur ne '
+        + 'mélange jamais les formats : dans Ses mains › Bilan, l\'analyse se lance sur toutes ses mains ou sur un '
+        + 'format.'), form, message));
   }
 
   // Après un changement des mains (import, historique retiré, pseudo supprimé…) : les deux listes de la page Importer.
