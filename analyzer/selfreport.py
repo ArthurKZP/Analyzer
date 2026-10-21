@@ -295,12 +295,13 @@ STATS_LEGEND = ('<div class="legend-dev"><span><i style="background:var(--hi-bg)
 def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str,
                       embed: bool = False, spots_href: str = "spots", kinds: Optional[dict] = None,
                       head: str = "", leaks_href: str = "", gains: Optional[dict] = None,
-                      stats_href: str = "") -> str:
+                      stats_href: str = "", situations: str = "") -> str:
     """kinds : type de chaque adversaire (players.classify), pour séparer réguliers et récréatifs ; head : en tête,
     le choix du format et tes résultats tous formats confondus (l'application) ; leaks_href : le Leakfinding, où ces
     écarts se lisent face à la théorie (l'application), et son suivi dans le temps à côté ; gains : le filtre des
     gains (l'application, déjà dans head) : « tiles » et « curve » à la place de tes résultats sur toutes tes mains,
-    « detail » sous la courbe, « script » ; stats_href : l'onglet de toutes tes stats (sans lui, toutes au bilan)."""
+    « detail » sous la courbe, « script » ; stats_href : l'onglet de toutes tes stats (sans lui, toutes au bilan) ;
+    situations : tes résultats par situation (app/situations_page.py)."""
     h = stats[hero]
     gains = gains or {}
     curve = gains.get("curve", h.curve)
@@ -351,6 +352,8 @@ def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: st
       "détail : onglet Statistiques)", "stats") if stats_href else
  fold("Tes statistiques", STATS_LEGEND + self_stat_tables(h), "préflop, postflop et abattage, face aux repères",
       "stats")}
+
+{situations}
 
 {fold("Résultats par adversaire", by_kind_html(results, kinds) + opponents_box,
       f"{len(results)} adversaire{'s' if len(results) > 1 else ''}", "adversaires")}

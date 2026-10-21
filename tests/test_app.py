@@ -56,6 +56,7 @@ class LibraryTest(IsolatedHome):
         self.assertIn('href="spots#hand=HAND03"', preflop)
         self.assertIn("Bouton face au 3bet", lib.self_page("preflop"))
         self.assertIn("Résultats par adversaire", lib.self_page("bilan"))
+        self.assertIn("Tes résultats par situation", lib.self_page("bilan"))  # SRP IP attaquant, P3B OOP attaquant…
         self.assertIn('"K9s"', lib.self_page("mains"))  # mains de départ : les données de la page
         self.assertIn('id="data"', lib.self_page("spots"))
         self.assertIn("Les bluffs de Villain", lib.player_page("Villain", "bluffs"))

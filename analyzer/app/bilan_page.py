@@ -169,12 +169,13 @@ RING_NOTE = ('<p class="note">Toutes tes tables de 3 joueurs et plus ensemble. U
 
 def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, Optional[ring.FormatStats]]],
                      opponents: list[dict], gaps: Optional[list], head: str = "", embed: bool = True,
-                     filters: Optional[dict] = None, stats_href: str = "") -> str:
+                     filters: Optional[dict] = None, stats_href: str = "", situations: str = "") -> str:
     """hands : tes mains aux tables à plusieurs ; scopes : [(portée, libellé, ring.analyze(…, merge=True)[0])] ;
     opponents : Library.ring_opponents_view() ; gaps : tes écarts les plus importants contre les réguliers ; head : le
     filtre des gains, le choix du format et tes résultats tous formats confondus ; filters : le filtre des gains
     (gains.clean), pour tes résultats et leur répartition ; stats_href : l'onglet de toutes tes stats (sans lui,
-    toutes au bilan, toutes les positions comprises)."""
+    toutes au bilan, toutes les positions comprises) ; situations : tes résultats par situation
+    (situations_page.situations_html)."""
     filters = filters or {}
     res = results(hands, hero)
     shown_res = results(gains.apply(hands, filters), hero) if filters else res
@@ -206,6 +207,8 @@ def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, 
 {fold("Par position", positions_html(shown, ring.SIX_MAX if stats_href else None),
       ("les positions du 6-max : " if stats_href else "") + "open, défense, 3bet, vols, c-bet, gains après le flop",
       "positions")}
+
+{situations}
 
 {fold("Résultats par adversaire", _by_scope(shown) + opponents_table(opponents) + RING_NOTE,
       f"{len(opponents)} adversaire{'s' if len(opponents) > 1 else ''}", "adversaires")}

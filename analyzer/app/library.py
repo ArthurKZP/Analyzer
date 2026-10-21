@@ -19,7 +19,7 @@ from typing import Callable, Optional
 from urllib.parse import quote
 
 from .. import (aliases, bluffcatch, bluffs, db, field, gains, handplay, leaks, memory, players, replay, ring,
-               ring_leaks, settings, spots, stakes, store, students, tracking)
+               ring_leaks, settings, situations, spots, stakes, store, students, tracking)
 from .. import period as periods
 from .. import reference as refstudy
 from ..db import analyses as db_analyses
@@ -56,6 +56,7 @@ from .ring_page import MAX_SPOTS as MAX_RING_SPOTS
 from .ring_page import build_ring_page
 from .plan_page import build_coach_page
 from .review_page import build_review_page
+from .situations_page import situations_html
 from .solver_pages import PANEL_SCRIPT, build_solver_bilan, panel_html, slot_html
 from .backups import Backups
 from .coach_chat import Coach
@@ -863,7 +864,8 @@ class Library:
                 return build_self_report(self.hands, self.all_stats(), self.hero, embed=True, spots_href="",
                                          kinds=self.kinds(), head=self._bilan_head("HU", filters),
                                          leaks_href="" if self.pages.startswith("/reference/") else "leaks",
-                                         gains=self._hu_gains(filters), stats_href=self._stats_href())
+                                         gains=self._hu_gains(filters), stats_href=self._stats_href(),
+                                         situations=self._situations_html("HU", filters))
             if page == "stats":  # toutes tes stats heads-up : toutes tes mains, contre les réguliers, les récréatifs
                 recs = {h.hand_id for h in self.hands} - {h.hand_id for h in regular}
                 others = [("Contre réguliers", analyze(regular).get(self.hero) if recs else None),
@@ -952,10 +954,22 @@ class Library:
             shown = [(scope, labels[scope], found[0] if found else None) for scope, _, found in scopes]
             return bilan_page.build_ring_bilan(ring_leaks.mine(self.ring, hero), hero, shown,
                                                self.ring_opponents_view(), gaps, head=self._bilan_head("ring", filters),
-                                               filters=filters, stats_href=self._stats_href())
+                                               filters=filters, stats_href=self._stats_href(),
+                                               situations=self._situations_html(ring_leaks.FORMAT, filters))
         filters = filters or {}
         key = ("self", "bilan", "ring") + _theory_changes() + self._ring_kinds_key() + tuple(sorted(filters.items()))
         return self._cached(key, build)
+
+    def _situations_html(self, fmt: str, filters: Optional[dict] = None) -> str:
+        """Tes résultats par situation dans ce format (situations.build), face aux réguliers de ton field ; filters :
+        le filtre des gains du bilan, sur tes mains comme sur les leurs."""
+        if not self.hero:
+            return ""
+        hands = self.hands if fmt == "HU" else self.ring
+        kinds = self.kinds() if fmt == "HU" else self.ring_kinds()
+        regulars = [name for name, info in kinds.items() if info["kind"] == "reg"]
+        kept = gains.apply(hands, filters) if filters else hands
+        return situations_html(situations.build(kept, self.hero, regulars))
 
     def _stats_href(self) -> str:
         """L'onglet de toutes tes stats, depuis le bilan (rien pour un joueur de référence : pas d'onglet)."""

@@ -135,7 +135,8 @@ class Row:
         return 100 * Z95 * math.sqrt(var / self.hands)
 
 
-def _add(row: Row, hand: Hand, hero: str) -> None:
+def add(row: Row, hand: Hand, hero: str) -> None:
+    """Ajoute cette main aux résultats du joueur (en bb, en monnaie, en EV all-in)."""
     net = hand.net(hero)
     ev = allin_ev(hand)
     net_bb = net / hand.bb
@@ -159,14 +160,14 @@ def breakdown(hands: list[Hand], hero: str, dimension: str, filters: dict[str, s
         row = rows.get(value)
         if row is None:
             row = rows[value] = Row(value, label(dimension, value))
-        _add(row, h, hero)
+        add(row, h, hero)
     return sorted(rows.values(), key=lambda r: _order(dimension, r.value))
 
 
 def total(hands: list[Hand], hero: str) -> Row:
     row = Row("", "Total")
     for h in hands:
-        _add(row, h, hero)
+        add(row, h, hero)
     return row
 
 
