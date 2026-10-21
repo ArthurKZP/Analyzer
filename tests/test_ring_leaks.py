@@ -112,7 +112,7 @@ class PotTest(unittest.TestCase):
         defend = co_vs_bb(2, "BB", ["Ah", "Kd"], [("flop", "BB", CHECK), ("flop", "CO", BET, 3.0), ("flop", "BB", FOLD)],
                           winner="CO")
         hands = [cbet, defend]
-        pots = ring_leaks._pots(hands, "Hero")
+        pots = ring_leaks.two_way_pots(hands, "Hero")
         with mock.patch("analyzer.theory.exploit.baselines", return_value={}):
             rows = {s.label: s for s in ring_leaks.postflop_stats(hands, "Hero", pots, {cbet.hand_id: "rec"})}
         cbets = rows["À l'initiative : C-bet flop"]
@@ -499,7 +499,11 @@ class RingOnlyTest(IsolatedHome):
         bilan = lib.self_page("bilan")  # le bilan s'ouvre sur les tables à plusieurs
         self.assertIn("2 mains aux tables à plusieurs (6-max)", bilan)
         self.assertNotIn('class="lk-fmt"', bilan)  # un seul format : pas de choix
-        self.assertIn("Aucune main heads-up", lib.self_page("solveur"))
+        solver = lib.self_page("solveur")  # le bilan du solveur : les tables à plusieurs seulement
+        self.assertIn('<h2 id="ring">Tables à plusieurs</h2>', solver)
+        self.assertNotIn('<h2 id="hu">', solver)
+        self.assertIn("Face au solveur — tables à plusieurs", lib.solver_panel("ring"))
+        self.assertIn('class="fs-slot" data-src="/api/revue/panneau?format=ring"', lib.self_page("tables"))
         self.assertIn("Tes écarts les plus importants", bilan)
         self.assertIn("Par position", bilan)
 

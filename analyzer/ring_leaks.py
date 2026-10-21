@@ -353,7 +353,7 @@ def mine(hands: list[Hand], hero: str) -> list[Hand]:
     return [h for h in hands if h.size > 2 and hero in h.seats and h.bb and h.button]
 
 
-def _pots(hands: list[Hand], hero: str) -> dict[str, Pot]:
+def two_way_pots(hands: list[Hand], hero: str) -> dict[str, Pot]:
     """Ses pots à deux joueurs au flop (ligne préflop simple), par main."""
     out = {}
     for h in hands:
@@ -372,7 +372,7 @@ def stats(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     parts = split(hands, hero, kinds or {})
     scope_of = {h.hand_id: scope for scope in ("reg", "rec") for h in parts[scope]}
     if pots is None:
-        pots = _pots(hands, hero)
+        pots = two_way_pots(hands, hero)
     if plays is None:
         plays = handplay.collect(hands, hero, stake_charts.theory(heads_up=False))
     else:  # celles de ces mains, sans l'EV perdue (le préflop face aux charts n'en a pas besoin)
@@ -390,7 +390,7 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     kinds = kinds or {}
     hands = mine(hands, hero)
     parts = split(hands, hero, kinds)
-    pots = _pots(hands, hero)
+    pots = two_way_pots(hands, hero)
     solver = solver_review(parts["reg"], hero, pots)
     lines = handplay.ring_lines()
     losses = review.hero_losses(solver["digests"])

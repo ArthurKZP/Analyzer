@@ -19,12 +19,13 @@ def _json_for_script(data) -> str:
 
 def build_viewer(hands: list[Hand], hero: str, villain: Optional[str] = None, report_href: str = "",
                  embed: bool = False, solver: bool = False, api: str = "",
-                 records: Optional[list[dict]] = None) -> str:
+                 records: Optional[list[dict]] = None, top: str = "", extra_script: str = "") -> str:
     """villain=None : toutes tes mains, contre tous tes adversaires.
 
     solver=True (application) : le replayer propose de résoudre le coup avec GTOpen. api (application) : les mains
     restent sur le serveur (Library.spots_search) ; records : leurs fiches (spots.list_record), pour les lignes et le
-    nombre de mains. Sans api, toutes les fiches sont dans la page (fichier autonome).
+    nombre de mains. Sans api, toutes les fiches sont dans la page (fichier autonome). top, extra_script : un bloc en
+    tête de page et son script (le panneau « Face au solveur » ; il montre les mains analysées par window.fsFilter).
     """
     title = f"Spots — {villain}" if villain else "Mes spots — tous adversaires"
     if api:
@@ -44,11 +45,12 @@ def build_viewer(hands: list[Hand], hero: str, villain: Optional[str] = None, re
         "TITLE": escape(title),
         "BACK": f'<a href="{escape(report_href)}">Rapport complet</a>' if report_href else "",
         "DATA": _json_for_script(data),
-        "SCRIPT": SCRIPT + (EMBED_SCRIPT if embed else ""),
+        "SCRIPT": SCRIPT + extra_script + (EMBED_SCRIPT if embed else ""),
         "HEADING": "" if embed else f"<h1>{escape(title)}</h1>",
+        "TOP": top,
     }
     # Substitution en une seule passe : le contenu inséré n'est jamais relu.
-    return re.sub(r"__(TITLE|BACK|DATA|SCRIPT|HEADING)__", lambda m: values[m.group(1)], TEMPLATE)
+    return re.sub(r"__(TITLE|BACK|DATA|SCRIPT|HEADING|TOP)__", lambda m: values[m.group(1)], TEMPLATE)
 
 
 TEMPLATE = r"""<!doctype html>
@@ -221,6 +223,7 @@ button, select, input { font: inherit; color: inherit; }
 <main>
   __HEADING__
   <div class="meta"><span id="meta"></span> __BACK__</div>
+  __TOP__
   <nav class="presets" id="presets" aria-label="Spots prédéfinis"></nav>
   <section class="filters" id="filters" aria-label="Filtres"></section>
   <div class="summary" id="summary" aria-live="polite"></div>
@@ -994,5 +997,12 @@ SCRIPT = r"""
   });
   window.addEventListener('hashchange', readHash);
   readHash();
+  if (SOLVER) {  // le panneau « Face au solveur » : montrer ses mains analysées, et la liste à jour après une analyse
+    window.fsFilter = (sv) => {
+      setFilters({ sv, sort: 'evloss' });
+      document.getElementById('presets').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    window.fsRefresh = () => apply();
+  }
 })();
 """

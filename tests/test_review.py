@@ -146,11 +146,15 @@ class AnalyzeTest(unittest.TestCase):
         stored = db.current().all("SELECT main, LENGTH(donnees) FROM analyses ORDER BY main")
         self.assertEqual([main for main, _ in stored], ["HAND01", "HAND02"])  # gardés dans la base
         self.assertLess(max(size for _, size in stored), 20_000)  # compressés
-        page = build_review_page(self.hands, "Hero")
-        for text in ("2 / 2</b> mains analysées", "Les erreurs qui coûtent le plus", "Les erreurs récurrentes"):
+        from analyzer import leaks
+        from analyzer.app import solver_pages
+        page = solver_pages.panel_html("HU", leaks.solver_review(self.hands, "Hero"), {}, "/api/revue", "/moi")
+        for text in ("<b>2</b> mains analysées sur 2", "Les erreurs qui coûtent le plus", "Les erreurs récurrentes",
+                     'data-sv="done">Voir les 2 mains analysées', 'href="/moi/solveur"'):
             self.assertIn(text, page)
         villain_page = build_review_page(self.hands, "Hero", "Villain")
-        self.assertIn("Ses écarts à exploiter", villain_page)
+        for text in ("2 / 2</b> mains analysées", "Ses écarts à exploiter", "Les erreurs récurrentes"):
+            self.assertIn(text, villain_page)
         self.assertNotIn("Ses écarts à exploiter", page)
 
     def test_stake_charts_ranges(self):
@@ -185,9 +189,16 @@ class AnalyzeTest(unittest.TestCase):
                 time.sleep(0.05)
             done, todo = review.collect(self.hands, "Hero")
             self.assertEqual(([g["hand"] for g in done], len(todo)), ([costliest], 1))
-            page = lib.self_page("solveur")
-            for text in ('class="rv-pick"', '<option value="pertes"', "les plus chères (1)", "1 / 2</b>"):
+            self.assertEqual(lib.review_orders(table_format="HU")["pertes"], [orders["pertes"][1]])
+            page = lib.self_page("solveur")  # le bilan du solveur : le heads-up seulement (pas d'autre format)
+            for text in ('class="fs-run" data-api="/api/revue"', "&quot;pertes&quot;: {&quot;n&quot;: 1",
+                         '<h2 id="hu">Heads-up</h2>', "sur 2 allées au flop"):
                 self.assertIn(text, page)
+            self.assertNotIn('class="fs-format"', page)  # un seul format : pas de choix
+            panel = lib.solver_panel("HU")
+            self.assertIn("<b>1</b> mains analysées sur 2", panel)
+            with self.assertRaises(Exception):
+                lib.solver_panel("ring")  # pas de mains aux tables à plusieurs
         finally:
             lib.solves.shutdown()
 
@@ -239,7 +250,11 @@ class AnalyzeTest(unittest.TestCase):
                 time.sleep(0.05)
             self.assertEqual(lib.review_state("Villain")["done"], 2)
             self.assertIn("Face au solveur", lib.player_page("Villain", "solveur"))
-            self.assertIn("2 / 2</b>", lib.self_page("solveur"))
+            self.assertIn("<b>2</b> mains analysées sur 2", lib.solver_panel("HU"))
+            self.assertIn('<div class="value">2</div><div class="sub">sur 2 allées au flop', lib.self_page("solveur"))
+            self.assertEqual(lib.review_state(table_format="HU")["done"], 2)
+            self.assertEqual(lib.review_state(table_format="ring"), dict(lib.review_state(table_format="ring"),
+                                                                          total=0, done=0))
             # le résumé survit au cache des résultats (clé du spot seul)
             from analyzer import db
             db.current().execute("DELETE FROM documents WHERE type = 'resolution'")

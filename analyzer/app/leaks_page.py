@@ -15,7 +15,7 @@ from ..report import cards_html, fold, format_query, format_switch, html_page, m
 from ..selfreport import OPP_SCRIPT, OPP_STYLE, opponent_row_data, opponent_tools
 from ..theory import review, studyspots
 from .review_page import STYLE as REVIEW_STYLE
-from .review_page import PICKER_SCRIPT, _costly_table, _drills, _duration, _situations_table, solve_picker
+from .review_page import PICKER_SCRIPT, _drills, _duration, costly_table, situations_table, solve_picker
 from .ring_page import _why
 
 STYLE = """
@@ -738,8 +738,8 @@ def build_leaks_page(report: leaks.Report, api: str, pages: str, embed: bool = T
         + (f' · <a class="lk-dl" href="{escape(pages)}/presentation.pptx{query}" download '
            'title="Pour la séance avec l\'élève, avec les notes du coach">la présentation PowerPoint</a>'
            if name is not None else "") + '</p>')
-    solver = (_situations_table(report.review["digests"], "H", False) + "<h3>Ses décisions les plus chères</h3>"
-              + _costly_table(report.review["digests"], "H", True))
+    solver = (situations_table(report.review["digests"], "H", False) + "<h3>Ses décisions les plus chères</h3>"
+              + costly_table(report.review["digests"], "H", True))
     if standalone:  # pas de liens vers l'application dans le rapport envoyé
         solver = re.sub(r'<a class="open"[^>]*>.*?</a>', "", solver)
     if ring:

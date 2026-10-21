@@ -55,6 +55,7 @@ from .ring_page import MAX_SPOTS as MAX_RING_SPOTS
 from .ring_page import build_ring_page
 from .plan_page import build_coach_page
 from .review_page import build_review_page
+from .solver_pages import PANEL_SCRIPT, build_solver_bilan, panel_html, slot_html
 from .backups import Backups
 from .coach_chat import Coach
 from .solves import NeedSession, SolveQueue
@@ -822,6 +823,8 @@ class Library:
             return self._cached(key, self._hands_page)
         if page == "leaks":  # change au fil des analyses : le rapport a son propre cache
             return self.leaks_page(table_format=table_format)
+        if page == "solveur":  # le bilan du solveur, format par format : change au fil des analyses
+            return self.solver_bilan()
         if page == "suivi":
             return self.tracking_page(table_format)
         if page == "preflop" and self._leak_format(table_format) != "HU":
@@ -835,9 +838,6 @@ class Library:
                 return html_page("Heads-up", HEADS_UP_ONLY, True)
             raise UnknownPlayer("moi")
         regular, excluded = self.regular_hands()
-        if page == "solveur":
-            return build_review_page(regular, self.hero, excluded=excluded, api=f"{self.api}/revue",
-                                     orders=self.review_orders())
 
         def build():
             if page == "bilan":
@@ -860,8 +860,11 @@ class Library:
                                           solution=stake_charts.hu_solution(band))
             if page == "bluffs":
                 return self._population_bluffs()
+            panel = bool(self.hero) and "HU" in self.solver_formats()  # le panneau « Face au solveur »
             return build_viewer(self.hands, self.hero, None, embed=True, solver=True, api=f"{self.api}/coups",
-                                records=self._spot_index(None))
+                                records=self._spot_index(None),
+                                top=slot_html(f"{self.api}/revue/panneau?format=HU") if panel else "",
+                                extra_script=PANEL_SCRIPT if panel else "")
         kinds = self._kinds_key() if page in ("bilan", "stats", "preflop", "bluffs") else ()
         charts = stake_charts.revision()[2:] if page == "preflop" else ()
         return self._cached(("self", page) + kinds + charts + tuple(sorted(filters.items())), build)
@@ -891,9 +894,10 @@ class Library:
     def _ring_page(self) -> str:
         """Tes coups à deux joueurs au flop aux tables à plusieurs, à ouvrir au solveur."""
         scopes, _ = self._ring_overview()
+        panel = slot_html(f"{self.api}/revue/panneau?format={ring_leaks.FORMAT}") if self.hero else ""
         return build_ring_page(scopes, self.hero or "", spots=self.ring_spots(MAX_RING_SPOTS),
                                ranges=ring_ranges.available(), status=self.solver_status(ring_game=True),
-                               api=f"{self.api}/coups")
+                               api=f"{self.api}/coups", panel=panel)
 
     def _bilan_head(self, fmt: str, filters: Optional[dict] = None) -> str:
         """En tête du bilan : le filtre des gains, tes résultats tous formats confondus (puis en heads-up et aux tables
@@ -2600,37 +2604,114 @@ class Library:
                                 field=self.plan_field(band))
 
     # --- analyse des mains jouées ---------------------------------------------------
-    def review_orders(self, villain: Optional[str] = None) -> dict:
-        """Les mains encore à résoudre (toutes, ou face à cet adversaire), dans chaque ordre : « pots » (les plus gros
-        pots d'abord), « pertes » (les plus chères d'abord) et, pour tes mains contre les réguliers, « leaks »
-        (celles où se joue un de tes leaks, les plus chères d'abord) : [(main, minutes)]."""
-        hands = self.hands_against(villain) if villain else self.regular_hands()[0]
-        _, todo = review.collect(hands, self.hero)
-        pots = [(h.hand_id, review.minutes(t)) for h, t in zip(todo.hands, todo.pot_types)]
-        costly = review.by_loss(todo)
-        out = {"pertes": [(h.hand_id, review.minutes(t)) for h, t in zip(costly.hands, costly.pot_types)], "pots": pots}
-        if not villain and self.hands:
-            wanted = {h for h, _ in pots}
-            out["leaks"] = [x for x in self.leaks_report("HU").solve_orders.get("leaks", []) if x[0] in wanted]
+    def solver_formats(self) -> list[str]:
+        """Les formats dont les mains passent au solveur : ceux que tu joues (leak_formats), sans les mélanger."""
+        return [fmt for fmt, _ in self.leak_formats()]
+
+    def _review_formats(self, table_format: Optional[str]) -> list[str]:
+        """Les formats d'une analyse : celui demandé (« HU », « ring » ; « 6-max »… : les tables à plusieurs), ou tous
+        ceux que tu joues (None, « all »)."""
+        formats = self.solver_formats()
+        if table_format in (None, "", "all"):
+            return formats
+        wanted = "HU" if table_format == "HU" else ring_leaks.FORMAT
+        return [wanted] if wanted in formats else []
+
+    def _review_scope(self, fmt: str) -> tuple[list[Hand], dict, int]:
+        """Tes mains d'un format que le solveur juge, contre les réguliers (contre un récréatif, l'exploitation prime) :
+        en heads-up, toutes celles-là ; aux tables à plusieurs, celles allées au flop à deux avec toi, et leurs pots
+        (ring_leaks.two_way_pots) ; puis le nombre de tes mains contre des récréatifs, laissées de côté."""
+        def build():
+            if fmt == "HU":
+                regular, excluded = self.regular_hands()
+                return regular, {}, excluded["hands"]
+            hero = self.hero or ""
+            parts = ring_leaks.split(ring_leaks.mine(self.ring, hero), hero, self.ring_kinds())
+            pots = ring_leaks.two_way_pots(parts["reg"], hero)
+            return [h for h in parts["reg"] if h.hand_id in pots], pots, len(parts["rec"])
+        kinds = self._kinds_key() if fmt == "HU" else self._ring_kinds_key()
+        return self._cached(("review_scope", fmt) + kinds, build)
+
+    def solver_review(self, fmt: str) -> dict:
+        """Tes mains d'un format face au solveur, contre les réguliers (leaks.solver_review) : résumés des mains
+        analysées (aux tables à plusieurs, situations nommées avec les vraies positions), mains à résoudre, situations,
+        erreurs, EV perdue ; « excluded » : tes mains contre des récréatifs, laissées de côté. Recalculé quand une main
+        passe au solveur."""
+        def build():
+            hands, pots, excluded = self._review_scope(fmt)
+            found = (leaks.solver_review(hands, self.hero or "") if fmt == "HU"
+                     else ring_leaks.solver_review(hands, self.hero or "", pots))
+            return dict(found, excluded=excluded)
+        kinds = self._kinds_key() if fmt == "HU" else self._ring_kinds_key()
+        return self._cached(("solver_review", fmt) + kinds + _solver_key(), build)
+
+    def review_orders(self, villain: Optional[str] = None, table_format: Optional[str] = None) -> dict:
+        """Les mains encore à résoudre (face à cet adversaire, ou tes mains contre les réguliers d'un format, de tous
+        ceux que tu joues sans format), dans chaque ordre : « pots » (les plus gros pots d'abord), « pertes » (les plus
+        chères d'abord) et, pour tes mains, « leaks » (celles où se joue un de tes leaks) : [(main, minutes)]."""
+        if villain:
+            _, todo = review.collect(self.hands_against(villain), self.hero)
+            entries, leak_lists = list(zip(todo.hands, todo.pot_types)), []
+        else:
+            formats = self._review_formats(table_format)
+            pending = [self.solver_review(fmt)["todo"] for fmt in formats]
+            entries = [e for todo in pending for e in zip(todo.hands, todo.pot_types)]
+            leak_lists = [self.leaks_report(fmt).solve_orders.get("leaks", []) for fmt in formats] if self.hero else []
+        hero = self.hero or ""
+        loss = {h.hand_id: (h.net(hero) / h.bb, -sum(a.amount for a in h.actions)) for h, _ in entries}
+        pots = sorted(entries, key=lambda e: loss[e[0].hand_id][1])
+        costly = sorted(entries, key=lambda e: loss[e[0].hand_id])
+        out = {"pertes": [(h.hand_id, review.minutes(t)) for h, t in costly],
+               "pots": [(h.hand_id, review.minutes(t)) for h, t in pots]}
+        if leak_lists:
+            found = [x for found in leak_lists for x in found if x[0] in loss]
+            out["leaks"] = sorted(found, key=lambda x: loss[x[0]]) if len(leak_lists) > 1 else found
         return out
 
-    def review_state(self, villain: Optional[str] = None, start: bool = False, order: str = "pots",
-                     limit: Optional[int] = None) -> dict:
-        """Mains allées au flop (toutes, ou face à cet adversaire) : analysées, à analyser, en cours ; start=True met en
-        file les limit premières de celles qui restent (toutes sans limit), dans cet ordre (review_orders)."""
-        hands = self.hands_against(villain) if villain else self.regular_hands()[0]
-        done, todo = review.collect(hands, self.hero)
-        if start:
-            chosen = self.review_orders(villain).get(order) or []
-            self._queue_hands([hand_id for hand_id, _ in (chosen[:limit] if limit else chosen)])
-        return self._solve_view(todo.hand_ids, len(done))
+    def _review_todo(self, villain: Optional[str], table_format: Optional[str]) -> tuple[list[str], int]:
+        """Les mains qui restent à résoudre et le nombre de mains analysées (face à cet adversaire, ou tes mains d'un
+        format, de tous sans format)."""
+        if villain:
+            done, todo = review.collect(self.hands_against(villain), self.hero)
+            return todo.hand_ids, len(done)
+        found = [self.solver_review(fmt) for fmt in self._review_formats(table_format)]
+        return [i for r in found for i in r["todo"].hand_ids], sum(r["analyzed"] for r in found)
 
-    def review_cancel(self, villain: Optional[str] = None) -> dict:
-        hands = self.hands_against(villain) if villain else self.regular_hands()[0]
-        _, todo = review.collect(hands, self.hero)
-        for view in self.solves.active_for(todo.hand_ids):
+    def review_state(self, villain: Optional[str] = None, start: bool = False, order: str = "pots",
+                     limit: Optional[int] = None, table_format: Optional[str] = None) -> dict:
+        """Mains allées au flop (face à cet adversaire, ou tes mains d'un format, de tous sans format) : analysées, à
+        analyser, en cours ; start=True met en file les limit premières de celles qui restent (toutes sans limit), dans
+        cet ordre (review_orders)."""
+        if start:
+            chosen = self.review_orders(villain, table_format).get(order) or []
+            self._queue_hands([hand_id for hand_id, _ in (chosen[:limit] if limit else chosen)])
+        todo, done = self._review_todo(villain, table_format)
+        return self._solve_view(todo, done)
+
+    def solver_panel(self, table_format: Optional[str]) -> str:
+        """Le panneau « Face au solveur » de l'onglet d'un format (« HU », « ring ») ; NotFound pour un autre format,
+        ou un format que tu ne joues pas."""
+        if table_format not in ("HU", ring_leaks.FORMAT) or not self._review_formats(table_format):
+            raise NotFound(table_format or "")
+        return panel_html(table_format, self.solver_review(table_format),
+                          self.review_orders(table_format=table_format), f"{self.api}/revue", self.pages)
+
+    def solver_bilan(self) -> str:
+        """Mes mains › Bilan : ce que le solveur dit de tes mains analysées, format par format, et de quoi en analyser
+        d'autres (toutes tes mains, ou un format)."""
+        formats = self.solver_formats()
+        sections = [(fmt, self.solver_review(fmt)) for fmt in formats]
+        orders = {fmt: self.review_orders(table_format=fmt) for fmt in formats}
+        if len(formats) > 1:
+            orders["all"] = self.review_orders(table_format="all")
+        return build_solver_bilan(sections, orders, f"{self.api}/revue", self.pages,
+                                  empty_note="Aucune main pour l'instant : importe des historiques.")
+
+    def review_cancel(self, villain: Optional[str] = None, table_format: Optional[str] = None) -> dict:
+        todo, _ = self._review_todo(villain, table_format)
+        for view in self.solves.active_for(todo):
             self.solves.cancel(view["job"])
-        return self.review_state(villain)
+        return self.review_state(villain, table_format=table_format)
 
     # --- alias : plusieurs pseudos d'un même joueur ---------------------------------------
     def set_alias(self, alias: str, pseudos: list[str]) -> dict:

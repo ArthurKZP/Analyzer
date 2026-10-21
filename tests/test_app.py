@@ -541,8 +541,18 @@ class ServerTest(unittest.TestCase):
         for path in ("/api/revue/lancer", "/api/leaks/lancer"):
             status, _, body = self.request("POST", path, json.dumps({"ordre": "pertes", "limite": 5}), headers)
             self.assertEqual((status, json.loads(body)["busy"]), (200, 0))
-            for wrong in ({"ordre": "toutes"}, {"limite": -1}, {"limite": True}, {"leak": 3}):
+            for wrong in ({"ordre": "toutes"}, {"limite": -1}, {"limite": True}, {"leak": 3}, {"format": "6max"}):
                 self.assertEqual(self.request("POST", path, json.dumps(wrong), headers)[0], 400)
+        # format par format (heads-up, tables à plusieurs, toutes tes mains), et le panneau de l'onglet d'un format
+        for fmt in ("HU", "all"):
+            status, _, body = self.request("POST", "/api/revue/lancer", json.dumps({"format": fmt}), headers)
+            self.assertEqual((status, json.loads(body)["busy"]), (200, 0))
+        self.assertEqual(json.loads(self.request("GET", "/api/revue?format=ring")[2])["total"], 0)
+        status, ctype, body = self.request("GET", "/api/revue/panneau?format=HU")
+        self.assertEqual(status, 200)
+        self.assertIn("Face au solveur — heads-up", body.decode("utf-8"))
+        self.assertEqual(self.request("GET", "/api/revue/panneau?format=ring")[0], 404)  # pas de tables à plusieurs
+        self.assertEqual(self.request("GET", "/api/revue/panneau")[0], 404)
 
     def test_explorer(self):
         status, ctype, body = self.request("GET", "/explorateur/HAND02")
@@ -769,6 +779,9 @@ class ServerTest(unittest.TestCase):
         for page in ("leaks", "preflop", "solveur", "spots", "mains"):
             self.assertEqual(self.request("GET", f"/eleve/anna/{page}")[0], 200, page)
         self.assertEqual(self.request("GET", "/api/eleves/anna/mains?main=AA")[0], 200)
+        panel = self.request("GET", "/api/eleves/anna/revue/panneau?format=HU")[2].decode("utf-8")
+        self.assertIn('data-api="/api/eleves/anna/revue"', panel)
+        self.assertEqual(json.loads(self.request("GET", "/api/eleves/anna/revue?format=HU")[2])["total"], 2)
         self.assertEqual(json.loads(self.request("GET", "/api/eleves/anna/coups")[2])["total"], 4)
         self.assertEqual(self.request("GET", "/api/eleves/anna/coups/HAND01")[0], 200)
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)

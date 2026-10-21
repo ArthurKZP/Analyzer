@@ -160,7 +160,7 @@ def _freqs(group: dict) -> str:
     return f'<span class="freq">{played} <span class="th">(théorie {theory})</span></span>'
 
 
-def _costly_table(digests: list[dict], who: str, show_villain: bool) -> str:
+def costly_table(digests: list[dict], who: str, show_villain: bool) -> str:
     rows = []
     for g, d in review.costly(digests, who):
         link = f'/explorateur/{quote(g["hand"], safe="")}#d={d["d"]}'
@@ -197,7 +197,7 @@ def _drill_link(group: dict, drills: dict[str, set]) -> str:
     return f'<a class="open" href="{escape(href)}" title="Travailler cette situation dans l\'entraîneur">S\'entraîner</a>'
 
 
-def _situations_table(digests: list[dict], who: str, villain: bool) -> str:
+def situations_table(digests: list[dict], who: str, villain: bool) -> str:
     rows = []
     drills = {} if villain else _drills()
     for group in review.by_situation(digests, who)[:20]:
@@ -242,12 +242,12 @@ def _exploits_table(digests: list[dict]) -> str:
             f'</tr></thead><tbody>{"".join(html_rows)}</tbody></table></div>')
 
 
-def build_review_page(hands: list[Hand], hero: str, villain: Optional[str] = None, embed: bool = True,
-                      excluded: Optional[dict] = None, kind: Optional[dict] = None, api: str = "/api/revue",
-                      orders: Optional[dict] = None) -> str:
-    """excluded : mains contre des récréatifs laissées de côté (Mon jeu) ; kind : type de l'adversaire ; orders : les
-    mains encore à résoudre dans chaque ordre (Library.review_orders), pour n'en résoudre qu'une partie.
-    Face à un récréatif, seuls ses écarts comptent : tes décisions ne sont pas comparées à la théorie."""
+def build_review_page(hands: list[Hand], hero: str, villain: str, embed: bool = True, kind: Optional[dict] = None,
+                      api: str = "/api/revue", orders: Optional[dict] = None) -> str:
+    """Tes mains face à un adversaire, comparées au solveur (ses écarts à exploiter aussi) ; kind : son type ; orders :
+    les mains encore à résoudre dans chaque ordre (Library.review_orders), pour n'en résoudre qu'une partie. Face à un
+    récréatif, seuls ses écarts comptent : tes décisions ne sont pas comparées à la théorie. (Tes mains de tous tes
+    adversaires : solver_pages, format par format.)"""
     rec = bool(kind and kind["kind"] == "rec")
     digests, todo = review.collect(hands, hero)
     total = len(digests) + len(todo)
@@ -269,69 +269,56 @@ def build_review_page(hands: list[Hand], hero: str, villain: Optional[str] = Non
                                                          for h, t in zip(todo.hands, todo.pot_types)]}
     picker = solve_picker([(key, orders.get(key) or []) for key in ("leaks", "pertes", "pots")],
                           "leaks" if orders.get("leaks") else "pertes")
-    head = (f'<div class="rv-head" data-villain="{escape(villain or "")}" data-done="{len(digests)}" '
+    head = (f'<div class="rv-head" data-villain="{escape(villain)}" data-done="{len(digests)}" '
             f'data-api="{escape(api)}">'
             f'<span><b>{len(digests)} / {total}</b> mains analysées</span>{picker}'
             f'<button type="button" class="go rv-run"{" hidden" if not todo else ""}>Analyser</button>'
             '<button type="button" class="rv-stop" hidden>Arrêter</button><span class="rv-status"></span></div>'
             + (f'<p class="note">Toutes les {len(todo)} mains qui restent prendraient environ {_duration(eta)} sur 4 '
-               "cœurs : choisis-en une partie, celles où se jouent tes leaks ou les plus chères d'abord. Chaque main "
-               "se résout une fois ; la page se complète au fur et à mesure, tu peux la fermer. En ligne de commande : "
-               '<code>python -m analyzer gtopen --analyser</code>.</p>' if todo else ""))
-    who = f"face à {escape(villain)}" if villain else "contre les réguliers"
-    kind_line = ""
-    if excluded and excluded["hands"]:
-        kind_line = (f'<p class="note">{excluded["hands"]} mains contre des récréatifs '
-                     f'({escape(", ".join(excluded["players"]))}) sont exclues : contre eux, l\'exploitation prime '
-                     'sur la théorie. Le type de chaque adversaire se règle en haut de sa fiche.</p>')
-    elif kind:
-        kind_line = (f'<p class="note">{escape(villain or "")} : {escape(players.describe(kind))}. '
-                     'Le type se règle en haut de sa fiche.</p>')
+               "cœurs : choisis-en une partie, les plus chères d'abord. Chaque main se résout une fois ; la page se "
+               "complète au fur et à mesure, tu peux la fermer.</p>" if todo else ""))
+    kind_line = (f'<p class="note">{escape(villain)} : {escape(players.describe(kind))}. '
+                 'Le type se règle en haut de sa fiche.</p>' if kind else "")
+    exploits = (f'<div class="card">{_exploits_table(digests)}<p class="note">Ses fréquences dans chaque situation, '
+                "face à celles du solveur dans les mêmes coups : pas besoin de voir ses cartes, toutes ses décisions "
+                "comptent.</p></div>")
+    known_errors = (f'<div class="card">{costly_table(digests, "V", False)}<p class="note">Quand ses cartes ont été '
+                    "montrées : l'EV qu'il a laissée, décision par décision.</p></div>")
+    title = f"Face au solveur — {villain}"
     if rec:
         body = f"""
-<div class="meta">Tes mains allées au flop face à {escape(villain or "")}, joueur classé récréatif.</div>
+<div class="meta">Tes mains allées au flop face à {escape(villain)}, joueur classé récréatif.</div>
 <div class="card">{head}<p class="note">Contre un récréatif, tes décisions ne sont pas comparées à la théorie : le bon
 jeu est de l'exploiter. Ses écarts à la théorie, eux, disent comment.</p>{kind_line}</div>
 <h2>Ses écarts à exploiter</h2>
-<div class="card">{_exploits_table(digests)}
-<p class="note">Ses fréquences dans chaque situation, face à celles du solveur dans les mêmes coups : pas besoin de
-voir ses cartes, toutes ses décisions comptent.</p></div>
+{exploits}
 <h2>Ses erreurs connues</h2>
-<div class="card">{_costly_table(digests, "V", False)}
-<p class="note">Quand ses cartes ont été montrées : l'EV qu'il a laissée, décision par décision.</p></div>
+{known_errors}
 """
-        return html_page(f"Face au solveur — {villain}", f"<style>{STYLE}</style>{body}", embed, script=SCRIPT)
+        return html_page(title, f"<style>{STYLE}</style>{body}", embed, script=SCRIPT)
     costly_note = more("Comment c'est mesuré", (
         "EV perdue : ce que l'action jouée rapporte de moins que la meilleure action pour ta main, à ce moment du coup "
         "(en bb). Une action que le solveur joue au moins 10 % du temps avec cette main ne coûte rien. « ≈ » : la "
         "taille jouée diffère de celle de l'arbre. <b>Revoir ↗</b> ouvre la main dans l'explorateur, à cette "
         "décision."))
-    recurring = fold("Les erreurs récurrentes", f'<div class="card">{_situations_table(digests, "H", False)}'
+    recurring = fold("Les erreurs récurrentes", f'<div class="card">{situations_table(digests, "H", False)}'
                      '<p class="note">Par situation de la ligne : combien de fois tu l\'as jouée, tes erreurs et l\'EV '
                      "perdue, puis tes fréquences (fold / check ou call / mise ou relance) face à celles "
                      "qu'aurait eues le solveur avec toute sa range dans les mêmes coups. Un écart s'affiche dès 8 "
                      "occurrences et 10 points d'écart ; « solide » quand le hasard l'explique très mal.</p></div>",
                      "situation par situation : tes erreurs, l'EV perdue et tes fréquences face au solveur",
                      "recurrentes")
-    hands = ("" if villain else " Chaque main, avec son EV théorique et l'EV perdue (ou à résoudre) : <b>Heads-up</b> "
-             "et <b>Tables à plusieurs</b>, à côté (filtre et tri <i>Solveur</i>).")
     body = f"""
-<div class="meta">Tes mains heads-up allées au flop {who}, comparées au solveur (pots simples, 3bet et 4bet).
-{hands}</div>
+<div class="meta">Tes mains heads-up allées au flop face à {escape(villain)}, comparées au solveur (pots simples, 3bet
+et 4bet).</div>
 {tiles}
 <div class="card">{head}{kind_line}</div>
 <h2>Les erreurs qui coûtent le plus</h2>
-<div class="card">{_costly_table(digests, "H", villain is None)}
+<div class="card">{costly_table(digests, "H", False)}
 {costly_note}</div>
 {recurring}
 """
-    if villain:
-        body += fold("Ses écarts à exploiter", f'<div class="card">{_exploits_table(digests)}<p class="note">Ses '
-                     "fréquences dans chaque situation, face à celles du solveur dans les mêmes coups : pas besoin de "
-                     "voir ses cartes, toutes ses décisions comptent.</p></div>",
-                     "ses fréquences face au solveur, situation par situation", "ecarts")
-        body += fold("Ses erreurs connues", f'<div class="card">{_costly_table(digests, "V", False)}<p class="note">'
-                     "Quand ses cartes ont été montrées : l'EV qu'il a laissée, décision par décision.</p></div>",
-                     "quand ses cartes ont été montrées", "ses-erreurs")
-    title = f"Face au solveur — {villain}" if villain else "Face au solveur"
+    body += fold("Ses écarts à exploiter", exploits, "ses fréquences face au solveur, situation par situation",
+                 "ecarts")
+    body += fold("Ses erreurs connues", known_errors, "quand ses cartes ont été montrées", "ses-erreurs")
     return html_page(title, f"<style>{STYLE}</style>{body}", embed, script=SCRIPT)

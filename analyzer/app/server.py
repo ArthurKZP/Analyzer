@@ -255,7 +255,9 @@ class Handler(BaseHTTPRequestHandler):
                 if parts[3] == "periode":
                     return self._json(student.period_view())
                 return self._json(student.leaks_state(table_format=self._format()) if parts[3] == "leaks"
-                                  else student.review_state())
+                                  else student.review_state(table_format=self._format()))
+            if len(parts) == 5 and parts[:2] == ["api", "eleves"] and parts[3:] == ["revue", "panneau"]:
+                return self._html(library.student(parts[2]).solver_panel(self._format()))
             if parts[:2] == ["api", "coups"] and len(parts) in (2, 3) or \
                     parts[:2] == ["api", "eleves"] and len(parts) in (4, 5) and parts[3] == "coups":
                 owner = library if parts[1] == "coups" else library.student(parts[2])
@@ -302,9 +304,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(trainer.overview())
             if parts == ["api", "sauvegarde"]:
                 return self._json(library.backups.view())
-            if parts == ["api", "revue"]:
+            if parts == ["api", "revue"]:  # (« ?format=HU », « ring » : un format ; sans : tous)
                 villain = parse_qs(urlsplit(self.path).query).get("adversaire", [None])[0]
-                return self._json(library.review_state(villain))
+                return self._json(library.review_state(villain, table_format=self._format()))
+            if parts == ["api", "revue", "panneau"]:  # le panneau « Face au solveur » de l'onglet d'un format
+                return self._html(library.solver_panel(self._format()))
             if parts[:2] == ["api", "spots"] and len(parts) == 3 and parts[2] in library.SPOT_GROUPS:
                 # toutes les séries heads-up, ou 6-max (« ?ranges=hautes » : avec les ranges des hautes limites)
                 return self._json(library.group_spot_sets(parts[2], rset=self._study_set()))
@@ -689,9 +693,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, "Requête invalide.")
             try:
                 if parts[2] == "arreter":
-                    return self._json(library.review_cancel(villain))
+                    return self._json(library.review_cancel(villain, choice["format"]))
                 return self._json(library.review_state(villain, start=True, order=choice["order"] or "pots",
-                                                       limit=choice["limit"]))
+                                                       limit=choice["limit"], table_format=choice["format"]))
             except UnknownPlayer:
                 return self._error(404, "Adversaire inconnu.")
         if (parts[:2] == ["api", "spots"] and len(parts) == 4 and parts[2] in library.SPOT_GROUPS
@@ -812,9 +816,9 @@ class Handler(BaseHTTPRequestHandler):
                 if choice is None:
                     return self._error(400, "Requête invalide.")
                 if parts[3] == "revue":
-                    return self._json(student.review_cancel() if parts[4] == "arreter" else
-                                      student.review_state(start=True, order=choice["order"] or "pots",
-                                                           limit=choice["limit"]))
+                    return self._json(student.review_cancel(table_format=choice["format"]) if parts[4] == "arreter"
+                                      else student.review_state(start=True, order=choice["order"] or "pots",
+                                                                limit=choice["limit"], table_format=choice["format"]))
                 try:
                     return self._json(student.leaks_cancel(self._format()) if parts[4] == "arreter"
                                       else student.leaks_state(start=True, table_format=self._format(),
@@ -844,18 +848,21 @@ class Handler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _solve_choice(payload) -> Optional[dict]:
-        """Les mains à passer au solveur, d'après la requête : {"order", "limit", "leak"} (None : par défaut), ou None
-        si la requête est invalide. « ordre » : leaks, pertes, lignes ou pots ; « limite » : un nombre de mains (0 :
-        toutes) ; « leak » : la clé d'un leak."""
+        """Les mains à passer au solveur, d'après la requête : {"order", "limit", "leak", "format"} (None : par défaut),
+        ou None si la requête est invalide. « ordre » : leaks, pertes, lignes ou pots ; « limite » : un nombre de mains
+        (0 : toutes) ; « leak » : la clé d'un leak ; « format » : HU, ring ou all (toutes tes mains)."""
         payload = payload if isinstance(payload, dict) else {}
         order, limit, leak = payload.get("ordre"), payload.get("limite"), payload.get("leak")
+        table_format = payload.get("format")
         if order is not None and order not in ("leaks", "pertes", "lignes", "pots"):
+            return None
+        if table_format is not None and table_format not in ("HU", "ring", "all"):
             return None
         if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= 5000):
             return None
         if leak is not None and not (isinstance(leak, str) and len(leak) <= 200):
             return None
-        return {"order": order, "limit": limit or None, "leak": leak}
+        return {"order": order, "limit": limit or None, "leak": leak, "format": table_format}
 
     def _import_step(self, owner, rest: list[str]):
         """Un import envoyé en plusieurs fois (le tien, ou celui d'un élève) : « ouvrir », puis « <id>/lot » (des

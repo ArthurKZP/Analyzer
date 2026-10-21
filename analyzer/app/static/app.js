@@ -6,8 +6,8 @@
   // Les onglets de chaque vue : une page [page, libellé], ou un groupe de pages proches [libellé, [[page, libellé], …]]
   // dont les pages forment une seconde barre (sous-onglets). Les adresses restent celles des pages (#/moi/suivi).
   const LEAKS_GROUP = ['Leaks', [['leaks', 'À travailler'], ['suivi', 'Suivi dans le temps']]];
-  // tes mains : chacune avec ce qu'en dit le solveur (à résoudre sinon), puis le bilan de tes mains face au solveur
-  const HANDS_TABS = [['spots', 'Heads-up'], ['tables', 'Tables à plusieurs'], ['solveur', 'Face au solveur']];
+  // tes mains : le bilan du solveur (format par format), puis chaque format avec ses mains et son « Face au solveur »
+  const HANDS_TABS = [['solveur', 'Bilan'], ['spots', 'Heads-up'], ['tables', 'Tables à plusieurs']];
   const PREFLOP_GROUP = ['Préflop', [['preflop', 'Face à la théorie'], ['mains', 'Mains de départ']]];
   const TABS = {
     moi: [['bilan', 'Bilan'], ['stats', 'Statistiques'], LEAKS_GROUP, PREFLOP_GROUP, ['Mes mains', HANDS_TABS]],
@@ -33,7 +33,7 @@
   const FORMAT_TABS = ['bilan', 'stats', 'leaks', 'suivi', 'preflop', 'comparaison', 'lignes'];
   // Les formats que tu joues (Paramètres) : sans choix, tous. Un format que tu ne joues pas sort des menus.
   const plays = (fmt) => !state || !state.settings || !state.settings.plays || state.settings.plays.includes(fmt);
-  const HIDDEN_TABS = { HU: { moi: ['spots', 'solveur'], etudes: ['hu'], entraineur: ['solveur'] },
+  const HIDDEN_TABS = { HU: { moi: ['spots'], etudes: ['hu'], entraineur: ['solveur'] },
     ring: { moi: ['tables'], etudes: ['6max'] } };
   function groupsOf(view) {  // [{ label, tabs: [[page, libellé], …] }] : les groupes dont une page au moins est jouée
     const hidden = ['HU', 'ring'].filter((f) => !plays(f)).flatMap((f) => HIDDEN_TABS[f][view] || []);

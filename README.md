@@ -74,11 +74,12 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   mêmes cartes : un nœud par situation et positions (premier à parler, face à l'open de telle position, face au 3bet
   après ton open), avec la grille de la stratégie, tes fréquences face aux charts et tes écarts main par main ; une
   table sans charts à elle prend ceux du 6-max à même nombre de joueurs derrière, et les mains contre les récréatifs
-  sont exclues. **Mes mains** : *Heads-up* (le visualiseur de spots, voir plus bas) et *Tables à plusieurs* (tes
-  coups à deux joueurs au flop), chaque main avec ce qu'en dit le solveur (son EV théorique et l'EV perdue, ou
-  *Résoudre*), filtres et tri compris, puis *Face au solveur* (le bilan de tes erreurs postflop, voir plus bas). Un
-  élève a les mêmes onglets (*Bilan* avec ses courbes, *Statistiques*, *Leaks*, *Préflop*, *Ses mains*), plus
-  *Importer*.
+  sont exclues. **Mes mains** : *Bilan* (ce que le solveur dit de tes mains analysées, format par format, et
+  l'analyse à lancer sur toutes tes mains ou sur un format, voir « Face au solveur »), puis *Heads-up* (le
+  visualiseur de spots, voir plus bas) et *Tables à plusieurs* (tes coups à deux joueurs au flop), chacun ouvert sur
+  son panneau *Face au solveur* (ses mains analysées à parcourir, ses erreurs) et chaque main avec ce qu'en dit le
+  solveur (son EV théorique et l'EV perdue, ou *Résoudre*), filtres et tri compris. Un élève a les mêmes onglets
+  (*Bilan* avec ses courbes, *Statistiques*, *Leaks*, *Préflop*, *Ses mains*), plus *Importer*.
 - **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Réguliers* et *Récréatifs*, chacun en
   trois sous-onglets, en heads-up ou aux tables à plusieurs et par limites (micro, milieu, hautes) : *Leakfinding*
   (ceux que tu croises le plus, chacun avec ses leaks à exploiter et ce que montrent ses lignes, puis sa fiche
@@ -694,10 +695,18 @@ Variables d'environnement : `ANALYZER_HOME` (dossier de travail, `~/.analyzer` p
 
 ## Face au solveur (mains jouées)
 
-L'onglet *Face au solveur* (dans *Mes mains* de « Mon jeu », et pour chaque adversaire) compare tes mains allées au
-flop à la théorie. Chaque main (SRP, pot 3bet ou 4bet ; pas les limps ni les tapis préflop) est résolue une fois,
-sur sa ligne réelle, avec les tailles de l'arbre par défaut ; on en garde un résumé de quelques Ko (dans la base de
-données), qui survit aux mises à jour du solveur.
+*Face au solveur* compare tes mains allées au flop à la théorie, format par format, sans les mélanger (le heads-up,
+puis les tables à plusieurs, où seuls tes pots à deux joueurs au flop se résolvent). Dans *Mes mains* de « Mon jeu »
+(et *Ses mains* d'un élève), le **Bilan** dit ce qui ressort des mains analysées de chaque format : les chiffres
+(mains analysées, décisions, erreurs, EV perdue), l'essentiel en phrases (où part l'EV, la situation qui coûte le
+plus, l'écart de fréquence le plus net), les situations qui coûtent le plus et où part l'EV par street, type de pot
+et position ; il lance aussi l'analyse, de toutes tes mains ou d'un format (les plus chères, celles où se jouent tes
+leaks ou les plus gros pots ; 5, 10, 20 ou toutes, avec la durée estimée). Chaque onglet de format (*Heads-up*,
+*Tables à plusieurs*) s'ouvre sur son panneau **Face au solveur** : ses chiffres, l'analyse de ce format, *Voir les
+N mains analysées* (la liste dessous les filtre, les plus chères d'abord), les erreurs qui coûtent le plus et les
+erreurs récurrentes. Chaque fiche d'adversaire a aussi son onglet *Face au solveur*. Chaque main (SRP, pot 3bet ou
+4bet ; pas les limps ni les tapis préflop) est résolue une fois, sur sa ligne réelle, avec les tailles de l'arbre
+par défaut ; on en garde un résumé de quelques Ko (dans la base de données), qui survit aux mises à jour du solveur.
 
 ```bash
 python -m analyzer gtopen --analyser            # toutes les mains pas encore analysées
@@ -855,10 +864,10 @@ plus bas pour les tables à plusieurs.
   détaillés). Format 16:9, police Arial, modifiable dans PowerPoint, Keynote ou LibreOffice ; fait sans dépendance
   (`analyzer/pptxwriter.py`). Aussi pour toi : `/moi/presentation.pptx`.
 
-L'élève a aussi ses onglets *Leaks › Suivi dans le temps* et *Ses mains › Face au solveur* (toutes ses mains contre
-les réguliers), *Préflop › Face à la théorie* (face à la solution, main par main), *Préflop › Mains de départ* et
-*Ses mains* (le visualiseur, d'où chaque main s'ouvre dans l'explorateur ; ses coups à deux aux tables à plusieurs ;
-chacune avec ce qu'en dit le solveur, ou à résoudre).
+L'élève a aussi ses onglets *Leaks › Suivi dans le temps* et *Ses mains › Bilan* (ce que le solveur dit de ses mains
+analysées, format par format), *Préflop › Face à la théorie* (face à la solution, main par main), *Préflop › Mains
+de départ* et *Ses mains* (le visualiseur, d'où chaque main s'ouvre dans l'explorateur ; ses coups à deux aux tables
+à plusieurs ; chacune avec ce qu'en dit le solveur, ou à résoudre).
 
 ### Suivi des leaks dans le temps
 
@@ -1116,11 +1125,11 @@ ses formats) :
   moins un pseudo coché. Le pseudo d'un **joueur de référence** (menu du même nom) n'est jamais le tien : il apparaît
   décoché, avec le nom du joueur.
 - **Ce que tu joues** : heads-up et/ou tables à plusieurs. Un format que tu ne joues pas sort des menus : ses
-  onglets (*Mes mains › Heads-up* et *Mes mains › Face au solveur* pour le heads-up, *Mes mains › Tables à
-  plusieurs* sinon), le choix de format des pages (le bilan, les Leaks, le Préflop, les mains de départ et l'Étude
-  du field s'ouvrent sur l'autre), l'onglet *Heads-up* ou *6-max* des études, l'entraîneur (spots heads-up) et les
-  adversaires du menu ; l'explorateur part du 6-max. Tes mains restent gardées : recoche le format pour le
-  retrouver.
+  onglets (*Mes mains › Heads-up* pour le heads-up, *Mes mains › Tables à plusieurs* sinon ; le *Bilan* du solveur
+  ne garde que les formats joués), le choix de format des pages (le bilan, les Leaks, le Préflop, les mains de
+  départ et l'Étude du field s'ouvrent sur l'autre), l'onglet *Heads-up* ou *6-max* des études, l'entraîneur (spots
+  heads-up) et les adversaires du menu ; l'explorateur part du 6-max. Tes mains restent gardées : recoche le format
+  pour le retrouver.
 - **Coaching** : *Je suis coach* montre les **Élèves** dans le menu, *Je ne coache pas* les cache ; par défaut, ils
   apparaissent dès que tu as un élève.
 - **Étude du field** : le nombre de mains minimum contre un adversaire pour qu'il ait sa fiche (50 par défaut).
@@ -1697,21 +1706,20 @@ analyzer/
                        ranges des tables à plusieurs (ring_ranges.py), ton préflop face aux charts
                        (ring_preflop.py), arbre préflop 6-max pour l'explorateur (ring_tree.py), tes ranges ajustées
                        (custom_ranges.py, ordre des mains dans data/hand_order.json)
-  app/                 application : serveur local (server.py), bibliothèque de mains, cache et préchargement
-                       des pages (library.py), résolutions et sessions du solveur (solves.py), page « Face au
-                       solveur » (review_page.py), leakfinding (leaks_page.py), bluffs des adversaires
-                       (bluffs_page.py), étude du field (field_page.py : les joueurs et les alias ;
-                       field_leaks_page.py : le leakfinding des adversaires ; field_lines_page.py : les bluffs et la
-                       value des réguliers et des récréatifs), joueurs de référence (reference_page.py : toi et
-                       lui, sa value et ses bluffs), paramètres (settings_page.py), bilan des tables à plusieurs
-                       (bilan_page.py) et son filtre des gains (gains_page.py), mains de départ (hands_page.py),
-                       synthèse du Leakfinding
-                       (synthesis.py), son rapport PDF (report_pdf.py) et sa présentation (report_pptx.py),
-                       entraîneur (trainer.py, static/trainer.*), plan de jeu suggéré (plan_page.py), coach
-                       (coach_chat.py, static/coach.*) et son serveur MCP pour l'abonnement Claude
-                       (mcp_server.py), sauvegardes en arrière-plan (backups.py), avancement d'un import
-                       (import_job.py), interface
-                       (static/, dont l'explorateur explorer.*)
+  app/                 application : serveur local (server.py), bibliothèque de mains, cache et préchargement des
+                       pages (library.py), résolutions et sessions du solveur (solves.py), face au solveur
+                       (solver_pages.py : le bilan et le panneau de chaque format ; review_page.py : la fiche d'un
+                       adversaire), leakfinding (leaks_page.py), bluffs des adversaires (bluffs_page.py), étude du
+                       field (field_page.py : les joueurs et les alias ; field_leaks_page.py : le leakfinding des
+                       adversaires ; field_lines_page.py : les bluffs et la value des réguliers et des récréatifs),
+                       joueurs de référence (reference_page.py : toi et lui, sa value et ses bluffs), paramètres
+                       (settings_page.py), bilan des tables à plusieurs (bilan_page.py) et son filtre des gains
+                       (gains_page.py), mains de départ (hands_page.py), synthèse du Leakfinding (synthesis.py), son
+                       rapport PDF (report_pdf.py) et sa présentation (report_pptx.py), entraîneur (trainer.py,
+                       static/trainer.*), plan de jeu suggéré (plan_page.py), coach (coach_chat.py, static/coach.*)
+                       et son serveur MCP pour l'abonnement Claude (mcp_server.py), sauvegardes en arrière-plan
+                       (backups.py), avancement d'un import (import_job.py), interface (static/, dont l'explorateur
+                       explorer.*)
   backup.py            sauvegarde et restauration de la base et des études (commande `sauvegarde`)
   blobs.py             stockage des gros fichiers (arbres des études) : un dossier ici, un stockage objet en ligne
   store.py             cache sur disque des calculs longs (SQLite : mains lues, équités, clés des spots)

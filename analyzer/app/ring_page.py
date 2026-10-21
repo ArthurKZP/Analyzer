@@ -10,6 +10,7 @@ from urllib.parse import quote
 from .. import ring
 from ..report import cards_html, fold, format_query, html_page, num, pct_cell
 from ..ring_leaks import FORMAT
+from .solver_pages import PANEL_SCRIPT
 
 STYLE = """<style>
 .rg-switch { display: flex; gap: 6px; margin-top: 14px; }
@@ -70,6 +71,19 @@ if (rgTable) {
   const api = rgTable.dataset.api;
   const call = (body) => fetch(api, { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body) }).then((res) => res.json().then((data) => (res.ok ? data : Promise.reject(data))));
+  // le panneau « Face au solveur » : montrer tes coups analysés (aussi depuis le bilan : « #sv=done »), et la liste à
+  // jour après une analyse
+  window.fsFilter = (sv) => {
+    tools.querySelector('[name="sv"]').value = sv;
+    tools.querySelector('[name="sort"]').value = 'lost';
+    apply();
+    const box = rgTable.closest('details');
+    if (box) box.open = true;
+    tools.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  window.fsRefresh = () => location.reload();
+  const wanted = new URLSearchParams(location.hash.slice(1)).get('sv');
+  if (['done', 'todo', 'err'].includes(wanted)) window.fsFilter(wanted);
   rgTable.querySelectorAll('button.rg-solve').forEach((b) => b.addEventListener('click', () => {
     b.disabled = true;
     b.textContent = 'En file…';
@@ -202,7 +216,9 @@ def _spots(rows: list[dict], ready: bool, opened: bool = False, status: Optional
                 f'<td>{cards_html(r["cards"])}</td><td>{cards_html(r["board"])}</td>'
                 f'<td class="num">{num(r["total_bb"], 1)}</td><td class="num">{num(r["net_bb"], 1, sign=True)}</td>'
                 f"{_solver_cells(r, sv)}</tr>")
-    body = "".join(row(r) for r in mine[:MAX_SPOTS])
+    # les plus gros pots, et tous tes coups déjà analysés
+    shown = mine[:MAX_SPOTS] + [r for r in mine[MAX_SPOTS:] if _sv_state(r, status.get(r["id"])) == "done"]
+    body = "".join(row(r) for r in shown)
     note = "" if ready else (
         '<p class="note">Tes ranges préflop ne sont pas encore là : ces coups s\'ouvriront au solveur dès qu\'elles '
         "seront ajoutées.</p>")
@@ -210,9 +226,10 @@ def _spots(rows: list[dict], ready: bool, opened: bool = False, status: Optional
         note += ('<p><button type="button" class="rg-load">Charger les charts 100 bb de Hand2Note Guide (6-max et 3-max)'
                  '</button> <span class="muted small">pots simples, 3bet et 4bet ; téléchargés sur ta machine, pour ton '
                  "usage personnel (conditions du site)</span> <span class=\"rg-load-msg small\"></span></p>")
-    extra = f" Les {MAX_SPOTS} plus gros pots sur {len(mine)}." if len(mine) > MAX_SPOTS else ""
+    extra = (f" Les {MAX_SPOTS} plus gros pots sur {len(mine)}, et tous ceux déjà analysés." if len(mine) > MAX_SPOTS
+             else "")
     done = sum(1 for r in mine if _sv_state(r, status.get(r["id"])) == "done")
-    table = (f'<div class="card">{_tools(mine[:MAX_SPOTS])}<div class="scroll">'
+    table = (f'<div class="card">{_tools(shown)}<div class="scroll">'
              f'<table class="stats rg-spots" data-api="{escape(api)}"><thead><tr><th>Date</th><th>Table</th>'
              '<th>Ligne préflop</th><th>Toi</th><th>Main</th><th>Flop</th><th class="num">Pot (bb)</th>'
              '<th class="num">Résultat</th><th class="num">EV théorique</th><th class="num">EV perdue</th>'
@@ -277,11 +294,12 @@ def positions_html(shown: list[tuple[str, str, ring.FormatStats]], positions: Op
 
 def build_ring_page(scopes: list[tuple[str, str, list]], hero: str, embed: bool = True,
                     spots: Optional[list[dict]] = None, ranges: Optional[dict[str, int]] = None,
-                    status: Optional[dict] = None, api: str = "/api/coups") -> str:
+                    status: Optional[dict] = None, api: str = "/api/coups", panel: str = "") -> str:
     """Tes coups à deux joueurs au flop aux tables à plusieurs, à ouvrir au solveur. scopes : [(portée, libellé,
     ring.analyze(…, merge=True))] — toutes tes mains, contre les réguliers, contre les récréatifs ; spots :
     Library.ring_spots() ; ranges : formats dont la solution préflop est là (ring_ranges.available) ; status : ce
-    qu'en dit le solveur (Library.solver_status) ; api : où mettre un coup en file au solveur."""
+    qu'en dit le solveur (Library.solver_status) ; api : où mettre un coup en file au solveur ; panel : la place du
+    panneau « Face au solveur » (solver_pages.slot_html), en tête."""
     shown = [(scope, label, stats[0]) for scope, label, stats in scopes if stats]
     if not shown:
         body = ('<p class="note">Aucune main à une table de 3 joueurs ou plus. Importe des historiques 3-max, 6-max ou de '
@@ -303,4 +321,5 @@ def build_ring_page(scopes: list[tuple[str, str, list]], hero: str, embed: bool 
     if not found:
         found = ('<p class="note">Aucun coup à deux joueurs au flop pour l\'instant : tes pots à plusieurs joueurs au '
                  "flop ne se résolvent pas.</p>")
-    return html_page(f"Tables à plusieurs — {hero}", STYLE + heading + meta + found, embed, script=SCRIPT)
+    return html_page(f"Tables à plusieurs — {hero}", STYLE + heading + meta + panel + found, embed,
+                     script=SCRIPT + (PANEL_SCRIPT if panel else ""))
