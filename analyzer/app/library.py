@@ -243,6 +243,9 @@ class Library:
         if solves is None:
             self.solves.on_done.append(lambda job: self.backups.schedule())
             self.solves.on_done.append(lambda job: self.compactions.start())
+            # Les études compressées remplacent ensuite leur copie dans la sauvegarde (plus petite).
+            self.compactions.on_done.append(self.backups.schedule)
+            self.backups.busy = self.compactions.busy
         self.reload()
 
     # --- chargement -------------------------------------------------------------

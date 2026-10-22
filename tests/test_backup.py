@@ -204,6 +204,47 @@ class BackupTest(unittest.TestCase):
         manager.shutdown()
         json.dumps(manager.view())
 
+    def test_auto_waits_for_compression(self):
+        # La sauvegarde automatique attend la fin de la compression des études, puis recopie l'étude compressée
+        # (plus petite) par-dessus l'ancienne ; AUTO_WAIT au plus.
+        dest = self.root / "Drive" / "Analyzer"
+        manager = app_backups.Backups()
+        manager.configure(str(dest), True, True)
+        study = self.home / "etudes" / "k1.etude"
+        compressing = [True]
+        manager.busy = lambda: compressing[0]
+        patches = [mock.patch.object(app_backups, name, value)
+                   for name, value in (("AUTO_DELAY", 0.05), ("AUTO_INTERVAL", 0), ("WAIT_STEP", 0.05))]
+        for patch in patches:
+            patch.start()
+        try:
+            manager.schedule()
+            time.sleep(0.4)
+            self.assertIsNone(backup.load_config()["last"])  # elle attend
+            study.write_text("y" * 400, encoding="utf-8")  # l'étude, compressée
+            compressing[0] = False
+            deadline = time.time() + 10
+            while not backup.load_config()["last"] and time.time() < deadline:
+                time.sleep(0.05)
+            while manager.running and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertEqual((dest / "etudes" / "k1.etude").stat().st_size, 400)
+            compressing[0] = True
+            with mock.patch.object(app_backups, "AUTO_WAIT", 0.2):  # une compression sans fin ne la bloque pas
+                last = backup.load_config()["last"]["t"]
+                save = dict(backup.load_config()["last"], t=last - 10)
+                backup.save_config(last=save)
+                manager.schedule()
+                while backup.load_config()["last"]["t"] == last - 10 and time.time() < deadline:
+                    time.sleep(0.05)
+            self.assertNotEqual(backup.load_config()["last"]["t"], last - 10)
+        finally:
+            for patch in patches:
+                patch.stop()
+            while manager.running:
+                time.sleep(0.05)
+            manager.shutdown()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,17 +1,20 @@
 """Sauvegardes lancées depuis l'application : une à la fois, en arrière-plan ; automatiques après les
-calculs si les réglages le demandent (au plus une toutes les AUTO_INTERVAL secondes)."""
+calculs et après la compression des études si les réglages le demandent (au plus une toutes les AUTO_INTERVAL
+secondes)."""
 from __future__ import annotations
 
 import shutil
 import threading
 import time
 import traceback
-from typing import Optional
+from typing import Callable, Optional
 
 from .. import backup
 
 AUTO_DELAY = 120          # secondes après la fin d'un calcul (d'autres suivent souvent)
 AUTO_INTERVAL = 15 * 60   # entre deux sauvegardes automatiques
+AUTO_WAIT = 2 * 3600      # au plus, une sauvegarde automatique attend la fin de la compression des études
+WAIT_STEP = 60
 
 
 class Backups:
@@ -22,6 +25,7 @@ class Backups:
         self.log: list[str] = []
         self.error: Optional[str] = None
         self.result: Optional[dict] = None
+        self.busy: Optional[Callable[[], bool]] = None  # vrai pendant la compression des études (compactions.py)
 
     def view(self) -> dict:
         config = backup.load_config()
@@ -58,7 +62,8 @@ class Backups:
             self.running = None
 
     def schedule(self) -> None:
-        """Après un calcul : sauvegarde automatique (si activée), regroupée avec les calculs qui suivent."""
+        """Après un calcul ou une compression d'études : sauvegarde automatique (si activée), regroupée avec les
+        calculs qui suivent."""
         config = backup.load_config()
         if not config["auto"] or not config["dest"]:
             return
@@ -67,9 +72,22 @@ class Backups:
                 return
             last = (config.get("last") or {}).get("t", 0)
             delay = max(AUTO_DELAY, last + AUTO_INTERVAL - time.time())
-            self._timer = threading.Timer(delay, self.start)
-            self._timer.daemon = True
-            self._timer.start()
+            self._arm(delay, None)
+
+    def _arm(self, delay: float, since: Optional[float]) -> None:
+        self._timer = threading.Timer(delay, self._auto, args=(since,))
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _auto(self, since: Optional[float]) -> None:
+        """La sauvegarde automatique attend que les études aient fini d'être compressées (AUTO_WAIT au plus) : sinon
+        une étude serait copiée deux fois, avant puis après sa compression."""
+        since = since or time.time()
+        if self.busy is not None and self.busy() and time.time() - since < AUTO_WAIT:
+            with self._lock:
+                self._arm(WAIT_STEP, since)
+            return
+        self.start()
 
     def shutdown(self) -> None:
         with self._lock:

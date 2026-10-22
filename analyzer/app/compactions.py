@@ -6,7 +6,7 @@ from __future__ import annotations
 import threading
 import time
 import traceback
-from typing import Optional
+from typing import Callable, Optional
 
 from .. import blobs
 from ..theory import postflop
@@ -23,6 +23,7 @@ class Compactions:
         self.done = 0                       # études compressées depuis le lancement
         self.saved = 0                      # octets gagnés depuis le lancement
         self.error: Optional[str] = None
+        self.on_done: list[Callable[[], None]] = []  # après un passage qui a compressé au moins une étude
 
     def ready(self) -> bool:
         """Le pont sait compresser (installé et à jour)."""
@@ -42,6 +43,7 @@ class Compactions:
 
     def _run(self) -> None:
         failed: set[str] = set()
+        before = self.done
         try:
             self._clean()
             while not self._stop.is_set():
@@ -66,6 +68,12 @@ class Compactions:
         finally:
             with self._lock:
                 self.running, self._again = None, False
+        if self.done > before:
+            for callback in self.on_done:
+                try:
+                    callback()
+                except Exception:  # noqa: BLE001 — un rappel ne doit pas arrêter la compression
+                    traceback.print_exc()
 
     @staticmethod
     def _clean() -> None:
@@ -79,6 +87,10 @@ class Compactions:
                     path.unlink()
             except OSError:
                 pass
+
+    def busy(self) -> bool:
+        """Une compression est en cours."""
+        return self.running is not None
 
     def view(self) -> dict:
         return {"ready": self.ready(), "running": self.running is not None, "pending": len(postflop.to_compact()),

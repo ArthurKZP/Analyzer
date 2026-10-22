@@ -1580,9 +1580,18 @@ python -m analyzer sauvegarde --restaurer   # sur un autre ordinateur : reprend 
   journal de l'entraîneur, fiches des études). Une archive datée par sauvegarde dans `archives/`, les 10 dernières
   gardées.
 - **Les études** (`--etudes`, option de la page) : les fichiers des arbres résolus (20 Mo à quelques
-  centaines de Mo chacun) dans `etudes/` ; seuls les nouveaux ou modifiés sont copiés ensuite.
-- **Automatique** : après une résolution, un choix de tailles ou une main analysée, au plus une fois par
-  quart d'heure.
+  centaines de Mo chacun) dans `etudes/` ; seuls les nouveaux ou modifiés sont copiés ensuite. Une étude
+  compressée (*Compression des études*) remplace son ancienne copie à la sauvegarde suivante : le dossier de
+  sauvegarde maigrit comme celui de l'ordinateur. Sur Google Drive (ou OneDrive, Dropbox), l'ancienne version
+  remplacée reste quelque temps dans l'historique des versions du fichier (30 jours sur Google Drive), et un
+  fichier effacé reste 30 jours dans la corbeille, qui compte dans ton espace tant qu'elle n'est pas vidée. Pour
+  libérer la place tout de suite : une fois la compression finie, efface le dossier `etudes/` de la sauvegarde,
+  vide la corbeille du Drive, puis relance une sauvegarde (elle recopie les études, compressées) — seulement si
+  cet ordinateur a toutes tes études (une étude faite sur un autre ordinateur et gardée dans cette sauvegarde
+  serait perdue). Les études supprimées dans Merlin restent dans la sauvegarde : la même manœuvre les retire.
+- **Automatique** : après une résolution, un choix de tailles, une main analysée ou une compression d'études, au
+  plus une fois par quart d'heure ; pendant une compression, elle attend qu'elle finisse (deux heures au plus),
+  pour ne pas copier deux fois la même étude.
 - **Restaurer** : la base de la dernière archive est **fusionnée** dans celle de l'ordinateur : ce qui manque est
   ajouté, ce qui est plus récent dans l'archive remplace l'ancien, rien n'est effacé ; puis les arbres d'études
   absents. Une archive plus ancienne, faite de fichiers (d'avant la base), est reprise de la même façon.

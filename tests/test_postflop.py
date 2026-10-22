@@ -379,8 +379,14 @@ class CompactionTest(unittest.TestCase):
             path.write_bytes(b"x")
         os.utime(stale, (time.time() - 2 * 3600,) * 2)
         jobs = Compactions()
+        calls = []
+        jobs.on_done.append(lambda: calls.append(1))
         jobs.start()
         view = self.wait(jobs)
+        deadline = time.time() + 5
+        while not calls and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(calls, [1])  # (la sauvegarde automatique suit)
         self.assertEqual((view["pending"], view["done"]), (1, 1))  # l'étude illisible reste telle quelle
         self.assertGreater(view["saved"], 0)
         self.assertIn("invalide", view["error"])

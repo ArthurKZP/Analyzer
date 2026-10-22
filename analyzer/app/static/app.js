@@ -1259,10 +1259,12 @@
       el('div', { class: 'box' },
         el('label', { class: 'field', for: 'bk-dest' }, 'Où sauvegarder', dest),
         el('label', { class: 'check' }, studies, el('span', {}, 'Avec les études (' + v.studies_count + ' sur cet ordinateur, '
-          + size(v.studies_size) + ') : seules les nouvelles sont copiées ensuite. Sans elles, l\'essentiel ne pèse que '
+          + size(v.studies_size) + ') : seules les nouvelles sont copiées ensuite, et celles qui viennent d\'être '
+          + 'compressées (leur copie, plus petite, remplace l\'ancienne). Sans elles, l\'essentiel ne pèse que '
           + size(v.essentials_size) + '.')),
         el('label', { class: 'check' }, auto, el('span', {}, 'Sauvegarder automatiquement après chaque calcul '
-          + '(résolution, choix des tailles, main analysée ; au plus une fois par quart d\'heure)')),
+          + '(résolution, choix des tailles, main analysée, compression des études ; au plus une fois par quart '
+          + 'd\'heure)')),
         el('div', { class: 'buttons' }, now, save, back),
         status),
       el('div', { class: 'box help' },
