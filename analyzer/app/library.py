@@ -148,6 +148,11 @@ def _digest_count() -> int:
     return db_analyses.count(db.current())
 
 
+def _situation_refs() -> str:
+    """Tes repères des résultats par situation (Paramètres), pour les caches du bilan (le tien et ceux des élèves)."""
+    return repr(settings.load()["situation_refs"])
+
+
 def _solver_key() -> tuple:
     """Ce qui change quand une main passe au solveur (analyse, résolution, étude) ou quand ses réglages changent : les
     pages qui montrent tes mains face au solveur sont recalculées."""
@@ -687,7 +692,11 @@ class Library:
                 "my_hands": len(self._all_hands) + len(self._all_ring),
                 "formats": {"HU": len(self._all_hands), "ring": len(self._all_ring)}, "plays": conf["formats"],
                 "coach": conf["coach"], "students": len(students.all_students()), "min_hands": conf["min_hands"],
-                "precision": self.solves.precision()[1], "period": periods.label(self.period)}
+                "precision": self.solves.precision()[1], "period": periods.label(self.period),
+                "situations": [(g.key, g.label) for g in situations.ORDER],
+                "situation_refs": {fmt: situations.references(fmt) for fmt in settings.FORMATS},
+                "situation_defaults": situations.DEFAULT_REFERENCES,
+                "situation_custom": conf["situation_refs"] is not None}
 
     def settings_page(self) -> str:
         return build_settings_page(self.settings_view())
@@ -888,7 +897,8 @@ class Library:
                                 extra_script=PANEL_SCRIPT if panel else "")
         kinds = self._kinds_key() if page in ("bilan", "stats", "preflop", "bluffs") else ()
         charts = stake_charts.revision()[2:] if page == "preflop" else ()
-        return self._cached(("self", page) + kinds + charts + tuple(sorted(filters.items())), build)
+        refs = (_situation_refs(),) if page == "bilan" else ()  # tes repères des résultats par situation
+        return self._cached(("self", page) + kinds + charts + refs + tuple(sorted(filters.items())), build)
 
     def _ring_overview(self) -> tuple[list, list]:
         """Tes stats aux tables à plusieurs (toutes ensemble) sur toutes tes mains, contre les réguliers et contre les
@@ -957,7 +967,8 @@ class Library:
                                                filters=filters, stats_href=self._stats_href(),
                                                situations=self._situations_html(ring_leaks.FORMAT, filters))
         filters = filters or {}
-        key = ("self", "bilan", "ring") + _theory_changes() + self._ring_kinds_key() + tuple(sorted(filters.items()))
+        key = (("self", "bilan", "ring", _situation_refs()) + _theory_changes() + self._ring_kinds_key()
+               + tuple(sorted(filters.items())))
         return self._cached(key, build)
 
     def _situations_html(self, fmt: str, filters: Optional[dict] = None) -> str:
@@ -969,7 +980,7 @@ class Library:
         kinds = self.kinds() if fmt == "HU" else self.ring_kinds()
         regulars = [name for name, info in kinds.items() if info["kind"] == "reg"]
         kept = gains.apply(hands, filters) if filters else hands
-        references = situations.RING_REFERENCES if fmt != "HU" else None
+        references = situations.references("HU" if fmt == "HU" else "ring")
         return situations_html(situations.build(kept, self.hero, regulars, references))
 
     def _stats_href(self) -> str:

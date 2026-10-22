@@ -29,6 +29,9 @@ STYLE = """
   border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
 .st-row button.link { border: none; background: none; color: var(--series-1); padding: 4px 0; text-decoration: underline; }
 .st-links li { margin: 4px 0; }
+table.st-refs input[type=number] { font: inherit; font-size: 14px; width: 6.5em; padding: 3px 6px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--page); color: var(--ink); text-align: right; }
+table.st-refs td.def { color: var(--muted); font-size: 12px; white-space: nowrap; }
 """
 
 SCRIPT = """
@@ -124,6 +127,23 @@ SCRIPT = """
       if (window.parent !== window) window.parent.location.hash = '#/references';
     });
   });
+  // Tes repères des résultats par situation : un nombre de bb/100 par situation et par format (vide : sans repère).
+  var refs = document.querySelector('[data-refs]');
+  if (refs) {
+    refs.querySelector('.st-refs-save').addEventListener('click', function () {
+      var value = { ring: {}, HU: {} }, bad = null;
+      refs.querySelectorAll('input[data-key]').forEach(function (input) {
+        var text = input.value.trim().replace(',', '.'), n = Number(text);
+        if (text && !isFinite(n)) bad = input;
+        value[input.dataset.fmt][input.dataset.key] = text ? n : null;
+      });
+      if (bad) { bad.focus(); status(refs, 'Un repère est un nombre de bb/100 (vide : sans repère).', true); return; }
+      send('/api/parametres', { situation_refs: value }, refs);
+    });
+    refs.querySelector('.st-refs-reset').addEventListener('click', function () {
+      send('/api/parametres', { situation_refs: null }, refs, function () { location.reload(); });
+    });
+  }
   var prec = document.querySelector('[data-precision]');
   if (prec) prec.addEventListener('change', function (e) {
     send('/api/precision', { precision: Number(e.target.value) }, prec);
@@ -234,6 +254,38 @@ leurs leaks à exploiter, et ce qui distingue leur value de leurs bluffs.</p>
 </div>"""
 
 
+def _refs_html(view: dict) -> str:
+    """Tes repères des résultats par situation (le bilan) : bb/100 dans la situation, aux tables à plusieurs et en
+    heads-up ; vide : sans repère (la comparaison se fait avec les réguliers du field)."""
+    def field(fmt: str, key: str) -> str:
+        value = view["situation_refs"][fmt].get(key)
+        shown = "" if value is None else f"{value:g}"
+        return (f'<td><input type="number" step="any" data-fmt="{fmt}" data-key="{escape(key)}" value="{shown}" '
+                f'aria-label="Repère en bb/100"></td>')
+
+    def default(key: str) -> str:  # (aucun repère par défaut en heads-up)
+        found = view["situation_defaults"]["ring"].get(key)
+        return f'<td class="def">{"–" if found is None else f"{found:+g}"}</td>'
+    rows = "".join(f"<tr><td>{escape(label)}</td>{field('ring', key)}{field('HU', key)}{default(key)}</tr>"
+                   for key, label in view["situations"])
+    state = "tes repères" if view["situation_custom"] else "les repères par défaut"
+    return f"""
+<h2>Repères des résultats par situation</h2>
+<div class="card st-box" data-refs>
+<p style="margin-top:0">Le winrate de référence dans chaque situation (bb/100 : bb pour 100 pots de la situation),
+auquel le bilan compare le tien (section « Tes résultats par situation », pour toi et tes élèves). En ce moment :
+{state}.</p>
+<div class="scroll"><table class="stats st-refs"><thead><tr><th>Situation</th><th>Tables à plusieurs</th>
+<th>Heads-up</th><th>Par défaut (tables à plusieurs)</th></tr></thead><tbody>{rows}</tbody></table></div>
+<div class="st-row" style="margin-top:10px"><button type="button" class="st-refs-save">Enregistrer les repères</button>
+<button type="button" class="link st-refs-reset">Revenir aux repères par défaut</button></div>
+<div class="st-status" aria-live="polite"></div>
+<p class="note">Une case vide : pas de repère pour cette situation, ton winrate s'y compare aux réguliers de ton
+field. PFR : le dernier relanceur préflop (l'attaquant), PFC : celui qui a payé (le défenseur) ; IP : en position après
+le flop.</p>
+</div>"""
+
+
 def _solver_html(view: dict) -> str:
     options = "".join(f'<option value="{t:g}"{" selected" if abs(t - view["precision"]) < 1e-9 else ""}>'
                       f'{num(t, 1)} % du pot</option>' for t in postflop.PRECISIONS)
@@ -254,6 +306,7 @@ def build_settings_page(view: dict, embed: bool = True) -> str:
 {_formats_html(view)}
 {_coach_html(view)}
 {_field_html(view)}
+{_refs_html(view)}
 {_solver_html(view)}
 <h2>Ailleurs</h2>
 <div class="card"><ul class="st-links">

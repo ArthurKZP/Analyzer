@@ -15,7 +15,7 @@ import math
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-from . import gains, ring_leaks
+from . import gains, ring_leaks, settings
 from .models import CALL, FOLD, RAISE, VOLUNTARY, Hand
 
 
@@ -54,11 +54,21 @@ OTHERS = tuple(Group(f"srp_{'ip' if ip else 'oop'}_{'pfr' if pfr else 'pfc'}_aut
                      f"SRP {'IP' if ip else 'OOP'} {'PFR' if pfr else 'PFC'} (autres positions)", "srp", ip, pfr)
                for ip, pfr in ((True, True), (False, True), (False, False), (True, False)))
 ORDER = GROUPS[:4] + OTHERS + GROUPS[4:]
-# Tes repères aux tables à plusieurs (« Wr moyen ») : le winrate dans la situation, en bb/100 (bb pour 100 pots).
+# Les repères par défaut aux tables à plusieurs (« Wr moyen ») : le winrate dans la situation, en bb/100 (bb pour 100
+# pots) ; aucun en heads-up. Les tiens se règlent dans les Paramètres (settings : situation_refs).
 RING_REFERENCES = {"srp_ip_pfr": 60, "srp_oop_pfr": 15, "srp_oop_pfc": -60, "srp_ip_pfc": -45, "3b_oop_pfc": -160,
                    "3b_ip_pfc": -115, "3b_ip_pfr": 250, "3b_oop_pfr": 150, "4b_pfr": 450, "4b_pfc": -360}
+DEFAULT_REFERENCES = {"ring": RING_REFERENCES, "HU": {}}
 MIN_POTS = 20      # pots minimum (toi) pour classer une situation parmi tes plus fortes ou tes plus faibles
 SMALL = 1000       # pots à deux en tout : en dessous, l'échantillon reste petit
+
+
+def references(table_format: str) -> dict[str, float]:
+    """Tes repères dans ce format (« HU », « ring ») : ceux des Paramètres, sinon ceux par défaut."""
+    chosen = (settings.load()["situation_refs"] or {}).get(table_format)
+    if chosen is None:
+        return dict(DEFAULT_REFERENCES.get(table_format, {}))
+    return {key: ref for key, ref in chosen.items() if ref is not None}
 
 
 @dataclass(frozen=True)

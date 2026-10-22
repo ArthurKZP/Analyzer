@@ -17,6 +17,8 @@ Gardés dans la base (réglage « parametres » du compte). Ils valent pour ton 
 - references : les joueurs de référence, [{"name": …, "pseudos": […]}] : un bon joueur dont tu as importé les
   historiques (ses pseudos y sont marqués comme héros) ; ses mains sortent de tes analyses et il est étudié à part
   (menu Joueurs de référence). Chaque pseudo n'appartient qu'à un joueur de référence.
+- situation_refs : tes repères des résultats par situation (le bilan, analyzer/situations.py), par format :
+  {"ring": {situation: bb/100 ou None}, "HU": {…}} ; None : les repères par défaut. Ils valent aussi pour tes élèves.
 """
 from __future__ import annotations
 
@@ -28,7 +30,8 @@ KEY = "parametres"
 FORMATS = ("HU", "ring")
 FORMAT_NAMES = {"HU": "Heads-up", "ring": "Tables à plusieurs"}
 DEFAULTS = {"hero": None, "hero_excluded": [], "hero_added": [], "coach": None, "formats": None, "min_hands": 50,
-            "references": []}
+            "references": [], "situation_refs": None}
+REF_RANGE = 10_000  # un repère de situation, en bb/100 : entre -REF_RANGE et REF_RANGE
 MIN_HANDS_RANGE = (10, 5000)
 MAX_NAME = 60      # caractères du nom
 MAX_PSEUDOS = 200  # pseudos retirés ou ajoutés
@@ -92,6 +95,26 @@ def _pseudos(value: object) -> list[str]:
     return sorted(set(value), key=str.lower)
 
 
+def _situation_refs(value: object) -> Optional[dict]:
+    """Les repères des résultats par situation : None (ceux par défaut), ou {format: {situation: bb/100 ou None}}."""
+    if value is None:
+        return None
+    from .situations import ORDER  # (le module des situations lit ces paramètres)
+    keys = {g.key for g in ORDER}
+    if not isinstance(value, dict) or not set(value) <= set(FORMATS):
+        raise ValueError("Repères : par format, heads-up ou tables à plusieurs.")
+    out = {}
+    for fmt, refs in value.items():
+        if not isinstance(refs, dict) or not set(refs) <= keys:
+            raise ValueError("Repère d'une situation inconnue.")
+        for ref in refs.values():
+            if ref is not None and (isinstance(ref, bool) or not isinstance(ref, (int, float))
+                                    or not -REF_RANGE <= ref <= REF_RANGE):
+                raise ValueError(f"Un repère est un nombre de bb/100, entre -{REF_RANGE} et {REF_RANGE}.")
+        out[fmt] = {k: refs[k] for k in sorted(refs)}
+    return out
+
+
 def check(changes: object) -> dict:
     """Les changements demandés, vérifiés ; ValueError sinon."""
     if not isinstance(changes, dict) or not changes or not set(changes) <= set(DEFAULTS):
@@ -103,6 +126,8 @@ def check(changes: object) -> dict:
                 value = _name(value, "Ton nom")
         elif key == "references":
             value = _references(value)
+        elif key == "situation_refs":
+            value = _situation_refs(value)
         elif key in ("hero_excluded", "hero_added"):
             value = _pseudos(value)
         elif key == "coach":

@@ -1,7 +1,10 @@
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
-from analyzer import situations
+from analyzer import settings, situations
+from analyzer.app.library import Library
 from analyzer.app.situations_page import situations_html
 from analyzer.models import BET, CHECK, FOLD
 from analyzer.parsers import load_hands
@@ -70,6 +73,36 @@ class SituationsTest(IsolatedHome):
             self.assertIn(text, page)
         self.assertNotIn('<th class="num">Repère</th>', situations_html(field))
         self.assertEqual(situations_html(situations.build([], "Hero", [])), "")
+
+
+    def test_references_in_settings(self):
+        """Tes repères se règlent dans les Paramètres (par format ; vide : sans repère) ; le bilan les suit."""
+        self.assertEqual(situations.references("ring"), situations.RING_REFERENCES)
+        self.assertEqual(situations.references("HU"), {})
+        for bad in ({"6max": {}}, {"ring": {"inconnue": 3}}, {"ring": {"4b_pfr": "450"}}, {"ring": {"4b_pfr": True}},
+                    {"ring": {"4b_pfr": 1e9}}, ["ring"]):
+            with self.assertRaises(ValueError, msg=bad):
+                settings.check({"situation_refs": bad})
+        with_refs = '<th class="num">Toi</th><th class="num">Repère</th><th class="num">Réguliers du field</th>'
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        shutil.copy(FIXTURE, Path(tmp.name) / "sample.txt")
+        lib = Library(tmp.name)
+        self.addCleanup(lib.solves.shutdown)
+        self.assertNotIn(with_refs, lib.self_page("bilan"))  # pas de repère en heads-up
+        page = lib.settings_page()
+        for text in ("Repères des résultats par situation", 'data-fmt="ring" data-key="4b_pfr" value="450"',
+                     'data-fmt="HU" data-key="4b_pfr" value=""', "les repères par défaut"):
+            self.assertIn(text, page)
+        lib.set_settings({"situation_refs": {"ring": {"4b_pfr": 400, "4b_pfc": None}, "HU": {"srp_ip_pfr": 35}}})
+        self.assertEqual(situations.references("ring"), {"4b_pfr": 400})
+        self.assertEqual(situations.references("HU"), {"srp_ip_pfr": 35})
+        bilan = lib.self_page("bilan")
+        self.assertIn(with_refs, bilan)  # le bilan suit tes repères
+        self.assertIn("tes repères", lib.settings_page())
+        lib.set_settings({"situation_refs": None})  # les repères par défaut, de nouveau
+        self.assertEqual(situations.references("ring"), situations.RING_REFERENCES)
+        self.assertNotIn(with_refs, lib.self_page("bilan"))
 
 
 if __name__ == "__main__":

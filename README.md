@@ -57,34 +57,34 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   situation** (les pots joués à deux au flop, rangés comme tes repères : SRP IP PFR (IP vs BB), SRP OOP PFR (SB vs
   BB), SRP OOP PFC (BB vs IP), SRP IP PFC (BB vs SB), les autres pots simples, puis 3B et 4B en PFR ou PFC ; PFR :
   le dernier relanceur préflop, PFC : celui qui a payé ; chacune dépliée par positions, « CO vs BB » ; ton winrate
-  dans la situation en bb/100, EV all-in, face à tes repères aux tables à plusieurs et aux réguliers de ton field,
-  et l'effet de l'écart sur ton winrate : là où tu es le plus faible et le plus fort), résultats par adversaire avec
-  recherche, filtre par type et tri par mains, résultat, bb/100, date ou nom (aux tables à plusieurs : mains
-  ensemble, pots disputés et ton résultat dans ces pots), pertes sans abattage (heads-up). Tout en haut, **Filtrer
-  tes gains** : par limite (NL500…), room, mois, moment du mois (début du 1er au 10, milieu du 11 au 20, fin) et
-  créneau horaire (nuit 0h–6h, matin, après-midi, soir 18h–24h, l'heure de tes historiques) ; seules les dimensions
-  où tes mains varient sont proposées, et le choix du format garde le filtre. Les tuiles, la courbe et les résultats
-  tous formats confondus suivent le filtre (tes stats et tes écarts restent sur toutes tes mains de la période) ;
-  *Tes gains en détail*, sous la courbe, compare valeur par valeur sur les mains que les autres filtres gardent :
-  une ligne par valeur, ses mains, une barre de son winrate centrée sur zéro (vert au-dessus, rouge en dessous)
-  traversée de sa marge du hasard à 95 %, et sa valeur en bb/100 ; les lignes de moins de 300 mains sont pâles et
-  hors de l'échelle (‹ › : la barre déborde). Le survol et *Les chiffres* donnent les bb, l'EV all-in et les euros ;
-  un clic sur une ligne l'applique. **Statistiques** : toutes tes stats et leurs repères, sur toutes tes mains,
-  contre les réguliers et contre les récréatifs (heads-up : au bouton, en BB, après le flop, abattage ; tables à
-  plusieurs : toutes positions confondues puis position par position, de 3 à 9 joueurs). **Leaks** : *À travailler*
-  (le Leakfinding, voir plus bas) et *Suivi dans le temps* (tes leaks période par période, avant et après le jour où
-  tu as commencé à les travailler, voir plus bas). **Préflop** : *Face à la théorie* et *Mains de départ* (ce que
-  rapporte chaque main, voir plus bas). *Face à la théorie* compare tes décisions préflop à la solution heads-up,
-  ou, aux tables à plusieurs (choix *Heads-up* / *Tables à plusieurs* en haut de la page), à tes charts avec les
-  mêmes cartes : un nœud par situation et positions (premier à parler, face à l'open de telle position, face au 3bet
-  après ton open), avec la grille de la stratégie, tes fréquences face aux charts et tes écarts main par main ; une
-  table sans charts à elle prend ceux du 6-max à même nombre de joueurs derrière, et les mains contre les récréatifs
-  sont exclues. **Mes mains** : *Bilan* (ce que le solveur dit de tes mains analysées, format par format, et
-  l'analyse à lancer sur toutes tes mains ou sur un format, voir « Face au solveur »), puis *Heads-up* (le
-  visualiseur de spots, voir plus bas) et *Tables à plusieurs* (tes coups à deux joueurs au flop), chacun ouvert sur
-  son panneau *Face au solveur* (ses mains analysées à parcourir, ses erreurs) et chaque main avec ce qu'en dit le
-  solveur (son EV théorique et l'EV perdue, ou *Résoudre*), filtres et tri compris. Un élève a les mêmes onglets
-  (*Bilan* avec ses courbes, *Statistiques*, *Leaks*, *Préflop*, *Ses mains*), plus *Importer*.
+  dans la situation en bb/100, EV all-in, face à tes repères (Paramètres) et aux réguliers de ton field, et l'effet
+  de l'écart sur ton winrate : là où tu es le plus faible et le plus fort), résultats par adversaire avec recherche,
+  filtre par type et tri par mains, résultat, bb/100, date ou nom (aux tables à plusieurs : mains ensemble, pots
+  disputés et ton résultat dans ces pots), pertes sans abattage (heads-up). Tout en haut, **Filtrer tes gains** :
+  par limite (NL500…), room, mois, moment du mois (début du 1er au 10, milieu du 11 au 20, fin) et créneau horaire
+  (nuit 0h–6h, matin, après-midi, soir 18h–24h, l'heure de tes historiques) ; seules les dimensions où tes mains
+  varient sont proposées, et le choix du format garde le filtre. Les tuiles, la courbe et les résultats tous formats
+  confondus suivent le filtre (tes stats et tes écarts restent sur toutes tes mains de la période) ; *Tes gains en
+  détail*, sous la courbe, compare valeur par valeur sur les mains que les autres filtres gardent : une ligne par
+  valeur, ses mains, une barre de son winrate centrée sur zéro (vert au-dessus, rouge en dessous) traversée de sa
+  marge du hasard à 95 %, et sa valeur en bb/100 ; les lignes de moins de 300 mains sont pâles et hors de l'échelle
+  (‹ › : la barre déborde). Le survol et *Les chiffres* donnent les bb, l'EV all-in et les euros ; un clic sur une
+  ligne l'applique. **Statistiques** : toutes tes stats et leurs repères, sur toutes tes mains, contre les réguliers
+  et contre les récréatifs (heads-up : au bouton, en BB, après le flop, abattage ; tables à plusieurs : toutes
+  positions confondues puis position par position, de 3 à 9 joueurs). **Leaks** : *À travailler* (le Leakfinding,
+  voir plus bas) et *Suivi dans le temps* (tes leaks période par période, avant et après le jour où tu as commencé à
+  les travailler, voir plus bas). **Préflop** : *Face à la théorie* et *Mains de départ* (ce que rapporte chaque
+  main, voir plus bas). *Face à la théorie* compare tes décisions préflop à la solution heads-up, ou, aux tables à
+  plusieurs (choix *Heads-up* / *Tables à plusieurs* en haut de la page), à tes charts avec les mêmes cartes : un
+  nœud par situation et positions (premier à parler, face à l'open de telle position, face au 3bet après ton open),
+  avec la grille de la stratégie, tes fréquences face aux charts et tes écarts main par main ; une table sans charts
+  à elle prend ceux du 6-max à même nombre de joueurs derrière, et les mains contre les récréatifs sont exclues.
+  **Mes mains** : *Bilan* (ce que le solveur dit de tes mains analysées, format par format, et l'analyse à lancer
+  sur toutes tes mains ou sur un format, voir « Face au solveur »), puis *Heads-up* (le visualiseur de spots, voir
+  plus bas) et *Tables à plusieurs* (tes coups à deux joueurs au flop), chacun ouvert sur son panneau *Face au
+  solveur* (ses mains analysées à parcourir, ses erreurs) et chaque main avec ce qu'en dit le solveur (son EV
+  théorique et l'EV perdue, ou *Résoudre*), filtres et tri compris. Un élève a les mêmes onglets (*Bilan* avec ses
+  courbes, *Statistiques*, *Leaks*, *Préflop*, *Ses mains*), plus *Importer*.
 - **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Statistiques* (leurs stats globales à
   chaque niveau de limites, par position, et ce que leurs écarts changent pour ton jeu, voir plus bas), puis
   *Réguliers* et *Récréatifs*, chacun en trois sous-onglets, en heads-up ou aux tables à plusieurs et par limites
@@ -1155,6 +1155,10 @@ ses formats) :
 - **Coaching** : *Je suis coach* montre les **Élèves** dans le menu, *Je ne coache pas* les cache ; par défaut, ils
   apparaissent dès que tu as un élève.
 - **Étude du field** : le nombre de mains minimum contre un adversaire pour qu'il ait sa fiche (50 par défaut).
+- **Repères des résultats par situation** : le winrate de référence (bb/100 dans la situation) auquel le bilan
+  compare le tien, situation par situation (SRP IP PFR (IP vs BB)… 4B PFC), aux tables à plusieurs et en heads-up ;
+  une case vide : pas de repère, la comparaison se fait avec les réguliers de ton field. Par défaut, des repères aux
+  tables à plusieurs seulement ; *Revenir aux repères par défaut* les rétablit. Ils valent aussi pour tes élèves.
 - **Solveur** : la précision des résolutions (la même qu'à côté de *Résoudre* dans l'explorateur).
 
 L'onglet *Joueurs et alias* : le type de chaque adversaire (régulier ou récréatif) et les alias (voir *Application*).
