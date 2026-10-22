@@ -54,36 +54,37 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   plus importants** aux repères avant l'essentiel de tes stats (VPIP, PFR, open, 3bet, fold face au 3bet, abattage,
   gain à l'abattage et WWSF, la part des flops vus que tu gagnes ; aux tables à plusieurs, sur toutes tes mains,
   contre les réguliers et contre les récréatifs, puis **par position**, de l'UTG à la BB), **tes résultats par
-  situation** (les pots joués à deux au flop : SRP, pot 3bet « P3B » ou 4bet « P4B », en position « IP » ou non
-  « OOP », attaquant ou défenseur, puis par positions, « CO vs BB » ; en bb par pot, EV all-in, face aux réguliers
-  de ton field dans la même situation, et l'écart ramené à ton winrate : là où tu gagnes et perds le plus face à
-  eux), résultats par adversaire avec recherche, filtre par type et tri par mains, résultat, bb/100, date ou nom
-  (aux tables à plusieurs : mains ensemble, pots disputés et ton résultat dans ces pots), pertes sans abattage
-  (heads-up). Tout en haut, **Filtrer tes gains** : par limite (NL500…), room, mois, moment du mois (début du 1er au
-  10, milieu du 11 au 20, fin) et créneau horaire (nuit 0h–6h, matin, après-midi, soir 18h–24h, l'heure de tes
-  historiques) ; seules les dimensions où tes mains varient sont proposées, et le choix du format garde le filtre.
-  Les tuiles, la courbe et les résultats tous formats confondus suivent le filtre (tes stats et tes écarts restent
-  sur toutes tes mains de la période) ; *Tes gains en détail*, sous la courbe, compare valeur par valeur sur les
-  mains que les autres filtres gardent : une ligne par valeur, ses mains, une barre de son winrate centrée sur zéro
-  (vert au-dessus, rouge en dessous) traversée de sa marge du hasard à 95 %, et sa valeur en bb/100 ; les lignes de
-  moins de 300 mains sont pâles et hors de l'échelle (‹ › : la barre déborde). Le survol et *Les chiffres* donnent
-  les bb, l'EV all-in et les euros ; un clic sur une ligne l'applique. **Statistiques** : toutes tes stats et leurs
-  repères, sur toutes tes mains, contre les réguliers et contre les récréatifs (heads-up : au bouton, en BB, après
-  le flop, abattage ; tables à plusieurs : toutes positions confondues puis position par position, de 3 à 9
-  joueurs). **Leaks** : *À travailler* (le Leakfinding, voir plus bas) et *Suivi dans le temps* (tes leaks période
-  par période, avant et après le jour où tu as commencé à les travailler, voir plus bas). **Préflop** : *Face à la
-  théorie* et *Mains de départ* (ce que rapporte chaque main, voir plus bas). *Face à la théorie* compare tes
-  décisions préflop à la solution heads-up, ou, aux tables à plusieurs (choix *Heads-up* / *Tables à plusieurs* en
-  haut de la page), à tes charts avec les mêmes cartes : un nœud par situation et positions (premier à parler, face
-  à l'open de telle position, face au 3bet après ton open), avec la grille de la stratégie, tes fréquences face aux
-  charts et tes écarts main par main ; une table sans charts à elle prend ceux du 6-max à même nombre de joueurs
-  derrière, et les mains contre les récréatifs sont exclues. **Mes mains** : *Bilan* (ce que le solveur dit de tes
-  mains analysées, format par format, et l'analyse à lancer sur toutes tes mains ou sur un format, voir « Face au
-  solveur »), puis *Heads-up* (le visualiseur de spots, voir plus bas) et *Tables à plusieurs* (tes coups à deux
-  joueurs au flop), chacun ouvert sur son panneau *Face au solveur* (ses mains analysées à parcourir, ses erreurs)
-  et chaque main avec ce qu'en dit le solveur (son EV théorique et l'EV perdue, ou *Résoudre*), filtres et tri
-  compris. Un élève a les mêmes onglets (*Bilan* avec ses courbes, *Statistiques*, *Leaks*, *Préflop*, *Ses mains*),
-  plus *Importer*.
+  situation** (les pots joués à deux au flop, rangés comme tes repères : SRP IP PFR (IP vs BB), SRP OOP PFR (SB vs
+  BB), SRP OOP PFC (BB vs IP), SRP IP PFC (BB vs SB), les autres pots simples, puis 3B et 4B en PFR ou PFC ; PFR :
+  le dernier relanceur préflop, PFC : celui qui a payé ; chacune dépliée par positions, « CO vs BB » ; ton winrate
+  dans la situation en bb/100, EV all-in, face à tes repères aux tables à plusieurs et aux réguliers de ton field,
+  et l'effet de l'écart sur ton winrate : là où tu es le plus faible et le plus fort), résultats par adversaire avec
+  recherche, filtre par type et tri par mains, résultat, bb/100, date ou nom (aux tables à plusieurs : mains
+  ensemble, pots disputés et ton résultat dans ces pots), pertes sans abattage (heads-up). Tout en haut, **Filtrer
+  tes gains** : par limite (NL500…), room, mois, moment du mois (début du 1er au 10, milieu du 11 au 20, fin) et
+  créneau horaire (nuit 0h–6h, matin, après-midi, soir 18h–24h, l'heure de tes historiques) ; seules les dimensions
+  où tes mains varient sont proposées, et le choix du format garde le filtre. Les tuiles, la courbe et les résultats
+  tous formats confondus suivent le filtre (tes stats et tes écarts restent sur toutes tes mains de la période) ;
+  *Tes gains en détail*, sous la courbe, compare valeur par valeur sur les mains que les autres filtres gardent :
+  une ligne par valeur, ses mains, une barre de son winrate centrée sur zéro (vert au-dessus, rouge en dessous)
+  traversée de sa marge du hasard à 95 %, et sa valeur en bb/100 ; les lignes de moins de 300 mains sont pâles et
+  hors de l'échelle (‹ › : la barre déborde). Le survol et *Les chiffres* donnent les bb, l'EV all-in et les euros ;
+  un clic sur une ligne l'applique. **Statistiques** : toutes tes stats et leurs repères, sur toutes tes mains,
+  contre les réguliers et contre les récréatifs (heads-up : au bouton, en BB, après le flop, abattage ; tables à
+  plusieurs : toutes positions confondues puis position par position, de 3 à 9 joueurs). **Leaks** : *À travailler*
+  (le Leakfinding, voir plus bas) et *Suivi dans le temps* (tes leaks période par période, avant et après le jour où
+  tu as commencé à les travailler, voir plus bas). **Préflop** : *Face à la théorie* et *Mains de départ* (ce que
+  rapporte chaque main, voir plus bas). *Face à la théorie* compare tes décisions préflop à la solution heads-up,
+  ou, aux tables à plusieurs (choix *Heads-up* / *Tables à plusieurs* en haut de la page), à tes charts avec les
+  mêmes cartes : un nœud par situation et positions (premier à parler, face à l'open de telle position, face au 3bet
+  après ton open), avec la grille de la stratégie, tes fréquences face aux charts et tes écarts main par main ; une
+  table sans charts à elle prend ceux du 6-max à même nombre de joueurs derrière, et les mains contre les récréatifs
+  sont exclues. **Mes mains** : *Bilan* (ce que le solveur dit de tes mains analysées, format par format, et
+  l'analyse à lancer sur toutes tes mains ou sur un format, voir « Face au solveur »), puis *Heads-up* (le
+  visualiseur de spots, voir plus bas) et *Tables à plusieurs* (tes coups à deux joueurs au flop), chacun ouvert sur
+  son panneau *Face au solveur* (ses mains analysées à parcourir, ses erreurs) et chaque main avec ce qu'en dit le
+  solveur (son EV théorique et l'EV perdue, ou *Résoudre*), filtres et tri compris. Un élève a les mêmes onglets
+  (*Bilan* avec ses courbes, *Statistiques*, *Leaks*, *Préflop*, *Ses mains*), plus *Importer*.
 - **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Statistiques* (leurs stats globales à
   chaque niveau de limites, par position, et ce que leurs écarts changent pour ton jeu, voir plus bas), puis
   *Réguliers* et *Récréatifs*, chacun en trois sous-onglets, en heads-up ou aux tables à plusieurs et par limites
@@ -1714,8 +1715,8 @@ analyzer/
   selfreport.py        « Mon jeu » : ton bilan contre tous tes adversaires
   replay.py            une main jouée pour le replayer (static/replayer.*)
   gains.py             tes gains par limite, room, mois, moment du mois et créneau horaire (le filtre du bilan)
-  situations.py        tes résultats par situation (SRP, P3B, P4B ; IP ou OOP ; attaquant ou défenseur ; positions),
-                       face aux réguliers de ton field
+  situations.py        tes résultats par situation (SRP, 3B, 4B ; IP ou OOP ; PFR ou PFC ; positions), face à tes
+                       repères (RING_REFERENCES) et aux réguliers de ton field
   theory/              préflop vs solveur : solution (data/), comparaison (preflop.py), page (page.py),
                        arbre préflop pour l'explorateur (preflop_tree.py), plan de jeu suggéré
                        (coach.py), profil d'un adversaire réel et node-lock, tailles et volume de mise

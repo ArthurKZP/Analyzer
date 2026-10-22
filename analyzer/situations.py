@@ -1,12 +1,14 @@
 """Tes résultats par situation : les pots joués à deux au flop après une ligne préflop simple (open, 3bet, 4bet, puis
-call), rangés par type de pot (SRP, pot 3bet « P3B », pot 4bet « P4B »), par place après le flop (en position « IP »
-ou non « OOP ») et par rôle (attaquant : le dernier relanceur préflop ; défenseur : celui qui a payé), puis par
-positions des deux joueurs (« CO vs BB »), en heads-up comme aux tables à plusieurs.
+call), rangés comme tes repères : type de pot (SRP, 3B : pot 3bet, 4B : pot 4bet), place après le flop (IP : en
+position, OOP : hors de position), rôle (PFR : le dernier relanceur préflop, l'attaquant ; PFC : celui qui a payé, le
+défenseur) et, pour les pots simples, les positions (« SRP IP PFR (IP vs BB) »), puis le détail par positions des deux
+joueurs (« CO vs BB »), en heads-up comme aux tables à plusieurs.
 
-Pour chacune : tes pots, ton résultat par pot en EV all-in (le hasard des tapis retiré) et sa marge à 95 %, ce qu'elle
-pèse dans ton winrate (bb/100 de toutes tes mains) ; comparé aux réguliers de ton field dans la même situation (leurs
-pots dans tes historiques, contre toi ou contre d'autres) et, quand il y en a, à un repère (REFERENCES). L'écart avec
-eux, multiplié par la fréquence de la situation, dit où tu gagnes ou perds le plus face à eux (bb/100)."""
+Pour chacune : tes pots et ton winrate dans la situation (bb/100 : bb pour 100 pots de cette situation, en EV all-in,
+le hasard des tapis retiré), avec sa marge à 95 %, face à ton repère (REFERENCES, aux tables à plusieurs) et aux
+réguliers de ton field dans la même situation (leurs pots dans tes historiques, contre toi ou contre d'autres). L'écart,
+multiplié par la fréquence de la situation, dit ce qu'elle te fait gagner ou perdre sur ton winrate (bb/100 de toutes
+tes mains) : où tu es le plus fort et le plus faible."""
 from __future__ import annotations
 
 import math
@@ -16,19 +18,47 @@ from typing import Iterable, Optional
 from . import gains, ring_leaks
 from .models import CALL, FOLD, RAISE, VOLUNTARY, Hand
 
-KINDS = {"srp": "SRP", "3bet": "P3B", "4bet": "P4B"}
-# Les catégories, des plus jouées aux plus rares : (type de pot, en position ?, attaquant ?)
-CATEGORIES = (
-    ("srp", True, True), ("srp", False, True), ("srp", False, False), ("srp", True, False),
-    ("3bet", False, True), ("3bet", True, False), ("3bet", True, True), ("3bet", False, False),
-    ("4bet", False, False), ("4bet", False, True), ("4bet", True, False), ("4bet", True, True),
+
+@dataclass(frozen=True)
+class Group:
+    """Une situation : type de pot, place après le flop (None : l'une ou l'autre), rôle, et au besoin tes positions
+    et celles de l'adversaire (vide : toutes)."""
+    key: str
+    label: str
+    kind: str
+    ip: Optional[bool]
+    attacker: bool
+    positions: tuple = ()
+    versus: tuple = ()
+
+    def matches(self, spot: "Spot") -> bool:
+        return (spot.kind == self.kind and self.ip in (None, spot.ip) and spot.attacker == self.attacker
+                and (not self.positions or spot.position in self.positions)
+                and (not self.versus or spot.versus in self.versus))
+
+
+GROUPS = (
+    Group("srp_ip_pfr", "SRP IP PFR (IP vs BB)", "srp", True, True, versus=("BB",)),
+    Group("srp_oop_pfr", "SRP OOP PFR (SB vs BB)", "srp", False, True, ("SB",), ("BB",)),
+    Group("srp_oop_pfc", "SRP OOP PFC (BB vs IP)", "srp", False, False, ("BB",)),
+    Group("srp_ip_pfc", "SRP IP PFC (BB vs SB)", "srp", True, False, ("BB",), ("SB",)),
+    Group("3b_oop_pfc", "3B OOP PFC", "3bet", False, False),
+    Group("3b_ip_pfc", "3B IP PFC", "3bet", True, False),
+    Group("3b_ip_pfr", "3B IP PFR", "3bet", True, True),
+    Group("3b_oop_pfr", "3B OOP PFR", "3bet", False, True),
+    Group("4b_pfr", "4B PFR", "4bet", None, True),
+    Group("4b_pfc", "4B PFC", "4bet", None, False),
 )
-# Repères (bb par pot, EV all-in) d'un régulier gagnant, par catégorie (« SRP IP attaquant ») ou par situation
-# (« SRP IP attaquant · CO vs BB ») ; vide tant qu'aucun repère n'est choisi : la comparaison se fait avec le field.
-REFERENCES: dict[str, float] = {}
+# Les pots simples hors des positions des situations ci-dessus (le bouton contre la SB, le CO payé par le bouton…).
+OTHERS = tuple(Group(f"srp_{'ip' if ip else 'oop'}_{'pfr' if pfr else 'pfc'}_autres",
+                     f"SRP {'IP' if ip else 'OOP'} {'PFR' if pfr else 'PFC'} (autres positions)", "srp", ip, pfr)
+               for ip, pfr in ((True, True), (False, True), (False, False), (True, False)))
+ORDER = GROUPS[:4] + OTHERS + GROUPS[4:]
+# Tes repères aux tables à plusieurs (« Wr moyen ») : le winrate dans la situation, en bb/100 (bb pour 100 pots).
+RING_REFERENCES = {"srp_ip_pfr": 60, "srp_oop_pfr": 15, "srp_oop_pfc": -60, "srp_ip_pfc": -45, "3b_oop_pfc": -160,
+                   "3b_ip_pfc": -115, "3b_ip_pfr": 250, "3b_oop_pfr": 150, "4b_pfr": 450, "4b_pfc": -360}
 MIN_POTS = 20      # pots minimum (toi) pour classer une situation parmi tes plus fortes ou tes plus faibles
 SMALL = 1000       # pots à deux en tout : en dessous, l'échantillon reste petit
-Z95 = 1.96
 
 
 @dataclass(frozen=True)
@@ -36,27 +66,21 @@ class Spot:
     """La situation d'un joueur dans un pot à deux au flop."""
     kind: str        # srp, 3bet, 4bet
     ip: bool         # en position après le flop
-    attacker: bool   # le dernier relanceur préflop
+    attacker: bool   # le dernier relanceur préflop (PFR)
     position: str
     versus: str
 
     @property
-    def category(self) -> tuple[str, bool, bool]:
-        return self.kind, self.ip, self.attacker
+    def group(self) -> Group:
+        return next(g for g in GROUPS + OTHERS if g.matches(self))
 
     @property
     def label(self) -> str:
-        return category_label(self.category)
+        return self.group.label
 
     @property
     def pair(self) -> str:
         return f"{self.position} vs {self.versus}"
-
-
-def category_label(category: tuple[str, bool, bool]) -> str:
-    """« SRP IP attaquant », « P3B OOP défenseur »."""
-    kind, ip, attacker = category
-    return f"{KINDS[kind]} {'IP' if ip else 'OOP'} {'attaquant' if attacker else 'défenseur'}"
 
 
 def _hu_pot(hand: Hand) -> Optional[ring_leaks.Pot]:
@@ -98,77 +122,80 @@ def spot_of(hand: Hand, player: str) -> Optional[Spot]:
 
 @dataclass
 class Line:
-    """Une situation (ou une catégorie : pair vide) : tes résultats, ceux des réguliers de ton field, l'écart."""
-    category: tuple[str, bool, bool]
+    """Une situation (ou, pair rempli, ses positions) : tes résultats, ton repère, ceux des réguliers de ton field."""
+    group: Group
     pair: str
     mine: gains.Row
     field: gains.Row
-    hands: int  # toutes tes mains (pour ramener l'écart à 100 mains)
+    hands: int                         # toutes tes mains (pour ramener l'écart à 100 mains)
+    reference: Optional[float] = None  # ton repère de la situation (bb/100 dans la situation)
 
     @property
     def label(self) -> str:
-        return category_label(self.category) + (f" · {self.pair}" if self.pair else "")
+        return self.group.label + (f" · {self.pair}" if self.pair else "")
 
     @property
-    def per_pot(self) -> Optional[float]:
-        return self.mine.ev_bb / self.mine.hands if self.mine.hands else None
+    def winrate(self) -> Optional[float]:
+        """Ton winrate dans la situation : bb pour 100 pots, en EV all-in."""
+        return 100 * self.mine.ev_bb / self.mine.hands if self.mine.hands else None
 
     @property
-    def field_per_pot(self) -> Optional[float]:
-        return self.field.ev_bb / self.field.hands if self.field.hands else None
+    def field_winrate(self) -> Optional[float]:
+        return 100 * self.field.ev_bb / self.field.hands if self.field.hands else None
 
     @property
     def margin(self) -> Optional[float]:
-        """La marge du hasard à 95 % sur ton résultat par pot."""
-        return None if self.mine.margin is None else self.mine.margin / 100
+        """La marge du hasard à 95 % sur ton winrate dans la situation (bb/100)."""
+        return self.mine.margin
 
     @property
-    def weight(self) -> Optional[float]:
-        """Ce que la situation pèse dans ton winrate : ton résultat (EV all-in) pour 100 de toutes tes mains."""
-        return 100 * self.mine.ev_bb / self.hands if self.hands else None
+    def base(self) -> Optional[float]:
+        """Ce à quoi ton winrate se compare : ton repère, sinon les réguliers du field."""
+        return self.reference if self.reference is not None else self.field_winrate
 
     @property
     def gap(self) -> Optional[float]:
-        """Ton résultat par pot moins celui des réguliers du field."""
-        if self.per_pot is None or self.field_per_pot is None:
-            return None
-        return self.per_pot - self.field_per_pot
+        """Ton winrate dans la situation moins le repère (ou celui des réguliers du field), en bb/100."""
+        return None if self.winrate is None or self.base is None else self.winrate - self.base
 
     @property
     def impact(self) -> Optional[float]:
-        """L'écart avec eux ramené à toutes tes mains (bb/100) : ce que tu gagnes (+) ou perds (−) de plus qu'eux."""
-        return None if self.gap is None or not self.hands else self.gap * 100 * self.mine.hands / self.hands
+        """L'écart ramené à toutes tes mains (bb/100) : ce que la situation te fait gagner (+) ou perdre (−) sur ton
+        winrate par rapport au repère."""
+        return None if self.gap is None or not self.hands else self.gap * self.mine.hands / self.hands
+
+    @property
+    def weight(self) -> Optional[float]:
+        """Ce que la situation apporte à ton winrate : ton résultat (EV all-in) pour 100 de toutes tes mains."""
+        return 100 * self.mine.ev_bb / self.hands if self.hands else None
 
     @property
     def clear(self) -> bool:
-        """L'écart sort de la marge du hasard (la tienne et la leur, à 95 %)."""
-        if self.gap is None or self.mine.margin is None or self.field.margin is None:
+        """L'écart sort de la marge du hasard à 95 % (la tienne, et celle du field sans repère)."""
+        if self.gap is None or self.mine.margin is None:
             return False
-        return abs(self.gap) > math.hypot(self.mine.margin, self.field.margin) / 100
-
-    @property
-    def reference(self) -> Optional[float]:
-        return REFERENCES.get(self.label)
+        if self.reference is not None:
+            return abs(self.gap) > self.mine.margin
+        return self.field.margin is not None and abs(self.gap) > math.hypot(self.mine.margin, self.field.margin)
 
 
 @dataclass
 class Report:
     hands: int
     pots: int
-    categories: list[Line]
-    lines: dict[tuple, list[Line]]  # catégorie -> ses situations (positions)
+    groups: list[Line]
+    lines: dict[str, list[Line]]  # situation (Group.key) -> ses positions
+    references: bool = False      # avec tes repères
 
     def ranked(self) -> list[Line]:
-        """Les situations assez jouées (MIN_POTS), de celle où tu gagnes le plus par rapport au field à celle où tu
-        perds le plus (impact) ; les catégories quand aucune situation n'est assez jouée."""
-        found = [x for rows in self.lines.values() for x in rows if x.mine.hands >= MIN_POTS and x.impact is not None]
-        if not found:
-            found = [x for x in self.categories if x.mine.hands >= MIN_POTS and x.impact is not None]
+        """Les situations assez jouées (MIN_POTS), de celle qui te fait gagner le plus par rapport au repère (ou au
+        field) à celle qui te fait perdre le plus (impact)."""
+        found = [x for x in self.groups if x.mine.hands >= MIN_POTS and x.impact is not None]
         return sorted(found, key=lambda x: -x.impact)
 
 
 def _rows(hands: Iterable[Hand], players: set[str]) -> dict[tuple, gains.Row]:
-    """Les résultats de ces joueurs par (catégorie, positions) et par catégorie (positions : « »)."""
+    """Les résultats de ces joueurs par (situation, positions) et par situation (positions : « »)."""
     out: dict[tuple, gains.Row] = {}
     for h in hands:
         pot = pot_of(h) if h.bb else None
@@ -178,7 +205,7 @@ def _rows(hands: Iterable[Hand], players: set[str]) -> dict[tuple, gains.Row]:
             if player not in players:
                 continue
             spot = spot_of(h, player)
-            for key in ((spot.category, spot.pair), (spot.category, "")):
+            for key in ((spot.group.key, spot.pair), (spot.group.key, "")):
                 row = out.get(key)
                 if row is None:
                     row = out[key] = gains.Row(key[1], key[1])
@@ -186,19 +213,23 @@ def _rows(hands: Iterable[Hand], players: set[str]) -> dict[tuple, gains.Row]:
     return out
 
 
-def build(hands: list[Hand], hero: str, regulars: Iterable[str]) -> Report:
-    """Tes résultats par situation, face à ceux des réguliers de ton field (regulars : leurs noms) dans ces mains."""
+def build(hands: list[Hand], hero: str, regulars: Iterable[str],
+          references: Optional[dict[str, float]] = None) -> Report:
+    """Tes résultats par situation, face à tes repères (references : Group.key -> bb/100 dans la situation) et à ceux
+    des réguliers de ton field (regulars : leurs noms) dans ces mains."""
+    references = references or {}
     mine = gains.mine(hands, hero)
     rows = _rows(mine, {hero})
     field = _rows(hands, set(regulars) - {hero})
     total = len(mine)
     empty = lambda key: gains.Row(key[1], key[1])  # noqa: E731
-    categories, lines = [], {}
-    for category in CATEGORIES:
-        key = (category, "")
+    groups, lines = [], {}
+    for group in ORDER:
+        key = (group.key, "")
         if key not in rows:
             continue
-        categories.append(Line(category, "", rows[key], field.get(key) or empty(key), total))
-        pairs = sorted((k for k in rows if k[0] == category and k[1]), key=lambda k: -rows[k].hands)
-        lines[category] = [Line(category, k[1], rows[k], field.get(k) or empty(k), total) for k in pairs]
-    return Report(total, sum(x.mine.hands for x in categories), categories, lines)
+        ref = references.get(group.key)
+        groups.append(Line(group, "", rows[key], field.get(key) or empty(key), total, ref))
+        pairs = sorted((k for k in rows if k[0] == group.key and k[1]), key=lambda k: -rows[k].hands)
+        lines[group.key] = [Line(group, k[1], rows[k], field.get(k) or empty(k), total, ref) for k in pairs]
+    return Report(total, sum(x.mine.hands for x in groups), groups, lines, bool(references))

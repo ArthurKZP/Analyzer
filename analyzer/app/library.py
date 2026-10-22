@@ -961,15 +961,16 @@ class Library:
         return self._cached(key, build)
 
     def _situations_html(self, fmt: str, filters: Optional[dict] = None) -> str:
-        """Tes résultats par situation dans ce format (situations.build), face aux réguliers de ton field ; filters :
-        le filtre des gains du bilan, sur tes mains comme sur les leurs."""
+        """Tes résultats par situation dans ce format (situations.build), face à tes repères (aux tables à plusieurs)
+        et aux réguliers de ton field ; filters : le filtre des gains du bilan, sur tes mains comme sur les leurs."""
         if not self.hero:
             return ""
         hands = self.hands if fmt == "HU" else self.ring
         kinds = self.kinds() if fmt == "HU" else self.ring_kinds()
         regulars = [name for name, info in kinds.items() if info["kind"] == "reg"]
         kept = gains.apply(hands, filters) if filters else hands
-        return situations_html(situations.build(kept, self.hero, regulars))
+        references = situations.RING_REFERENCES if fmt != "HU" else None
+        return situations_html(situations.build(kept, self.hero, regulars, references))
 
     def _stats_href(self) -> str:
         """L'onglet de toutes tes stats, depuis le bilan (rien pour un joueur de référence : pas d'onglet)."""
