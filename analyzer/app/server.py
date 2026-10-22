@@ -282,7 +282,8 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 3 and parts[0] == "p":
                 return self._html(library.player_page(parts[1], parts[2]))
             if parts == ["etudes"]:
-                return self._html(build_studies_page(embed=True, rset=self._study_set()))
+                return self._html(build_studies_page(embed=True, rset=self._study_set(),
+                                                     compaction=library.compactions.view()))
             if parts == ["etudes", "plan"]:  # (« ?limites=micro » : le field de ce niveau)
                 return self._html(library.plan_page(self._stakes()))
             if parts == ["api", "plan"]:
@@ -295,7 +296,8 @@ class Handler(BaseHTTPRequestHandler):
                 view = library.coach.view(parts[2])
                 return self._json(view) if view else self._error(404, "Conversation inconnue.")
             if len(parts) == 2 and parts[0] == "etudes":
-                return self._html(build_studies_page(embed=True, section=parts[1], rset=self._study_set()))
+                return self._html(build_studies_page(embed=True, section=parts[1], rset=self._study_set(),
+                                                     compaction=library.compactions.view()))
             if parts == ["entraineur"]:
                 return self._html((STATIC / "trainer.html").read_text(encoding="utf-8"))
             if parts == ["entraineur", "bluffcatch"]:  # payer ou coucher, sur tes mains jouées
@@ -966,6 +968,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"{NAME} est ouvert sur {url}  (Ctrl+C pour arrêter)", flush=True)
     if not args.sans_navigateur:
         webbrowser.open(url)
+    library.compactions.start()  # les études pas encore compressées, en arrière-plan
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -973,6 +976,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     finally:
         library.solves.shutdown()
         library.backups.shutdown()
+        library.compactions.shutdown()
         server.server_close()
     return 0
 

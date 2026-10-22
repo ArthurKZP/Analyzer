@@ -1,8 +1,9 @@
 //! Pont entre Analyzer et le moteur de GTOpen : résout un spot postflop, suit la ligne jouée et,
 //! en mode session, répond ensuite aux demandes de navigation dans l'arbre résolu.
 //!
-//! Usage : analyzer-solve requete.json [--save etude.gz] [--serve] > resultat.json
-//!         analyzer-solve --load etude.gz [--serve] > resultat.json
+//! Usage : analyzer-solve requete.json [--save etude.etude] [--serve] > resultat.json
+//!         analyzer-solve --load etude.etude [--serve] > resultat.json
+//!         analyzer-solve --compacter etude.etude
 //!
 //! Requête :
 //!   {"spot": <SpotConfig GTOpen>, "line": [étapes], "max_iterations": 300,
@@ -38,7 +39,8 @@
 //!
 //! Une étude (--save) garde l'arbre résolu sur disque sous une forme compacte : la requête, puis la
 //! stratégie moyenne de chaque nœud sur 8 bits (sans la dernière action, qui s'en déduit), le tout
-//! compressé. --load la recharge en quelques secondes, sans recalculer, pour naviguer à nouveau.
+//! compressé sans perte (etude.rs : gzip rapide à l'enregistrement, puis xz avec --compacter, environ
+//! 45 % plus petit). --load la recharge en quelques secondes, sans recalculer, pour naviguer à nouveau.
 //!
 //! analyzer-solve --lot lot.json : résout une série de variantes (sous-jeux pour le choix des tailles),
 //! en parallèle, sans rien garder ; une ligne JSON par variante, dans l'ordre où elles finissent :
@@ -60,9 +62,9 @@
 //! carte NVIDIA via le moteur CUDA de GTOpen, et revient au processeur si la carte n'est pas utilisable.
 
 mod arbre;
+mod etude;
 mod profil;
 
-use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::{Deserialize, Serialize};
@@ -586,14 +588,13 @@ fn follow_line(solver: &Solver, line: &[Step]) -> (Vec<Decision>, Option<String>
     (decisions, None)
 }
 
-const STUDY_MAGIC: &[u8] = b"ANALYZER-ETUDE1\n";
-
-/// Enregistre l'étude : en-tête JSON (requête, résumé), puis les stratégies moyennes sur 8 bits.
+/// Enregistre l'étude, vite (sous sa forme rapide : etude.rs) : en-tête JSON (requête, résumé), puis les
+/// stratégies moyennes sur 8 bits.
 fn save_study(solver: &Solver, request: &Value, summary: &Value, path: &str) -> Result<(), String> {
     let err = |e: std::io::Error| e.to_string();
     let tmp = format!("{path}.tmp");
     let mut w = BufWriter::new(std::fs::File::create(&tmp).map_err(err)?);
-    w.write_all(STUDY_MAGIC).map_err(err)?;
+    w.write_all(etude::FAST_MAGIC).map_err(err)?;
     writeln!(w, "{}", json!({ "request": request, "summary": summary })).map_err(err)?;
     let mut z = GzEncoder::new(w, Compression::fast());
     let tree = &solver.spot.tree;
@@ -617,9 +618,9 @@ fn save_study(solver: &Solver, request: &Value, summary: &Value, path: &str) -> 
 fn load_study(path: &str) -> Result<(Request, Value, Solver), String> {
     let err = |e: std::io::Error| format!("lecture de l'étude {path} : {e}");
     let mut r = BufReader::new(std::fs::File::open(path).map_err(err)?);
-    let mut magic = vec![0u8; STUDY_MAGIC.len()];
+    let mut magic = vec![0u8; etude::FAST_MAGIC.len()];
     r.read_exact(&mut magic).map_err(err)?;
-    if magic != STUDY_MAGIC {
+    if magic != etude::FAST_MAGIC && magic != etude::PACKED_MAGIC {
         return Err(format!("{path} n'est pas une étude d'Analyzer"));
     }
     let mut line = String::new();
@@ -628,7 +629,7 @@ fn load_study(path: &str) -> Result<(Request, Value, Solver), String> {
     let request: Request = serde_json::from_value(header["request"].clone()).map_err(|e| format!("requête invalide : {e}"))?;
     let spot = make_spot(&request)?;
     let solver = Solver::with_storage(Arc::new(spot), Storage::Compressed);
-    let mut z = GzDecoder::new(r);
+    let mut z = etude::body(r, &magic).expect("forme d'étude vérifiée");
     let tree = &solver.spot.tree;
     for (idx, node) in tree.nodes.iter().enumerate() {
         if node.kind != KIND_ACTION {
@@ -754,6 +755,13 @@ fn main() {
     let session = args.iter().any(|a| a == "--serve");
     if let Some(path) = option(&args, "--lot") {
         run_lot(&path);
+        return;
+    }
+    if let Some(path) = option(&args, "--compacter") {
+        match etude::compact(&path) {
+            Ok(reply) => println!("{reply}"),
+            Err(e) => fail(e),
+        }
         return;
     }
     if let Some(path) = option(&args, "--taille") {

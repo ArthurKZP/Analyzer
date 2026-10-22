@@ -14,6 +14,7 @@ Le spot d'une main :
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 import os
@@ -78,6 +79,7 @@ serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 rayon = "1.10"
 flate2 = "1"
+xz2 = {{ version = "0.1", features = ["static"] }}
 
 [features]
 gpu = ["solver/gpu"]
@@ -1085,6 +1087,62 @@ def delete_study(key: str) -> bool:
         return False
     removed = db_studies.delete(db.current(), key)
     return blobs.studies().delete(key) or removed
+
+
+# Une étude s'enregistre vite (gzip rapide, environ une seconde), puis le pont la compresse sans perte en tâche de
+# fond (analyzer-solve --compacter : xz par blocs, environ 45 % plus petite, relue aussi vite ; native/etude.rs).
+FAST_STUDY = b"ANALYZER-ETUDE1\n"
+
+
+def to_compact() -> list[str]:
+    """Les études encore sous leur forme rapide, de la plus petite à la plus grosse."""
+    files, found = blobs.studies(), []
+    for key in files.keys():
+        path = files.path(key)
+        try:
+            with path.open("rb") as f:
+                if f.read(len(FAST_STUDY)) == FAST_STUDY:
+                    found.append((path.stat().st_size, key))
+        except OSError:
+            continue
+    return [key for _, key in sorted(found)]
+
+
+def compaction_threads() -> int:
+    """Les cœurs prêtés à la compression : le quart (de 1 à 4), en priorité basse, derrière tes calculs ; environ
+    100 Mo de mémoire par cœur."""
+    return max(1, min(4, (os.cpu_count() or 4) // 4))
+
+
+def compact_study(key: str) -> dict:
+    """Compresse l'arbre d'une étude sans perte (vérifié octet par octet avant de remplacer le fichier) et note sa
+    nouvelle taille : {"avant": octets, "apres": octets, "secondes": durée}."""
+    exe = binary_path()
+    if not exe.is_file():
+        raise SolverError(status()["message"])
+    files = blobs.studies()
+    env = dict(os.environ, RAYON_NUM_THREADS=str(compaction_threads()))
+    low = {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name == "nt" else {}
+    proc = subprocess.Popen([str(exe), "--compacter", str(files.fetch(key))], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, env=env, **low, **PIPE_TEXT)
+    if os.name != "nt":
+        try:
+            os.setpriority(os.PRIO_PROCESS, proc.pid, 10)
+        except OSError:
+            pass
+    out, err = proc.communicate()
+    errors: list = []
+    _progress_reader(io.StringIO(err), None, errors)
+    lines = out.strip().splitlines()
+    if proc.returncode != 0 or not lines:
+        raise SolverError(errors[-1] if errors else
+                          f"analyzer-solve --compacter s'est arrêté (code {proc.returncode}).")
+    result = json.loads(lines[-1])
+    files.stored(key)
+    size = files.size(key)
+    if size is not None:
+        db_studies.resize(db.current(), key, size)
+    return result
 
 
 class Session:

@@ -59,6 +59,7 @@ from .review_page import build_review_page
 from .situations_page import situations_html
 from .solver_pages import PANEL_SCRIPT, build_solver_bilan, panel_html, slot_html
 from .backups import Backups
+from .compactions import Compactions
 from .coach_chat import Coach
 from .solves import NeedSession, SolveQueue
 
@@ -193,13 +194,14 @@ class Library:
 
     def __init__(self, folder: Path | str, hero: Optional[str] = None, solves: Optional[SolveQueue] = None,
                  backups: Optional[Backups] = None, api: str = "/api", pages: str = "/moi", space: str = "moi",
-                 space_name: str = "Moi", source: Optional[Callable[[], list[Hand]]] = None, warm_up: bool = False):
+                 space_name: str = "Moi", source: Optional[Callable[[], list[Hand]]] = None, warm_up: bool = False,
+                 compactions: Optional[Compactions] = None):
         """folder : la boîte d'arrivée des historiques (importés dans la base au chargement) ; space : l'espace de la
-        base (« moi », ou « eleve:<identifiant> ») ; solves, backups : ceux de la bibliothèque principale, partagés par
-        celles des élèves (une résolution à la fois) ; api, pages : préfixes des adresses de ses pages et de leurs
-        actions. source : les mains d'un joueur de référence, lues dans ton espace (pas d'espace à lui ; space ne sert
-        qu'à garder sa période) ; hero : son nom. warm_up : après chaque chargement, les pages principales se calculent
-        en arrière-plan (l'application ; jamais dans les tests)."""
+        base (« moi », ou « eleve:<identifiant> ») ; solves, backups, compactions : ceux de la bibliothèque principale,
+        partagés par celles des élèves (une résolution à la fois) ; api, pages : préfixes des adresses de ses pages et
+        de leurs actions. source : les mains d'un joueur de référence, lues dans ton espace (pas d'espace à lui ; space
+        ne sert qu'à garder sa période) ; hero : son nom. warm_up : après chaque chargement, les pages principales se
+        calculent en arrière-plan (l'application ; jamais dans les tests)."""
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
         self.db = db.current()
@@ -234,11 +236,13 @@ class Library:
         self._import_lock = threading.Lock()  # les historiques s'enregistrent un envoi à la fois
         self.solves = solves or SolveQueue()
         self.backups = backups or Backups()
+        self.compactions = compactions or Compactions()  # la compression des études, en arrière-plan
         self.coach = Coach(self)
         self.warm_up = warm_up
         self._busy = 0  # pages en calcul pour une demande (le préchargement attend qu'il n'y en ait plus)
         if solves is None:
             self.solves.on_done.append(lambda job: self.backups.schedule())
+            self.solves.on_done.append(lambda job: self.compactions.start())
         self.reload()
 
     # --- chargement -------------------------------------------------------------
@@ -1400,6 +1404,7 @@ class Library:
             lib = self._students.get(ident)
         if lib is None:
             lib = Library(students.folder(ident), meta.get("pseudo"), solves=self.solves, backups=self.backups,
+                          compactions=self.compactions,
                           api=f"/api/eleves/{ident}", pages=f"/eleve/{ident}", space=students.PREFIX + ident,
                           space_name=meta["name"], warm_up=self.warm_up)
             lib.display_name = meta["name"]
@@ -1433,7 +1438,8 @@ class Library:
             lib = self._references.get(ident)
         if lib is None:
             name = meta["name"]
-            lib = Library(self.folder, name, solves=self.solves, backups=self.backups, api=f"/api/references/{ident}",
+            lib = Library(self.folder, name, solves=self.solves, backups=self.backups, compactions=self.compactions,
+                          api=f"/api/references/{ident}",
                           pages=f"/reference/{ident}", space=REFERENCE_PREFIX + ident, space_name=name,
                           source=lambda: self._reference_hands.get(name, []), warm_up=self.warm_up)
             lib.display_name = name

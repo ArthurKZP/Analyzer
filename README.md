@@ -433,14 +433,22 @@ l'EV perdue. Quand c'est la range entière qui n'arrive presque jamais à un nœ
 avertissement le signale : la suite du coup n'y est pas optimisée.
 
 **Études du solveur** : chaque coup résolu est gardé : sa fiche dans la base, son arbre dans un fichier
-(`~/.analyzer/etudes`, 50 à 170 Mo selon l'arbre) sous une forme compacte : la stratégie de chaque nœud sur 8 bits,
-compressée.
-L'explorateur rouvre une étude en une quinzaine de secondes au lieu de la recalculer (les fréquences
-restent à 1 point près, les EV à quelques centièmes de bb). La page *Études du solveur* de l'application
-liste les études (onglet *Coups joués*), avec leur précision et leur taille, et permet de les rouvrir ou
-de les supprimer.
-Une étude ouverte occupe environ 2 Go de mémoire : une seule reste ouverte, fermée après 30 minutes sans
+(`~/.analyzer/etudes`, 30 à 100 Mo selon l'arbre) sous une forme compacte : la stratégie de chaque nœud sur 8 bits,
+compressée sans perte. L'explorateur rouvre une étude en une quinzaine de secondes au lieu de la recalculer (les
+fréquences restent à 1 point près, les EV à quelques centièmes de bb). La page *Études du solveur* de l'application
+liste les études (onglet *Coups joués*), avec leur précision et leur taille, et permet de les rouvrir ou de les
+supprimer. Une étude ouverte occupe environ 2 Go de mémoire : une seule reste ouverte, fermée après 30 minutes sans
 activité ou quand une autre s'ouvre.
+
+**Compression des études** : un arbre s'enregistre vite, juste après la résolution (gzip, une seconde environ), puis
+l'application le compresse en arrière-plan avec xz, par blocs de 16 Mo (`native/etude.rs`) : 35 à 45 % de place en
+moins (mesuré : 61 → 34 Mo, 430 → 265 Mo), sans rien perdre — la copie est relue et comparée octet par octet avant
+de remplacer le fichier — et l'étude se rouvre aussi vite, ses blocs se décompressant en parallèle. Au lancement de
+l'application et après chaque calcul, les études pas encore compressées passent une à une, de la plus petite à la
+plus grosse, en priorité basse, sur le quart des cœurs (de 1 à 4, environ 100 Mo de mémoire par cœur) ; la page
+*Études du solveur* dit où elle en est. Il faut recompiler le pont une fois
+(`python -m analyzer gtopen --installer`) : les études déjà enregistrées restent lisibles et sont compressées à leur
+tour.
 
 **Durée** : un arbre de flop compte des centaines de milliers de nœuds et jusqu'à 2 Go de mémoire avec les
 ranges HU complètes. Sur un processeur à 4 cœurs, l'objectif par défaut (1,5 % du pot d'exploitabilité,
@@ -1729,8 +1737,9 @@ analyzer/
                        lecture de captures de ranges (extract.py) ; postflop avec GTOpen : spots,
                        installation et lecture des résultats (postflop.py), pont Rust (native/main.rs, avec
                        tes nœuds verrouillés ; arbre.rs pour les tailles, profil.rs pour le verrou d'un profil
-                       d'adversaire), tes tailles et tes verrous dans l'explorateur (custom_tree.py),
-                       commande `gtopen` (solve_cli.py), mains jouées face au solveur (review.py),
+                       d'adversaire, etude.rs pour la compression des études), tes tailles et tes verrous dans
+                       l'explorateur (custom_tree.py), commande `gtopen` (solve_cli.py), mains jouées face au
+                       solveur (review.py),
                        ranges des tables à plusieurs (ring_ranges.py), ton préflop face aux charts
                        (ring_preflop.py), arbre préflop 6-max pour l'explorateur (ring_tree.py), tes ranges ajustées
                        (custom_ranges.py, ordre des mains dans data/hand_order.json)
@@ -1747,8 +1756,9 @@ analyzer/
                        Leakfinding (synthesis.py), son rapport PDF (report_pdf.py) et sa présentation
                        (report_pptx.py), entraîneur (trainer.py, static/trainer.*), plan de jeu suggéré
                        (plan_page.py), coach (coach_chat.py, static/coach.*) et son serveur MCP pour l'abonnement
-                       Claude (mcp_server.py), sauvegardes en arrière-plan (backups.py), avancement d'un import
-                       (import_job.py), interface (static/, dont l'explorateur explorer.*)
+                       Claude (mcp_server.py), sauvegardes en arrière-plan (backups.py), compression des études
+                       en arrière-plan (compactions.py), avancement d'un import (import_job.py), interface (static/,
+                       dont l'explorateur explorer.*)
   backup.py            sauvegarde et restauration de la base et des études (commande `sauvegarde`)
   blobs.py             stockage des gros fichiers (arbres des études) : un dossier ici, un stockage objet en ligne
   store.py             cache sur disque des calculs longs (SQLite : mains lues, équités, clés des spots)

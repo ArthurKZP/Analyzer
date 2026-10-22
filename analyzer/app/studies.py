@@ -638,9 +638,27 @@ quelques secondes, sans recalculer.</p>{table}</div>
 SECTIONS = ("hu", "6max", "coups") + tuple(studyspots.FAMILIES)
 
 
-def build_studies_page(embed: bool = True, section: Optional[str] = None, rset: Optional[str] = None) -> str:
+def _compaction_note(state: Optional[dict]) -> str:
+    """Où en est la compression des études (app/compactions.py : Compactions.view)."""
+    if not state:
+        return ""
+    gained = f", {_size(state['saved'])} gagnés" if state["saved"] else ""
+    if state["pending"] and state["running"]:
+        return (f" · compression sans perte en cours : {state['pending']} étude(s) à compresser"
+                f"{gained}")
+    if state["pending"] and not state["ready"]:
+        return (f" · {state['pending']} étude(s) pas encore compressée(s) : recompile le pont (« "
+                f"{escape(postflop.INSTALL_COMMAND)} ») pour gagner environ 45 % de place")
+    if state["pending"] and state["error"]:
+        return f" · {state['pending']} étude(s) pas encore compressée(s) ({escape(state['error'])})"
+    return f" · {state['done']} étude(s) compressée(s){gained}" if state["done"] else ""
+
+
+def build_studies_page(embed: bool = True, section: Optional[str] = None, rset: Optional[str] = None,
+                       compaction: Optional[dict] = None) -> str:
     """Toutes les études, ou une seule section (onglets de l'application) : hu (SRP, pots 3bet et 4bet heads-up), 6max
-    ou coups ; rset : les ranges des séries, petites ou hautes limites (par défaut, la référence)."""
+    ou coups ; rset : les ranges des séries, petites ou hautes limites (par défaut, la référence) ; compaction : où en
+    est leur compression (Compactions.view)."""
     if section is not None and section not in SECTIONS:
         raise NotFound(section)
     rset = rset or studyspots.reference_set()
@@ -656,7 +674,8 @@ def build_studies_page(embed: bool = True, section: Optional[str] = None, rset: 
     else:
         content = switch + _hu_section(section, rset)
     body = f"""
-<div class="meta">{len(studies)} étude(s) · {_size(total)} sur le disque · {escape(str(postflop.studies_dir()))}</div>
+<div class="meta">{len(studies)} étude(s) · {_size(total)} sur le disque · {escape(str(postflop.studies_dir()))}
+{_compaction_note(compaction)}</div>
 <p class="note">Précision : exploitabilité de la solution, en % du pot (plus c'est bas, plus elle est proche de
 l'équilibre).</p>
 {content}

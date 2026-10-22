@@ -35,6 +35,25 @@ if option("--lot"):  # variantes : EV fictive, situations du sous-jeu fréquente
         print(json.dumps({"i": i, "iterations": 10, "exploit_pct": 0.4, "seconds": 0.01, "tree_nodes": 9,
                           "root_ev": plan_ev(plan, base["spot"]["tree"]["starting_pot"]), "stats": stats}))
     sys.exit(0)
+if option("--compacter"):  # étude rapide (gzip) -> compacte (ici, xz d'un bloc ; le vrai pont : native/etude.rs)
+    import gzip
+    import lzma
+    path = option("--compacter")
+    data = open(path, "rb").read()
+    if data.startswith(b"ANALYZER-ETUDE2\n"):
+        print(json.dumps({"compacte": True, "taille": len(data)}))
+        sys.exit(0)
+    head, _, body = data[16:].partition(b"\n")
+    try:
+        assert data.startswith(b"ANALYZER-ETUDE1\n")
+        packed = b"ANALYZER-ETUDE2\n" + head + b"\n" + lzma.compress(gzip.decompress(body))
+    except (AssertionError, OSError, EOFError):
+        print(json.dumps({"error": f"compression de l'étude {path} : invalide"}), file=sys.stderr)
+        sys.exit(2)
+    open(path + ".compact", "wb").write(packed)
+    os.replace(path + ".compact", path)
+    print(json.dumps({"avant": len(data), "apres": len(packed), "secondes": 0.0}))
+    sys.exit(0)
 if option("--load"):  # étude : ici, simplement la requête d'origine
     request = json.load(open(option("--load"), encoding="utf-8"))
     print(json.dumps({"loaded": 0.1}), file=sys.stderr, flush=True)

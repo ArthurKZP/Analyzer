@@ -1,4 +1,5 @@
 import copy
+import gzip
 import json
 import os
 import subprocess
@@ -9,7 +10,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from analyzer import blobs, db
+from analyzer.app.compactions import Compactions
 from analyzer.app.solves import NeedSession, SolveQueue
+from analyzer.app.studies import _compaction_note
+from analyzer.db import studies as db_studies
 from analyzer.parsers import load_hands
 from analyzer.theory import coach, postflop
 from analyzer.theory.preflop import load_solution
@@ -324,6 +329,75 @@ class SolveTest(unittest.TestCase):
         queue.shutdown()
 
 
+@unittest.skipUnless(POSIX, "faux solveur : script exécutable POSIX")
+class CompactionTest(unittest.TestCase):
+    """La compression des études en arrière-plan (postflop.compact_study, app/compactions.py), avec le faux pont."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        env = {"ANALYZER_DB": "", "ANALYZER_HOME": self.tmp.name, "ANALYZER_SOLVER": str(FAKE_SOLVER)}
+        self.env = mock.patch.dict(os.environ, env)
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def write(self, key: str, body: bytes, magic: bytes = postflop.FAST_STUDY) -> Path:
+        path = blobs.studies().path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(magic + json.dumps({"request": {}, "summary": {}}).encode() + b"\n" + body)
+        db_studies.save(db.current(), key, {"kind": "hand"}, path.stat().st_size)
+        return path
+
+    def wait(self, jobs: Compactions) -> dict:
+        deadline = time.time() + 20
+        while jobs.view()["running"] and time.time() < deadline:
+            time.sleep(0.05)
+        return jobs.view()
+
+    def test_compact_study(self):
+        small = self.write("aaaa", gzip.compress(b"\0" * 100_000, 1))
+        big = self.write("bbbb", gzip.compress(bytes(range(256)) * 4000, 1))
+        self.write("cccc", b"deja", magic=b"ANALYZER-ETUDE2\n")
+        self.assertLess(small.stat().st_size, big.stat().st_size)
+        self.assertEqual(postflop.to_compact(), ["aaaa", "bbbb"])  # la plus petite d'abord
+        before = big.stat().st_size
+        result = postflop.compact_study("bbbb")
+        self.assertEqual(result["avant"], before)
+        self.assertLess(big.stat().st_size, before)
+        self.assertTrue(big.read_bytes().startswith(b"ANALYZER-ETUDE2\n"))
+        self.assertEqual(postflop.to_compact(), ["aaaa"])
+        sizes = {s["key"]: s["size"] for s in db_studies.every(db.current())}
+        self.assertEqual(sizes["bbbb"], big.stat().st_size)  # la fiche suit le fichier
+
+    def test_background(self):
+        self.write("aaaa", gzip.compress(bytes(range(256)) * 4000, 1))
+        self.write("dddd", b"pas du gzip")
+        stale, fresh = (blobs.studies().root / f"{k}.etude.compact" for k in ("vieux", "neuf"))
+        for path in (stale, fresh):
+            path.write_bytes(b"x")
+        os.utime(stale, (time.time() - 2 * 3600,) * 2)
+        jobs = Compactions()
+        jobs.start()
+        view = self.wait(jobs)
+        self.assertEqual((view["pending"], view["done"]), (1, 1))  # l'étude illisible reste telle quelle
+        self.assertGreater(view["saved"], 0)
+        self.assertIn("invalide", view["error"])
+        self.assertFalse(stale.exists())  # reste d'une compression interrompue
+        self.assertTrue(fresh.exists())  # (peut-être en cours ailleurs)
+        self.assertIn("1 étude(s) pas encore compressée(s)", _compaction_note(view))
+
+    def test_not_ready(self):
+        self.write("aaaa", gzip.compress(b"\0" * 1000, 1))
+        jobs = Compactions()
+        with mock.patch.dict(os.environ, {"ANALYZER_SOLVER": str(Path(self.tmp.name) / "absent")}):
+            jobs.start()
+            view = jobs.view()
+        self.assertEqual((view["ready"], view["running"], view["pending"]), (False, False, 1))
+        self.assertIn(postflop.INSTALL_COMMAND, _compaction_note(view))
+
+
 @unittest.skipUnless(os.environ.get("ANALYZER_TEST_GTOPEN") and postflop.binary_path().is_file(),
                      "intégration GTOpen : ANALYZER_TEST_GTOPEN=1 et solveur installé")
 class GTOpenIntegrationTest(unittest.TestCase):
@@ -396,6 +470,33 @@ class GTOpenIntegrationTest(unittest.TestCase):
                 self.assertEqual([round(x, 3) for x in rows[c]], [0.0, 0.0, 1.0])
         finally:
             session.close()
+
+    def test_study_compaction(self):
+        # Une étude réelle, compressée sans perte (native/etude.rs) : plus petite, et relue à l'identique.
+        hand = {h.hand_id: h for h in load_hands([FIXTURES])}["HAND02"]
+        request = postflop.build_spot(hand, "Hero").request(iterations=3, target=50.0)
+        exe = str(postflop.binary_path())
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": tmp, "ANALYZER_SOLVER": exe}):
+            postflop.solve(request, use_cache=False, save_study=True)
+            key = postflop.study_key(request)
+            path = postflop.study_path(request)
+            self.assertEqual(postflop.to_compact(), [key])
+            nodes = []
+            for _ in range(2):
+                session = postflop.Session(request)
+                session.start()
+                try:
+                    nodes.append([session.node([]), session.node([{"type": "action", "index": 1}])])
+                finally:
+                    session.close()
+                if len(nodes) == 1:
+                    before = path.stat().st_size
+                    result = postflop.compact_study(key)
+                    self.assertEqual(postflop.to_compact(), [])
+                    self.assertLess(path.stat().st_size, before)
+                    self.assertEqual(result["apres"], path.stat().st_size)
+            self.assertEqual(nodes[0], nodes[1])
 
     def test_plan_tree(self):
         # Sans plan, l'arbre d'Analyzer (native/arbre.rs) est celui de GTOpen, nœud pour nœud.
