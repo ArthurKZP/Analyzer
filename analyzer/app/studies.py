@@ -648,7 +648,7 @@ def _compaction_note(state: Optional[dict]) -> str:
                 f"{gained}")
     if state["pending"] and not state["ready"]:
         return (f" · {state['pending']} étude(s) pas encore compressée(s) : recompile le pont (« "
-                f"{escape(postflop.INSTALL_COMMAND)} ») pour gagner environ 45 % de place")
+                f"{escape(postflop.INSTALL_COMMAND)} ») pour gagner 35 à 45 % de place")
     if state["pending"] and state["error"]:
         return f" · {state['pending']} étude(s) pas encore compressée(s) ({escape(state['error'])})"
     return f" · {state['done']} étude(s) compressée(s){gained}" if state["done"] else ""

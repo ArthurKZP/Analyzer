@@ -1090,7 +1090,7 @@ def delete_study(key: str) -> bool:
 
 
 # Une étude s'enregistre vite (gzip rapide, environ une seconde), puis le pont la compresse sans perte en tâche de
-# fond (analyzer-solve --compacter : xz par blocs, environ 45 % plus petite, relue aussi vite ; native/etude.rs).
+# fond (analyzer-solve --compacter : xz par blocs, 35 à 45 % plus petite, relue aussi vite ; native/etude.rs).
 FAST_STUDY = b"ANALYZER-ETUDE1\n"
 
 

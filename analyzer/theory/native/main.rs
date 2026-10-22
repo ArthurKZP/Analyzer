@@ -39,7 +39,7 @@
 //!
 //! Une étude (--save) garde l'arbre résolu sur disque sous une forme compacte : la requête, puis la
 //! stratégie moyenne de chaque nœud sur 8 bits (sans la dernière action, qui s'en déduit), le tout
-//! compressé sans perte (etude.rs : gzip rapide à l'enregistrement, puis xz avec --compacter, environ
+//! compressé sans perte (etude.rs : gzip rapide à l'enregistrement, puis xz avec --compacter, 35 à
 //! 45 % plus petit). --load la recharge en quelques secondes, sans recalculer, pour naviguer à nouveau.
 //!
 //! analyzer-solve --lot lot.json : résout une série de variantes (sous-jeux pour le choix des tailles),

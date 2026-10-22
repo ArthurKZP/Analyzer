@@ -1,6 +1,6 @@
 """La compression des études en arrière-plan : au lancement de l'application et après chaque calcul, les études
 encore sous leur forme rapide passent une à une sous leur forme compacte, sans perte (postflop.compact_study :
-environ 45 % de place en moins)."""
+35 à 45 % de place en moins)."""
 from __future__ import annotations
 
 import threading

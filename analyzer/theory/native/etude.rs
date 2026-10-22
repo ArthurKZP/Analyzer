@@ -1,9 +1,9 @@
 //! Le corps des études sur disque, sans perte, sous deux formes :
 //!
 //! - rapide (ANALYZER-ETUDE1) : gzip rapide, écrit juste après la résolution (--save, environ une seconde) ;
-//! - compacte (ANALYZER-ETUDE2) : des blocs indépendants de 16 Mio compressés avec xz (LZMA2), environ 45 % plus
+//! - compacte (ANALYZER-ETUDE2) : des blocs indépendants de 16 Mio compressés avec xz (LZMA2), 35 à 45 % plus
 //!   petite. Chaque bloc : [u32 taille brute][u32 taille compressée][flux xz, avec sa somme de contrôle], puis un bloc
-//!   vide pour finir. Les blocs se compressent et se relisent en parallèle, par vagues (un bloc par cœur).
+//!   vide pour finir. Les blocs se compressent et se relisent en parallèle, par vagues (un bloc par cœur, 8 au plus).
 //!
 //! analyzer-solve --compacter etude.etude réécrit une étude rapide sous la forme compacte, vérifie la copie octet
 //! par octet, puis remplace le fichier ; --load lit les deux formes.
@@ -19,9 +19,16 @@ use xz2::stream::{Check, Filters, LzmaOptions, Stream};
 pub const FAST_MAGIC: &[u8] = b"ANALYZER-ETUDE1\n";
 pub const PACKED_MAGIC: &[u8] = b"ANALYZER-ETUDE2\n";
 const CHUNK: usize = 16 << 20;
+/// Blocs par vague, au plus (un par cœur) : la mémoire en plus reste sous 150 Mo à la lecture, et sous 1 Go à
+/// l'écriture (xz -6 : environ 100 Mo par bloc en cours).
+const WAVE: usize = 8;
 /// xz -6 (dictionnaire de 8 Mio), avec 4 bits de contexte par octet et sans alignement : le meilleur réglage mesuré
 /// sur des études (les stratégies sur 8 bits n'ont pas de structure par mots).
 const PRESET: u32 = 6;
+
+fn wave_size() -> usize {
+    rayon::current_num_threads().clamp(1, WAVE)
+}
 
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_string())
@@ -88,7 +95,7 @@ impl<W: Write> Write for PackWriter<W> {
         if self.buf.len() == CHUNK {
             let full = std::mem::replace(&mut self.buf, Vec::with_capacity(CHUNK));
             self.full.push(full);
-            if self.full.len() >= rayon::current_num_threads() {
+            if self.full.len() >= wave_size() {
                 self.wave()?;
             }
         }
@@ -116,7 +123,7 @@ impl<R: Read> PackReader<R> {
 
     fn wave(&mut self) -> io::Result<()> {
         let mut packed = Vec::new();
-        while !self.done && packed.len() < rayon::current_num_threads() {
+        while !self.done && packed.len() < wave_size() {
             let mut head = [0u8; 8];
             self.src.read_exact(&mut head)?;
             let raw = u32::from_le_bytes([head[0], head[1], head[2], head[3]]) as usize;

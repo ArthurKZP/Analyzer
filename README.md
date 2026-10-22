@@ -442,11 +442,11 @@ activité ou quand une autre s'ouvre.
 
 **Compression des études** : un arbre s'enregistre vite, juste après la résolution (gzip, une seconde environ), puis
 l'application le compresse en arrière-plan avec xz, par blocs de 16 Mo (`native/etude.rs`) : 35 à 45 % de place en
-moins (mesuré : 61 → 34 Mo, 430 → 265 Mo), sans rien perdre — la copie est relue et comparée octet par octet avant
-de remplacer le fichier — et l'étude se rouvre aussi vite, ses blocs se décompressant en parallèle. Au lancement de
-l'application et après chaque calcul, les études pas encore compressées passent une à une, de la plus petite à la
-plus grosse, en priorité basse, sur le quart des cœurs (de 1 à 4, environ 100 Mo de mémoire par cœur) ; la page
-*Études du solveur* dit où elle en est. Il faut recompiler le pont une fois
+moins (mesuré : 61 → 34 Mo, 430 → 265 Mo ; 53 études : 2,8 → 1,7 Go), sans rien perdre — la copie est relue et
+comparée octet par octet avant de remplacer le fichier — et l'étude se rouvre aussi vite, ses blocs se décompressant
+en parallèle. Au lancement de l'application et après chaque calcul, les études pas encore compressées passent une à
+une, de la plus petite à la plus grosse, en priorité basse, sur le quart des cœurs (de 1 à 4, environ 100 Mo de
+mémoire par cœur) ; la page *Études du solveur* dit où elle en est. Il faut recompiler le pont une fois
 (`python -m analyzer gtopen --installer`) : les études déjà enregistrées restent lisibles et sont compressées à leur
 tour.
 
