@@ -1,87 +1,27 @@
-"""Étude du field › Statistiques : les stats globales de tes adversaires à un niveau de limites (réguliers,
-récréatifs, tous), face aux repères d'un régulier solide de ce niveau et à toi ; aux tables à plusieurs, le détail par
-position ; puis ce que leurs écarts changent pour ton jeu (tes écarts que leurs réponses justifient, les écarts qui te
-rapporteraient), d'après la vérification en jeu du Leakfinding (leakcheck)."""
+"""Étude du field › Statistiques : les stats de tes adversaires à un niveau de limites (réguliers, récréatifs,
+tous), celles que tu choisis dans le catalogue (analyzer/statlib.py, paramètres : field_stat_selection), face aux
+repères d'un régulier solide de ce niveau et à toi, puis position par position ; puis ce que leurs écarts changent
+pour ton jeu (tes écarts que leurs réponses justifient, les écarts qui te rapporteraient), d'après la vérification
+en jeu du Leakfinding (leakcheck)."""
 from __future__ import annotations
 
 from html import escape
 from typing import Optional
 
-from .. import field, ring
-from ..insights import SECTIONS, StatDef
-from ..report import html_page, num, pct_cell
-from ..stats import Ratio
+from .. import statlib
+from ..report import html_page, num
+from ..selfreport import STATS_LEGEND
 from .field_leaks_page import _band_note, _band_words
-from .ring_page import SCRIPT as RING_SCRIPT
-from .ring_page import STYLE as RING_STYLE
-from .ring_page import positions_html
+from .stats_page import BAR, NONE_CHOSEN, SCRIPT, chooser, overview_table, positions_block
+from .stats_page import STYLE as STATS_STYLE
 
 STYLE = """<style>
-table.fs-stats th.grp { text-align: left; padding-top: 12px; font-size: 12px; color: var(--ink-2); }
-table.fs-stats td.ref { color: var(--muted); font-size: 12px; white-space: nowrap; }
-table.fs-stats td.lbl { white-space: nowrap; }
 ul.fs-list { margin: 4px 0; padding-left: 18px; }
 ul.fs-list li { margin: 6px 0; }
 ul.fs-list .why { display: block; color: var(--ink-2); font-size: 12px; }
 </style>"""
-
-# Aux tables à plusieurs : les stats de ring.read et de field.postflop_read, par moment du coup.
-RING_SECTIONS = (
-    ("Avant le flop", ("vpip", "pfr", "open", "limp", "threebet", "flat", "fold_3bet", "fold_steal",
-                       "threebet_steal")),
-    ("Après le flop", ("cbet_hu", "cbet_multi", "fold_cbet", "cbet_turn", "fold_turn", "fold_river", "xr_flop",
-                       "stab_flop", "afq", "fold_bet")),
-    ("Abattage", ("wtsd", "wsd", "wwsf")),
-)
-RING_LABELS = {**ring.LABEL, "open": "Open (RFI : premier à entrer)", "fold_bet": "Fold face à une mise (toutes streets)",
-               "cbet_turn": "2e barrel (turn)", "fold_turn": "Fold vs mise turn", "fold_river": "Fold vs mise river",
-               "xr_flop": "Check-raise flop", "stab_flop": "Mise quand l'agresseur checke (flop)",
-               "afq": "Agressivité après le flop (AFq)"}
-HU_GENERAL = (StatDef("vpip", "VPIP"), StatDef("pfr", "PFR"))
-
-
-def ring_defs(band: Optional[str]) -> dict[str, StatDef]:
-    """Les stats des tables à plusieurs et leur repère à ce niveau de limites (field.band_defs, ring.REF_6MAX)."""
-    found = {d.key: d for d in field.band_defs(field.RING_DEFS, band)}
-    out = {}
-    for _, keys in RING_SECTIONS:
-        for key in keys:
-            known = found.get(key)
-            ref = known.ref if known else ring.REF_6MAX.get(key)
-            out[key] = StatDef(key, RING_LABELS.get(key, key), ref)
-    return out
-
-
-def hu_sections(band: Optional[str]) -> list[tuple[str, list[StatDef]]]:
-    """Les stats heads-up (insights.SECTIONS, repères de ce niveau de limites), après VPIP et PFR."""
-    adjusted = {d.key: d for d in field.band_defs([d for _, defs in SECTIONS for d in defs], band, heads_up=True)}
-    return [("En général", list(HU_GENERAL))] + [(title, [adjusted[d.key] for d in defs]) for title, defs in SECTIONS]
-
-
-def _ref(stat: StatDef) -> str:
-    if not stat.ref:
-        return '<td class="ref">–</td>'
-    lo, hi = stat.ref
-    return f'<td class="ref">{lo:.0f}–{hi:.0f}&nbsp;%</td>'
-
-
-def stats_table(sections: list[tuple[str, list[StatDef]]], columns: list[tuple[str, dict]]) -> str:
-    """Une ligne par stat, groupées par moment du coup ; une colonne par population (columns : [(libellé, {stat:
-    Ratio})]), le repère avant la dernière (toi)."""
-    head = "".join(f'<th class="num">{escape(label)}</th>' for label, _ in columns[:-1])
-    head += f'<th class="num">Repère</th><th class="num">{escape(columns[-1][0])}</th>'
-    rows = []
-    for title, stats in sections:
-        shown = [s for s in stats if any((ratios.get(s.key) or Ratio()).opps for _, ratios in columns)]
-        if not shown:
-            continue
-        rows.append(f'<tr><th class="grp" colspan="{len(columns) + 2}">{escape(title)}</th></tr>')
-        for stat in shown:
-            cells = [pct_cell(ratios.get(stat.key) or Ratio(), stat) for _, ratios in columns]
-            rows.append(f'<tr><td class="lbl">{escape(stat.label)}</td>{"".join(cells[:-1])}{_ref(stat)}{cells[-1]}'
-                        "</tr>")
-    return (f'<div class="scroll"><table class="stats fs-stats"><thead><tr><th>Stat</th>{head}</tr></thead>'
-            f'<tbody>{"".join(rows)}</tbody></table></div>')
+FIELD_NOTE = ("Ton choix vaut pour l'Étude du field, à tous les niveaux de limites, dans ton espace comme pour tes "
+              "élèves.")
 
 
 def _leak_items(found: list) -> str:
@@ -115,37 +55,44 @@ def your_game_html(exploits: list, chances: list, leaks_href: str) -> str:
             "Leakfinding</a></p></div>")
 
 
-def build_field_stats_page(fmt: str, band: Optional[str], switch: str, columns: list[tuple[str, dict]],
-                           players: dict[str, int], hands: dict[str, int], positions: Optional[list] = None,
+def build_field_stats_page(fmt: str, band: Optional[str], switch: str,
+                           populations: list[tuple[str, str, Optional[statlib.Table]]], mine: Optional[statlib.Table],
+                           players: dict[str, int], hands: dict[str, int], saved: Optional[dict] = None,
                            exploits: Optional[list] = None, chances: Optional[list] = None,
                            leaks_href: str = "/moi/leaks") -> str:
-    """La page Statistiques de l'Étude du field. columns : [(libellé, {stat: Ratio})] — réguliers, récréatifs, tous,
-    puis toi (le dernier) ; players, hands : leur nombre de joueurs et de mains par population (« reg », « rec »,
-    « all ») ; positions : aux tables à plusieurs, [(clé, libellé, ring.FormatStats)] de chaque population ;
-    exploits, chances : tes écarts justifiés et les écarts qui te rapporteraient (leaks.Report)."""
+    """La page Statistiques de l'Étude du field. populations : [(clé, libellé, statlib.tally_group)] — réguliers,
+    récréatifs, tous ; mine : tes stats sur les mêmes mains ; players, hands : leur nombre de joueurs et de
+    mains-joueur par population (« reg », « rec », « all ») ; saved : les stats choisies (settings
+    field_stat_selection) ; exploits, chances : tes écarts justifiés et les écarts qui te rapporteraient
+    (leaks.Report)."""
     ring_game = fmt != "HU"
-    if not players.get("all"):
+    shown = [(k, label, t) for k, label, t in populations if t is not None and t.total.hands]
+    if not players.get("all") or not shown:
         body = (switch + '<p class="note">Aucun adversaire classé à ce niveau de limites : rien à compter pour '
                 "l'instant.</p>")
         return html_page("Statistiques du field", STYLE + body, True)
-    sections = ([(title, [ring_defs(band)[k] for k in keys]) for title, keys in RING_SECTIONS] if ring_game
-                else hu_sections(band))
+    chosen = statlib.selection(fmt, saved, statlib.FIELD_DEFAULTS)
     where = "aux tables à plusieurs (3 à 9 joueurs ensemble)" if ring_game else "en heads-up"
     meta = (f'<div class="meta">Tes adversaires {where}{_band_words(band)} : {players.get("reg", 0)} régulier(s), '
-            f'{players.get("rec", 0)} récréatif(s), {num(hands.get("all", 0), 0)} mains-joueur. Leurs fréquences '
-            "réunies, face aux repères d'un régulier solide de ce niveau et à toi.</div>")
-    table = (f'<div class="card">{stats_table(sections, columns)}<p class="note">Chaque main compte une fois pour chaque '
-             "joueur de la population qui y est servi. En couleur : hors du repère d'un régulier solide de ce niveau "
-             "(nettement, d'après l'intervalle de confiance) ; chiffres en gris : moins de 15 occasions. "
-             f"{escape(_band_note(band))}" + (" En heads-up, les repères d'avant le flop viennent de la solution "
-                                               "préflop." if not ring_game else "") + "</p></div>")
-    out = [switch, meta, "<h2>Le field en chiffres</h2>", table]
-    if ring_game and positions:
-        note = ('<p class="note">Une position compte les mains de chaque taille de table, une fois par joueur. Open : '
-                "il parle le premier (RFI). Vol : ouverture du CO, du bouton ou de la SB sans caller ; la défense se lit "
-                "en SB et BB. C-bet : il était le dernier relanceur préflop. bb/100 : leur résultat à cette position "
-                "(contre toi et les autres).</p>")
-        out += ["<h2>Par position</h2>", positions_html(positions, note=note)]
+            f'{players.get("rec", 0)} récréatif(s), {num(hands.get("all", 0), 0)} mains-joueur. {len(chosen)} '
+            f"stat(s) choisie(s) sur {len(statlib.available(fmt))}, face aux repères d'un régulier solide de ce niveau "
+            "et à toi.</div>")
+    ref_of = lambda stat: statlib.field_ref(stat, fmt, band)  # noqa: E731
+    you = [("me", "Toi", mine)] if mine is not None and mine.total.hands else []
+    note = ('<p class="note">Chaque main compte une fois pour chaque joueur de la population qui y est servi. En '
+            "couleur : hors du repère d'un régulier solide de ce niveau (nettement, d'après l'intervalle de "
+            "confiance) ; chiffres en gris : moins de 15 occasions ; tailles : moyenne des mises (tapis exclus). "
+            f"{escape(_band_note(band))}" + (" En heads-up, les repères d'avant le flop viennent de la solution "
+                                               "préflop." if not ring_game else "") + "</p>")
+    out = [switch, meta, BAR, chooser(fmt, chosen, saved, "field_stat_selection", FIELD_NOTE)]
+    if chosen:
+        out += ["<h2>Le field en chiffres</h2>", STATS_LEGEND, overview_table(chosen, fmt, shown, you, ref_of), note,
+                "<h2>Par position</h2>",
+                f'<div class="card">{positions_block(chosen, fmt, shown + you, ref_of, "Population")}'
+                '<p class="note">Une position compte les mains de chaque taille de table, une fois par joueur.</p>'
+                "</div>"]
+    else:
+        out.append(NONE_CHOSEN)
     out.append(your_game_html(exploits or [], chances or [], leaks_href))
-    return html_page("Statistiques du field", STYLE + RING_STYLE + "".join(out), True,
-                     script=RING_SCRIPT if ring_game else "")
+    return html_page("Statistiques du field", f"<style>{STATS_STYLE}</style>" + STYLE + "".join(out), True,
+                     script=SCRIPT)

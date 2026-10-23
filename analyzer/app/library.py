@@ -738,7 +738,7 @@ class Library:
         if conf["hero"] and conf["hero"] not in mine and conf["hero"] in self.players_seen:
             checked["hero"] = None  # ton nom était un pseudo que tu retires : ton pseudo le plus fréquent le remplace
         settings.save(checked)
-        if set(checked) <= {"stat_selection"}:  # (la page des stats se refait à chaque visite)
+        if set(checked) <= {"stat_selection", "field_stat_selection"}:  # (ces pages se refont à chaque visite)
             return self.summary()
         if {"hero", "hero_excluded", "hero_added", "references"} & set(checked):
             self.reload()
@@ -1276,9 +1276,10 @@ class Library:
         return self._cached(("field", kind, fmt, band, min_hands) + tuple(kinds_key), build)
 
     def field_stats(self, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
-        """Les stats globales de tes adversaires d'un format à un niveau de limites : réguliers, récréatifs, tous, face
-        aux repères de ce niveau et à toi ; aux tables à plusieurs, par position ; puis tes écarts que leurs réponses
-        justifient et ceux qui te rapporteraient (le Leakfinding de ce format)."""
+        """Les stats de tes adversaires d'un format à un niveau de limites, celles choisies (settings
+        field_stat_selection, statlib) : réguliers, récréatifs, tous, face aux repères de ce niveau et à toi, puis par
+        position ; puis tes écarts que leurs réponses justifient et ceux qui te rapporteraient (le Leakfinding de ce
+        format). Les totaux restent en cache, la page se refait avec ton choix."""
         fmt = self._field_format(table_format)
         band = self._field_band(fmt, band)
         kinds_key = self._kinds_key() if fmt == "HU" else (self._ring_kinds_key(),)
@@ -1294,23 +1295,17 @@ class Library:
             labels = {"reg": "Réguliers", "rec": "Récréatifs", "all": "Tous"}
             # les populations qui ont des joueurs (« Tous » : quand il y a des deux)
             shown = [k for k in ("reg", "rec") if groups[k]] + (["all"] if groups["reg"] and groups["rec"] else [])
-            positions = None
-            if fmt == "HU":
-                stats = self._band_stats(band)
-                merged = {k: field.merge_stats([stats[n] for n in names if n in stats]) for k, names in groups.items()}
-                columns = [(labels[k], dict(merged[k].ratios)) for k in shown]
-                columns.append(("Toi", dict(stats[hero].ratios) if hero in stats else {}))
-            else:
-                hands_list = self._band_hands(fmt, band)
-                columns = [(labels[k], field.ring_ratios(hands_list, groups[k])) for k in shown]
-                columns.append(("Toi", field.ring_ratios(hands_list, [hero]) if hero else {}))
-                found = [(f"pop-{k}", labels[k], ring.population(hands_list, set(groups[k]))) for k in shown]
-                positions = [x for x in found if x[2] is not None]
+            band_hands = self._band_hands(fmt, band)
+            populations = [(k, labels[k], statlib.tally_group(band_hands, groups[k], fmt)) for k in shown]
+            mine = statlib.tally(band_hands, hero, fmt) if hero else None
             report = self.leaks_report(fmt) if hero else None
-            return build_field_stats_page(fmt, band, self._field_switch(fmt, band), columns, players, hands, positions,
-                                          report.exploits if report else [], report.opportunities if report else [],
-                                          leaks_href=f"{self.pages}/leaks{format_query(fmt)}")
-        return self._cached(("field_stats", fmt, band, _digest_count()) + _theory_changes() + tuple(kinds_key), build)
+            return {"populations": populations, "mine": mine, "players": players, "hands": hands,
+                    "exploits": report.exploits if report else [], "chances": report.opportunities if report else []}
+        found = self._cached(("field_stats", fmt, band, _digest_count()) + _theory_changes() + tuple(kinds_key), build)
+        return build_field_stats_page(fmt, band, self._field_switch(fmt, band), found["populations"], found["mine"],
+                                      found["players"], found["hands"], settings.load()["field_stat_selection"],
+                                      found["exploits"], found["chances"],
+                                      leaks_href=f"{self.pages}/leaks{format_query(fmt)}")
 
     def field_lines(self, kind: str, focus: str, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
         """Les bluffs (focus « bluffs ») ou la value (« value ») des réguliers (« reg ») ou des récréatifs (« rec »)

@@ -243,7 +243,8 @@ class Stat:
 
     kind : « pct » (fréquence), « avg » (moyenne, unit), « af » (facteur d'agression : counts), « result » (bb/100 :
     un champ de Tally), « hands ». positions : seulement les mains jouées à ces positions. refs : les repères par
-    format ((min, max) en %)."""
+    format ((min, max) en %) ; ref_keys : la stat d'où vient chacun (insights, ring, field), pour ceux d'un niveau de
+    limites (field_ref)."""
     id: str
     label: str
     group: str
@@ -253,6 +254,7 @@ class Stat:
     unit: str = ""
     positions: tuple = ()
     refs: dict = field(default_factory=dict)
+    ref_keys: dict = field(default_factory=dict)
 
     def formats(self) -> tuple[str, ...]:
         return tuple(f for f in FORMATS if f in self.src and (not self.positions
@@ -273,12 +275,13 @@ def _ring_ref(key: str) -> Optional[tuple]:
 
 
 def _refs(hu: Optional[str] = None, ring_key: Optional[str] = None) -> dict:
-    out = {}
-    if hu and _hu_ref(hu):
-        out["HU"] = _hu_ref(hu)
-    if ring_key and _ring_ref(ring_key):
-        out["ring"] = _ring_ref(ring_key)
-    return out
+    """Les repères d'une stat (refs) et les stats d'où ils viennent (ref_keys)."""
+    refs, keys = {}, {}
+    for fmt, key, find in (("HU", hu, _hu_ref), ("ring", ring_key, _ring_ref)):
+        ref = find(key) if key else None
+        if ref:
+            refs[fmt], keys[fmt] = ref, key
+    return {"refs": refs, "ref_keys": keys}
 
 
 G_RESULTS = "Résultats"
@@ -322,14 +325,14 @@ def _catalog() -> list[Stat]:
 
     # Préflop — général
     add("vpip", "VPIP", G_PRE, "Mains où tu mets de l'argent de toi-même avant le flop (call ou relance ; poster une "
-        "blinde ne compte pas).", both("vpip", "vpip"), refs=_refs(ring_key="vpip"))
-    add("pfr", "PFR", G_PRE, "Mains où tu relances avant le flop.", both("pfr", "pfr"), refs=_refs(ring_key="pfr"))
+        "blinde ne compte pas).", both("vpip", "vpip"), **_refs(ring_key="vpip"))
+    add("pfr", "PFR", G_PRE, "Mains où tu relances avant le flop.", both("pfr", "pfr"), **_refs(ring_key="pfr"))
     add("saw_flop", "Voit le flop", G_PRE, "Mains où tu vois le flop.", both("saw_flop", "saw_f"))
     for pos in ring.SIX_MAX:
         name = POSITION_NAMES[pos]
         hu = {"BTN": "vpip_sb", "BB": "vpip_bb"}.get(pos)
         add(f"vpip_{pos.lower()}", f"VPIP {name}", G_PRE, f"VPIP quand tu es {name}.", both("vpip", "vpip"),
-            positions=(pos,), refs=_refs(hu=hu))
+            positions=(pos,), **_refs(hu=hu))
     for pos in ring.SIX_MAX:
         name = POSITION_NAMES[pos]
         add(f"pfr_{pos.lower()}", f"PFR {name}", G_PRE, f"PFR quand tu es {name}.", both("pfr", "pfr"),
@@ -337,7 +340,7 @@ def _catalog() -> list[Stat]:
 
     # Préflop — ouverture et vol
     add("rfi", "Open (RFI)", G_OPEN, "Tu relances quand personne n'est entré avant toi (Raise First In).",
-        both("sb_first.raise", "open"), refs=_refs(hu="sb_first.raise"))
+        both("sb_first.raise", "open"), **_refs(hu="sb_first.raise"))
     for pos in ("UTG", "HJ", "CO", "BTN", "SB"):
         name = POSITION_NAMES[pos]
         refs = {"ring": ring.OPEN_6MAX[pos]} if pos in ring.OPEN_6MAX else {}
@@ -348,27 +351,27 @@ def _catalog() -> list[Stat]:
     add("steal", "Tentative de vol", G_OPEN, "Open du CO, du bouton ou de la SB quand personne n'est entré (attempt "
         "to steal).", both("sb_first.raise", "open"), positions=STEAL_FROM)
     add("limp", "Limp d'entrée", G_OPEN, "Tu paies la blinde quand personne n'est entré avant toi.",
-        both("sb_first.call", "limp"), refs=_refs(hu="sb_first.call"))
+        both("sb_first.call", "limp"), **_refs(hu="sb_first.call"))
     add("fold_rfi", "Fold d'entrée", G_OPEN, "Tu te couches quand personne n'est entré avant toi.",
-        both("sb_first.fold", "fold_rfi"), refs=_refs(hu="sb_first.fold"))
+        both("sb_first.fold", "fold_rfi"), **_refs(hu="sb_first.fold"))
 
     # Préflop — face à une ouverture
     add("fold_open", "Fold face à une ouverture", G_VS_OPEN, "Tu te couches face à une ouverture (une relance, pas "
         "encore de 3bet), à ta première parole.", both("bb_vs_open.fold", "fold_open"),
-        refs=_refs(hu="bb_vs_open.fold"))
+        **_refs(hu="bb_vs_open.fold"))
     add("call_open", "Call d'une ouverture (flat)", G_VS_OPEN, "Tu paies une ouverture à ta première parole (cold "
-        "call).", both("bb_vs_open.call", "flat"), refs=_refs(hu="bb_vs_open.call"))
+        "call).", both("bb_vs_open.call", "flat"), **_refs(hu="bb_vs_open.call"))
     add("threebet", "3bet", G_VS_OPEN, "Tu relances une ouverture à ta première parole.",
-        both("bb_vs_open.raise", "threebet"), refs=_refs(hu="bb_vs_open.raise", ring_key="threebet"))
+        both("bb_vs_open.raise", "threebet"), **_refs(hu="bb_vs_open.raise", ring_key="threebet"))
     add("squeeze", "Squeeze", G_VS_OPEN, "Tu relances une ouverture déjà payée par un ou plusieurs joueurs.",
         {"ring": "squeeze"})
     add("fold_steal", "Fold face au vol", G_VS_OPEN, "En SB ou en BB, tu te couches face à une ouverture du CO, du "
         "bouton ou de la SB (sans caller).", both("bb_vs_open.fold", "fold_steal"),
-        refs=_refs(hu="bb_vs_open.fold", ring_key="fold_steal"))
+        **_refs(hu="bb_vs_open.fold", ring_key="fold_steal"))
     add("call_steal", "Call face au vol", G_VS_OPEN, "En SB ou en BB, tu paies une ouverture du CO, du bouton ou de la "
         "SB.", both("bb_vs_open.call", "call_steal"))
     add("threebet_steal", "3bet face au vol", G_VS_OPEN, "En SB ou en BB, tu relances une ouverture du CO, du bouton "
-        "ou de la SB.", both("bb_vs_open.raise", "threebet_steal"), refs=_refs(ring_key="threebet_steal"))
+        "ou de la SB.", both("bb_vs_open.raise", "threebet_steal"), **_refs(ring_key="threebet_steal"))
     for pos in ("SB", "BB"):
         hu = both("bb_vs_open.fold", "fold_steal") if pos == "BB" else {"ring": "fold_steal"}
         add(f"fold_steal_{pos.lower()}", f"Fold {pos} face au vol", G_VS_OPEN, f"Fold face au vol quand tu es {pos}.",
@@ -377,30 +380,30 @@ def _catalog() -> list[Stat]:
         add(f"threebet_steal_{pos.lower()}", f"3bet {pos} face au vol", G_VS_OPEN,
             f"3bet face au vol quand tu es {pos}.", hu, positions=(pos,))
     add("iso", "Iso-raise face à un limp", G_VS_OPEN, "Tu relances un ou plusieurs limps (personne n'a relancé).",
-        both("bb_vs_limp.raise", "iso"), refs=_refs(hu="bb_vs_limp.raise"))
+        both("bb_vs_limp.raise", "iso"), **_refs(hu="bb_vs_limp.raise"))
     add("overlimp", "Limp derrière un limp", G_VS_OPEN, "Tu paies derrière un ou plusieurs limps.",
         {"ring": "overlimp"})
 
     # Préflop — 3bet, 4bet, 5bet
     add("fold_3bet", "Fold face au 3bet", G_3BET, "Tu avais ouvert : tu te couches face au 3bet.",
-        both("sb_vs_3bet.fold", "fold_3bet"), refs=_refs(hu="sb_vs_3bet.fold", ring_key="fold_3bet"))
+        both("sb_vs_3bet.fold", "fold_3bet"), **_refs(hu="sb_vs_3bet.fold", ring_key="fold_3bet"))
     add("call_3bet", "Call du 3bet", G_3BET, "Tu avais ouvert : tu paies le 3bet.", both("sb_vs_3bet.call", "call_vs3"),
-        refs=_refs(hu="sb_vs_3bet.call"))
+        **_refs(hu="sb_vs_3bet.call"))
     add("fourbet", "4bet", G_3BET, "Tu avais ouvert : tu relances le 3bet.", both("sb_vs_3bet.raise", "raise_vs3"),
-        refs=_refs(hu="sb_vs_3bet.raise"))
+        **_refs(hu="sb_vs_3bet.raise"))
     add("fourbet_any", "4bet (toutes situations)", G_3BET, "Tu relances un 3bet, que tu aies ouvert ou non (cold 4bet "
         "compris).", both("vs_3bet.raise", "fourbet_any"))
     add("fold_4bet", "Fold face au 4bet", G_3BET, "Tu avais 3betté : tu te couches face au 4bet.",
-        both("bb_vs_4bet.fold", "fold_vs4"), refs=_refs(hu="bb_vs_4bet.fold"))
+        both("bb_vs_4bet.fold", "fold_vs4"), **_refs(hu="bb_vs_4bet.fold"))
     add("call_4bet", "Call du 4bet", G_3BET, "Tu avais 3betté : tu paies le 4bet.", both("bb_vs_4bet.call", "call_vs4"))
     add("fivebet", "5bet", G_3BET, "Tu avais 3betté : tu relances le 4bet.", both("bb_vs_4bet.raise", "raise_vs4"),
-        refs=_refs(hu="bb_vs_4bet.raise"))
+        **_refs(hu="bb_vs_4bet.raise"))
 
     # Préflop — limp
     for option, label, what in (("fold", "Limp puis fold", "tu te couches"), ("call", "Limp puis call", "tu paies"),
                                 ("raise", "Limp-relance", "tu relances")):
         add(f"limp_{option}", label, G_LIMP, f"Tu as limpé et quelqu'un relance : {what}.",
-            both(f"sb_vs_iso.{option}", f"{option}_limp"), refs=_refs(hu=f"sb_vs_iso.{option}"))
+            both(f"sb_vs_iso.{option}", f"{option}_limp"), **_refs(hu=f"sb_vs_iso.{option}"))
 
     # Préflop — tailles
     add("open_size", "Taille de l'open", G_PRE_SIZE, "Ta relance d'ouverture, en big blinds (tapis exclus).",
@@ -414,11 +417,11 @@ def _catalog() -> list[Stat]:
     add("cbet_f", "C-bet flop", G_PFA, "Dernier relanceur avant le flop, tu mises au flop quand personne n'a misé "
         "avant toi.", both("cbet_flop", "cbet_hu+cbet_multi"))
     add("cbet_f_ip", "C-bet flop en position", G_PFA, "C-bet flop quand tu parles le dernier.",
-        both("cbet_flop_ip", "cbet_f_ip"), refs=_refs(hu="cbet_flop_ip"))
+        both("cbet_flop_ip", "cbet_f_ip"), **_refs(hu="cbet_flop_ip"))
     add("cbet_f_oop", "C-bet flop hors de position", G_PFA, "C-bet flop quand un adversaire parle après toi.",
-        both("cbet_flop_oop", "cbet_f_oop"), refs=_refs(hu="cbet_flop_oop"))
+        both("cbet_flop_oop", "cbet_f_oop"), **_refs(hu="cbet_flop_oop"))
     add("cbet_f_hu", "C-bet flop, pot à deux", G_PFA, "C-bet flop quand vous êtes deux à voir le flop.",
-        both("cbet_flop", "cbet_hu"), refs=_refs(ring_key="cbet_hu"))
+        both("cbet_flop", "cbet_hu"), **_refs(ring_key="cbet_hu"))
     add("cbet_f_multi", "C-bet flop, pot à plusieurs", G_PFA,
         "C-bet flop quand vous êtes trois ou plus à voir le flop.",
         {"ring": "cbet_multi"})
@@ -426,15 +429,15 @@ def _catalog() -> list[Stat]:
         both("cbet_f_srp", "cbet_f_srp"))
     add("cbet_f_3bp", "C-bet flop, pot 3bet", G_PFA, "C-bet flop dans un pot 3betté.", both("cbet_f_3bp", "cbet_f_3bp"))
     add("cbet_t", "2e barrel (c-bet turn)", G_PFA, "Tu as fait la c-bet flop : tu mises encore la turn quand personne "
-        "n'a misé avant toi.", both("cbet_turn", "cbet_turn"), refs=_refs(hu="cbet_turn", ring_key="cbet_turn"))
+        "n'a misé avant toi.", both("cbet_turn", "cbet_turn"), **_refs(hu="cbet_turn", ring_key="cbet_turn"))
     add("cbet_r", "3e barrel (c-bet river)", G_PFA, "Tu as misé le flop et la turn : tu mises encore la river.",
-        both("cbet_river", "cbet_river"), refs=_refs(hu="cbet_river"))
+        both("cbet_river", "cbet_river"), **_refs(hu="cbet_river"))
     add("delayed_cbet_t", "C-bet retardé turn", G_PFA, "Le flop s'est joué sans mise : dernier relanceur avant le "
-        "flop, tu mises la turn.", both("delayed_cbet_turn", "delayed_cbet_t"), refs=_refs(hu="delayed_cbet_turn"))
+        "flop, tu mises la turn.", both("delayed_cbet_turn", "delayed_cbet_t"), **_refs(hu="delayed_cbet_turn"))
     for short, street, _ in STREETS:
         add(f"fold_raise_{short}", f"Fold face à une relance après ta mise, {street}", G_ANY,
             f"Tu as misé ou relancé au {street} et on te relance : tu te couches.",
-            both(f"vs_raise_{street}.fold", f"fold_raise_{short}"), refs=_refs(hu=f"vs_raise_{street}.fold"))
+            both(f"vs_raise_{street}.fold", f"fold_raise_{short}"), **_refs(hu=f"vs_raise_{street}.fold"))
 
     # Après le flop — face à l'initiative
     for short, street, _ in STREETS:
@@ -443,24 +446,24 @@ def _catalog() -> list[Stat]:
         add(f"fold_cbet_{short}", f"Fold face à la {name}" if short == "f" else f"Fold face au {name}", G_DEF,
             f"Le dernier relanceur avant le flop mise ({name}) : tu te couches.",
             both(f"vs_cbet_{street}.fold", ring_fold),
-            refs=_refs(hu=f"vs_cbet_{street}.fold", ring_key=ring_fold))
+            **_refs(hu=f"vs_cbet_{street}.fold", ring_key=ring_fold))
         add(f"call_cbet_{short}", f"Call de la {name}" if short == "f" else f"Call du {name}", G_DEF,
             f"Le dernier relanceur avant le flop mise ({name}) : tu paies.",
             both(f"vs_cbet_{street}.call", f"call_cbet_{short}"))
         add(f"raise_cbet_{short}", f"Relance de la {name}" if short == "f" else f"Relance du {name}", G_DEF,
             f"Le dernier relanceur avant le flop mise ({name}) : tu relances.",
-            both(f"vs_cbet_{street}.raise", f"raise_cbet_{short}"), refs=_refs(hu=f"vs_cbet_{street}.raise"))
+            both(f"vs_cbet_{street}.raise", f"raise_cbet_{short}"), **_refs(hu=f"vs_cbet_{street}.raise"))
     add("donk_f", "Donk flop", G_DEF, "Tu mises au flop avant le dernier relanceur préflop, qui parle après toi.",
-        both("donk_flop", "donk_f"), refs=_refs(hu="donk_flop"))
+        both("donk_flop", "donk_f"), **_refs(hu="donk_flop"))
     add("donk_t", "Donk turn", G_DEF, "Tu as payé sa c-bet flop : tu mises la turn avant lui.",
         both("donk_turn", "donk_t"))
     add("stab_f", "Mise quand l'initiative checke, flop", G_DEF, "Le dernier relanceur préflop checke le flop : tu "
         "mises (« bet vs missed c-bet »).", both("float_flop", "stab_flop"),
-        refs=_refs(hu="float_flop", ring_key="stab_flop"))
+        **_refs(hu="float_flop", ring_key="stab_flop"))
     add("stab_t", "Mise quand l'initiative renonce, turn", G_DEF, "Tu as payé sa c-bet flop et il checke la turn : tu "
         "mises (float).", both("float_turn", "stab_t"))
     add("probe_t", "Probe turn", G_DEF, "Le flop s'est joué sans mise : tu mises la turn avant le dernier relanceur "
-        "préflop.", both("probe_turn", "probe_t"), refs=_refs(hu="probe_turn"))
+        "préflop.", both("probe_turn", "probe_t"), **_refs(hu="probe_turn"))
     add("probe_r", "Probe river", G_DEF, "La turn s'est jouée sans mise : tu mises la river avant le dernier relanceur "
         "préflop.", both("probe_r", "probe_r"))
 
@@ -472,7 +475,7 @@ def _catalog() -> list[Stat]:
         ring_fold = {"f": "fold_bet_f", "t": "fold_turn", "r": "fold_river"}[short]
         add(f"fold_bet_{short}", f"Fold face à une mise, {street}", G_ANY,
             f"On mise au {street} (première mise) : tu te couches.", both(f"vs_bet_{street}.fold", ring_fold),
-            refs=_refs(hu=f"vs_bet_{street}.fold", ring_key=ring_fold))
+            **_refs(hu=f"vs_bet_{street}.fold", ring_key=ring_fold))
         add(f"call_bet_{short}", f"Call d'une mise, {street}", G_ANY,
             f"On mise au {street} (première mise) : tu paies.",
             both(f"vs_bet_{street}.call", f"call_bet_{short}"))
@@ -484,7 +487,7 @@ def _catalog() -> list[Stat]:
     for short, street, _ in STREETS:
         ring_xr = "xr_flop" if short == "f" else f"xr_{short}"
         add(f"xr_{short}", f"Check-raise {street}", G_ANY, f"Tu as checké le {street}, on mise : tu relances.",
-            both(f"xr_{street}", ring_xr), refs=_refs(hu=f"xr_{street}", ring_key=ring_xr))
+            both(f"xr_{street}", ring_xr), **_refs(hu=f"xr_{street}", ring_key=ring_xr))
         add(f"xc_{short}", f"Check-call {street}", G_ANY, f"Tu as checké le {street}, on mise : tu paies.",
             both(f"xc_{short}", f"xc_{short}"))
         add(f"xf_{short}", f"Check-fold {street}", G_ANY, f"Tu as checké le {street}, on mise : tu te couches.",
@@ -511,18 +514,18 @@ def _catalog() -> list[Stat]:
         add(f"af_{short}", f"AF {street}", G_AGGR, f"Au {street} : (mises + relances) / calls.", both(short, short),
             kind="af")
     add("afq", "Fréquence d'agression (AFq)", G_AGGR, "Après le flop : part des mises et relances parmi tes mises, "
-        "relances, calls et folds.", both("*", "*"), kind="afq", refs=_refs(ring_key="afq"))
+        "relances, calls et folds.", both("*", "*"), kind="afq", **_refs(ring_key="afq"))
     for short, street, _ in STREETS:
         add(f"afq_{short}", f"AFq {street}", G_AGGR, f"Au {street} : part des mises et relances parmi tes actions.",
             both(short, short), kind="afq")
 
     # Abattage
     add("wtsd", "WTSD (va à l'abattage)", G_SD, "Quand tu vois le flop, tu vas à l'abattage.", both("wtsd", "wtsd"),
-        refs=_refs(hu="wtsd", ring_key="wtsd"))
+        **_refs(hu="wtsd", ring_key="wtsd"))
     add("wsd", "W$SD (gagne à l'abattage)", G_SD, "Quand tu vas à l'abattage, tu gagnes.", both("wsd", "wsd"),
-        refs=_refs(hu="wsd", ring_key="wsd"))
+        **_refs(hu="wsd", ring_key="wsd"))
     add("wwsf", "WWSF (gagne après le flop)", G_SD, "Quand tu vois le flop, tu gagnes le pot (abattage ou non).",
-        both("wwsf", "wwsf"), refs=_refs(ring_key="wwsf"))
+        both("wwsf", "wwsf"), **_refs(ring_key="wwsf"))
     return out
 
 
@@ -540,6 +543,13 @@ DEFAULTS = {
              "fold_3bet", "cbet_f_hu", "cbet_f_multi", "cbet_t", "fold_cbet_f", "stab_f", "fold_bet_t", "fold_bet_r",
              "xr_f", "afq", "wtsd", "wsd", "wwsf"],
 }
+# Dans l'Étude du field, par défaut : les stats que sa page montrait jusqu'ici.
+FIELD_DEFAULTS = {
+    "HU": DEFAULTS["HU"],
+    "ring": ["hands", "bb100", "vpip", "pfr", "rfi", "limp", "threebet", "call_open", "fold_steal", "threebet_steal",
+             "fold_3bet", "cbet_f_hu", "cbet_f_multi", "cbet_t", "fold_cbet_f", "stab_f", "fold_bet_t", "fold_bet_r",
+             "xr_f", "fold_bet", "afq", "wtsd", "wsd", "wwsf"],
+}
 MAX_SELECTED = len(CATALOG)
 
 
@@ -548,11 +558,12 @@ def available(table_format: str) -> list[Stat]:
     return [s for s in CATALOG if table_format in s.formats()]
 
 
-def selection(table_format: str, chosen: Optional[dict] = None) -> list[Stat]:
-    """Tes stats dans ce format, dans ton ordre (chosen : settings stat_selection ; None : DEFAULTS)."""
+def selection(table_format: str, chosen: Optional[dict] = None, defaults: Optional[dict] = None) -> list[Stat]:
+    """Tes stats dans ce format, dans ton ordre (chosen : settings stat_selection ou field_stat_selection ; sans choix
+    pour ce format : defaults, DEFAULTS par défaut)."""
     ids = (chosen or {}).get(table_format)
     if ids is None:
-        ids = DEFAULTS[table_format]
+        ids = (defaults or DEFAULTS)[table_format]
     return [BY_ID[i] for i in ids if i in BY_ID and table_format in BY_ID[i].formats()]
 
 
@@ -560,35 +571,63 @@ def selection(table_format: str, chosen: Optional[dict] = None) -> list[Stat]:
 
 @dataclass
 class Tally:
-    """Ce que des mains disent d'un joueur : ses occasions, ses valeurs (somme, nombre), ses actions après le flop
-    et ses résultats (bb)."""
+    """Ce que des mains disent d'un joueur (ou d'un groupe) : ses occasions (opps) et ce qu'il en a fait (hits), ses
+    valeurs (somme et nombre), ses actions après le flop et ses résultats (bb)."""
     hands: int = 0
     net_bb: float = 0.0
     ev_bb: float = 0.0
     sd_bb: float = 0.0
     nsd_bb: float = 0.0
     rake_bb: float = 0.0
-    ratios: dict = field(default_factory=lambda: defaultdict(Ratio))
-    values: dict = field(default_factory=lambda: defaultdict(lambda: [0.0, 0]))
+    opps: Counter = field(default_factory=Counter)
+    hits: Counter = field(default_factory=Counter)
+    sums: dict = field(default_factory=lambda: defaultdict(float))
+    samples: Counter = field(default_factory=Counter)
     counts: Counter = field(default_factory=Counter)
+
+    def ratio(self, key: str) -> Ratio:
+        return Ratio(self.hits[key], self.opps[key])
 
     def merge(self, other: "Tally") -> None:
         for name in ("hands", "net_bb", "ev_bb", "sd_bb", "nsd_bb", "rake_bb"):
             setattr(self, name, getattr(self, name) + getattr(other, name))
-        for key, r in other.ratios.items():
-            mine = self.ratios[key]
-            mine.hits += r.hits
-            mine.opps += r.opps
-        for key, (total, n) in other.values.items():
-            mine = self.values[key]
-            mine[0] += total
-            mine[1] += n
-        self.counts.update(other.counts)
+        for mine, theirs in ((self.opps, other.opps), (self.hits, other.hits), (self.samples, other.samples),
+                             (self.counts, other.counts)):
+            mine.update(theirs)
+        for key, total in other.sums.items():
+            self.sums[key] += total
+
+    def add(self, hand: Hand, player: str, table_format: str) -> None:
+        """Une main de ce joueur."""
+        old, sizes = _old_events(hand, player, table_format)
+        new = read(hand).get(player) or _NONE
+        net = hand.net(player) / hand.bb
+        ev = allin_ev(hand)
+        self.hands += 1
+        self.net_bb += net
+        self.ev_bb += ev[player] / hand.bb if ev is not None else net
+        if hand.showdown:
+            self.sd_bb += net
+        else:
+            self.nsd_bb += net
+        self.rake_bb += rake_paid(hand, player) / hand.bb
+        for events in (old, new.ratios):
+            self.opps.update(key for key, _ in events)
+            self.hits.update(key for key, made in events if made)
+        for values in (sizes, new.values):
+            for key, x in values:
+                self.sums[key] += x
+                self.samples[key] += 1
+        self.counts.update(new.counts)
+
+
+_NONE = Events()
 
 
 @dataclass
 class Table:
-    """Les stats d'un joueur sur des mains : toutes positions (total), puis position par position."""
+    """Les stats d'un joueur (ou d'un groupe) sur des mains : toutes positions (total), puis position par
+    position."""
     total: Tally
     positions: dict[str, Tally]
 
@@ -618,44 +657,37 @@ def _old_events(hand: Hand, player: str, table_format: str) -> tuple[list, list]
     return found, []
 
 
+def _usable(hand: Hand, table_format: str) -> bool:
+    if not hand.bb or (hand.size <= 2) != (table_format == "HU"):
+        return False
+    return table_format != "HU" or bool(hand.button and hand.big_blind)
+
+
+def tally_group(hands: Iterable[Hand], names: Iterable[str], table_format: str) -> Table:
+    """Les stats de ces joueurs ensemble sur ces mains (celles de ce format : « HU » ou « ring ») : chaque main compte
+    une fois pour chacun d'eux qui y est servi ; toutes positions, puis position par position."""
+    names = set(names)
+    by_pos: dict[str, Tally] = {}
+    for h in hands:
+        here = names & h.seats.keys()
+        if not here or not _usable(h, table_format):
+            continue
+        for player in here:
+            pos = h.position(player) or "?"
+            at = by_pos.get(pos)
+            if at is None:
+                at = by_pos[pos] = Tally()
+            at.add(h, player, table_format)
+    total = Tally()
+    for at in by_pos.values():
+        total.merge(at)
+    return Table(total, by_pos)
+
+
 def tally(hands: Iterable[Hand], player: str, table_format: str) -> Table:
     """Les stats de ce joueur sur ces mains (celles de ce format : « HU » ou « ring »), toutes positions puis
     position par position."""
-    total = Tally()
-    by_pos: dict[str, Tally] = {}
-    for h in hands:
-        if player not in h.seats or not h.bb or (h.size <= 2) != (table_format == "HU"):
-            continue
-        if table_format == "HU" and (not h.button or not h.big_blind):
-            continue
-        pos = h.position(player) or "?"
-        at = by_pos.get(pos)
-        if at is None:
-            at = by_pos[pos] = Tally()
-        old, sizes = _old_events(h, player, table_format)
-        new = read(h).get(player) or Events()
-        net = h.net(player)
-        ev = allin_ev(h)
-        fee = rake_paid(h, player)
-        for t in (total, at):
-            t.hands += 1
-            t.net_bb += net / h.bb
-            t.ev_bb += (ev[player] if ev is not None else net) / h.bb
-            if h.showdown:
-                t.sd_bb += net / h.bb
-            else:
-                t.nsd_bb += net / h.bb
-            t.rake_bb += fee / h.bb
-            for key, made in old:
-                t.ratios[key].add(made)
-            for key, made in new.ratios:
-                t.ratios[key].add(made)
-            for key, value in list(sizes) + list(new.values):
-                cell = t.values[key]
-                cell[0] += value
-                cell[1] += 1
-            t.counts.update(new.counts)
-    return Table(total, by_pos)
+    return tally_group(hands, (player,), table_format)
 
 
 # --- La valeur d'une stat -------------------------------------------------------------------------------------------
@@ -694,17 +726,26 @@ def value(stat: Stat, table_format: str, table: Table, positions: Optional[tuple
         r = Ratio(aggr, aggr + calls + folds)
         return Value(r.pct, r.opps, r)
     if stat.kind == "avg":
-        total, n = t.values.get(src, (0.0, 0))
-        return Value(total / n if n else None, n)
-    r = Ratio()
-    for key in src.split("+"):
-        found = t.ratios.get(key)
-        if found is not None:
-            r.hits += found.hits
-            r.opps += found.opps
+        n = t.samples[src]
+        return Value(t.sums[src] / n if n else None, n)
+    keys = src.split("+")
+    r = Ratio(sum(t.hits[k] for k in keys), sum(t.opps[k] for k in keys))
     return Value(r.pct, r.opps, r)
 
 
-def stat_def(stat: Stat, table_format: str) -> StatDef:
-    """Pour colorer une fréquence face à son repère (report.pct_cell)."""
-    return StatDef(stat.id, stat.label, stat.refs.get(table_format))
+def stat_def(stat: Stat, table_format: str, ref: Optional[tuple] = None) -> StatDef:
+    """Pour colorer une fréquence face à son repère (report.pct_cell) : ref, sinon celui de la stat."""
+    return StatDef(stat.id, stat.label, ref if ref is not None else stat.refs.get(table_format))
+
+
+def field_ref(stat: Stat, table_format: str, band: Optional[str] = None) -> Optional[tuple]:
+    """Le repère d'une stat dans l'Étude du field : celui d'un régulier solide de ce niveau de limites (stakes.BANDS ;
+    ceux de field.RING_DEFS d'abord aux tables à plusieurs, comme ses autres pages), sinon celui de la stat."""
+    key = stat.ref_keys.get(table_format)
+    base = stat.refs.get(table_format)
+    known = field_stats.RING_DEF.get(key) if table_format == "ring" and key else None
+    if known is not None and known.ref:
+        base = known.ref
+    if base is None or not key or not band:
+        return base
+    return (field_stats.HU_BAND_REFS if table_format == "HU" else field_stats.BAND_REFS).get(band, {}).get(key, base)

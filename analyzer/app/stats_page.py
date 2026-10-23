@@ -1,12 +1,13 @@
 """L'onglet Statistiques (Mon jeu, un élève, un joueur de référence) : tes stats, celles que tu as choisies dans le
 catalogue (analyzer/statlib.py), dans ton ordre, sur toutes tes mains, contre les réguliers et contre les récréatifs,
 face aux repères ; puis position par position. « Choisir mes stats » : ajouter, retirer, ranger, comme dans
-PokerTracker (paramètres : stat_selection, communs à tous les espaces)."""
+PokerTracker (paramètres : stat_selection, communs à tous les espaces). Ses morceaux servent aussi à l'Étude du field
+(field_stats_page.py : field_stat_selection)."""
 from __future__ import annotations
 
 import json
 from html import escape
-from typing import Optional
+from typing import Callable, Optional
 
 from .. import statlib
 from ..report import html_page, num, pct_cell
@@ -47,11 +48,17 @@ table.sl-table td.lbl abbr { text-decoration: none; border-bottom: 1px dotted va
 
 UNITS = {"bb": " bb", "×": "×", "% du pot": " %"}
 MIN_SAMPLE = 15
+RefOf = Callable[[statlib.Stat], Optional[tuple]]  # le repère d'une stat sur la page
 
 
-def cell(stat: statlib.Stat, fmt: str, table: Optional[statlib.Table], positions: Optional[tuple] = None) -> str:
+def _own_ref(fmt: str) -> RefOf:
+    return lambda stat: stat.refs.get(fmt)
+
+
+def cell(stat: statlib.Stat, fmt: str, table: Optional[statlib.Table], positions: Optional[tuple] = None,
+         ref_of: Optional[RefOf] = None) -> str:
     """La valeur d'une stat sur ces mains (positions : seulement celles-là), en cellule de tableau ; colorée face à
-    son repère, sauf à une seule position quand le repère vaut pour toutes."""
+    son repère (ref_of, sinon celui de la stat), sauf à une seule position quand le repère vaut pour toutes."""
     if table is None:
         return '<td class="num muted">–</td>'
     found = statlib.value(stat, fmt, table, positions)
@@ -59,7 +66,8 @@ def cell(stat: statlib.Stat, fmt: str, table: Optional[statlib.Table], positions
         return '<td class="num muted">–</td>'
     if found.ratio is not None and stat.kind in ("pct", "afq"):
         colored = not positions or bool(stat.positions)
-        return pct_cell(found.ratio, stat=statlib.stat_def(stat, fmt) if colored else None)
+        ref = (ref_of or _own_ref(fmt))(stat)
+        return pct_cell(found.ratio, stat=statlib.stat_def(stat, fmt, ref) if colored and ref else None)
     small = " small" if found.sample < MIN_SAMPLE else ""
     if stat.kind == "hands":
         return f'<td class="num"><span class="v">{num(found.value, 0)}</span></td>'
@@ -74,8 +82,7 @@ def cell(stat: statlib.Stat, fmt: str, table: Optional[statlib.Table], positions
     return f'<td class="num"><span class="v">{text}</span><span class="n{small}">{sample}</span></td>'
 
 
-def _ref(stat: statlib.Stat, fmt: str) -> str:
-    ref = stat.refs.get(fmt)
+def _ref(ref: Optional[tuple]) -> str:
     return f'<td class="num muted">{ref[0]:.0f}–{ref[1]:.0f}&nbsp;%</td>' if ref else '<td class="num muted"></td>'
 
 
@@ -83,21 +90,28 @@ def _label(stat: statlib.Stat) -> str:
     return f'<td class="lbl"><abbr title="{escape(stat.help)}">{escape(stat.label)}</abbr></td>'
 
 
-def overview_table(chosen: list[statlib.Stat], fmt: str, scopes: list[tuple[str, str, statlib.Table]]) -> str:
-    """Tes stats, dans ton ordre (un titre à chaque changement de groupe) : une colonne par portée, puis le repère."""
+def overview_table(chosen: list[statlib.Stat], fmt: str, scopes: list[tuple[str, str, statlib.Table]],
+                   tail: tuple = (), ref_of: Optional[RefOf] = None) -> str:
+    """Tes stats, dans ton ordre (un titre à chaque changement de groupe) : une colonne par portée, le repère (ref_of,
+    sinon celui de la stat), puis les portées de tail (« Toi » dans l'Étude du field)."""
+    ref_of = ref_of or _own_ref(fmt)
     head = "".join(f'<th class="num">{escape(label)}</th>' for _, label, _ in scopes)
+    after = "".join(f'<th class="num">{escape(label)}</th>' for _, label, _ in tail)
+    width = len(scopes) + len(tail) + 2
     rows, group = [], None
     for stat in chosen:
         if stat.group != group:
             group = stat.group
-            rows.append(f'<tr class="grp"><td colspan="{len(scopes) + 2}">{escape(group)}</td></tr>')
-        cells = "".join(cell(stat, fmt, table) for _, _, table in scopes)
-        rows.append(f"<tr>{_label(stat)}{cells}{_ref(stat, fmt)}</tr>")
+            rows.append(f'<tr class="grp"><td colspan="{width}">{escape(group)}</td></tr>')
+        cells = "".join(cell(stat, fmt, table, ref_of=ref_of) for _, _, table in scopes)
+        last = "".join(cell(stat, fmt, table, ref_of=ref_of) for _, _, table in tail)
+        rows.append(f"<tr>{_label(stat)}{cells}{_ref(ref_of(stat))}{last}</tr>")
     return (f'<div class="card scroll"><table class="stats sl-table"><thead><tr><th>Stat</th>{head}'
-            f'<th class="num">Repère</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>')
+            f'<th class="num">Repère</th>{after}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>')
 
 
-def positions_table(chosen: list[statlib.Stat], fmt: str, table: statlib.Table) -> str:
+def positions_table(chosen: list[statlib.Stat], fmt: str, table: statlib.Table,
+                    ref_of: Optional[RefOf] = None) -> str:
     """Tes stats position par position (les positions où tu as des mains, dans l'ordre de parole)."""
     order = statlib.POSITIONS[fmt]
     present = [p for p in order if p in table.positions] + sorted(p for p in table.positions if p not in order)
@@ -107,16 +121,33 @@ def positions_table(chosen: list[statlib.Stat], fmt: str, table: statlib.Table) 
         if stat.group != group:
             group = stat.group
             rows.append(f'<tr class="grp"><td colspan="{len(present) + 2}">{escape(group)}</td></tr>')
-        cells = "".join(cell(stat, fmt, table, (p,)) for p in present)
-        rows.append(f"<tr>{_label(stat)}{cell(stat, fmt, table)}{cells}</tr>")
+        cells = "".join(cell(stat, fmt, table, (p,), ref_of) for p in present)
+        rows.append(f"<tr>{_label(stat)}{cell(stat, fmt, table, ref_of=ref_of)}{cells}</tr>")
     return (f'<div class="scroll"><table class="stats sl-table"><thead><tr><th>Stat</th><th class="num">Toutes</th>'
             f'{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
             '<p class="note">En couleur à une position : seulement les stats dont le repère vaut pour elle (l\'open '
             "par position par exemple).</p>")
 
 
-def chooser(fmt: str, chosen: list[statlib.Stat], saved: Optional[dict]) -> str:
-    """Le panneau « Choisir mes stats » : le catalogue (cases à cocher, recherche) et tes stats dans ton ordre."""
+def positions_block(chosen: list[statlib.Stat], fmt: str, shown: list[tuple[str, str, statlib.Table]],
+                    ref_of: Optional[RefOf] = None, what: str = "Adversaires") -> str:
+    """Les stats position par position de chaque portée (shown), une à la fois (boutons au-dessus)."""
+    switch = (f'<div class="sl-switch" role="group" aria-label="{escape(what)}">' + "".join(
+        f'<button type="button" data-scope="{escape(scope)}" aria-pressed="{str(k == 0).lower()}">'
+        f"{escape(label)} ({num(table.total.hands, 0)})</button>" for k, (scope, label, table) in enumerate(shown))
+        + "</div>") if len(shown) > 1 else ""
+    return switch + "".join(
+        f'<section class="sl-pos" data-scope="{escape(scope)}"{"" if k == 0 else " hidden"}>'
+        f"{positions_table(chosen, fmt, table, ref_of)}</section>" for k, (scope, _, table) in enumerate(shown))
+
+
+TO_ALL = "Ton choix vaut pour ce format, dans ton espace comme pour tes élèves et tes joueurs de référence."
+
+
+def chooser(fmt: str, chosen: list[statlib.Stat], saved: Optional[dict], setting: str = "stat_selection",
+            scope_note: str = TO_ALL) -> str:
+    """Le panneau « Choisir mes stats » : le catalogue (cases à cocher, recherche) et tes stats dans ton ordre ;
+    setting : le paramètre où il s'enregistre (saved : sa valeur)."""
     picked = {s.id for s in chosen}
     groups = []
     for group in statlib.GROUPS:
@@ -128,8 +159,7 @@ def chooser(fmt: str, chosen: list[statlib.Stat], saved: Optional[dict]) -> str:
             f'data-id="{escape(s.id)}" data-label="{escape(s.label)}"{" checked" if s.id in picked else ""}>'
             f'<span>{escape(s.label)} <span class="sl-help">— {escape(s.help)}</span></span></label>' for s in stats)
         groups.append(f'<div class="sl-group"><h4>{escape(group)}</h4>{items}</div>')
-    data = {"format": fmt, "saved": saved, "selected": [s.id for s in chosen],
-            "defaults": statlib.DEFAULTS[fmt]}
+    data = {"format": fmt, "saved": saved, "selected": [s.id for s in chosen], "setting": setting}
     return (
         '<div class="sl-panel" hidden><div class="sl-cols"><div><input type="search" class="sl-search" '
         f'placeholder="Chercher une stat (c-bet, 3bet, river…)" aria-label="Chercher une stat">'
@@ -141,7 +171,7 @@ def chooser(fmt: str, chosen: list[statlib.Stat], saved: Optional[dict]) -> str:
         '<button type="button" class="sl-default">Revenir aux stats par défaut</button>'
         '<span class="sl-msg sl-status"></span></div>'
         '<p class="note">Coche une stat pour l\'ajouter (à la fin), décoche-la pour la retirer ; ↑ et ↓ la déplacent. '
-        "Ton choix vaut pour ce format, dans ton espace comme pour tes élèves et tes joueurs de référence.</p></div>"
+        f"{escape(scope_note)}</p></div>"
         f'<script type="application/json" id="sl-data">{_json(data)}</script>')
 
 
@@ -165,23 +195,19 @@ def build_stats_page(fmt: str, hero: str, scopes: list[tuple[str, str, Optional[
             else "un régulier 6-max à 100 bb")
     meta = (f'<div class="meta">{num(total, 0)} mains {where} · {len(chosen)} stat(s) choisie(s) sur '
             f"{len(statlib.available(fmt))} · repères indicatifs : {refs} · l'essentiel est dans le bilan.</div>")
-    bar = ('<div class="sl-bar"><button type="button" class="primary sl-open">Choisir mes stats</button>'
-           '<span class="sl-msg">Survole le nom d\'une stat pour sa définition.</span></div>')
-    switch = ('<div class="sl-switch" role="group" aria-label="Adversaires">' + "".join(
-        f'<button type="button" data-scope="{escape(scope)}" aria-pressed="{str(k == 0).lower()}">'
-        f"{escape(label)} ({num(table.total.hands, 0)})</button>" for k, (scope, label, table) in enumerate(shown))
-        + "</div>") if len(shown) > 1 else ""
-    by_position = "".join(
-        f'<section class="sl-pos" data-scope="{escape(scope)}"{"" if k == 0 else " hidden"}>'
-        f"{positions_table(chosen, fmt, table)}</section>" for k, (scope, _, table) in enumerate(shown))
     note = ('<p class="note">Fréquences : fois où tu l\'as fait / fois où tu pouvais le faire ; en couleur, hors du '
             "repère ; chiffres en gris : moins de 15 occasions. Tailles : moyenne de tes mises (tapis exclus). "
             "Contre les réguliers, contre les récréatifs : les mains où l'un d'eux était dans le coup.</p>")
-    body = (f"<style>{STYLE}</style>{head}{meta}{bar}{chooser(fmt, chosen, saved)}"
-            + (f"{STATS_LEGEND}{overview_table(chosen, fmt, shown)}{note}" if chosen else
-               '<p class="note">Aucune stat choisie : clique sur « Choisir mes stats ».</p>')
-            + (f'<h2>Position par position</h2><div class="card">{switch}{by_position}</div>' if chosen else ""))
+    body = (f"<style>{STYLE}</style>{head}{meta}{BAR}{chooser(fmt, chosen, saved)}"
+            + (f"{STATS_LEGEND}{overview_table(chosen, fmt, shown)}{note}" if chosen else NONE_CHOSEN)
+            + (f'<h2>Position par position</h2><div class="card">{positions_block(chosen, fmt, shown)}</div>'
+               if chosen else ""))
     return html_page(f"Statistiques — {hero}", body, embed, script=SCRIPT)
+
+
+BAR = ('<div class="sl-bar"><button type="button" class="primary sl-open">Choisir mes stats</button>'
+       '<span class="sl-msg">Survole le nom d\'une stat pour sa définition.</span></div>')
+NONE_CHOSEN = '<p class="note">Aucune stat choisie : clique sur « Choisir mes stats ».</p>'
 
 
 SCRIPT = r"""
@@ -248,8 +274,10 @@ SCRIPT = r"""
     var all = Object.assign({}, data.saved || {});
     if (value === null) delete all[data.format]; else all[data.format] = value;
     status.textContent = 'Enregistrement…';
+    var body = {};
+    body[data.setting] = Object.keys(all).length ? all : null;
     fetch('/api/parametres', {method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({stat_selection: Object.keys(all).length ? all : null})})
+      body: JSON.stringify(body)})
       .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || r.status); }); })
       .then(function () { location.reload(); })
       .catch(function (err) { status.textContent = 'Erreur : ' + err.message; });

@@ -100,6 +100,47 @@ class SameNumbersTest(IsolatedHome):
         self.assertEqual(bb.opps, next(p for p in fs.positions if p.position == "BB").ratios["fold_steal"].opps)
 
 
+class PopulationTest(IsolatedHome):
+    """Un groupe de joueurs (l'Étude du field) : les mêmes chiffres que ses autres pages."""
+
+    def test_tables(self):
+        hands = [h for h in load_hands([SITES / "betclic_6max.txt", SITES / "winamax.txt"]) if h.size > 2]
+        names = {p for h in hands for p in h.seats} - {"Hero"}
+        table = statlib.tally_group(hands, names, "ring")
+        old = field.ring_ratios(hands, names)
+        for sid, key in (("vpip", "vpip"), ("fold_cbet_f", "fold_cbet"), ("afq", "afq"), ("fold_3bet", "fold_3bet")):
+            found = statlib.value(statlib.BY_ID[sid], "ring", table).ratio
+            self.assertEqual((found.hits, found.opps), (old[key].hits, old[key].opps), sid)
+        self.assertEqual(table.total.hands, sum(len(names & h.seats.keys()) for h in hands))
+
+    def test_heads_up(self):
+        hands = load_hands([FIXTURES / "betclic_sample.txt"])
+        names = {p for h in hands for p in h.seats} - {"Hero"}
+        table = statlib.tally_group(hands, names, "HU")
+        every = analyze(hands)
+        merged = field.merge_stats([every[n] for n in names])
+        for key in ("vpip", "bb_vs_open.raise", "vs_cbet_flop.fold"):
+            stat = next(s for s in statlib.available("HU") if s.src["HU"] == key and not s.positions)
+            found = statlib.value(stat, "HU", table).ratio
+            self.assertEqual((found.hits, found.opps), (merged.r(key).hits, merged.r(key).opps), key)
+
+    def test_band_refs(self):
+        fold = statlib.BY_ID["fold_cbet_f"]
+        self.assertEqual(statlib.field_ref(fold, "ring"), field.RING_DEF["fold_cbet"].ref)
+        self.assertEqual(statlib.field_ref(fold, "ring", "micro"), field.BAND_REFS["micro"]["fold_cbet"])
+        self.assertEqual(statlib.field_ref(fold, "HU", "hautes"), field.HU_BAND_REFS["hautes"]["vs_cbet_flop.fold"])
+        self.assertEqual(statlib.field_ref(statlib.BY_ID["fold_3bet"], "HU", "hautes"),
+                         STAT_DEFS["sb_vs_3bet.fold"].ref)  # le préflop : le solveur, à tous les niveaux
+        self.assertEqual(statlib.field_ref(statlib.BY_ID["rfi_co"], "ring", "micro"), ring.OPEN_6MAX["CO"])
+        self.assertIsNone(statlib.field_ref(statlib.BY_ID["squeeze"], "ring", "micro"))
+        self.assertEqual(settings.check({"field_stat_selection": {"HU": ["vpip"]}}),
+                         {"field_stat_selection": {"HU": ["vpip"]}})
+        with self.assertRaises(ValueError):
+            settings.check({"field_stat_selection": {"HU": ["squeeze"]}})
+        self.assertEqual([s.id for s in statlib.selection("ring", None, statlib.FIELD_DEFAULTS)],
+                         statlib.FIELD_DEFAULTS["ring"])
+
+
 class ReadTest(unittest.TestCase):
     """Les nouvelles stats, coup par coup."""
 

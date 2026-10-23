@@ -86,8 +86,9 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   solveur* (ses mains analysées à parcourir, ses erreurs) et chaque main avec ce qu'en dit le solveur (son EV
   théorique et l'EV perdue, ou *Résoudre*), filtres et tri compris. Un élève a les mêmes onglets (*Bilan* avec ses
   courbes, *Statistiques*, *Leaks*, *Préflop*, *Ses mains*), plus *Importer*.
-- **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Statistiques* (leurs stats globales à
-  chaque niveau de limites, par position, et ce que leurs écarts changent pour ton jeu, voir plus bas), puis
+- **Étude du field** : comment jouent tes adversaires, pour les exploiter. *Statistiques* (leurs stats à chaque
+  niveau de limites, celles que tu choisis dans le même catalogue que les tiennes, par position, et ce que leurs
+  écarts changent pour ton jeu, voir plus bas), puis
   *Réguliers* et *Récréatifs*, chacun en trois sous-onglets, en heads-up ou aux tables à plusieurs et par limites
   (micro, milieu, hautes) : *Leakfinding* (ceux que tu croises le plus, chacun avec ses leaks à exploiter et ce que
   montrent ses lignes, puis sa fiche détaillée, voir *Étude du field : le leakfinding de tes adversaires*), *Bluffs*
@@ -1034,18 +1035,21 @@ heads-up et aux tables à plusieurs (3 à 9 joueurs ensemble).
 
 ## Étude du field : le leakfinding de tes adversaires
 
-Onglet *Statistiques* (au choix *Heads-up* / *Tables à plusieurs*, et le niveau de limites : micro, milieu, hautes) :
-les **stats globales du field**, les fréquences réunies de tes adversaires classés réguliers, récréatifs et tous
-ensemble, face au repère d'un régulier solide de ce niveau et à toi. Aux tables à plusieurs : VPIP, PFR, open (RFI),
-limp, 3bet, call d'une ouverture, fold face au 3bet, défense des blindes face au vol et 3bet de vol, c-bet (à deux et
-à plusieurs), fold face à la c-bet, 2e barrel, fold face aux mises turn et river, check-raise, mise quand
-l'agresseur checke, agressivité, WTSD, W$SD et WWSF, puis le même détail **par position** (une population à la fois,
-avec son résultat). En heads-up, les stats du bouton et de la BB (open, limp, 3bet, 4bet, défense…) et d'après le
-flop. Une valeur hors du repère est en couleur. En bas, **ce que ça change pour ton jeu** : un écart à la théorie
-n'est pas forcément une fuite (tu 3bet plus que la théorie, mais ils se couchent plus qu'elle face au 3bet : c'est
-une exploitation). Le Leakfinding le vérifie en jeu, contre les réguliers (ce que l'écart te rapporte sur tes mains,
-sinon leurs réponses dans la situation miroir) : la page liste tes écarts que le field justifie et les écarts qui te
-rapporteraient là où tu joues comme la théorie (« Les écarts justifiés » et les opportunités du Leakfinding).
+Onglet *Statistiques* (au choix *Heads-up* / *Tables à plusieurs*, et le niveau de limites : micro, milieu,
+hautes) : les **stats du field**, les fréquences réunies de tes adversaires classés réguliers, récréatifs et tous
+ensemble, face au repère d'un régulier solide de ce niveau et à toi : celles que tu choisis dans le catalogue de
+l'onglet *Statistiques* de Mon jeu (*Choisir mes stats*, voir *Choisir ses stats* ; un choix à part, gardé dans tes
+paramètres, pour tous les niveaux de limites). Par défaut, celles que la page montrait : aux tables à plusieurs
+VPIP, PFR, open (RFI), limp, 3bet, call d'une ouverture, fold face au 3bet, défense des blindes face au vol et 3bet
+de vol, c-bet (à deux et à plusieurs), fold face à la c-bet, 2e barrel, fold face aux mises turn et river,
+check-raise, mise quand l'agresseur checke, agressivité, WTSD, W$SD et WWSF ; en heads-up, les stats du bouton et de
+la BB (open, limp, 3bet, 4bet, défense…) et d'après le flop. Puis le même détail **par position** (une population à
+la fois, toi compris, avec son résultat). Une valeur hors du repère de ce niveau est en couleur. En bas, **ce que ça
+change pour ton jeu** : un écart à la théorie n'est pas forcément une fuite (tu 3bet plus que la théorie, mais ils
+se couchent plus qu'elle face au 3bet : c'est une exploitation). Le Leakfinding le vérifie en jeu, contre les
+réguliers (ce que l'écart te rapporte sur tes mains, sinon leurs réponses dans la situation miroir) : la page liste
+tes écarts que le field justifie et les écarts qui te rapporteraient là où tu joues comme la théorie (« Les écarts
+justifiés » et les opportunités du Leakfinding).
 
 Onglets *Réguliers* et *Récréatifs* de l'*Étude du field* (au choix *Heads-up* / *Tables à plusieurs*, retenu) : les
 joueurs de ce type que tu as croisés au moins N mains (*Paramètres*, 50 par défaut ; aux tables à plusieurs, les

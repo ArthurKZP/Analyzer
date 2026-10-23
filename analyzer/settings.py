@@ -22,6 +22,7 @@ Gardés dans la base (réglage « parametres » du compte). Ils valent pour ton 
 - stat_selection : tes stats de l'onglet Statistiques, dans ton ordre (analyzer/statlib.py), par format :
   {"HU": [stat, …], "ring": […]} ; un format absent (ou None) : la sélection par défaut. Elle vaut aussi pour tes
   élèves et tes joueurs de référence.
+- field_stat_selection : de même, les stats de l'Étude du field (statlib.FIELD_DEFAULTS par défaut).
 """
 from __future__ import annotations
 
@@ -33,7 +34,7 @@ KEY = "parametres"
 FORMATS = ("HU", "ring")
 FORMAT_NAMES = {"HU": "Heads-up", "ring": "Tables à plusieurs"}
 DEFAULTS = {"hero": None, "hero_excluded": [], "hero_added": [], "coach": None, "formats": None, "min_hands": 50,
-            "references": [], "situation_refs": None, "stat_selection": None}
+            "references": [], "situation_refs": None, "stat_selection": None, "field_stat_selection": None}
 REF_RANGE = 10_000  # un repère de situation, en bb/100 : entre -REF_RANGE et REF_RANGE
 MIN_HANDS_RANGE = (10, 5000)
 MAX_NAME = 60      # caractères du nom
@@ -149,7 +150,7 @@ def check(changes: object) -> dict:
             value = _references(value)
         elif key == "situation_refs":
             value = _situation_refs(value)
-        elif key == "stat_selection":
+        elif key in ("stat_selection", "field_stat_selection"):
             value = _stat_selection(value)
         elif key in ("hero_excluded", "hero_added"):
             value = _pseudos(value)
