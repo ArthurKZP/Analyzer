@@ -798,7 +798,7 @@ def build_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str, vi
         spots=(f' · <a href="{escape(spots_href)}">Visualiseur de spots</a>' if spots_href and not embed else "")
         + (f' · <a href="{escape(preflop_href)}">Préflop vs solveur</a>' if preflop_href and not embed else ""),
         n_showdowns=len(v.showdowns),
-        script=SCRIPT + (EMBED_SCRIPT if embed else ""),
+        script=SCRIPT + FOLD_SCRIPT + (EMBED_SCRIPT if embed else ""),
     )
 
 
@@ -834,10 +834,43 @@ PAGE = """<!doctype html>
 """
 
 
+# Les sections repliées ou ouvertes le restent d'une visite à l'autre (par page et par section).
+FOLD_SCRIPT = """
+document.querySelectorAll('details.fold[data-fold]').forEach(function (d) {
+  var key = 'fold:' + location.pathname + ':' + d.dataset.fold;
+  try { var v = localStorage.getItem(key); if (v !== null) d.open = v === '1'; } catch (e) {}
+  d.addEventListener('toggle', function () { try { localStorage.setItem(key, d.open ? '1' : '0'); } catch (e) {} });
+});
+// un lien vers un élément d'une section repliée (#id) l'ouvre
+function openTarget() {
+  var id = location.hash.slice(1), el;
+  try { el = id && document.getElementById(decodeURIComponent(id)); } catch (e) { return; }
+  for (var d = el && el.closest('details'); d; d = d.parentElement.closest('details')) d.open = true;
+}
+openTarget();
+window.addEventListener('hashchange', openTarget);
+"""
+
+
+def fold(title: str, body: str, hint: str = "", key: str = "", opened: bool = False, level: int = 2) -> str:
+    """Une section repliable : son titre et une ligne qui la résume restent visibles, le détail s'ouvre au clic (et le
+    reste d'une visite à l'autre, key : son nom dans la page). hint : du HTML déjà échappé."""
+    attrs = (f' data-fold="{escape(key)}"' if key else "") + (" open" if opened else "")
+    return (f'<details class="fold"{attrs}><summary><h{level}>{escape(title)}</h{level}>'
+            + (f'<span class="fold-hint">{hint}</span>' if hint else "")
+            + f'</summary><div class="fold-body">{body}</div></details>')
+
+
+def more(label: str, body: str) -> str:
+    """Le détail d'un élément, replié sous un petit lien (« Pourquoi ? ») ; label et body : du HTML déjà échappé."""
+    return f'<details class="more"><summary>{label}</summary><div class="more-body">{body}</div></details>'
+
+
 def html_page(title: str, body: str, embed: bool = False, script: str = "") -> str:
     """Page autonome avec le style du rapport (utilisée par l'application)."""
+    folds = FOLD_SCRIPT if 'class="fold"' in body else ""
     return PAGE.format(title=escape(title), style=STYLE, body=body,
-                       script=script + (EMBED_SCRIPT if embed else ""))
+                       script=script + folds + (EMBED_SCRIPT if embed else ""))
 
 
 FORMAT_NAMES = {"HU": "Heads-up", "ring": "Tables à plusieurs"}
@@ -848,12 +881,15 @@ def format_query(table_format: str) -> str:
     return "" if table_format == "HU" else f"?format={quote(table_format)}"
 
 
-def format_switch(formats: list[tuple[str, int]], current: str) -> str:
-    """Le choix entre le heads-up et les tables à plusieurs, avec leur nombre de mains (rien s'il n'y en a qu'un)."""
+def format_switch(formats: list[tuple[str, int]], current: str, keep: str = "") -> str:
+    """Le choix entre le heads-up et les tables à plusieurs, avec leur nombre de mains (rien s'il n'y en a qu'un) ;
+    keep : d'autres paramètres de l'adresse à garder (« limite=NL500 », le filtre des gains du bilan)."""
     if len(formats) < 2:
         return ""
+    extra = f"&{keep}" if keep else ""
     links = "".join(
-        f'<a href="{escape(format_query(fmt) or "?format=HU")}" aria-current="{"page" if fmt == current else "false"}">'
+        f'<a href="{escape((format_query(fmt) or "?format=HU") + extra)}" '
+        f'aria-current="{"page" if fmt == current else "false"}">'
         f'{escape(FORMAT_NAMES.get(fmt, fmt))} <span>{n}</span></a>' for fmt, n in formats)
     return f'<nav class="lk-fmt" aria-label="Format de table">{links}</nav>'
 
@@ -945,6 +981,7 @@ td.strong .v { font-weight: 700; }
 .lk-fmt a span { color: var(--muted); font-size: 12px; margin-left: 2px; }
 .lk-fmt a[aria-current="page"] { background: var(--ink); color: var(--page); border-color: var(--ink); font-weight: 600; }
 .lk-fmt a[aria-current="page"] span { color: var(--page); opacity: .75; }
+.bl-all + .lk-fmt { margin-top: 16px; }
 .legend-dev { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); margin: 0 0 12px; }
 .legend-dev i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
 .findings { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
@@ -990,6 +1027,24 @@ span.pc.ss { color: var(--sc); } span.pc.sh { color: var(--sh); } span.pc.sd { c
 details { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; }
 summary { cursor: pointer; padding: 12px 16px; }
 details[open] summary { border-bottom: 1px solid var(--grid); }
+details.fold { background: none; border: 0; border-radius: 0; margin: 26px 0 0; }
+details.fold > summary { list-style: none; padding: 4px 0; display: flex; align-items: baseline; flex-wrap: wrap;
+  gap: 2px 12px; border-bottom: 0; }
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary > h2, details.fold > summary > h3 { margin: 0; }
+details.fold > summary > :first-child::before { content: "›"; display: inline-block; width: 0.9em; color: var(--muted);
+  transition: transform 0.15s; }
+details.fold[open] > summary > :first-child::before { transform: rotate(90deg); }
+details.fold > summary:hover > :first-child { text-decoration: underline; text-decoration-color: var(--axis); }
+details.fold > .fold-body { margin-top: 10px; }
+.fold-hint { color: var(--muted); font-size: 13px; }
+details.more { background: none; border: 0; border-radius: 0; margin: 3px 0 0; }
+details.more > summary { list-style: none; padding: 0; display: inline; font-size: 12px; color: var(--series-1);
+  border-bottom: 0; }
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::after { content: " ▾"; }
+details.more[open] > summary::after { content: " ▴"; }
+details.more > .more-body { margin-top: 4px; }
 details table { margin: 0; }
 details .stats td, details .stats th { padding-left: 12px; }
 .combos { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
@@ -1084,7 +1139,9 @@ TEMPLATE = """<!doctype html>
 {plan}
 <p class="note">Consignes générées à partir des sections ci-dessous. Confiance : <b>solide</b> = l'écart reste vrai même en tenant compte du hasard (intervalle à 90&nbsp;%), <b>indicatif</b> = tendance nette sur un échantillon modeste, <b>à confirmer</b> = peu de mains.</p>
 
-<h2>Résultat cumulé (bb)</h2>
+<details class="fold" data-fold="courbe"><summary><h2>Résultat cumulé (bb)</h2>
+<span class="fold-hint">ta courbe contre lui, réel et EV all-in</span></summary>
+<div class="fold-body">
 <div class="card">
   {legend}
   {chart}
@@ -1093,6 +1150,7 @@ TEMPLATE = """<!doctype html>
   </details>
   <p class="note">« EV all-in » remplace le résultat réel des all-in payés avant la river par ton espérance (équité × pot) : l'écart avec le résultat réel mesure la chance.</p>
 </div>
+</div></details>
 
 <h2>Lecture de l'adversaire</h2>
 <div class="grid2">
@@ -1100,10 +1158,15 @@ TEMPLATE = """<!doctype html>
   <div class="card"><h3>Tes écarts dans ce match</h3>{hero_findings}</div>
 </div>
 
-<h2>Le duel : ses attaques, tes réponses</h2>
+<details class="fold" data-fold="duel"><summary><h2>Le duel : ses attaques, tes réponses</h2>
+<span class="fold-hint">ses mises situation par situation et ce que tu en fais</span></summary>
+<div class="fold-body">
 <div class="card scroll">{duels}</div>
+</div></details>
 
-<h2>Ses lignes : value ou bluff ?</h2>
+<details class="fold" data-fold="lignes"><summary><h2>Ses lignes : value ou bluff ?</h2>
+<span class="fold-hint">ligne par ligne, ce qu'il montre à l'abattage quand il mise</span></summary>
+<div class="fold-body">
 <div class="card intro">
   <p>Chaque mise ou relance postflop est rangée par ligne. Quand le coup va à l'abattage, sa main est classée <b>au moment de la mise</b> :</p>
   <div class="legend-int">
@@ -1116,32 +1179,54 @@ TEMPLATE = """<!doctype html>
 </div>
 {lines}
 <div class="grid2" style="margin-top:16px">{passive}<div class="card"><h3>Timing selon sa main</h3>{intent_timing}<p class="note">Un écart net de temps entre value et bluff serait un tell exploitable.</p></div></div>
+</div></details>
 
-<h2>Où partent tes bb sans abattage</h2>
+<details class="fold" data-fold="sans-abattage"><summary><h2>Où partent tes bb sans abattage</h2>
+<span class="fold-hint">les mains finies sans abattage, tes checks, tes folds turn et river</span></summary>
+<div class="fold-body">
 {nonshowdown}
+</div></details>
 
-<h2>Tes bluffs : est-ce qu'il folde assez ?</h2>
+<details class="fold" data-fold="bluffs"><summary><h2>Tes bluffs : est-ce qu'il folde assez ?</h2>
+<span class="fold-hint">son fold face à tes mises, au seuil de rentabilité d'un bluff</span></summary>
+<div class="fold-body">
 <div class="card scroll">{bluffs}
 <p class="note">Un bluff pur (sans équité) gagne dès qu'il folde plus souvent que le seuil = mise / (pot + mise), quelle que soit sa main. Signalé quand l'écart dépasse 8 points (au moins 8 occurrences).</p></div>
+</div></details>
 
-<h2>Statistiques</h2>
+<details class="fold" data-fold="stats"><summary><h2>Statistiques</h2>
+<span class="fold-hint">préflop, postflop et abattage, face aux repères</span></summary>
+<div class="fold-body">
 <div class="legend-dev"><span><i style="background:var(--hi-bg)"></i>au-dessus du repère</span><span><i style="background:var(--lo-bg)"></i>en dessous du repère</span><span><b>gras</b> = écart net (intervalle de confiance à 90&nbsp;% hors repère)</span><span>chiffres en italique = moins de 15 occasions</span></div>
 {stat_tables}
+</div></details>
 
-<h2>Sizings</h2>
+<details class="fold" data-fold="sizings"><summary><h2>Sizings</h2>
+<span class="fold-hint">ses tailles par street, selon la force de sa main</span></summary>
+<div class="fold-body">
 <div class="card scroll" style="margin-bottom:16px"><h3>Préflop</h3>{preflop_sizes}</div>
 {sizing}
 <p class="note">Force de sa main <b>au moment de la mise</b> (orange = rien ou tirage, blanc = paire moyenne/faible, bleu = top paire et mieux). Seuls les coups allés à l'abattage sont visibles : ses bluffs qui t'ont fait folder n'apparaissent jamais. Survole une ligne pour voir le détail des mains.</p>
+</div></details>
 
-<h2>Timing</h2>
+<details class="fold" data-fold="timing"><summary><h2>Timing</h2>
+<span class="fold-hint">son temps de réflexion selon l'action</span></summary>
+<div class="fold-body">
 <div class="card scroll">{timing}<p class="note">Temps mesuré depuis l'action précédente (horodatage à la seconde ; inclut l'animation de distribution en début de street).</p></div>
+</div></details>
 
-<h2>All-in</h2>
+<details class="fold" data-fold="allin"><summary><h2>All-in</h2>
+<span class="fold-hint">les tapis payés et leur équité</span></summary>
+<div class="fold-body">
 <div class="card scroll">{allins}</div>
+</div></details>
 
-<h2>Ses mains à l'abattage ({n_showdowns})</h2>
+<details class="fold" data-fold="abattage"><summary><h2>Ses mains à l'abattage ({n_showdowns})</h2>
+<span class="fold-hint">groupées par sa ligne préflop</span></summary>
+<div class="fold-body">
 <p class="muted">Groupées par sa ligne préflop. H = toi, V = lui ; le temps de réflexion de l'adversaire est indiqué après chacune de ses actions.</p>
 {showdowns}
+</div></details>
 
 <p class="note">Repères indicatifs pour un régulier HU solide à 100bb+ : ils servent à repérer les écarts, pas à définir une stratégie optimale. Rapport généré par {app_name}.</p>
 </main>

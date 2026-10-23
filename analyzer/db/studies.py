@@ -21,6 +21,16 @@ def save(db: Database, key: str, fiche: dict, size: int, account: Optional[int] 
         bump(db, KIND, account)
 
 
+
+def resize(db: Database, key: str, size: int) -> None:
+    """La nouvelle taille de l'arbre d'une étude (compressé), pour chaque compte qui la garde."""
+    with db.transaction():
+        accounts = [r[0] for r in db.all("SELECT compte_id FROM etudes WHERE cle = ?", (key,))]
+        db.execute("UPDATE etudes SET taille = ? WHERE cle = ?", (int(size), key))
+        for account in accounts:
+            bump(db, KIND, account)
+
+
 def get(db: Database, key: str, account: Optional[int] = None) -> Optional[dict]:
     blob = db.value("SELECT fiche FROM etudes WHERE compte_id = ? AND cle = ?", (account or db.account(), key))
     return unpack(blob) if blob is not None else None

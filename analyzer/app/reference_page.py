@@ -7,11 +7,11 @@ from html import escape
 from typing import Optional
 from urllib.parse import quote
 
-from .. import ring
+from .. import replay, ring
 from ..field import INTENT_LABELS
 from ..lines import BOARD_SIZE
 from ..reference import POSITION_MIN, LineRow, LineStats, Result, Row, examples, gaps, passed, street_totals
-from ..report import FORMAT_NAMES, cards_html, html_page, num, pct_cell
+from ..report import FORMAT_NAMES, cards_html, fold, html_page, more, num, pct_cell
 from ..theory import postflop
 
 STREET_NAME = {"flop": "Flop", "turn": "Turn", "river": "River"}
@@ -84,10 +84,11 @@ def gaps_html(rows: list[Row]) -> str:
                 'ressemblent, ou l\'échantillon est encore petit.</p>')
     else:
         body = '<ul class="findings">' + "".join(_gap_text(r) for r in found) + "</ul>"
-    return (f'<h2>Ce qu\'il fait autrement</h2><div class="card">{body}<p class="note">Ses fréquences qui s\'écartent '
-            'nettement des tiennes, les plus marquées d\'abord (le hasard les explique mal : test à 90 %, au moins 20 '
-            'occasions chacun). Un bon joueur n\'a pas toujours raison, mais c\'est là que vos jeux diffèrent : à '
-            'creuser dans ses mains (onglet Value et bluffs, Mains de départ).</p></div>')
+    how = more("Comment c'est choisi", (
+        "Ses fréquences qui s'écartent nettement des tiennes, les plus marquées d'abord (le hasard les explique mal : "
+        "test à 90 %, au moins 20 occasions chacun). Un bon joueur n'a pas toujours raison, mais c'est là que vos jeux "
+        "diffèrent : à creuser dans ses mains (onglet Value et bluffs, Mains de départ)."))
+    return f'<h2>Ce qu\'il fait autrement</h2><div class="card">{body}{how}</div>'
 
 
 def _pair(his: Optional[float], mine: Optional[float], fmt=_rate) -> str:
@@ -120,11 +121,13 @@ def positions_html(by_pos: tuple[dict[str, Result], dict[str, Result]],
                                                   lambda x: "–" if x is None else f"{num(x, 0)} %") + "</td>")
         rows.append(f'<tr><td>{escape(p)}</td><td class="num">{_pair(a.hands, b.hands, lambda x: num(x or 0, 0))}</td>'
                     f'<td class="num">{_pair(a.bb100, b.bb100)}</td>{cells}</tr>')
-    return ('<h2>Par position</h2><div class="card scroll"><table class="stats"><thead><tr><th>Position</th>'
-            f'<th class="num">Mains</th><th class="num">bb/100</th>{head}</tr></thead><tbody>{"".join(rows)}</tbody>'
-            '</table><p class="note">Chaque case : lui · <span class="muted">toi</span>. Les winrates par position '
-            'varient beaucoup d\'un échantillon à l\'autre (il faut des dizaines de milliers de mains pour qu\'un écart '
-            'soit sûr) ; les fréquences se stabilisent bien plus vite.</p></div>')
+    return fold("Par position", (
+        '<div class="card scroll"><table class="stats"><thead><tr><th>Position</th>'
+        f'<th class="num">Mains</th><th class="num">bb/100</th>{head}</tr></thead><tbody>{"".join(rows)}</tbody>'
+        '</table><p class="note">Chaque case : lui · <span class="muted">toi</span>. Les winrates par position '
+        'varient beaucoup d\'un échantillon à l\'autre (il faut des dizaines de milliers de mains pour qu\'un écart '
+        'soit sûr) ; les fréquences se stabilisent bien plus vite.</p></div>'),
+        "vos mains et vos winrates, lui et toi" + (", VPIP, PFR et 3bet" if keys else ""), "positions")
 
 
 def stats_html(rows: list[Row]) -> str:
@@ -144,11 +147,13 @@ def stats_html(rows: list[Row]) -> str:
                     f'<td class="{cls}">{gap_text}</td><td class="num muted">{ref}</td></tr>')
     if not body:
         return ""
-    return ('<h2>Toutes les fréquences</h2><div class="card scroll"><table class="stats"><thead><tr><th></th>'
-            '<th class="num">Lui</th><th class="num">Toi</th><th class="num">Écart (points)</th>'
-            f'<th class="num">Repère</th></tr></thead><tbody>{"".join(body)}</tbody></table>'
-            '<p class="note">Écart : sa fréquence moins la tienne, en points ; en gras et surligné quand il est net. '
-            'Repère : la fourchette d\'un régulier solide, indicative.</p></div>')
+    return fold("Toutes les fréquences", (
+        '<div class="card scroll"><table class="stats"><thead><tr><th></th>'
+        '<th class="num">Lui</th><th class="num">Toi</th><th class="num">Écart (points)</th>'
+        f'<th class="num">Repère</th></tr></thead><tbody>{"".join(body)}</tbody></table>'
+        '<p class="note">Écart : sa fréquence moins la tienne, en points ; en gras et surligné quand il est net. '
+        'Repère : la fourchette d\'un régulier solide, indicative.</p></div>'),
+        "section par section : lui, toi, l'écart et le repère", "frequences")
 
 
 def build_comparison_page(rows: list[Row], results: tuple[Result, Result],
@@ -206,11 +211,13 @@ def street_html(street: str, rows: list[LineRow]) -> str:
 
 
 def _replay(hand) -> str:
-    """Revoir la main dans l'explorateur (au solveur), quand il ne restait que deux joueurs au flop."""
+    """Revoir la main au replayer, et au solveur (l'explorateur) quand il ne restait que deux joueurs au flop."""
+    link = (f'<a class="spots-link" href="{escape(replay.href(hand.hand_id))}" target="_blank" '
+            'rel="noopener">rejouer ↗</a>')
     if postflop.flop_pair(hand) is None:
-        return ""
-    return (f'<a class="spots-link" href="/explorateur/{quote(hand.hand_id, safe="")}" target="_blank" '
-            'rel="noopener">revoir ↗</a>')
+        return link
+    return (f'{link} <a class="spots-link" href="/explorateur/{quote(hand.hand_id, safe="")}" target="_blank" '
+            'rel="noopener">solveur ↗</a>')
 
 
 def examples_html(title: str, bets: list, note: str) -> str:

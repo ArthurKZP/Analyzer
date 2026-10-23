@@ -37,7 +37,13 @@ EPS = 0.02  # bb : en dessous, deux choix sont à égalité et le plus petit l'e
 EPS_FLOP_POT = 0.004
 # Sous-jeux : égalité sous 0,5 % du pot de la turn par occurrence de la situation (au moins 0,002 bb à la racine).
 EPS_POT, EPS_FLOOR = 0.005, 0.002
-METHOD = 2  # version de la méthode (un choix plus ancien peut se refaire)
+METHOD = 3  # version de la méthode (un choix plus ancien peut se refaire)
+# Méthode 3, à la river : des tailles par position (hors de position, une petite vers 33 % ; en position, une moyenne
+# et une très grosse ou le tapis), deux tailles bien distinctes (la grande au moins SPREAD fois la petite), et une
+# taille qui mettrait au moins ALLIN_NEAR du tapis restant devient le tapis.
+SPREAD = 2.0
+ALLIN_NEAR = 2 / 3
+BIG = 150  # % du pot : avec une taille de cette grandeur, le tapis reste trop proche pour faire une paire
 FLOP_TARGET = 0.4  # % du pot : précision des arbres complets comparés
 SUB_TARGET = 0.5  # % du pot du sous-jeu
 TURN_CARDS = 12  # cartes turn de l'échantillon (situations fréquentes)
@@ -64,8 +70,12 @@ class Situation:
         return self.key.split(":")[2]
 
     def options(self) -> list[tuple]:
-        """Choix possibles, du plus petit au plus grand (les candidats sont rangés par taille)."""
-        return list(itertools.combinations(self.candidates, self.choose))
+        """Choix possibles, du plus petit au plus grand (les candidats sont rangés par taille) ; deux tailles : bien
+        distinctes (spread), sauf s'il n'y a pas d'autre choix."""
+        found = list(itertools.combinations(self.candidates, self.choose))
+        if self.choose == 2:
+            return [o for o in found if spread(o)] or found
+        return found
 
     def initial(self) -> list:
         """Choix de départ, avant comparaison : la taille du milieu (deux à la river)."""
@@ -73,6 +83,17 @@ class Situation:
             c = self.candidates
             return [c[1], c[3]] if len(c) >= 4 else [c[0], c[-1]]
         return [self.candidates[len(self.candidates) // 2]]
+
+
+def spread(pair: tuple) -> bool:
+    """Deux tailles qui ne font pas le même travail : la grande vaut au moins SPREAD fois la petite ; le tapis va avec
+    une taille sous BIG % du pot ; une taille symbolique (géo) va avec tout."""
+    small, big = pair
+    if big == "a":
+        return small != "a" and (isinstance(small, str) or small < BIG)
+    if isinstance(small, str) or isinstance(big, str):
+        return True
+    return big >= SPREAD * small - 1e-9
 
 
 @dataclass(frozen=True)
@@ -89,6 +110,7 @@ class Profile:
     flop_line: dict  # lettre du flop -> « c-bet payée »…
     main: tuple  # situations résumées dans les menus
     description: str
+    river_sizes: Optional[Callable[[str, str], Optional[tuple]]] = None  # méthode 3 (sinon river_bets)
 
 
 def _srp_river(bettor: str, past: str) -> Optional[tuple]:
@@ -110,6 +132,25 @@ def _3bet_river(bettor: str, past: str) -> Optional[tuple]:
         return [33, 50, 75, "a"], 2  # le bouton continue après sa mise payée
     return [25, 50, "a"], 1  # stab : la BB checke
 
+
+def _river(oop: list, ip: list, stab: Optional[tuple] = None,
+           donk: bool = False) -> Callable[[str, str], Optional[tuple]]:
+    """Méthode 3 : les tailles river du joueur hors de position (oop) et en position (ip), deux gardées ; stab : la
+    mise du joueur en position quand l'agresseur hors de position checke (tailles, nombre gardé) ; donk : le joueur
+    hors de position peut mener dans l'agresseur de la turn (jamais par défaut)."""
+    def river(bettor: str, past: str) -> Optional[tuple]:
+        if bettor == "o":
+            return None if past[-1] == "i" and not donk else (oop, 2)
+        return stab if stab is not None and past[-1] != "i" else (ip, 2)
+    return river
+
+
+# Hors de position, une petite taille (vers 33 %) à côté des autres ; en position, une moyenne et une très grosse
+# (overbet) ou le tapis. Dans les pots 3bet et 4bet, le tapis est la très grosse.
+RIVER_SRP = _river([33, 50, 75, 100, 150, "a"], [50, 75, 150, 200, "a"])
+RIVER_3BET_OOP = _river([33, 50, 75, "a"], [50, 75, "a"], stab=([25, 50, "a"], 1))  # l'agresseur hors de position
+RIVER_3BET_IP = _river([33, 50, 75, "a"], [50, 75, "a"])
+RIVER_4BET = _river([25, 50, "a"], [25, 50, "a"])
 
 PROFILES = {
     "srp": Profile(
@@ -137,8 +178,10 @@ PROFILES = {
         flop_line={"i": "c-bet payée", "x": "flop checké", "o": "check-raise payé"},
         main=("bet:fi:", "raise:fo::0", "bet:ti:i", "bet:ti:x", "bet:to:x", "bet:ri:ii", "bet:ri:ix", "bet:ro:ix"),
         description="c-bet 33 / 75 % / géo, 2e barrel 50 % / pot / géo, c-bet retardée 33 / 66 % / géo, probe turn "
-                    "33 / 75 % / pot / géo, river deux parmi 50 / 75 % / pot / 150 % / tapis, relances 33 / 66 % / "
-                    "géo (tapis à la river)",
+                    "33 / 75 % / pot / géo, river deux tailles distinctes (hors de position 33 / 50 / 75 % / pot / "
+                    "150 % / tapis ; en position 50 / 75 / 150 / 200 % / tapis), relances 33 / 66 % / géo (tapis à "
+                    "la river)",
+        river_sizes=RIVER_SRP,
     ),
     # Pot 4bet : le bouton a 4betté (en position, à l'initiative), la BB a payé ; 74 bb derrière pour un pot
     # de 52 (SPR 1,4). Au flop, le géométrique sur deux streets fait 48 % du pot ; ensuite, il retombe vers
@@ -160,6 +203,7 @@ PROFILES = {
         main=("bet:fi:", "raise:fo::0", "bet:ti:i", "bet:ti:x", "bet:to:x", "bet:ri:ii", "bet:ri:ix", "bet:ro:ix"),
         description="c-bet du bouton 25 % / géo sur deux streets (48 %) / tapis, puis à la turn 25 / 50 % / tapis "
                     "(2e barrel, c-bet retardée, probe), river deux parmi 25 / 50 % / tapis, relances 33 % / tapis",
+        river_sizes=RIVER_4BET,
     ),
     # Pot 3bet : la BB a 3betté, elle est hors de position et à l'initiative ; le bouton a payé.
     "3bet": Profile(
@@ -193,8 +237,9 @@ PROFILES = {
         flop_line={"o": "c-bet payée", "x": "flop checké", "i": "stab payé"},
         main=("bet:fo:", "raise:fi::0", "bet:fi:", "bet:to:o", "bet:to:x", "bet:ti:o", "bet:ro:oo", "bet:ro:ox"),
         description="c-bet de la BB 33 / 75 % / géo sur deux streets, 2e barrel 33 / 50 / 75 % / tapis, c-bet retardée "
-                    "33 / 75 % / géo, river (3e barrel, probe) deux parmi 33 / 50 / 75 % / tapis, stab du bouton "
-                    "25 / 50 % / tapis, relances 33 / 66 % / tapis",
+                    "33 / 75 % / géo, river (3e barrel, probe) deux parmi 33 / 50 / 75 % / tapis, en position une "
+                    "moyenne (50 / 75 %) et le tapis, stab du bouton 25 / 50 % / tapis, relances 33 / 66 % / tapis",
+        river_sizes=RIVER_3BET_OOP,
     ),
 }
 
@@ -235,8 +280,10 @@ STRUCTURES = {
         lines=OOP_LINES, flop_river=[75], names=OOP_NAMES,
         flop_line={"o": "c-bet payée", "x": "flop checké", "i": "stab payé"}, main=OOP_MAIN,
         description="c-bet 33 / 75 % / géo, relance face à la c-bet 33 / 66 % / géo, stab 33 / 75 % / géo, 2e barrel "
-                    "50 % / pot / géo, c-bet retardée 33 / 66 % / géo, river deux parmi 50 / 75 % / pot / 150 % / "
-                    "tapis, relances 33 / 66 % / géo (tapis à la river)",
+                    "50 % / pot / géo, c-bet retardée 33 / 66 % / géo, river deux tailles distinctes (hors de "
+                    "position 33 / 50 / 75 % / pot / 150 % / tapis ; en position 50 / 75 / 150 / 200 % / tapis), "
+                    "relances 33 / 66 % / géo (tapis à la river)",
+        river_sizes=_river([33, 50, 75, 100, 150, "a"], [50, 75, 150, 200, "a"], stab=([50, 75, 150, 200, "a"], 2)),
     ),
     # Pot 3bet du joueur en position (la BB 3bette l'open de la SB) : SPR de 6 environ.
     "3bet_ip": Profile(
@@ -248,8 +295,9 @@ STRUCTURES = {
         lines=IP_LINES, flop_river=[50], names=PROFILES["srp"].names, flop_line=PROFILES["srp"].flop_line,
         main=PROFILES["srp"].main,
         description="c-bet 33 / 75 % / géo sur deux streets, 2e barrel 33 / 50 / 75 % / tapis, c-bet retardée "
-                    "33 / 75 % / géo, probe 33 / 75 % / tapis, river deux parmi 33 / 50 / 75 % / tapis, relances "
-                    "33 / 66 % / tapis",
+                    "33 / 75 % / géo, probe 33 / 75 % / tapis, river deux parmi 33 / 50 / 75 % / tapis hors de "
+                    "position, une moyenne (50 / 75 %) et le tapis en position, relances 33 / 66 % / tapis",
+        river_sizes=RIVER_3BET_IP,
     ),
     # Pot 4bet du joueur hors de position (la SB 4bette le 3bet de la BB) : SPR de 2 environ.
     "4bet_oop": Profile(
@@ -262,6 +310,7 @@ STRUCTURES = {
         flop_line={"o": "c-bet payée", "x": "flop checké", "i": "stab payé"}, main=OOP_MAIN,
         description="c-bet 25 % / géo sur deux streets / tapis, stab 25 / 50 % / tapis, puis 25 / 50 % / tapis à la "
                     "turn, river deux parmi 25 / 50 % / tapis, relances 33 % / tapis",
+        river_sizes=_river([25, 50, "a"], [25, 50, "a"], stab=([25, 50, "a"], 2)),
     ),
 }
 STRUCTURES.update({"srp_ip": PROFILES["srp"], "3bet_oop": PROFILES["3bet"], "4bet_ip": PROFILES["4bet"]})
@@ -295,9 +344,11 @@ def rename_roles(text: str, oop: str, ip: str) -> str:
     return _ROLE_RE.sub(sub, text)
 
 
-def situations(family: str = "srp") -> list[Situation]:
-    """Les situations d'une famille de pots : mises et relances, street par street (le flop dans l'ordre du choix)."""
+def situations(family: str = "srp", method: int = METHOD) -> list[Situation]:
+    """Les situations d'une famille de pots : mises et relances, street par street (le flop dans l'ordre du choix) ;
+    method : les tailles river comparées par cette version de la méthode (celles d'un choix plus ancien)."""
     profile = PROFILES[family]
+    river = profile.river_sizes if method >= 3 and profile.river_sizes is not None else profile.river_bets
     out = [Situation(key, sizes) for key, sizes in profile.flop]
     for street, pasts in (("t", list(profile.lines)), ("r", [a + b for a in profile.lines for b in "ixo"])):
         for past in pasts:
@@ -305,7 +356,7 @@ def situations(family: str = "srp") -> list[Situation]:
                 if street == "t":
                     bets, n = profile.turn_bets.get((bettor, past)), 1
                 else:
-                    bets, n = profile.river_bets(bettor, past) or (None, 1)
+                    bets, n = river(bettor, past) or (None, 1)
                 if bets is None:
                     continue  # pas de donk
                 other = "i" if bettor == "o" else "o"
@@ -595,6 +646,8 @@ class Selection:
             sits = [s for s in self._chosen() if s.street == street and s.past[0] == line]
             if not sits:
                 continue  # rien à choisir sur cette ligne (ton arbre)
+            if street == 2:  # une taille river qui mettrait presque tout le tapis devient le tapis
+                sits = [self._near_allin(s, node["pot"]) for s in sits]
             cards = sample(node["cards"], self.cards if street == 1 else min(self.cards, RIVER_CARDS))
             bases = [subgame(self.spot, node, card, line) for card in cards]
             # Pour la turn, la river reste simple (comme au flop) ; elle se choisit ensuite.
@@ -605,6 +658,38 @@ class Selection:
             usage = self._river_usage(bases, sits, reach, weight) if street == 2 else {}
             for sit in sorted(sits, key=lambda s: -reach[s.key]):
                 self._compare(sit, bases, reach[sit.key], weight, node["pot"], view, usage.get(sit.key))
+
+    def _river_pot(self, sit: Situation, turn_pot: float) -> tuple[float, float]:
+        """Le pot et le tapis restant à la river d'une situation (en bb), d'après le pot de la turn et la mise turn de
+        son passé (la première taille du plan ; une turn checkée ne change rien)."""
+        behind = self.spot.stack_bb - (turn_pot - self.spot.pot_bb) / 2
+        letter = sit.past[1:2]
+        sizes = (self.plan.get(f"bet:t{letter}:{sit.past[0]}") or []) if letter in ("o", "i") else []
+        if not sizes or behind <= 0:
+            return turn_pot, behind
+        size = sizes[0]
+        if isinstance(size, str):
+            size = postflop.symbolic_sizes(turn_pot, behind, 2).get(size)
+        if size is None:
+            return turn_pot, behind
+        bet = min(size / 100 * turn_pot, behind)
+        return turn_pot + 2 * bet, behind - bet
+
+    def _near_allin(self, sit: Situation, turn_pot: float) -> Situation:
+        """Une taille river qui mettrait au moins ALLIN_NEAR du tapis restant devient le tapis (les doublons
+        s'effacent) : un tapis à peine plus gros fait le même travail, sans en laisser trop peu derrière."""
+        pot, behind = self._river_pot(sit, turn_pot)
+        if pot <= 0 or behind <= 0:
+            return sit
+        out: list = []
+        for size in sit.candidates:
+            if not isinstance(size, str) and size / 100 * pot >= ALLIN_NEAR * behind - 1e-9:
+                size = "a"
+            if size not in out:
+                out.append(size)
+        if out == list(sit.candidates):
+            return sit
+        return Situation(sit.key, out, min(sit.choose, len(out)))
 
     def _river_usage(self, bases: list[dict], sits: list[Situation], reach: dict, weight: float) -> dict:
         """River : chaque mise propose toutes ses tailles à la fois ; leur fréquence d'emploi retient les trois
@@ -628,11 +713,14 @@ class Selection:
         """Choisit la taille d'une situation. reach : sa fréquence dans le sous-jeu ; weight : la probabilité
         d'atteindre ce sous-jeu depuis le flop."""
         options = sit.options()
-        if usage is not None:  # river : paires parmi les trois tailles les plus employées
-            top = sorted(sorted(range(len(sit.candidates)), key=lambda j: -usage[j])[:3])
-            options = list(itertools.combinations([sit.candidates[j] for j in top], 2))
+        if usage is not None:  # river : les trois paires de tailles distinctes les plus employées
+            index = {c: j for j, c in enumerate(sit.candidates)}
+            score = [sum(usage[index[c]] for c in o) for o in options]
+            top = sorted(sorted(range(len(options)), key=lambda i: -score[i])[:3])
+            options = [options[i] for i in top]
         overall = weight * reach  # probabilité d'atteindre la situation depuis le flop
-        entry = {"label": self._label(sit.key), "options": [list(o) for o in options], "reach": round(overall, 5)}
+        entry = {"label": self._label(sit.key), "options": [list(o) for o in options], "reach": round(overall, 5),
+                 "candidates": list(sit.candidates)}
         if usage is not None:
             entry["usage"] = usage
         if overall < RARE:

@@ -14,6 +14,7 @@ Le spot d'une main :
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 import os
@@ -78,6 +79,7 @@ serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 rayon = "1.10"
 flate2 = "1"
+xz2 = {{ version = "0.1", features = ["static"] }}
 
 [features]
 gpu = ["solver/gpu"]
@@ -492,7 +494,7 @@ POSTFLOP_ORDER = ("SB", "BB", "UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN") 
 
 
 def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custom: bool = True,
-               theory: bool = True) -> PostflopSpot:
+               theory: bool = True, stakes: bool = True, band: Optional[str] = "auto") -> PostflopSpot:
     """Le spot postflop d'une main : heads-up (ranges de la solution HU), ou table à plusieurs quand il ne reste que
     deux joueurs au flop (ranges de ta solution du format, voir ring_ranges). Tes ranges ajustées pour ce coup ou
     pour sa ligne (custom_ranges) remplacent celles de la référence, sauf avec custom=False.
@@ -500,8 +502,12 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
     Tailles : les tailles théoriques du flop dans la famille de spots la plus proche (studyspots.size_families :
     heads-up pour un coup heads-up, 6-max d'abord à une table à plusieurs), une par situation, plus chaque taille jouée
     (ajoutée, ou à la place d'une taille théorique à moins de 10 points) ; theory=False : l'arbre d'avant, aux
-    tailles fixes (DEFAULT_BETS), pour retrouver les analyses déjà faites."""
-    from . import custom_ranges, studyspots
+    tailles fixes (DEFAULT_BETS), pour retrouver les analyses déjà faites.
+
+    Ranges : celles des charts du niveau de limites de la main quand tu en as importé pour lui (stake_charts), sinon
+    celles de la référence ; stakes=False : celles de la référence, pour retrouver les analyses déjà faites ; band :
+    les charts de ce niveau de limites (None : la référence) plutôt que ceux de la main (« auto »)."""
+    from . import custom_ranges, stake_charts, studyspots
     if len(hand.seats) == 2 and (not hand.button or not hand.big_blind or hand.opponent_of(hero) is None):
         raise Unsupported("Seules les mains heads-up se résolvent.")
     pre = [a for a in hand.actions if a.street == "preflop" and a.kind in VOLUNTARY]
@@ -509,17 +515,21 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
         raise Unsupported("Tapis préflop : il n'y a plus de décision après le flop.")
     if len(hand.board) < 3 or not any(a.street == "flop" for a in hand.actions):
         raise Unsupported("La main s'arrête avant le flop : rien à résoudre après le flop.")
+    if band == "auto":
+        band = stake_charts.band_for(hand) if stakes else None
     if len(hand.seats) == 2:
-        oop, ip, pot_type, ranges = _heads_up_ranges(hand, pre, solution or load_solution())
+        default = stake_charts.hu_solution(band) if band else load_solution()
+        oop, ip, pot_type, ranges = _heads_up_ranges(hand, pre, solution or default)
     else:
-        oop, ip, pot_type, ranges = _ring_ranges(hand, hero, pre)
+        oop, ip, pot_type, ranges = _ring_ranges(hand, hero, pre, band)
     villain = ip if hero == oop else oop
     context = custom_ranges.context(hand.table_format, [(hand.position(a.player), a.kind) for a in pre
                                                         if a.kind != FOLD])
     reference = {p: dict(r) for p, r in ranges.items()}
     adjusted = None
     if custom:
-        scope, mine = custom_ranges.lookup(hand.hand_id, context)
+        scope, mine = custom_ranges.lookup(hand.hand_id, context,
+                                           stake_charts.set_of(hand.bb) if stakes else "petites")
         for p in (oop, ip):
             if hand.position(p) in mine:
                 ranges[p], adjusted = dict(mine[hand.position(p)]), scope
@@ -562,7 +572,7 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
             key = f"bet:{where}:{past}" if a.kind == BET else f"raise:{where}:{past}:{raises}"
             situations.append({"key": key, "street": s, "player": 0 if a.player == oop else 1,
                                "kind": "bet" if a.kind == BET else "raise",
-                               "equiv": _symbolic_sizes(a.pot_before, behind, 3 - s) if a.kind == BET else {}})
+                               "equiv": symbolic_sizes(a.pot_before, behind, 3 - s) if a.kind == BET else {}})
         step: dict = {"action": a.kind}
         if a.kind in (BET, RAISE, CALL):
             step["to"] = round(a.to / bb, 4)
@@ -615,7 +625,7 @@ def build_spot(hand: Hand, hero: str, solution: Optional[Solution] = None, custo
                         size_target=families[0] if families else None)
 
 
-def _symbolic_sizes(pot: float, behind: float, streets: int) -> dict[str, float]:
+def symbolic_sizes(pot: float, behind: float, streets: int) -> dict[str, float]:
     """Ce que valent, en % du pot, les tailles symboliques d'un plan pour une mise (voir native/arbre.rs) : le
     géométrique sur les streets restantes (ou sur N), le tapis."""
     if pot <= 0 or behind <= 0:
@@ -674,10 +684,11 @@ def flop_pair(hand: Hand) -> Optional[tuple[str, str]]:
     return oop, ip
 
 
-def _ring_ranges(hand: Hand, hero: str, pre: list) -> tuple[str, str, str, dict]:
+def _ring_ranges(hand: Hand, hero: str, pre: list, band: Optional[str] = None) -> tuple[str, str, str, dict]:
     """Table à plusieurs : les deux joueurs qui voient le flop, leurs ranges d'après ta solution du format (ou les
-    charts 6-max à même nombre de joueurs derrière, voir ring_ranges.resolve)."""
-    from . import ring_ranges
+    charts 6-max à même nombre de joueurs derrière, voir ring_ranges.resolve) ; band : celles de tes charts de ce
+    niveau de limites (stake_charts), là où ils en donnent."""
+    from . import ring_ranges, stake_charts
     folded = {a.player for a in pre if a.kind == FOLD}
     players = [p for p in hand.seats if p not in folded]
     if hero not in players:
@@ -691,13 +702,17 @@ def _ring_ranges(hand: Hand, hero: str, pre: list) -> tuple[str, str, str, dict]
     if any(pos not in POSTFLOP_ORDER for pos in positions.values()):
         raise Unsupported("Positions inconnues : le bouton manque dans l'historique.")
     steps = [(positions[a.player], a.kind) for a in pre if a.kind != FOLD]
-    chart = ring_ranges.resolve(hand.table_format, steps)
-    found = ring_ranges.lookup(*chart) if chart else None
-    if found is None:
-        raise Unsupported(f"Pas de range préflop pour « {ring_ranges.describe(steps)} » en {hand.table_format} : "
-                          f"{ring_ranges.missing_hint(hand.table_format)}.")
-    pot_type, by_position = found
-    in_chart = dict(zip((pos for pos, _ in steps), (pos for pos, _ in chart[1])))  # position à la table -> charts
+    own = stake_charts.ring_lookup(hand.table_format, steps, band) if band else None
+    if own is not None:
+        pot_type, by_position, chart_steps = own
+    else:
+        chart = ring_ranges.resolve(hand.table_format, steps)
+        found = ring_ranges.lookup(*chart) if chart else None
+        if found is None:
+            raise Unsupported(f"Pas de range préflop pour « {ring_ranges.describe(steps)} » en {hand.table_format} : "
+                              f"{ring_ranges.missing_hint(hand.table_format)}.")
+        (pot_type, by_position), chart_steps = found, chart[1]
+    in_chart = dict(zip((pos for pos, _ in steps), (pos for pos, _ in chart_steps)))  # position à la table -> charts
     if any(in_chart.get(pos) not in by_position for pos in positions.values()):
         raise Unsupported(f"Ta solution ne donne pas les deux ranges de « {ring_ranges.describe(steps)} ».")
     oop, ip = sorted(players, key=lambda p: POSTFLOP_ORDER.index(positions[p]))
@@ -1072,6 +1087,62 @@ def delete_study(key: str) -> bool:
         return False
     removed = db_studies.delete(db.current(), key)
     return blobs.studies().delete(key) or removed
+
+
+# Une étude s'enregistre vite (gzip rapide, environ une seconde), puis le pont la compresse sans perte en tâche de
+# fond (analyzer-solve --compacter : xz par blocs, 35 à 45 % plus petite, relue aussi vite ; native/etude.rs).
+FAST_STUDY = b"ANALYZER-ETUDE1\n"
+
+
+def to_compact() -> list[str]:
+    """Les études encore sous leur forme rapide, de la plus petite à la plus grosse."""
+    files, found = blobs.studies(), []
+    for key in files.keys():
+        path = files.path(key)
+        try:
+            with path.open("rb") as f:
+                if f.read(len(FAST_STUDY)) == FAST_STUDY:
+                    found.append((path.stat().st_size, key))
+        except OSError:
+            continue
+    return [key for _, key in sorted(found)]
+
+
+def compaction_threads() -> int:
+    """Les cœurs prêtés à la compression : le quart (de 1 à 4), en priorité basse, derrière tes calculs ; environ
+    100 Mo de mémoire par cœur."""
+    return max(1, min(4, (os.cpu_count() or 4) // 4))
+
+
+def compact_study(key: str) -> dict:
+    """Compresse l'arbre d'une étude sans perte (vérifié octet par octet avant de remplacer le fichier) et note sa
+    nouvelle taille : {"avant": octets, "apres": octets, "secondes": durée}."""
+    exe = binary_path()
+    if not exe.is_file():
+        raise SolverError(status()["message"])
+    files = blobs.studies()
+    env = dict(os.environ, RAYON_NUM_THREADS=str(compaction_threads()))
+    low = {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name == "nt" else {}
+    proc = subprocess.Popen([str(exe), "--compacter", str(files.fetch(key))], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, env=env, **low, **PIPE_TEXT)
+    if os.name != "nt":
+        try:
+            os.setpriority(os.PRIO_PROCESS, proc.pid, 10)
+        except OSError:
+            pass
+    out, err = proc.communicate()
+    errors: list = []
+    _progress_reader(io.StringIO(err), None, errors)
+    lines = out.strip().splitlines()
+    if proc.returncode != 0 or not lines:
+        raise SolverError(errors[-1] if errors else
+                          f"analyzer-solve --compacter s'est arrêté (code {proc.returncode}).")
+    result = json.loads(lines[-1])
+    files.stored(key)
+    size = files.size(key)
+    if size is not None:
+        db_studies.resize(db.current(), key, size)
+    return result
 
 
 class Session:

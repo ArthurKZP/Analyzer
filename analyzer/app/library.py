@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import re
 import secrets
 import sys
@@ -17,8 +18,8 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import quote
 
-from .. import (aliases, bluffs, db, field, handplay, leaks, memory, players, ring, ring_leaks, settings, spots, stakes,
-               store, students)
+from .. import (aliases, bluffcatch, bluffs, db, field, gains, handplay, leaks, memory, players, replay, ring,
+               ring_leaks, settings, situations, spots, stakes, statlib, store, students, tracking)
 from .. import period as periods
 from .. import reference as refstudy
 from ..db import analyses as db_analyses
@@ -28,43 +29,54 @@ from ..db import hands as db_hands
 from ..cli import detect_hero, unify_hero
 from ..lines import villain_lines
 from ..models import CALL, RAISE, Hand
-from ..parsers import count_hands, read_zip
-from ..report import build_plan_page, build_report, format_switch, html_page
+from ..parsers import count_hands, decode, read_zip
+from ..report import build_plan_page, build_report, format_query, format_switch, html_page
 from ..selfreport import build_self_report, opponent_results
 from ..stats import analyze
 from ..theory import (coach, custom_ranges, custom_tree, handclass, postflop, review, ring_preflop, ring_ranges, sizing,
-                      studyspots)
+                      stake_charts, studyspots)
 from ..theory.page import build_preflop_page, build_ring_preflop_page
-from ..theory.preflop import load_solution
 from ..viewer import build_viewer
-from . import bilan_page, synthesis
+from . import bilan_page, catch_trainer, gains_page, synthesis
 from .report_pdf import build_pdf
 from .report_pptx import build_pptx
 from .bluffs_page import build_bluffs_page
 from .import_job import ImportJob
 from .field_leaks_page import build_group_page, build_list_page, build_player_page, stakes_switch
+from .field_lines_page import build_crowd_page
+from .field_stats_page import build_field_stats_page
 from .field_page import build_players_page
 from .ranges_page import build_ranges_page
 from .settings_page import build_settings_page
 from .hands_page import build_hands_page
 from .leaks_page import build_leaks_page
+from .tracking_page import build_tracking_page
 from .reference_page import build_comparison_page, build_lines_page
 from .ring_page import MAX_SPOTS as MAX_RING_SPOTS
 from .ring_page import build_ring_page
 from .plan_page import build_coach_page
 from .review_page import build_review_page
+from .situations_page import situations_html
+from .solver_pages import PANEL_SCRIPT, build_solver_bilan, panel_html, slot_html
 from .backups import Backups
+from .compactions import Compactions
 from .coach_chat import Coach
 from .solves import NeedSession, SolveQueue
+from .stats_page import build_stats_page
 
 PLAYER_PAGES = ("plan", "preflop", "rapport", "spots", "solveur", "bluffs")
+STAT_SCOPES = (("all", "Toutes tes mains"), ("reg", "Contre les réguliers"), ("rec", "Contre les récréatifs"))
 HEADS_UP_ONLY = ('<p class="note">Aucune main heads-up : cette page analyse tes parties en heads-up. Tes tables à '
-                 'plusieurs (3 à 9 joueurs, ensemble) ont leur Leakfinding, leur préflop, leurs mains de départ et leurs '
-                 'stats par position (onglet Tables à plusieurs).</p>')
-SELF_PAGES = ("bilan", "preflop", "spots", "solveur", "bluffs", "leaks", "tables", "mains")
+                 'plusieurs (3 à 9 joueurs, ensemble) ont leur bilan (avec leurs stats par position), leur Leakfinding, '
+                 'leur préflop et leurs mains de départ : choisis « Tables à plusieurs » en haut de ces pages.</p>')
+SELF_PAGES = ("bilan", "stats", "preflop", "spots", "solveur", "bluffs", "leaks", "tables", "mains", "suivi")
 REFERENCE_PAGES = ("comparaison", "lignes", "bilan", "tables", "preflop", "mains")  # un joueur de référence
 REFERENCE_PREFIX = "ref:"  # sa période d'analyse se garde sous cette clé
-FIELD_PAGES = ("regs", "recs", "bluffs", "joueurs")  # Étude du field (« joueurs » : aussi dans Paramètres)
+# Étude du field : leurs stats globales, puis réguliers et récréatifs, chacun avec son leakfinding, ses bluffs et sa
+# value (« joueurs » : aussi dans Paramètres)
+FIELD_PAGES = ("stats", "regs", "recs", "bluffs", "value", "rec-bluffs", "rec-value", "joueurs")
+FIELD_LINES = {"bluffs": ("reg", "bluffs"), "value": ("reg", "value"), "rec-bluffs": ("rec", "bluffs"),
+               "rec-value": ("rec", "value")}
 MAX_IMPORT_FILES = 5000  # fichiers (ou archives zip) par import
 MAX_REMOVED_PSEUDOS = 200  # pseudos dont on supprime les mains d'un coup
 
@@ -73,11 +85,38 @@ class UnknownPlayer(NotFound):
     pass
 
 
+def _theory_changes() -> tuple:
+    """Les révisions de ce qui fait la théorie : plans de jeu, charts, charts par limites (pour les caches)."""
+    return documents.revision(db.current(), "plan", "ranges", stake_charts.KIND)[2:]
+
+
 def _excluded_note(excluded: dict) -> str:
     if not excluded["hands"]:
         return ""
     return (f"{excluded['hands']} mains contre des récréatifs ({', '.join(excluded['players'])}) sont exclues : "
             "contre eux, l'exploitation prime sur la théorie.")
+
+
+def _solver_match(status: Optional[dict], wanted: str) -> bool:
+    """Le filtre « Solveur » du visualiseur : « done » (analysée), « todo » (à résoudre), « err » (une erreur)."""
+    if status is None:
+        return False
+    if wanted == "todo":
+        return "todo" in status
+    return "todo" not in status and (wanted == "done" or status["errors"] > 0)
+
+
+def _solver_sorts(status: dict[str, dict]) -> dict:
+    """Le tri du visualiseur sur ce que dit le solveur : l'EV perdue, les plus chères d'abord (puis les autres)."""
+    return {"evloss": (lambda r: (status.get(r["id"]) or {}).get("lost", -1.0), True)}
+
+
+def _solver_summary(found: list[dict]) -> dict:
+    """Ce que dit le solveur d'une sélection de mains : analysées, EV perdue et erreurs, mains à résoudre."""
+    done = [s for s in found if "todo" not in s]
+    return {"done": len(done), "todo": len(found) - len(done), "lost": round(sum(s["lost"] for s in done), 2),
+            "errors": sum(s["errors"] for s in done),
+            "minutes": round(sum(s["todo"] for s in found if "todo" in s), 1)}
 
 
 def _note(text: str) -> str:
@@ -93,12 +132,14 @@ def _kind_note(kind: dict) -> str:
 
 
 
-def _ring_replay(hand: Hand) -> str:
-    """Revoir une main d'une table à plusieurs : au solveur, quand elle est allée au flop à deux."""
+def _ring_replay(hand: Hand, api: str = "/api") -> str:
+    """Revoir une main d'une table à plusieurs : au replayer, et au solveur quand elle est allée au flop à deux."""
+    link = (f'<a class="spots-link" href="{escape(replay.href(hand.hand_id, api))}" target="_blank" '
+            'rel="noopener">rejouer ↗</a>')
     if postflop.flop_pair(hand) is None:
-        return ""
-    return (f'<a class="spots-link" href="/explorateur/{quote(hand.hand_id, safe="")}" target="_blank" '
-            'rel="noopener">revoir ↗</a>')
+        return link
+    return (f'{link} <a class="spots-link" href="/explorateur/{quote(hand.hand_id, safe="")}" target="_blank" '
+            'rel="noopener">solveur ↗</a>')
 
 
 def _round(x: Optional[float], digits: int = 1) -> Optional[float]:
@@ -110,12 +151,17 @@ def _digest_count() -> int:
     return db_analyses.count(db.current())
 
 
-def _formats(hands: list[Hand]) -> dict[str, int]:
-    """Mains par format de table (HU, 3-max, 6-max…), dans cet ordre."""
-    counts: dict[str, int] = {}
-    for h in sorted(hands, key=lambda h: h.size):
-        counts[h.table_format] = counts.get(h.table_format, 0) + 1
-    return counts
+def _situation_refs() -> str:
+    """Tes repères des résultats par situation (Paramètres), pour les caches du bilan (le tien et ceux des élèves)."""
+    return repr(settings.load()["situation_refs"])
+
+
+def _solver_key() -> tuple:
+    """Ce qui change quand une main passe au solveur (analyse, résolution, étude) ou quand ses réglages changent : les
+    pages qui montrent tes mains face au solveur sont recalculées."""
+    solved = postflop.solved_keys()
+    return _digest_count(), len(solved[0]), len(solved[1]), review.signature()
+
 
 _LABEL_RE = re.compile(r'(<(?:(?:th|h[1-4])\b[^>]*|div class="label")>)([^<]+)')
 _SCRIPT_RE = re.compile(r"(<script\b.*?</script>)", re.S)
@@ -150,13 +196,14 @@ class Library:
 
     def __init__(self, folder: Path | str, hero: Optional[str] = None, solves: Optional[SolveQueue] = None,
                  backups: Optional[Backups] = None, api: str = "/api", pages: str = "/moi", space: str = "moi",
-                 space_name: str = "Moi", source: Optional[Callable[[], list[Hand]]] = None, warm_up: bool = False):
+                 space_name: str = "Moi", source: Optional[Callable[[], list[Hand]]] = None, warm_up: bool = False,
+                 compactions: Optional[Compactions] = None):
         """folder : la boîte d'arrivée des historiques (importés dans la base au chargement) ; space : l'espace de la
-        base (« moi », ou « eleve:<identifiant> ») ; solves, backups : ceux de la bibliothèque principale, partagés par
-        celles des élèves (une résolution à la fois) ; api, pages : préfixes des adresses de ses pages et de leurs
-        actions. source : les mains d'un joueur de référence, lues dans ton espace (pas d'espace à lui ; space ne sert
-        qu'à garder sa période) ; hero : son nom. warm_up : après chaque chargement, les pages principales se calculent
-        en arrière-plan (l'application ; jamais dans les tests)."""
+        base (« moi », ou « eleve:<identifiant> ») ; solves, backups, compactions : ceux de la bibliothèque principale,
+        partagés par celles des élèves (une résolution à la fois) ; api, pages : préfixes des adresses de ses pages et
+        de leurs actions. source : les mains d'un joueur de référence, lues dans ton espace (pas d'espace à lui ; space
+        ne sert qu'à garder sa période) ; hero : son nom. warm_up : après chaque chargement, les pages principales se
+        calculent en arrière-plan (l'application ; jamais dans les tests)."""
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
         self.db = db.current()
@@ -170,6 +217,7 @@ class Library:
         self._lock = threading.Lock()
         self._key_locks: dict[tuple, threading.Lock] = {}
         self._cache: dict[tuple, object] = {}
+        self._solver_status: dict[bool, tuple] = {}  # format -> (clé, statuts) : le dernier calculé seulement
         self.hands: list[Hand] = []  # tes mains heads-up de la période
         self.ring: list[Hand] = []  # … et aux tables à plusieurs
         self._all_hands: list[Hand] = []  # toutes, quelle que soit la période
@@ -187,13 +235,19 @@ class Library:
         self._snapshot: Optional[dict] = None  # ce qui a décidé de tes mains au dernier chargement (_load_new)
         self._imports: dict[str, ImportJob] = {}  # les imports suivis (barre d'avancement), les derniers
         self._import_pool: Optional[ThreadPoolExecutor] = None  # un import à la fois, en arrière-plan
+        self._import_lock = threading.Lock()  # les historiques s'enregistrent un envoi à la fois
         self.solves = solves or SolveQueue()
         self.backups = backups or Backups()
+        self.compactions = compactions or Compactions()  # la compression des études, en arrière-plan
         self.coach = Coach(self)
         self.warm_up = warm_up
         self._busy = 0  # pages en calcul pour une demande (le préchargement attend qu'il n'y en ait plus)
         if solves is None:
             self.solves.on_done.append(lambda job: self.backups.schedule())
+            self.solves.on_done.append(lambda job: self.compactions.start())
+            # Les études compressées remplacent ensuite leur copie dans la sauvegarde (plus petite).
+            self.compactions.on_done.append(self.backups.schedule)
+            self.backups.busy = self.compactions.busy
         self.reload()
 
     # --- chargement -------------------------------------------------------------
@@ -245,6 +299,11 @@ class Library:
         if self.is_me and not self.hero_override:  # tes pseudos réunis sous ton nom (Paramètres)
             hero, mine, pseudo_set, owners = self._group_me(hands, pseudos, conf)
             snapshot.update(path="moi", mine=pseudo_set, owners=owners)
+        elif self.chosen_pseudos():  # les pseudos choisis de l'élève : seules leurs mains, sous un seul nom
+            chosen = self.chosen_pseudos()
+            hero = self._chosen_hero(pseudos, chosen, mapping)
+            mine = self._claim_chosen(hands, chosen, hero)
+            snapshot = dict(snapshot, path="choisis", chosen=tuple(chosen))
         else:  # --hero (ligne de commande) ou le pseudo de l'élève, sinon le plus fréquent : ses pseudos sous celui-là
             hero = mapping.get(self.hero_override, self.hero_override) if self.hero_override else detect_hero(hands)
             unify_hero(hands, hero)
@@ -290,6 +349,11 @@ class Library:
             if name != self.hero or (not conf["hero"] and len(top) > 1 and top[0][1] == top[1][1]):
                 return False  # ton nom (le pseudo le plus fréquent) change, ou deux pseudos à égalité
             mine = self._claim(owners, name)
+        elif snap["path"] == "choisis":  # les pseudos choisis de l'élève : comme au chargement
+            if tuple(self.chosen_pseudos()) != snap["chosen"]:
+                return False
+            mine = self._claim_chosen(new, list(snap["chosen"]), self.hero)
+            counts = snap.get("owners")
         else:  # le pseudo donné (un élève) : comme au chargement
             unify_hero(new, self.hero)
             mine = [h for h in new if self.hero and self.hero in h.seats and (not h.hero or h.hero == self.hero)]
@@ -345,6 +409,80 @@ class Library:
             self.players_seen = Counter(name for h in mine for name in h.seats)
             self.unmarked_seen = Counter()
             self._select()
+
+    def chosen_pseudos(self) -> list[str]:
+        """Les pseudos choisis de l'élève (vide : tous les héros de ses historiques ; jamais ailleurs que chez un
+        élève)."""
+        if not (self.space_key or "").startswith(students.PREFIX) or self.space_id is None:
+            return []
+        return students.pseudos(self.space_key[len(students.PREFIX):])
+
+    def _chosen_hero(self, pseudos: Counter, chosen: list[str], mapping: dict) -> str:
+        """Le nom de l'élève dans ses analyses : le pseudo donné à sa création, sinon celui de ses pseudos choisis qui
+        a le plus de mains."""
+        if self.hero_override:
+            return mapping.get(self.hero_override, self.hero_override)
+        counts: Counter = Counter()
+        for (pseudo, _), n in pseudos.items():
+            if pseudo in chosen:
+                counts[pseudo] += n
+        return counts.most_common(1)[0][0] if counts else chosen[0]
+
+    @staticmethod
+    def _claim_chosen(hands: list[Hand], chosen: list[str], hero: str) -> list[Hand]:
+        """Les mains de l'élève : celles dont le héros marqué est un de ses pseudos, ou, sans héros marqué, où l'un
+        d'eux joue ; ce pseudo y prend son nom."""
+        wanted = set(chosen)
+        mine = []
+        for h in hands:
+            marked = h.hero
+            if marked:
+                if marked not in wanted:
+                    continue
+                h.rename(marked, hero)
+            else:
+                present = [p for p in chosen if p in h.seats]
+                if not present:
+                    continue
+                if hero not in h.seats:
+                    h.rename(present[0], hero)
+            if hero in h.seats:
+                mine.append(h)
+        return mine
+
+    def chosen_formats(self) -> list[str]:
+        """Les formats joués : les tiens (Paramètres), ceux de l'élève ; vide : tous."""
+        if self.is_me:
+            return settings.load()["formats"] or []
+        if (self.space_key or "").startswith(students.PREFIX) and self.space_id is not None:
+            return students.formats(self.space_key[len(students.PREFIX):])
+        return []
+
+    def set_formats(self, chosen: object) -> dict:
+        """Les formats que joue l'élève (None : tous) ; ValueError : pas un élève, ou aucun format valide. Un format
+        qu'il ne joue pas sort de ses onglets et de ses analyses ; ses mains restent gardées."""
+        if not (self.space_key or "").startswith(students.PREFIX):
+            raise ValueError("Seulement pour un élève.")
+        students.set_formats(self.space_key[len(students.PREFIX):], chosen)
+        with self._lock:
+            self._select()
+        return self.summary()
+
+    def set_chosen_pseudos(self, names: object) -> dict:
+        """Choisit les pseudos de l'élève parmi ceux de ses historiques (une liste vide : tous les héros de ses
+        historiques) ; ValueError : pas un élève, ou un pseudo absent de ses mains."""
+        if not (self.space_key or "").startswith(students.PREFIX):
+            raise ValueError("Seulement pour un élève.")
+        if not (isinstance(names, list) and len(names) <= students.MAX_PSEUDOS
+                and all(isinstance(n, str) and 0 < len(n.strip()) <= 60 for n in names)):
+            raise ValueError("Requête invalide.")
+        known = {p for p, _ in self.hero_pseudos} | set(self.players_seen) | set(self.chosen_pseudos())
+        unknown = [n.strip() for n in names if n.strip() not in known]
+        if unknown:
+            raise ValueError(f"« {unknown[0]} » ne joue dans aucune de ses mains.")
+        students.set_pseudos(self.space_key[len(students.PREFIX):], names)
+        self.reload()
+        return {"pseudos": self.pseudos_view(), "files": self.files_view(), "state": self.summary()}
 
     @staticmethod
     def my_pseudos(pseudos: Counter, conf: dict) -> set[str]:
@@ -460,7 +598,7 @@ class Library:
 
     def period_view(self) -> dict:
         """La période et de quoi la choisir : toutes tes mains (par format) et leurs dates."""
-        if self.period["kind"] == "days" and self._period_day != date.today():  # « 30 derniers jours » : un jour a passé
+        if self.period["kind"] in periods.RELATIVE and self._period_day != date.today():  # un jour a passé
             with self._lock:
                 self._select()
         every = self._all_hands + self._all_ring
@@ -563,7 +701,11 @@ class Library:
                 "my_hands": len(self._all_hands) + len(self._all_ring),
                 "formats": {"HU": len(self._all_hands), "ring": len(self._all_ring)}, "plays": conf["formats"],
                 "coach": conf["coach"], "students": len(students.all_students()), "min_hands": conf["min_hands"],
-                "precision": self.solves.precision()[1], "period": periods.label(self.period)}
+                "precision": self.solves.precision()[1], "period": periods.label(self.period),
+                "situations": [(g.key, g.label) for g in situations.ORDER],
+                "situation_refs": {fmt: situations.references(fmt) for fmt in settings.FORMATS},
+                "situation_defaults": situations.DEFAULT_REFERENCES,
+                "situation_custom": conf["situation_refs"] is not None}
 
     def settings_page(self) -> str:
         return build_settings_page(self.settings_view())
@@ -596,6 +738,8 @@ class Library:
         if conf["hero"] and conf["hero"] not in mine and conf["hero"] in self.players_seen:
             checked["hero"] = None  # ton nom était un pseudo que tu retires : ton pseudo le plus fréquent le remplace
         settings.save(checked)
+        if set(checked) <= {"stat_selection", "field_stat_selection"}:  # (ces pages se refont à chaque visite)
+            return self.summary()
         if {"hero", "hero_excluded", "hero_added", "references"} & set(checked):
             self.reload()
         else:
@@ -607,7 +751,7 @@ class Library:
         """Ce que le menu de l'application montre : les formats que tu joues (None : tous), les Élèves, le seuil
         de l'Étude du field."""
         conf = settings.load()
-        return {"plays": conf["formats"] if self.is_me else None,
+        return {"plays": self.chosen_formats() or None,
                 "coach": settings.coach_shown(len(students.all_students()), conf["coach"]),
                 "min_hands": conf["min_hands"]}
 
@@ -685,7 +829,7 @@ class Library:
         hands = self.hands_against(player)  # 404 si le joueur est inconnu
         kind = self.kinds()[player]
         if page == "solveur":  # change au fil des analyses : jamais en cache
-            return build_review_page(hands, self.hero, player, kind=kind)
+            return build_review_page(hands, self.hero, player, kind=kind, orders=self.review_orders(player))
 
         def build():
             hands, stats, lines = self._analysis(player)
@@ -698,50 +842,67 @@ class Library:
                 return build_report(hands, stats, self.hero, player, spots_href="spots", embed=True, lines=lines)
             if page == "bluffs":
                 return build_bluffs_page(bluffs.analyze(hands, [player], self.hero), f"de {player}",
-                                         note=_note(f"{player} : {players.describe(kind)}."))
+                                         note=_note(f"{player} : {players.describe(kind)}."),
+                                         catch=bluffcatch.spots(bluffcatch.faced(hands, [player], self.hero)))
             return build_viewer(hands, self.hero, player, embed=True, solver=True, api=f"{self.api}/coups",
                                 records=self._spot_index(player))
         return self._cached(("player", player, page) + ((kind["kind"],) if page == "preflop" else ()), build)
 
-    def self_page(self, page: str, table_format: Optional[str] = None) -> str:
+    def self_page(self, page: str, table_format: Optional[str] = None, filters: Optional[dict] = None) -> str:
         """Une page de Mon jeu ; table_format : le heads-up (« HU ») ou les tables à plusieurs (« ring »), pour le
-        Leakfinding et le préflop."""
+        Leakfinding et le préflop ; filters : le filtre des gains du bilan (gains.clean)."""
+        filters = gains.clean(filters or {}) if page == "bilan" else {}
         if page not in SELF_PAGES:
             raise NotFound(page)
         if page == "tables":  # tables à 3 joueurs et plus : pas besoin de mains heads-up
-            changes = documents.revision(db.current(), "plan", "ranges")[2:]  # charts, plans des flops 6-max
-            return self._cached(("self", "tables") + changes + self._ring_kinds_key(), self._ring_page)
+            changes = _theory_changes()  # charts, plans des flops 6-max
+            return self._cached(("self", "tables") + changes + self._ring_kinds_key() + _solver_key(), self._ring_page)
         if page == "mains":  # heads-up et tables à plusieurs ; les analyses du solveur s'y ajoutent
             key = (("self", "mains", tuple(sorted(ring_ranges.available().items())), _digest_count()) + self._kinds_key()
                    + self._ring_kinds_key())
             return self._cached(key, self._hands_page)
+        if page == "stats":  # tes stats choisies (paramètres) : la page se refait, les totaux restent en cache
+            return self.stats_page(table_format)
         if page == "leaks":  # change au fil des analyses : le rapport a son propre cache
             return self.leaks_page(table_format=table_format)
+        if page == "solveur":  # le bilan du solveur, format par format : change au fil des analyses
+            return self.solver_bilan()
+        if page == "suivi":
+            return self.tracking_page(table_format)
         if page == "preflop" and self._leak_format(table_format) != "HU":
             return self._ring_preflop_page()
         if page == "bilan" and self._leak_format(table_format) != "HU":
-            return self._ring_bilan()
+            return self._ring_bilan(filters)
         if not self.hands:
             if self.ring:  # seulement des tables à plusieurs : la page heads-up le dit
                 return html_page("Heads-up", HEADS_UP_ONLY, True)
             raise UnknownPlayer("moi")
         regular, excluded = self.regular_hands()
-        if page == "solveur":
-            return build_review_page(regular, self.hero, excluded=excluded, api=f"{self.api}/revue")
 
         def build():
             if page == "bilan":
                 return build_self_report(self.hands, self.all_stats(), self.hero, embed=True, spots_href="",
-                                         kinds=self.kinds(), head=self._bilan_head("HU"))
-            if page == "preflop":
-                return build_preflop_page(regular, self.hero, embed=True, spots_href="spots",
-                                          note=_excluded_note(excluded), switch=format_switch(self.leak_formats(), "HU"))
+                                         kinds=self.kinds(), head=self._bilan_head("HU", filters),
+                                         leaks_href="" if self.pages.startswith("/reference/") else "leaks",
+                                         gains=self._hu_gains(filters), stats_href=self._stats_href(),
+                                         situations=self._situations_html("HU", filters))
+            if page == "preflop":  # les charts du niveau de limites où tu as le plus de mains
+                band, charts = stake_charts.page_band("HU", regular)
+                note = " ".join(x for x in (_excluded_note(excluded), charts) if x)
+                return build_preflop_page(regular, self.hero, embed=True, spots_href="spots", note=note,
+                                          switch=format_switch(self.leak_formats(), "HU"),
+                                          solution=stake_charts.hu_solution(band))
             if page == "bluffs":
                 return self._population_bluffs()
+            panel = bool(self.hero) and "HU" in self.solver_formats()  # le panneau « Face au solveur »
             return build_viewer(self.hands, self.hero, None, embed=True, solver=True, api=f"{self.api}/coups",
-                                records=self._spot_index(None))
+                                records=self._spot_index(None),
+                                top=slot_html(f"{self.api}/revue/panneau?format=HU") if panel else "",
+                                extra_script=PANEL_SCRIPT if panel else "")
         kinds = self._kinds_key() if page in ("bilan", "preflop", "bluffs") else ()
-        return self._cached(("self", page) + kinds, build)
+        charts = stake_charts.revision()[2:] if page == "preflop" else ()
+        refs = (_situation_refs(),) if page == "bilan" else ()  # tes repères des résultats par situation
+        return self._cached(("self", page) + kinds + charts + refs + tuple(sorted(filters.items())), build)
 
     def _ring_overview(self) -> tuple[list, list]:
         """Tes stats aux tables à plusieurs (toutes ensemble) sur toutes tes mains, contre les réguliers et contre les
@@ -753,7 +914,7 @@ class Library:
             scopes = [(scope, label, found[scope]) for scope, label in leaks.SCOPES]
             stats = ring_leaks.stats(self.ring, hero, self.ring_kinds(), plays=self._plays().get("ring"))
             return scopes, leaks.top_stat_gaps(stats, "reg", 5)
-        key = (("ring_overview",) + documents.revision(db.current(), "plan", "ranges")[2:] + self._ring_kinds_key())
+        key = ("ring_overview",) + _theory_changes() + self._ring_kinds_key()
         return self._cached(key, build)
 
     def _ring_found(self) -> dict:
@@ -766,19 +927,39 @@ class Library:
         return self._cached(("ring_found",) + self._ring_kinds_key(), build)
 
     def _ring_page(self) -> str:
-        """Tes stats par position aux tables à plusieurs (toutes ensemble), sur toutes tes mains, contre les réguliers
-        et contre les récréatifs, après tes écarts les plus importants contre les réguliers."""
-        scopes, gaps = self._ring_overview()
+        """Tes coups à deux joueurs au flop aux tables à plusieurs, à ouvrir au solveur."""
+        scopes, _ = self._ring_overview()
+        panel = slot_html(f"{self.api}/revue/panneau?format={ring_leaks.FORMAT}") if self.hero else ""
         return build_ring_page(scopes, self.hero or "", spots=self.ring_spots(MAX_RING_SPOTS),
-                               ranges=ring_ranges.available(), gaps=gaps)
+                               ranges=ring_ranges.available(), status=self.solver_status(ring_game=True),
+                               api=f"{self.api}/coups", panel=panel)
 
-    def _bilan_head(self, fmt: str) -> str:
-        """En tête du bilan : le choix du format, et tes résultats tous formats confondus."""
+    def _bilan_head(self, fmt: str, filters: Optional[dict] = None) -> str:
+        """En tête du bilan : le filtre des gains, tes résultats tous formats confondus (puis en heads-up et aux tables
+        à plusieurs), puis le choix du format qui suit (le filtre gardé)."""
         hero = self.hero or ""
-        return format_switch(self.leak_formats(), fmt) + bilan_page.overall_html(
-            bilan_page.results(self.hands, hero), bilan_page.results(ring_leaks.mine(self.ring, hero), hero))
+        filters = filters or {}
+        heads_up, tables = gains.mine(self.hands, hero), gains.mine(ring_leaks.mine(self.ring, hero), hero)
+        both = heads_up + tables
+        kept_hu, kept_ring = gains.apply(heads_up, filters), gains.apply(tables, filters)
+        kept = len(kept_hu) + len(kept_ring) if filters else len(both)
+        bar = (f"<style>{gains_page.STYLE}</style>" + gains_page.filter_bar(both, filters, fmt)
+               + gains_page.active_note(filters, kept, len(both)))
+        return (bar + bilan_page.overall_html(bilan_page.results(kept_hu, hero), bilan_page.results(kept_ring, hero))
+                + format_switch(self.leak_formats(), fmt, keep=gains.query(filters)))
 
-    def _ring_bilan(self) -> str:
+    def _hu_gains(self, filters: dict) -> dict:
+        """Le bilan heads-up filtré : tes résultats et ta courbe sur les mains que le filtre garde (rien à changer sans
+        filtre), et la répartition de tes gains."""
+        hero = self.hero or ""
+        mine = gains.mine(self.hands, hero)
+        out = {"detail": gains_page.breakdown_html(mine, hero, filters, "HU"), "script": gains_page.SCRIPT}
+        if filters:
+            res = bilan_page.results(gains.apply(mine, filters), hero)
+            out.update(tiles=bilan_page.result_tiles(res), curve=res["curve"])
+        return out
+
+    def _ring_bilan(self, filters: Optional[dict] = None) -> str:
         """Ton bilan aux tables à plusieurs, sur le plan de celui du heads-up."""
         def build():
             hero = self.hero or ""
@@ -786,10 +967,57 @@ class Library:
             labels = {"all": "Toutes tes mains", "reg": "Contre les réguliers", "rec": "Contre les récréatifs"}
             shown = [(scope, labels[scope], found[0] if found else None) for scope, _, found in scopes]
             return bilan_page.build_ring_bilan(ring_leaks.mine(self.ring, hero), hero, shown,
-                                               self.ring_opponents_view(), gaps, head=self._bilan_head("ring"))
-        key = (("self", "bilan", "ring") + documents.revision(db.current(), "plan", "ranges")[2:]
-               + self._ring_kinds_key())
+                                               self.ring_opponents_view(), gaps, head=self._bilan_head("ring", filters),
+                                               filters=filters, stats_href=self._stats_href(),
+                                               situations=self._situations_html(ring_leaks.FORMAT, filters))
+        filters = filters or {}
+        key = (("self", "bilan", "ring", _situation_refs()) + _theory_changes() + self._ring_kinds_key()
+               + tuple(sorted(filters.items())))
         return self._cached(key, build)
+
+    def _situations_html(self, fmt: str, filters: Optional[dict] = None) -> str:
+        """Tes résultats par situation dans ce format (situations.build), face à tes repères (aux tables à plusieurs)
+        et aux réguliers de ton field ; filters : le filtre des gains du bilan, sur tes mains comme sur les leurs."""
+        if not self.hero:
+            return ""
+        hands = self.hands if fmt == "HU" else self.ring
+        kinds = self.kinds() if fmt == "HU" else self.ring_kinds()
+        regulars = [name for name, info in kinds.items() if info["kind"] == "reg"]
+        kept = gains.apply(hands, filters) if filters else hands
+        references = situations.references("HU" if fmt == "HU" else "ring")
+        return situations_html(situations.build(kept, self.hero, regulars, references))
+
+    def _stats_href(self) -> str:
+        """L'onglet de toutes tes stats, depuis le bilan (rien pour un joueur de référence : pas d'onglet)."""
+        return "" if self.pages.startswith("/reference/") else "stats"
+
+    def stats_page(self, table_format: Optional[str] = None) -> str:
+        """L'onglet Statistiques : tes stats choisies (settings stat_selection, statlib), sur toutes tes mains,
+        contre les réguliers et contre les récréatifs, puis position par position."""
+        fmt = self._leak_format(table_format)
+        if fmt == "HU" and not self.hands:
+            if self.ring:  # seulement des tables à plusieurs : la page heads-up le dit
+                return html_page("Heads-up", HEADS_UP_ONLY, True)
+            raise UnknownPlayer("moi")
+        return build_stats_page(fmt, self.hero or "", self.stat_tables(fmt), settings.load()["stat_selection"],
+                                head=format_switch(self.leak_formats(), fmt))
+
+    def stat_tables(self, fmt: str) -> list[tuple[str, str, Optional[statlib.Table]]]:
+        """Tes stats du catalogue (statlib.tally) dans ce format : toutes tes mains, contre les réguliers, contre les
+        récréatifs (None quand tous tes adversaires sont du même type)."""
+        def build():
+            hero = self.hero or ""
+            if fmt == "HU":
+                regular, _ = self.regular_hands()
+                kept = {h.hand_id for h in regular}
+                parts = {"all": self.hands, "reg": regular, "rec": [h for h in self.hands if h.hand_id not in kept]}
+            else:
+                parts = ring_leaks.split(ring_leaks.mine(self.ring, hero), hero, self.ring_kinds())
+            split = bool(parts["reg"]) and bool(parts["rec"])
+            return [(scope, label, statlib.tally(parts[scope], hero, fmt) if scope == "all" or split else None)
+                    for scope, label in STAT_SCOPES]
+        kinds = self._kinds_key() if fmt == "HU" else self._ring_kinds_key()
+        return self._cached(("statlib", fmt) + kinds, build)
 
     def _ring_preflop_page(self) -> str:
         """Mon préflop aux tables à plusieurs : tes décisions contre les réguliers face aux charts, avec les mêmes
@@ -800,11 +1028,15 @@ class Library:
             note = (f"{len(parts['rec'])} mains contre des récréatifs sont exclues (un récréatif a mis de l'argent dans le "
                     "pot pendant que tu y étais) : contre eux, l'exploitation prime sur la théorie."
                     if parts["rec"] else "")
+            band, charts = stake_charts.page_band(ring_leaks.FORMAT, parts["reg"])
+            note = " ".join(x for x in (note, charts) if x)
             return build_ring_preflop_page(
-                ring_preflop.collect(parts["reg"], hero), hero, embed=True, note=note,
-                switch=format_switch(self.leak_formats(), ring_leaks.FORMAT), replay=_ring_replay,
-                load_hint=" Charge-les dans Mon jeu › Tables à plusieurs (« Charger les charts »).")
-        key = ("self", "preflop", "ring") + documents.revision(db.current(), "ranges")[2:] + self._ring_kinds_key()
+                ring_preflop.collect(parts["reg"], hero, stake_charts.ring_lines(band)), hero, embed=True, note=note,
+                switch=format_switch(self.leak_formats(), ring_leaks.FORMAT),
+                replay=lambda hand: _ring_replay(hand, self.api),
+                load_hint=" Charge-les dans Paramètres › Ranges préflop (« Charger les charts 6-max »).")
+        key = (("self", "preflop", "ring") + documents.revision(db.current(), "ranges", stake_charts.KIND)[2:]
+               + self._ring_kinds_key())
         return self._cached(key, build)
 
     def _plays(self) -> dict[str, list]:
@@ -813,12 +1045,13 @@ class Library:
         def build():
             if not self.hero:
                 return {}
-            theory = handplay.Theory(load_solution(), handplay.ring_lines())
+            theory = stake_charts.theory()  # les charts du niveau de limites de chaque main
             losses = review.hero_losses(review.saved_digests())
             plays = {"HU": handplay.collect(self.hands, self.hero, theory, losses),
                      "ring": handplay.collect(self.ring, self.hero, theory, losses)}
             return {k: v for k, v in plays.items() if v}
-        return self._cached(("plays", tuple(sorted(ring_ranges.available().items())), _digest_count()), build)
+        return self._cached(("plays", tuple(sorted(ring_ranges.available().items())), _digest_count())
+                            + stake_charts.revision()[2:], build)
 
     def _kind_map(self) -> dict[str, str]:
         return {name: info["kind"] for name, info in self.kinds().items()}
@@ -848,6 +1081,7 @@ class Library:
 
     # --- visualiseur de spots : recherche côté serveur -----------------------------------
     SPOT_FILTERS = ("opp", "pot", "pfa", "pos", "reach", "st", "cb", "h", "v", "l", "end", "known", "res", "sort", "q")
+    SOLVER_FILTERS = ("done", "todo", "err")  # le filtre « Solveur » : analysées, à résoudre, avec une erreur
 
     def _spot_index(self, villain: Optional[str]) -> list[dict]:
         """Les fiches de tes mains (sans le détail), contre cet adversaire ou tous."""
@@ -856,14 +1090,69 @@ class Library:
             return spots.list_records(hands, self.hero, villain) if self.hero else []
         return self._cached(("spot_index", villain or ""), build)
 
-    def spots_search(self, query: dict[str, str]) -> dict:
-        """Une page de mains du visualiseur : filtres (ceux de la page), tri, offset, limit ; adversaire : ses mains."""
+    def _spot_selection(self, query: dict[str, str]) -> tuple[list[dict], dict, dict[str, dict]]:
+        """Les fiches de la sélection du visualiseur (ses filtres, dont « sv » : face au solveur), ses filtres et le
+        statut de tes mains face au solveur (solver_status)."""
         index = self._spot_index(query.get("adversaire") or None)
         filters = {k: query[k] for k in self.SPOT_FILTERS if query.get(k)}
         if "reach" in filters and not filters["reach"].isdigit():
             del filters["reach"]
+        status = self.solver_status()
+        wanted = query.get("sv") if query.get("sv") in self.SOLVER_FILTERS else None
+        found = [r for r in index if spots.matches(r, filters)
+                 and (wanted is None or _solver_match(status.get(r["id"]), wanted))]
+        return found, filters, status
+
+    def spots_search(self, query: dict[str, str]) -> dict:
+        """Une page de mains du visualiseur : filtres (ceux de la page), tri, offset, limit ; adversaire : ses mains.
+        Chaque ligne porte ce qu'en dit le solveur (« sv ») ; la sélection, combien de ses mains sont analysées."""
+        found, filters, status = self._spot_selection(query)
         number = lambda key, default: int(query[key]) if (query.get(key) or "").isdigit() else default  # noqa: E731
-        return spots.search(index, filters, number("offset", 0), number("limit", 150))
+        out = spots.search(found, filters, number("offset", 0), number("limit", 150), extra_sorts=_solver_sorts(status))
+        for row in out["rows"]:
+            if row["id"] in status:
+                row["sv"] = status[row["id"]]
+        out["solver"] = _solver_summary([status[r["id"]] for r in found if r["id"] in status])
+        return out
+
+    def solver_status(self, ring_game: bool = False) -> dict[str, dict]:
+        """Tes mains allées au flop face au solveur (review.statuses) : en heads-up, ou tes pots à deux joueurs au
+        flop aux tables à plusieurs. Recalculé quand une analyse, une résolution ou un réglage du solveur change."""
+        if not self.hero:
+            return {}
+        key = (self.version,) + _solver_key()
+        with self._lock:
+            known = self._solver_status.get(ring_game)
+        if known is not None and known[0] == key:
+            return known[1]
+        hands = [h for h in self.ring if self.hero in (postflop.flop_pair(h) or ())] if ring_game else self.hands
+        found = review.statuses(hands, self.hero)
+        with self._lock:
+            self._solver_status[ring_game] = (key, found)
+        return found
+
+    def spots_solve(self, query: dict[str, str], action: str = "etat", limit: Optional[int] = None,
+                    ids: Optional[list[str]] = None) -> dict:
+        """Les mains de la sélection du visualiseur (ses filtres) ou ces mains (ids, des tables à plusieurs aussi) face
+        au solveur : « etat » (l'avancement), « resoudre » (met en file les limit premières qui restent à résoudre, dans
+        l'ordre de la liste ; toutes sans limit), « arreter »."""
+        if ids is not None:
+            status = {**self.solver_status(), **self.solver_status(ring_game=True)}
+            chosen = [i for i in ids if i in status]
+        else:
+            found, _, status = self._spot_selection(query)
+            sorts = {**spots.SORTS, **_solver_sorts(status)}
+            key, reverse = sorts.get(query.get("sort") or "date", spots.SORTS["date"])
+            found.sort(key=key, reverse=reverse)
+            chosen = [r["id"] for r in found if r["id"] in status]
+        todo = [i for i in chosen if "todo" in status[i]]
+        if action == "resoudre":
+            self._queue_hands(todo[:limit] if limit else todo)
+        elif action == "arreter":
+            for view in self.solves.active_for(todo):
+                self.solves.cancel(view["job"])
+        return dict(self._solve_view(todo, len(chosen) - len(todo)),
+                    minutes=round(sum(status[i]["todo"] for i in todo), 1))
 
     def hand_fiche(self, hand_id: str) -> dict:
         """La fiche complète d'une de tes mains heads-up (pour la rejouer)."""
@@ -876,16 +1165,18 @@ class Library:
     # Chaque adversaire est étudié à un niveau de limites (stakes) : ses mains de ce niveau, face aux repères et aux
     # exploits de ce niveau (field.band_defs) ; les pages partent du niveau où tu as le plus de mains.
     def field_page(self, page: str, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
-        """Étude du field : le leakfinding des réguliers et des récréatifs, les bluffs des réguliers (heads-up), tes
-        adversaires et leur type."""
+        """Étude du field : le leakfinding, les bluffs et la value des réguliers et des récréatifs, tes adversaires et
+        leur type."""
         if page not in FIELD_PAGES:
             raise NotFound(page)
-        if page == "bluffs":
-            return self.self_page("bluffs")
         if not self.hands and not self.ring:
             raise UnknownPlayer("moi")
+        if page == "stats":
+            return self.field_stats(table_format, band)
         if page in ("regs", "recs"):
             return self.field_list(page[:3], table_format, band)
+        if page in FIELD_LINES:
+            return self.field_lines(*FIELD_LINES[page], table_format, band)
         return build_players_page(self.summary()["opponents"] if self.hands else [], self.ring_opponents_view(),
                                   aliases.groups())
 
@@ -984,6 +1275,60 @@ class Library:
                                    groups, band=band)
         return self._cached(("field", kind, fmt, band, min_hands) + tuple(kinds_key), build)
 
+    def field_stats(self, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
+        """Les stats de tes adversaires d'un format à un niveau de limites, celles choisies (settings
+        field_stat_selection, statlib) : réguliers, récréatifs, tous, face aux repères de ce niveau et à toi, puis par
+        position ; puis tes écarts que leurs réponses justifient et ceux qui te rapporteraient (le Leakfinding de ce
+        format). Les totaux restent en cache, la page se refait avec ton choix."""
+        fmt = self._field_format(table_format)
+        band = self._field_band(fmt, band)
+        kinds_key = self._kinds_key() if fmt == "HU" else (self._ring_kinds_key(),)
+        hero = self.hero or ""
+
+        def build():
+            rows = self._field_rows(fmt, band)
+            groups = {kind: [r["name"] for r in rows if r["info"]["kind"] == kind] for kind in ("reg", "rec")}
+            groups["all"] = groups["reg"] + groups["rec"]
+            index = self._field_index(fmt, band)
+            players = {k: len(names) for k, names in groups.items()}
+            hands = {k: sum(len(index.get(n, [])) for n in names) for k, names in groups.items()}
+            labels = {"reg": "Réguliers", "rec": "Récréatifs", "all": "Tous"}
+            # les populations qui ont des joueurs (« Tous » : quand il y a des deux)
+            shown = [k for k in ("reg", "rec") if groups[k]] + (["all"] if groups["reg"] and groups["rec"] else [])
+            band_hands = self._band_hands(fmt, band)
+            populations = [(k, labels[k], statlib.tally_group(band_hands, groups[k], fmt)) for k in shown]
+            mine = statlib.tally(band_hands, hero, fmt) if hero else None
+            report = self.leaks_report(fmt) if hero else None
+            return {"populations": populations, "mine": mine, "players": players, "hands": hands,
+                    "exploits": report.exploits if report else [], "chances": report.opportunities if report else []}
+        found = self._cached(("field_stats", fmt, band, _digest_count()) + _theory_changes() + tuple(kinds_key), build)
+        return build_field_stats_page(fmt, band, self._field_switch(fmt, band), found["populations"], found["mine"],
+                                      found["players"], found["hands"], settings.load()["field_stat_selection"],
+                                      found["exploits"], found["chances"],
+                                      leaks_href=f"{self.pages}/leaks{format_query(fmt)}")
+
+    def field_lines(self, kind: str, focus: str, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
+        """Les bluffs (focus « bluffs ») ou la value (« value ») des réguliers (« reg ») ou des récréatifs (« rec »)
+        d'un format et d'un niveau de limites, tous ensemble ; en heads-up, les bluffs face au solveur
+        (bluffs.analyze)."""
+        fmt = self._field_format(table_format)
+        band = self._field_band(fmt, band)
+        kinds_key = self._kinds_key() if fmt == "HU" else (self._ring_kinds_key(),)
+        switch = self._field_switch(fmt, band)
+
+        def build():
+            names = tuple(r["name"] for r in self._field_rows(fmt, band) if r["info"]["kind"] == kind)
+            if fmt == "HU" and focus == "bluffs":
+                return self._population_bluffs(kind, band, switch)
+            study = self.field_study(fmt, names, band) if names else None
+            patterns = []
+            if fmt == "HU" and names:  # là où ils misent bien moins que la théorie : de la value
+                voice = bluffs.Voice(f"les {'réguliers' if kind == 'reg' else 'récréatifs'}", plural=True)
+                report = bluffs.analyze(self._band_hands(fmt, band), names, self.hero, voice)
+                patterns = [p for p in report.patterns if p.direction == "moins"]
+            return build_crowd_page(kind, focus, fmt, study, switch, band, patterns)
+        return self._cached(("field_lines", kind, focus, fmt, band) + tuple(kinds_key), build)
+
     def field_player(self, name: str, table_format: Optional[str] = None, band: Optional[str] = None) -> str:
         """La fiche d'un adversaire dans l'Étude du field, à un niveau de limites (celui demandé, sinon celui où il
         a le plus de mains) : ses leaks, sa value et ses bluffs par ligne."""
@@ -1019,22 +1364,31 @@ class Library:
         study = self.field_study(fmt, tuple(r["name"] for r, _ in members), band)
         return build_group_page(style, fmt, study, members, self._field_switch(fmt, band), band=band)
 
-    def _population_bluffs(self) -> str:
-        """Les bluffs des réguliers, ensemble puis un par un."""
-        regs = [n for n, info in self.kinds().items() if info["kind"] == "reg"]
-        recs = sorted(n for n, info in self.kinds().items() if info["kind"] == "rec")
+    def _population_bluffs(self, kind: str = "reg", band: Optional[str] = None, head: str = "") -> str:
+        """Les bluffs des réguliers (ou des récréatifs) en heads-up, ensemble puis un par un ; band : leurs mains d'un
+        niveau de limites (toutes sinon) ; head : le choix du format et des limites."""
+        crowd, others = ("réguliers", "récréatifs") if kind == "reg" else ("récréatifs", "réguliers")
+        hands = self.hands if band is None else self._band_hands("HU", band)
+        index = None if band is None else self._field_index("HU", band)
+        names = [n for n, info in self.kinds().items() if info["kind"] == kind]
+        if index is not None:
+            names = [n for n in names if index.get(n)]
+        rest = sum(1 for n, info in self.kinds().items() if info["kind"] != kind and (index is None or index.get(n)))
+        if not names:
+            return build_crowd_page(kind, "bluffs", "HU", None, head, band)
         rows = []
-        for name in regs:
-            report = bluffs.analyze(self.hands_against(name), [name], self.hero)
-            top = next((p for p in report.patterns if p.confidence == "solide"), None)
+        for name in names:
+            report = bluffs.analyze(self.hands_against(name) if index is None else index[name], [name], self.hero)
+            top = next((p for p in report.patterns if p.confidence == "solide" and p.direction == "plus"), None)
             rows.append({"name": name, "hands": report.hands, "shown": len(report.shown),
                          "river": sum(1 for s in report.shown if s.street == "river" and s.bluff),
                          "top": top.title if top else None})
-        note = (f"Les {len(regs)} réguliers ensemble (chacun dans « Adversaire par adversaire », en bas de page)."
-                if len(regs) > 1 else "Un seul régulier." if regs else "Aucun adversaire classé régulier.")
-        if recs:
-            note += f" Les {len(recs)} récréatifs n'y sont pas : ils ont leur page, dans l'onglet Récréatifs."
-        report = bluffs.analyze(self.hands, regs, self.hero, bluffs.Voice("les réguliers", plural=True))
+        note = (f"Les {len(names)} {crowd} ensemble (chacun dans « Adversaire par adversaire », en bas de page)."
+                if len(names) > 1 else f"Un seul joueur parmi les {crowd}.")
+        if rest:
+            note += f" Les {others} ({rest}) ont leur propre page : {others.capitalize()} › Bluffs."
+        note += " Là où leurs mises sont surtout de la value : le sous-onglet Value."
+        report = bluffs.analyze(hands, names, self.hero, bluffs.Voice(f"les {crowd}", plural=True))
         profile = {p.name: p for p in report.profiles}
         for row in rows:
             prof = profile.get(row["name"])
@@ -1042,11 +1396,14 @@ class Library:
                        group=prof.group if prof else None)
         groups = []
         for cluster in report.clusters:  # ce qui ressort de chaque groupe, ses membres pesant chacun au plus 1
-            sub = (bluffs.analyze(self.hands, cluster.names, self.hero, bluffs.Voice("les joueurs du groupe", plural=True))
+            sub = (bluffs.analyze(hands, cluster.names, self.hero, bluffs.Voice("les joueurs du groupe", plural=True))
                    if len(cluster.members) > 1 else None)
-            groups.append({"cluster": cluster, "patterns": (sub.patterns if sub else [])[:3]})
-        return build_bluffs_page(report, "des réguliers", note=_note(note),
-                                 players=sorted(rows, key=lambda r: -r["hands"]), groups=groups)
+            found = [p for p in (sub.patterns if sub else []) if p.direction == "plus"]
+            groups.append({"cluster": cluster, "patterns": found[:3]})
+        return build_bluffs_page(report, f"des {crowd}", note=_note(note),
+                                 players=sorted(rows, key=lambda r: -r["hands"]), groups=groups,
+                                 catch=bluffcatch.spots(bluffcatch.faced(hands, names, self.hero)), head=head,
+                                 direction="plus", crowd=crowd)
 
     # --- élèves -----------------------------------------------------------------------
     def student(self, ident: str) -> "Library":
@@ -1058,6 +1415,7 @@ class Library:
             lib = self._students.get(ident)
         if lib is None:
             lib = Library(students.folder(ident), meta.get("pseudo"), solves=self.solves, backups=self.backups,
+                          compactions=self.compactions,
                           api=f"/api/eleves/{ident}", pages=f"/eleve/{ident}", space=students.PREFIX + ident,
                           space_name=meta["name"], warm_up=self.warm_up)
             lib.display_name = meta["name"]
@@ -1091,7 +1449,8 @@ class Library:
             lib = self._references.get(ident)
         if lib is None:
             name = meta["name"]
-            lib = Library(self.folder, name, solves=self.solves, backups=self.backups, api=f"/api/references/{ident}",
+            lib = Library(self.folder, name, solves=self.solves, backups=self.backups, compactions=self.compactions,
+                          api=f"/api/references/{ident}",
                           pages=f"/reference/{ident}", space=REFERENCE_PREFIX + ident, space_name=name,
                           source=lambda: self._reference_hands.get(name, []), warm_up=self.warm_up)
             lib.display_name = name
@@ -1170,7 +1529,8 @@ class Library:
         self.reload()
         return dict(self.references_view(), state=self.summary())
 
-    def reference_page(self, ident: str, page: str, table_format: Optional[str] = None) -> str:
+    def reference_page(self, ident: str, page: str, table_format: Optional[str] = None,
+                       filters: Optional[dict] = None) -> str:
         """Une page d'un joueur de référence : « comparaison » (toi et lui), « lignes » (sa value et ses bluffs), ou une
         page de son jeu analysée comme les tiennes (bilan, tables, préflop, mains de départ)."""
         if page not in REFERENCE_PAGES:
@@ -1183,7 +1543,7 @@ class Library:
             note = (f'<p class="note" style="margin:0 0 12px">Le jeu de <b>{escape(name)}</b>, analysé comme le tien : '
                     "les colonnes et les titres portent son nom, et dans les textes, « tu », « ton » et « tes » le "
                     "désignent aussi.</p>")
-            html = as_reference(lib.self_page(page, table_format=table_format), name)
+            html = as_reference(lib.self_page(page, table_format=table_format, filters=filters), name)
             return html.replace("<main>\n", "<main>\n" + note, 1)
         fmt = lib._leak_format(table_format)  # UnknownPlayer s'il n'a pas de mains
 
@@ -1248,6 +1608,25 @@ class Library:
                          "status": status})
         return rows
 
+    def catch_trainer_page(self) -> str:
+        """Entraîneur › Bluffcatch : les mises river que tu as affrontées, à payer ou coucher (catch_trainer)."""
+        def build():
+            played = dict(self.leak_formats())
+            groups = [("HU", self.hands, self.kinds())] if "HU" in played else []
+            groups += [("ring", self.ring, self.ring_kinds())] if ring_leaks.FORMAT in played else []
+            return catch_trainer.build_page(catch_trainer.exercises(groups, self.hero or "", self.api))
+        return self._cached(("entraineur", "bluffcatch") + self._kinds_key() + self._ring_kinds_key(), build)
+
+    def replay_record(self, hand_id: str) -> dict:
+        """Une main pour le replayer (replay.record), vue de cet espace ; dans le tien, aussi celles des élèves et de
+        tes joueurs de référence. NotFound si elle n'y est pas."""
+        found = (self.by_id[hand_id], self.hero) if hand_id in self.by_id else (
+            self.find_hand(hand_id) if self.is_me else None)
+        if found is None:
+            raise NotFound(hand_id)
+        hand, hero = found
+        return dict(replay.record(hand, hero), explorer=len(hand.board) >= 3 and postflop.flop_pair(hand) is not None)
+
     def find_hand(self, hand_id: str) -> Optional[tuple[Hand, str]]:
         """Une main et son joueur : parmi les tiennes, puis celles des élèves et de tes joueurs de référence."""
         hand = self.by_id.get(hand_id)
@@ -1264,12 +1643,13 @@ class Library:
     # --- leakfinding ----------------------------------------------------------------------
     def leak_formats(self) -> list[tuple[str, int]]:
         """Les formats de tes mains et leur nombre : le heads-up, puis les tables à plusieurs (3 à 9 joueurs
-        ensemble) ; un rapport chacun. Dans ton espace, seulement ceux que tu joues (Paramètres)."""
+        ensemble) ; un rapport chacun. Seulement ceux que tu joues (Paramètres), ou que joue l'élève."""
         out = [("HU", len(self.hands))] if self.hands else []
         out += [(ring_leaks.FORMAT, len(self.ring))] if self.ring else []
-        if not self.is_me:
+        chosen = self.chosen_formats()
+        if not chosen:
             return out
-        kept = settings.enabled_formats([fmt for fmt, _ in out])
+        kept = settings.enabled_formats([fmt for fmt, _ in out], chosen)
         return [(fmt, n) for fmt, n in out if fmt in kept]
 
     def _leak_format(self, table_format: Optional[str]) -> str:
@@ -1288,7 +1668,7 @@ class Library:
     def leaks_report(self, table_format: str = "HU") -> "leaks.Report":
         """Le rapport d'un format, recalculé quand des mains, des analyses du solveur, tes charts, les plans de jeu ou
         le type de tes adversaires changent."""
-        changes = (_digest_count(),) + documents.revision(db.current(), "plan", "ranges")[2:]
+        changes = (_digest_count(),) + _theory_changes()
         if table_format == "HU":  # (les mains de départ et les stats déjà lues pour les autres pages servent)
             return self._cached(("leaks",) + changes + self._kinds_key(),
                                 lambda: leaks.build(self.hands, self.hero, self.kinds(), plays=self._plays().get("HU"),
@@ -1302,7 +1682,41 @@ class Library:
         return build_leaks_page(self.leaks_report(fmt), api=f"{self.api}/leaks", pages=self.pages,
                                 embed=not standalone, standalone=standalone, name=self.display_name,
                                 opponents=self.summary()["opponents"] if fmt == "HU" else self.ring_opponents_view(),
-                                formats=self.leak_formats(), period=periods.describe(self.period))
+                                formats=self.leak_formats(), period=periods.describe(self.period),
+                                follows=None if standalone else tracking.followed(self.pages, fmt))
+
+    def tracking(self, table_format: Optional[str] = None) -> tracking.Tracking:
+        """Le suivi de ses leaks dans le temps (analyzer/tracking.py), dans ce format : ceux qu'il suit, et ceux du
+        Leakfinding à suivre."""
+        fmt = self._leak_format(table_format)
+        report = self.leaks_report(fmt)
+        follow_list = tracking.followed(self.pages, fmt)
+        current = [(x.key, x.title, x.direction) for x in report.leaks
+                   if x.key and x.direction and not x.key.startswith("solveur:")]
+        hero = self.hero or ""
+        changes = _theory_changes()
+        if fmt == "HU":
+            kinds = self.kinds()
+            hands = self.hands
+            stats_of = lambda part: leaks.stats_for(part, hero, kinds)  # noqa: E731
+            kinds_key = self._kinds_key()
+        else:
+            kinds, plays = self.ring_kinds(), self._plays().get("ring")
+            hands = ring_leaks.mine(self.ring, hero)
+            stats_of = lambda part: ring_leaks.stats(part, hero, kinds, plays)  # noqa: E731
+            kinds_key = self._ring_kinds_key()
+        key = ("suivi", fmt, json.dumps(follow_list, sort_keys=True), tuple(current)) + changes + kinds_key
+        return self._cached(key, lambda: tracking.build(hands, stats_of, follow_list, current))
+
+    def tracking_page(self, table_format: Optional[str] = None) -> str:
+        fmt = self._leak_format(table_format)
+        return build_tracking_page(self.tracking(fmt), api=f"{self.api}/suivi", table_format=fmt,
+                                   formats=self.leak_formats())
+
+    def follow_leak(self, key: str, since: Optional[date], title: str = "", table_format: Optional[str] = None) -> dict:
+        """Suit ce leak (la clé de sa stat) à partir de cette date, ou ne le suit plus (since None)."""
+        fmt = self._leak_format(table_format)
+        return {"suivis": tracking.follow(self.pages, fmt, key, since, title)}
 
     def report_synthesis(self, table_format: Optional[str] = None) -> synthesis.Synthesis:
         """L'essentiel du Leakfinding d'un format, sur la période (pour le rapport PDF et la présentation)."""
@@ -1321,31 +1735,46 @@ class Library:
         """La présentation PowerPoint du Leakfinding, pour la séance du coach avec l'élève."""
         return build_pptx(self.report_synthesis(table_format))
 
-    def leaks_state(self, start: bool = False, table_format: Optional[str] = None) -> dict:
-        """Les mains choisies (contre les réguliers en heads-up) : analysées, à analyser, en cours ; start=True les
-        met en file."""
+    def _queue_hands(self, hand_ids: list[str]) -> None:
+        """Met ces mains en file au solveur (celles déjà résolues ou en cours n'y retournent pas)."""
+        if not postflop.status()["ready"]:
+            return
+        for hand_id in hand_ids:
+            found = self.by_id.get(hand_id)
+            if found is None or not self.hero:
+                continue
+            try:
+                spot = postflop.build_spot(found, self.hero)
+            except postflop.Unsupported:
+                continue
+            if self.solves.lookup(spot)["state"] not in ("waiting", "running", "done"):
+                self.solves.analyze(spot, review.save_digest)
+
+    def _solve_view(self, all_ids: list[str], done: int) -> dict:
+        """L'avancement des résolutions de ces mains (toutes celles qui restent à résoudre) : en file, en cours."""
+        jobs = self.solves.active_for(all_ids)
+        running = next((v for v in jobs if v["state"] == "running"), None)
+        current = None if running is None else {"hand": running["hand"], "progress": running.get("progress"),
+                                                "max_iterations": running.get("max_iterations"), "job": running["job"]}
+        return {"total": done + len(all_ids), "done": done, "busy": len({v["hand"] for v in jobs}),
+                "current": current, "ready": postflop.status()["ready"]}
+
+    def leaks_state(self, start: bool = False, table_format: Optional[str] = None, order: str = "leaks",
+                    limit: Optional[int] = None, leak: Optional[str] = None) -> dict:
+        """Les mains de ses pots contre les réguliers passées au solveur : analysées, à analyser, en cours ; start=True
+        met en file les limit premières (toutes sans limit) dans cet ordre (leaks.SOLVE_ORDERS), ou celles d'un leak
+        (sa clé)."""
         report = self.leaks_report(self._leak_format(table_format))
-        picks = report.picks.get(report.solver_scope, [])
-        ready = postflop.status()["ready"]
-        busy, current = 0, None
-        for spot in leaks.selection_spots(report):
-            view = self.solves.lookup(spot)
-            if start and ready and view["state"] not in ("waiting", "running", "done"):
-                view = self.solves.analyze(spot, review.save_digest)
-            if view["state"] in ("waiting", "running"):
-                busy += 1
-                if view["state"] == "running":
-                    current = {"hand": spot.hand.hand_id, "progress": view.get("progress"),
-                               "max_iterations": view.get("max_iterations")}
-        done = sum(1 for p in picks if p.digest is not None)
-        return {"total": sum(1 for p in picks if p.digest is not None or p.spot is not None), "done": done,
-                "busy": busy, "current": current, "ready": ready}
+        if start:
+            chosen = leaks.solve_candidates(report, order, leak)
+            self._queue_hands([hand_id for hand_id, _ in (chosen[:limit] if limit else chosen)])
+        return self._solve_view([hand_id for hand_id, _ in report.solve_orders.get("pertes", [])],
+                                report.review["analyzed"])
 
     def leaks_cancel(self, table_format: Optional[str] = None) -> dict:
-        for spot in leaks.selection_spots(self.leaks_report(self._leak_format(table_format))):
-            view = self.solves.lookup(spot)
-            if view["state"] in ("waiting", "running"):
-                self.solves.cancel(view["job"])
+        report = self.leaks_report(self._leak_format(table_format))
+        for view in self.solves.active_for([hand_id for hand_id, _ in report.solve_orders.get("pertes", [])]):
+            self.solves.cancel(view["job"])
         return self.leaks_state(table_format=table_format)
 
     # --- résolution postflop ----------------------------------------------------
@@ -1406,10 +1835,10 @@ class Library:
             if (isinstance(spot, studyspots.StudySpot) and not spot.plan and not spot.adjusted and not spot.edits
                     and board in studyspots.flop_set(spot.family) and postflop.solved_request(spot.request()) is None):
                 # flop de la série sans tailles choisies : le choix d'abord, comme pour la série entière
-                family = spot.family
+                family, rset = spot.family, spot.ranges_set
                 view = self.solves.choose_and_solve(
                     spot.ident, lambda job: self._choose(family, board, job),
-                    lambda: studyspots.StudySpot(family, studyspots.cards_of(board)))
+                    lambda: studyspots.StudySpot(family, studyspots.cards_of(board), ranges_set=rset))
             else:
                 view = self.solves.start(spot, force=reopen)
         if view["state"] == "absent":
@@ -1436,6 +1865,13 @@ class Library:
             return [(spot.oop, spot.oop, None), (spot.ip, spot.ip, None)]
         return [(p, spot.hand.position(p), "H" if p == spot.hero else "V") for p in (spot.oop, spot.ip)]
 
+    @staticmethod
+    def _ranges_set(spot) -> str:
+        """Le jeu de ranges d'un coup (stake_charts.SETS) : celui du spot d'étude, ou celui de la limite de la main."""
+        if isinstance(spot, studyspots.StudySpot):
+            return spot.ranges_set
+        return stake_charts.set_of(spot.hand.bb)
+
     def ranges_state(self, hand_id: str) -> dict:
         """Les ranges préflop du coup : celles de la référence, celles en jeu, et d'où elles viennent."""
         try:
@@ -1444,12 +1880,13 @@ class Library:
             return {"hand": hand_id, "supported": False, "message": str(exc)}
         study = isinstance(spot, studyspots.StudySpot)
         data = custom_ranges.load()
+        rset = self._ranges_set(spot)
         by_hand = data["coups"].get(spot.ident, {})
         can_line = not study or data["spots"]  # un spot d'étude : avec l'option des Paramètres
-        by_line = data["lignes"].get(spot.context, {}) if can_line else {}
+        by_line = data[custom_ranges.lines_key(rset)].get(spot.context, {}) if can_line else {}
         table_format, key = spot.context.split("|", 1)
         steps = [tuple(step.split(":", 1)) for step in key.split()]
-        reference = custom_ranges.reference_name(table_format)
+        reference = custom_ranges.reference_name(table_format, rset)
         players = []
         for name, pos, role in self._range_players(spot):
             source = "coup" if pos in by_hand else "ligne" if pos in by_line else "reference"
@@ -1458,10 +1895,72 @@ class Library:
             players.append({"position": pos, "role": role, "source": source, "reference": spot.reference[name],
                             "line": ring_ranges.parse_range(by_line[pos]) if pos in by_line else None,
                             "current": current})
-        return {"hand": hand_id, "supported": True, "spot": study, "format": table_format,
+        names = self._range_players(spot)
+        other = None
+        if study:  # le même flop avec l'autre jeu de ranges : une étude à part
+            twin = next(k for k in stake_charts.SETS if k != rset)
+            ident = f"spot:{spot.family}:{''.join(spot.board)}" + ("" if twin == "petites" else ":hautes")
+            other = {"set": twin, "href": "/explorateur/" + ident,
+                     "label": f"Ouvrir ce flop avec les ranges des {stake_charts.SET_NAMES[twin].lower()} ↗"}
+        return {"hand": hand_id, "supported": True, "spot": study, "format": table_format, "set": rset,
+                "set_name": stake_charts.SET_NAMES[rset],
                 "line": ring_ranges.describe(steps), "can_line": can_line, "for_spots": data["spots"],
                 "adjusted": spot.adjusted, "reference": reference, "players": players,
+                "choices": self._range_choices(spot, names, data), "other": other,
                 "order": custom_ranges.hand_order()}
+
+    @staticmethod
+    def _base_ranges(spot, band: Optional[str], names) -> dict[str, dict[str, float]]:
+        """Les ranges de base du coup (position -> poids) avec les charts de ce niveau de limites (None : la
+        référence) ; postflop.Unsupported quand ils ne donnent pas cette ligne."""
+        if isinstance(spot, studyspots.StudySpot):
+            info = studyspots.family_info(spot.family)
+            if spot.family not in studyspots.FAMILIES:
+                return studyspots.ring_spot_ranges(spot.family, band)
+            solution = stake_charts.hu_solution(band) if band else studyspots.load_solution()
+            return {spot.oop: postflop.range_weights(solution, *info["oop"]),
+                    spot.ip: postflop.range_weights(solution, *info["ip"])}
+        other = postflop.build_spot(spot.hand, spot.hero, custom=False, band=band)
+        return {pos: other.reference[name] for name, pos, _ in names}
+
+    def _range_choices(self, spot, names, data: dict) -> list[dict]:
+        """Les ranges dont le coup peut partir (onglet Ranges de l'explorateur) : celles de la référence, celles de tes
+        charts de chaque niveau de limites, et tes ranges de sa ligne dans chaque jeu (petites, hautes limites) ;
+        « base » : celles dont le coup part sans réglage. Les mêmes ranges ne sont proposées qu'une fois."""
+        positions = [pos for _, pos, _ in names]
+        base = [spot.reference[name] for name, _, _ in names]
+        heads_up = isinstance(spot, studyspots.StudySpot) and spot.family in studyspots.FAMILIES or (
+            not isinstance(spot, studyspots.StudySpot) and len(spot.hand.seats) == 2)
+        found = stake_charts.available()
+        levels = (found.get(stake_charts.HU, []) if heads_up else
+                  sorted({b for fmt, bands in found.items() if fmt != stake_charts.HU for b in bands},
+                         key=stakes.BANDS.index))
+        out, bases = [], {}
+        for band in (None, *levels):
+            try:
+                ranges = self._base_ranges(spot, band, names)
+            except postflop.Unsupported:
+                continue
+            bases[band] = ranges
+            label = "Référence (micro limites, rake élevé)" if band is None else f"Tes charts · {stakes.NAMES[band]}"
+            out.append({"id": f"charts:{band or 'reference'}", "label": label,
+                        "ranges": [ranges[pos] for pos in positions]})
+        for rset in stake_charts.SETS:
+            line = data[custom_ranges.lines_key(rset)].get(spot.context, {})
+            fallback = bases.get(stake_charts.set_band(rset)) or bases.get(None)
+            if not line or fallback is None:
+                continue
+            out.append({"id": f"ligne:{rset}",
+                        "label": f"Tes ranges de la ligne · {stake_charts.SET_NAMES[rset]}",
+                        "ranges": [ring_ranges.parse_range(line[pos]) if pos in line else fallback[pos]
+                                   for pos in positions]})
+        kept = []
+        for choice in out:
+            if any(all(custom_ranges.same(a, b) for a, b in zip(choice["ranges"], k["ranges"])) for k in kept):
+                continue
+            choice["base"] = all(custom_ranges.same(a, b) for a, b in zip(choice["ranges"], base))
+            kept.append(choice)
+        return kept
 
     def save_ranges(self, hand_id: str, scope: str, ranges: dict) -> dict:
         """Enregistre tes ranges pour ce coup (scope « coup ») ou pour sa ligne (« ligne ») ; seules celles qui
@@ -1475,7 +1974,8 @@ class Library:
         if not ranges or set(ranges) - set(names) or not all(isinstance(t, str) for t in ranges.values()):
             raise ValueError("Positions inconnues pour ce coup.")
         weights = {pos: custom_ranges.check(text) for pos, text in ranges.items()}
-        by_line = data["lignes"].get(spot.context, {}) if scope == "coup" and can_line else {}
+        rset = self._ranges_set(spot)
+        by_line = data[custom_ranges.lines_key(rset)].get(spot.context, {}) if scope == "coup" and can_line else {}
         keep = {}
         for pos, w in weights.items():
             base = ring_ranges.parse_range(by_line[pos]) if pos in by_line else spot.reference[names[pos]]
@@ -1483,9 +1983,9 @@ class Library:
                 keep[pos] = postflop.range_text(w)
         key = spot.ident if scope == "coup" else spot.context
         if keep:
-            custom_ranges.save(scope, key, keep)
+            custom_ranges.save(scope, key, keep, rset)
         else:
-            custom_ranges.clear(scope, key)
+            custom_ranges.clear(scope, key, rset)
         if scope == "ligne":  # la range de la ligne s'applique à ce coup : son réglage à lui s'efface
             custom_ranges.clear("coup", spot.ident)
         with self._lock:
@@ -1497,89 +1997,152 @@ class Library:
         spot = self._spot(hand_id)
         if scope not in custom_ranges.SCOPES:
             raise ValueError("Portée inconnue.")
-        custom_ranges.clear(scope, spot.ident if scope == "coup" else spot.context)
+        custom_ranges.clear(scope, spot.ident if scope == "coup" else spot.context, self._ranges_set(spot))
         with self._lock:
             self._cache.clear()
         return self.ranges_state(hand_id)
 
     # --- Paramètres › Ranges préflop : tes ranges par défaut, ligne par ligne, sans passer par un coup ---------------
 
-    def default_ranges_view(self) -> dict:
-        """Les lignes de chaque format que tu joues (custom_ranges.formats) et les positions où ta range remplace celle
-        de la référence ; les réglages dont la ligne n'a plus de référence (à effacer) ; l'option des spots d'étude."""
+    def stake_charts_view(self) -> dict:
+        """Les charts préflop par niveau de limites (theory/stake_charts.py) : pour chaque format que tu joues (le
+        heads-up, les tables à plusieurs : les charts 6-max et les formats qui ont les leurs) et chaque niveau, ceux
+        importés ou ceux de la référence ; et tes mains de chaque niveau."""
+        plays = settings.load()["formats"]
+        found = stake_charts.available()
+        hero = self.hero or ""
+        formats = []
+        if not plays or "HU" in plays:
+            formats.append((stake_charts.HU, "Heads-up", stake_charts.mix(self._all_hands)))
+        if not plays or "ring" in plays:
+            ring_mix = stake_charts.mix(ring_leaks.mine(self._all_ring, hero)) if hero else {}
+            ring_formats = sorted({"6-max", *ring_ranges.available(), *(f for f in found if f != stake_charts.HU)}
+                                  - {"HU"}, key=lambda f: (f != "6-max", f))
+            formats += [(fmt, fmt, ring_mix) for fmt in ring_formats]
+        out = []
+        references = ring_ranges.available()
+        for fmt, label, counts in formats:
+            bands = [{"band": band, "label": stakes.label(band), "hands": counts.get(band, 0),
+                      "charts": stake_charts.summary(fmt, band)} for band in stakes.BANDS]
+            reference = fmt == stake_charts.HU or ring_ranges.chart_mapping(fmt, references) is not None
+            out.append({"format": fmt, "label": label, "bands": bands, "reference": reference})
+        return {"formats": out}
+
+    def save_stake_charts(self, table_format: str, band: str, data: Optional[dict] = None,
+                          text: Optional[str] = None) -> dict:
+        """Garde des charts pour ce format et ce niveau : un JSON (data), ou l'export texte des tables à plusieurs
+        (text), qui complète ceux déjà là."""
+        if text is not None:
+            stake_charts.import_text(text, band, table_format)
+        else:
+            stake_charts.save(table_format, band, data or {})
+        return self.stake_charts_view()
+
+    def delete_stake_charts(self, table_format: str, band: str) -> dict:
+        stake_charts.delete(table_format, band)
+        return self.stake_charts_view()
+
+    def default_ranges_view(self, rset: str = "petites") -> dict:
+        """Les lignes de chaque format que tu joues (custom_ranges.formats) dans ce jeu de ranges (petites ou hautes
+        limites) et les positions où ta range remplace celle de base ; les réglages dont la ligne n'a plus de base (à
+        effacer) ; l'option des spots d'étude ; tes ranges par défaut (le choix) et tes mains de chaque jeu."""
         plays = settings.load()["formats"]
         counts = Counter(h.table_format for h in self._all_ring)
         counts["HU"] = len(self._all_hands)
         data = custom_ranges.load()
+        mine = data[custom_ranges.lines_key(rset)]
         groups, listed = [], set()
         for table_format in custom_ranges.formats(counts, heads_up=not plays or "HU" in plays,
                                                   ring=not plays or "ring" in plays):
             lines = []
-            for line in custom_ranges.reference_lines(table_format):
+            for line in custom_ranges.reference_lines(table_format, rset):
                 context = custom_ranges.context(table_format, line["steps"])
                 listed.add(context)
                 lines.append({"context": context, "line": ring_ranges.describe(line["steps"]),
                               "pot_type": line["pot_type"], "positions": list(line["ranges"]),
-                              "adjusted": [pos for pos in line["ranges"] if pos in data["lignes"].get(context, {})]})
+                              "adjusted": [pos for pos in line["ranges"] if pos in mine.get(context, {})]})
             groups.append({"format": table_format, "hands": counts.get(table_format, 0), "lines": lines,
-                           "reference": custom_ranges.reference_name(table_format)})
+                           "reference": custom_ranges.reference_name(table_format, rset)})
         orphans = []
-        for context in sorted(set(data["lignes"]) - listed):
+        for context in sorted(set(mine) - listed):
             table_format, _, key = context.partition("|")
             steps = [tuple(step.split(":", 1)) for step in key.split() if ":" in step]
             orphans.append({"context": context, "format": table_format, "line": ring_ranges.describe(steps),
-                            "positions": sorted(data["lignes"][context])})
+                            "positions": sorted(mine[context])})
         ring_played = not plays or "ring" in plays
+        level = stake_charts.bands()
+        sets = Counter("hautes" if level(h.bb) == "hautes" else "petites"
+                       for h in self._all_hands + self._all_ring if h.bb)
         return {"formats": groups, "orphans": orphans, "for_spots": data["spots"],
-                "charts": bool(ring_ranges.available()) or not ring_played}
+                "charts": bool(ring_ranges.available()) or not ring_played, "set": rset,
+                "sets": [{"set": k, "name": stake_charts.SET_NAMES[k], "level": stake_charts.SET_LEVELS[k],
+                          "hands": sets.get(k, 0)} for k in stake_charts.SETS],
+                "choice": stake_charts.choice(), "reference": stake_charts.reference_set()}
 
-    def default_range_line(self, context: str) -> dict:
-        """Une ligne pour l'éditeur : la range de référence de chaque position, et la tienne. NotFound si la ligne n'a
-        pas de référence."""
-        line = custom_ranges.reference_line(context)
+    def default_range_line(self, context: str, rset: str = "petites") -> dict:
+        """Une ligne pour l'éditeur, dans ce jeu de ranges : la range de base de chaque position, et la tienne.
+        NotFound si la ligne n'a pas de base."""
+        line = custom_ranges.reference_line(context, rset)
         if line is None:
             raise NotFound(context)
-        mine = custom_ranges.load()["lignes"].get(context, {})
+        mine = custom_ranges.load()[custom_ranges.lines_key(rset)].get(context, {})
         table_format = context.split("|", 1)[0]
         players = [{"position": pos, "role": None, "source": "ligne" if pos in mine else "reference",
                     "reference": reference, "line": None,
                     "current": ring_ranges.parse_range(mine[pos]) if pos in mine else dict(reference)}
                    for pos, reference in line["ranges"].items()]
-        return {"context": context, "supported": True, "format": table_format,
+        return {"context": context, "supported": True, "format": table_format, "set": rset,
                 "line": ring_ranges.describe(line["steps"]), "pot_type": line["pot_type"],
-                "reference": custom_ranges.reference_name(table_format), "players": players,
+                "reference": custom_ranges.reference_name(table_format, rset), "players": players,
                 "adjusted": "ligne" if mine else None, "order": custom_ranges.hand_order()}
 
-    def save_default_ranges(self, context: str, ranges: object) -> dict:
-        """Enregistre tes ranges par défaut d'une ligne ; une range égale à celle de la référence n'est pas gardée.
-        Les positions absentes de la demande gardent leur réglage. ValueError si la demande ne va pas."""
-        line = custom_ranges.reference_line(context)
+    def save_default_ranges(self, context: str, ranges: object, rset: str = "petites") -> dict:
+        """Enregistre tes ranges par défaut d'une ligne dans ce jeu ; une range égale à celle de base n'est pas
+        gardée. Les positions absentes de la demande gardent leur réglage. ValueError si la demande ne va pas."""
+        line = custom_ranges.reference_line(context, rset)
         if line is None:
             raise NotFound(context)
         if not isinstance(ranges, dict) or not ranges or set(ranges) - set(line["ranges"]) \
                 or not all(isinstance(t, str) for t in ranges.values()):
             raise ValueError("Positions inconnues pour cette ligne.")
         weights = {pos: custom_ranges.check(text) for pos, text in ranges.items()}
-        mine = dict(custom_ranges.load()["lignes"].get(context, {}))
+        mine = dict(custom_ranges.load()[custom_ranges.lines_key(rset)].get(context, {}))
         for pos, w in weights.items():
             if custom_ranges.same(w, line["ranges"][pos]):
                 mine.pop(pos, None)
             else:
                 mine[pos] = postflop.range_text(w)
         if mine:
-            custom_ranges.save("ligne", context, mine)
+            custom_ranges.save("ligne", context, mine, rset)
         else:
-            custom_ranges.clear("ligne", context)
+            custom_ranges.clear("ligne", context, rset)
         with self._lock:
             self._cache.clear()
-        return self.default_range_line(context)
+        return self.default_range_line(context, rset)
 
-    def clear_default_ranges(self, context: str) -> dict:
-        """Efface tes ranges par défaut d'une ligne (aussi celles d'une ligne qui n'a plus de référence)."""
-        cleared = custom_ranges.clear("ligne", context)
+    def clear_default_ranges(self, context: str, rset: str = "petites") -> dict:
+        """Efface tes ranges par défaut d'une ligne dans ce jeu (aussi celles d'une ligne qui n'a plus de base)."""
+        cleared = custom_ranges.clear("ligne", context, rset)
         with self._lock:
             self._cache.clear()
         return {"context": context, "cleared": cleared}
+
+    def set_ranges_choice(self, value: object) -> dict:
+        """Tes ranges par défaut : selon la limite de chaque main (« auto »), petites ou hautes limites (le jugement
+        préflop, le Leakfinding et les ranges du solveur de tes mains en dépendent). ValueError si le choix est
+        inconnu."""
+        stake_charts.set_choice(str(value))
+        with self._lock:
+            self._cache.clear()
+        return {"choice": stake_charts.choice()}
+
+    def set_ranges_reference(self, value: object) -> dict:
+        """La référence : le jeu de ranges des études du solveur (séries, plans de jeu, entraîneur, repères du
+        Leakfinding après le flop) et de l'explorateur préflop. ValueError si le jeu est inconnu."""
+        stake_charts.set_reference(str(value))
+        with self._lock:
+            self._cache.clear()
+        return {"reference": stake_charts.reference_set()}
 
     def set_ranges_for_spots(self, value: bool) -> dict:
         """Tes ranges par défaut valent aussi (ou non) pour les spots d'étude ouverts dans l'explorateur."""
@@ -1780,6 +2343,7 @@ class Library:
         base = {s.key: list(base_plan[s.key]) if s.key in base_plan else spot.default_sizes_for(s.key)
                 for s in sizing.situations(family) if s.key not in fixed and s.key not in waiting}
         ident = spot.ident
+        rset = spot.ranges_set if isinstance(spot, studyspots.StudySpot) else ""  # celles du spot, ou la référence
 
         def choose(job) -> None:
             def log(message: str) -> None:
@@ -1789,7 +2353,7 @@ class Library:
                 job.process = proc
                 if job.cancelled:
                     proc.terminate()
-            study = studyspots.StudySpot(family, studyspots.cards_of(board), plan={})
+            study = studyspots.StudySpot(family, studyspots.cards_of(board), plan={}, ranges_set=rset)
             result = sizing.Selection(study, log, on_start=started, stopped=lambda: job.cancelled, fixed=fixed,
                                       auto=waiting, base=base).run()
             custom_tree.set_chosen(ident, {k: result["plan"][k] for k in waiting}, result["report"])
@@ -1905,29 +2469,33 @@ class Library:
         if family in studyspots.RING_FAMILIES:
             studyspots.ring_spot_ranges(family)  # tes charts 6-max (Unsupported sinon)
         board = "".join(studyspots.normalize_board(family, spot.board))
-        study = lambda: studyspots.StudySpot(family, studyspots.cards_of(board))  # noqa: E731
+        study = lambda: studyspots.StudySpot(family, studyspots.cards_of(board))  # noqa: E731  (la référence)
         return self.solves.choose_and_solve(
-            f"spot:{family}:{board}", lambda job: self._choose(family, board, job), lambda: self._spot(hand_id),
+            studyspots.ident_of(family, board), lambda job: self._choose(family, board, job),
+            lambda: self._spot(hand_id),
             aliases=(hand_id,), keep_live=True, after=lambda: self.solves.start(study(), keep_live=False))
 
-    def spot_set(self, family: str = "srp", start: bool = False) -> dict:
-        """Série de spots d'étude : état de chaque flop ; start=True met en file ceux qui manquent.
+    def spot_set(self, family: str = "srp", start: bool = False, rset: Optional[str] = None) -> dict:
+        """Série de spots d'étude : état de chaque flop ; start=True met en file ceux qui manquent ; rset : avec les
+        ranges des petites limites (la série) ou des hautes limites (une étude à part par flop).
 
-        Un flop de la série sans tailles choisies passe d'abord par le choix des tailles (long)."""
-        if not studyspots.is_series(family):
+        Un flop de la série sans tailles choisies passe d'abord par le choix des tailles (long) ; avec les ranges des
+        hautes limites, il prend les mêmes tailles. Par défaut, les ranges de la référence."""
+        rset = rset or studyspots.reference_set()
+        if not studyspots.is_series(family) or rset not in stake_charts.SETS:
             raise NotFound(family)
         try:
             if family in studyspots.RING_FAMILIES:
-                studyspots.ring_spot_ranges(family)  # tes charts 6-max
+                studyspots.ring_spot_ranges(family, stake_charts.set_band(rset))  # tes charts 6-max
         except postflop.Unsupported as exc:
             return {"family": family, "label": studyspots.family_info(family)["label"], "ready": False,
-                    "error": str(exc), "total": 0, "done": 0, "busy": 0, "rows": []}
-        studies = studyspots.spot_studies((family,))
+                    "error": str(exc), "total": 0, "done": 0, "busy": 0, "rows": [], "ranges": rset}
+        studies = studyspots.spot_studies((family,), rset)
         rows = []
         ready = postflop.status()["ready"]
         series = set(studyspots.flop_set(family))
         for board in studyspots.family_boards(family):
-            spot = studyspots.StudySpot(family, studyspots.cards_of(board))
+            spot = studyspots.StudySpot(family, studyspots.cards_of(board), ranges_set=rset)
             meta = studies.get(spot.ident)
             row = {"id": spot.ident, "board": spot.board, "texture": spot.texture, "series": board in series,
                    "done": bool(meta and meta.get("summary")), "key": meta["key"] if meta else None,
@@ -1940,16 +2508,18 @@ class Library:
                            max_iterations=view.get("max_iterations"), mode=view.get("mode"))
             rows.append(row)
         return {"family": family, "label": studyspots.family_info(family)["label"], "ready": ready,
-                "precision": self.solves.precision()[1],
+                "precision": self.solves.precision()[1], "ranges": rset,
                 "total": len(rows), "done": sum(r["done"] for r in rows),
                 "busy": sum(r.get("state") in ("waiting", "running") for r in rows), "rows": rows}
 
     def _queue_flop(self, family: str, board: str, spot, view: dict, series: bool) -> dict:
-        """Met un flop d'une série en file : le choix de ses tailles d'abord s'il n'en a pas, puis sa résolution."""
+        """Met un flop d'une série en file : le choix de ses tailles d'abord s'il n'en a pas, puis sa résolution
+        (avec les ranges du spot : celles des petites ou des hautes limites)."""
         if series and not spot.plan:
+            rset = spot.ranges_set
             return self.solves.choose_and_solve(
                 spot.ident, lambda job: self._choose(family, board, job),
-                lambda: studyspots.StudySpot(family, studyspots.cards_of(board)))
+                lambda: studyspots.StudySpot(family, studyspots.cards_of(board), ranges_set=rset))
         return self.solves.start(spot, force=view["state"] == "done", keep_live=False)
 
     RING_ORDER = ("4bet", "3bet", "srp")  # les pots les plus rapides à résoudre d'abord
@@ -1960,13 +2530,15 @@ class Library:
         """« srp », « 3bet » ou « 4bet »."""
         return studyspots.RING_FAMILIES[family]["kind"] if family in studyspots.RING_FAMILIES else family
 
-    def group_spot_sets(self, group: str, start: bool = False) -> dict:
+    def group_spot_sets(self, group: str, start: bool = False, rset: Optional[str] = None) -> dict:
         """Toutes les séries d'un onglet (« hu » : SRP, pots 3bet et 4bet heads-up ; « 6max » : celles que tes charts
         couvrent) : leur état et la durée de ce qui manque ; start=True met en file tous les flops manquants, un flop
         de chaque série à tour de rôle (pots 4bet et 3bet d'abord) : chaque plan de jeu se dessine vite, au lieu
-        d'une série après l'autre. KeyError pour un autre onglet."""
+        d'une série après l'autre ; rset : avec les ranges des petites ou des hautes limites. KeyError pour un autre
+        onglet."""
         families = list(self.SPOT_GROUPS[group])
-        sets = {family: self.spot_set(family) for family in families}
+        rset = rset or studyspots.reference_set()
+        sets = {family: self.spot_set(family, rset=rset) for family in families}
         ready = postflop.status()["ready"]
         if start and ready:
             order = sorted(sets, key=lambda f: self.RING_ORDER.index(self._pot_kind(f)))
@@ -1977,16 +2549,17 @@ class Library:
                     if k < len(todo[family]):
                         row = todo[family][k]
                         board = "".join(row["board"])
-                        spot = studyspots.StudySpot(family, studyspots.cards_of(board))
+                        spot = studyspots.StudySpot(family, studyspots.cards_of(board), ranges_set=rset)
                         self._queue_flop(family, board, spot, self.solves.lookup(spot), row["series"])
-            sets = {family: self.spot_set(family) for family in families}
+            sets = {family: self.spot_set(family, rset=rset) for family in families}
         rows = [(f, r) for f, state in sets.items() for r in state["rows"]]
         current = next(((f, r) for f, r in rows if r.get("state") == "running"), None)
         seconds = sum(studyspots.SOLVE_SECONDS[f] + (0 if r["sizes"] or not r["series"] else studyspots.CHOOSE_SECONDS[f])
                       for f, r in rows if not r["done"])
         summary = [{"family": f, "title": studyspots.family_title(f), "total": state["total"], "done": state["done"],
                     "busy": state["busy"], "error": state.get("error")} for f, state in sets.items()]
-        out = {"group": group, "ready": ready, "total": len(rows), "done": sum(r["done"] for _, r in rows),
+        out = {"group": group, "ranges": rset, "ready": ready, "total": len(rows),
+               "done": sum(r["done"] for _, r in rows),
                "busy": sum(r.get("state") in ("waiting", "running") for _, r in rows),
                "waiting": sum(r.get("state") == "waiting" for _, r in rows), "seconds": seconds,
                "covered": sum(1 for x in summary if not x["error"]), "families": summary, "current": None}
@@ -1997,13 +2570,13 @@ class Library:
                               "max_iterations": row.get("max_iterations")}
         return out
 
-    def group_spot_cancel(self, group: str) -> dict:
-        """Arrête toutes les résolutions des séries de cet onglet (en attente ou en cours)."""
+    def group_spot_cancel(self, group: str, rset: Optional[str] = None) -> dict:
+        """Arrête toutes les résolutions des séries de cet onglet (en attente ou en cours), avec ces ranges."""
         for family in self.SPOT_GROUPS[group]:
-            for row in self.spot_set(family)["rows"]:
+            for row in self.spot_set(family, rset=rset)["rows"]:
                 if row.get("state") in ("waiting", "running"):
                     self.solves.cancel(row["job"])
-        return self.group_spot_sets(group)
+        return self.group_spot_sets(group, rset=rset)
 
     def ring_spot_sets(self, start: bool = False) -> dict:
         """Toutes les séries 6-max (group_spot_sets)."""
@@ -2024,12 +2597,12 @@ class Library:
                 proc.terminate()
         studyspots.choose_sizes(family, board, log, on_start=started, stopped=lambda: job.cancelled)
 
-    def spot_cancel(self, family: str = "srp") -> dict:
-        """Arrête les résolutions en lot de cette série (en attente ou en cours)."""
-        for row in self.spot_set(family)["rows"]:
+    def spot_cancel(self, family: str = "srp", rset: Optional[str] = None) -> dict:
+        """Arrête les résolutions en lot de cette série (en attente ou en cours), avec ces ranges."""
+        for row in self.spot_set(family, rset=rset)["rows"]:
             if row.get("state") in ("waiting", "running"):
                 self.solves.cancel(row["job"])
-        return self.spot_set(family)
+        return self.spot_set(family, rset=rset)
 
     # --- plan de jeu suggéré -----------------------------------------------------------
     def plan_state(self, start: bool = False) -> dict:
@@ -2133,30 +2706,114 @@ class Library:
                                 field=self.plan_field(band))
 
     # --- analyse des mains jouées ---------------------------------------------------
-    def review_state(self, villain: Optional[str] = None, start: bool = False) -> dict:
-        """Mains allées au flop (toutes, ou face à cet adversaire) : analysées, à analyser, en cours ;
-        start=True met en file celles qui restent (les plus gros pots d'abord)."""
-        hands = self.hands_against(villain) if villain else self.regular_hands()[0]
-        done, todo = review.collect(hands, self.hero)
-        ready = postflop.status()["ready"]
-        if start and ready:  # les spots ne se construisent qu'ici, pour les mettre en file
-            active = {v["hand"] for v in self.solves.active_for(todo.hand_ids)}
-            for spot in todo:
-                if spot.ident not in active:
-                    self.solves.analyze(spot, review.save_digest)
-        jobs = self.solves.active_for(todo.hand_ids)
-        running = next((v for v in jobs if v["state"] == "running"), None)
-        current = None if running is None else {"hand": running["hand"], "progress": running.get("progress"),
-                                                "max_iterations": running.get("max_iterations"), "job": running["job"]}
-        return {"total": len(done) + len(todo), "done": len(done), "busy": len({v["hand"] for v in jobs}),
-                "current": current, "ready": ready}
+    def solver_formats(self) -> list[str]:
+        """Les formats dont les mains passent au solveur : ceux que tu joues (leak_formats), sans les mélanger."""
+        return [fmt for fmt, _ in self.leak_formats()]
 
-    def review_cancel(self, villain: Optional[str] = None) -> dict:
-        hands = self.hands_against(villain) if villain else self.regular_hands()[0]
-        _, todo = review.collect(hands, self.hero)
-        for view in self.solves.active_for(todo.hand_ids):
+    def _review_formats(self, table_format: Optional[str]) -> list[str]:
+        """Les formats d'une analyse : celui demandé (« HU », « ring » ; « 6-max »… : les tables à plusieurs), ou tous
+        ceux que tu joues (None, « all »)."""
+        formats = self.solver_formats()
+        if table_format in (None, "", "all"):
+            return formats
+        wanted = "HU" if table_format == "HU" else ring_leaks.FORMAT
+        return [wanted] if wanted in formats else []
+
+    def _review_scope(self, fmt: str) -> tuple[list[Hand], dict, int]:
+        """Tes mains d'un format que le solveur juge, contre les réguliers (contre un récréatif, l'exploitation prime) :
+        en heads-up, toutes celles-là ; aux tables à plusieurs, celles allées au flop à deux avec toi, et leurs pots
+        (ring_leaks.two_way_pots) ; puis le nombre de tes mains contre des récréatifs, laissées de côté."""
+        def build():
+            if fmt == "HU":
+                regular, excluded = self.regular_hands()
+                return regular, {}, excluded["hands"]
+            hero = self.hero or ""
+            parts = ring_leaks.split(ring_leaks.mine(self.ring, hero), hero, self.ring_kinds())
+            pots = ring_leaks.two_way_pots(parts["reg"], hero)
+            return [h for h in parts["reg"] if h.hand_id in pots], pots, len(parts["rec"])
+        kinds = self._kinds_key() if fmt == "HU" else self._ring_kinds_key()
+        return self._cached(("review_scope", fmt) + kinds, build)
+
+    def solver_review(self, fmt: str) -> dict:
+        """Tes mains d'un format face au solveur, contre les réguliers (leaks.solver_review) : résumés des mains
+        analysées (aux tables à plusieurs, situations nommées avec les vraies positions), mains à résoudre, situations,
+        erreurs, EV perdue ; « excluded » : tes mains contre des récréatifs, laissées de côté. Recalculé quand une main
+        passe au solveur."""
+        def build():
+            hands, pots, excluded = self._review_scope(fmt)
+            found = (leaks.solver_review(hands, self.hero or "") if fmt == "HU"
+                     else ring_leaks.solver_review(hands, self.hero or "", pots))
+            return dict(found, excluded=excluded)
+        kinds = self._kinds_key() if fmt == "HU" else self._ring_kinds_key()
+        return self._cached(("solver_review", fmt) + kinds + _solver_key(), build)
+
+    def review_orders(self, villain: Optional[str] = None, table_format: Optional[str] = None) -> dict:
+        """Les mains encore à résoudre (face à cet adversaire, ou tes mains contre les réguliers d'un format, de tous
+        ceux que tu joues sans format), dans chaque ordre : « pots » (les plus gros pots d'abord), « pertes » (les plus
+        chères d'abord) et, pour tes mains, « leaks » (celles où se joue un de tes leaks) : [(main, minutes)]."""
+        if villain:
+            _, todo = review.collect(self.hands_against(villain), self.hero)
+            entries, leak_lists = list(zip(todo.hands, todo.pot_types)), []
+        else:
+            formats = self._review_formats(table_format)
+            pending = [self.solver_review(fmt)["todo"] for fmt in formats]
+            entries = [e for todo in pending for e in zip(todo.hands, todo.pot_types)]
+            leak_lists = [self.leaks_report(fmt).solve_orders.get("leaks", []) for fmt in formats] if self.hero else []
+        hero = self.hero or ""
+        loss = {h.hand_id: (h.net(hero) / h.bb, -sum(a.amount for a in h.actions)) for h, _ in entries}
+        pots = sorted(entries, key=lambda e: loss[e[0].hand_id][1])
+        costly = sorted(entries, key=lambda e: loss[e[0].hand_id])
+        out = {"pertes": [(h.hand_id, review.minutes(t)) for h, t in costly],
+               "pots": [(h.hand_id, review.minutes(t)) for h, t in pots]}
+        if leak_lists:
+            found = [x for found in leak_lists for x in found if x[0] in loss]
+            out["leaks"] = sorted(found, key=lambda x: loss[x[0]]) if len(leak_lists) > 1 else found
+        return out
+
+    def _review_todo(self, villain: Optional[str], table_format: Optional[str]) -> tuple[list[str], int]:
+        """Les mains qui restent à résoudre et le nombre de mains analysées (face à cet adversaire, ou tes mains d'un
+        format, de tous sans format)."""
+        if villain:
+            done, todo = review.collect(self.hands_against(villain), self.hero)
+            return todo.hand_ids, len(done)
+        found = [self.solver_review(fmt) for fmt in self._review_formats(table_format)]
+        return [i for r in found for i in r["todo"].hand_ids], sum(r["analyzed"] for r in found)
+
+    def review_state(self, villain: Optional[str] = None, start: bool = False, order: str = "pots",
+                     limit: Optional[int] = None, table_format: Optional[str] = None) -> dict:
+        """Mains allées au flop (face à cet adversaire, ou tes mains d'un format, de tous sans format) : analysées, à
+        analyser, en cours ; start=True met en file les limit premières de celles qui restent (toutes sans limit), dans
+        cet ordre (review_orders)."""
+        if start:
+            chosen = self.review_orders(villain, table_format).get(order) or []
+            self._queue_hands([hand_id for hand_id, _ in (chosen[:limit] if limit else chosen)])
+        todo, done = self._review_todo(villain, table_format)
+        return self._solve_view(todo, done)
+
+    def solver_panel(self, table_format: Optional[str]) -> str:
+        """Le panneau « Face au solveur » de l'onglet d'un format (« HU », « ring ») ; NotFound pour un autre format,
+        ou un format que tu ne joues pas."""
+        if table_format not in ("HU", ring_leaks.FORMAT) or not self._review_formats(table_format):
+            raise NotFound(table_format or "")
+        return panel_html(table_format, self.solver_review(table_format),
+                          self.review_orders(table_format=table_format), f"{self.api}/revue", self.pages)
+
+    def solver_bilan(self) -> str:
+        """Mes mains › Bilan : ce que le solveur dit de tes mains analysées, format par format, et de quoi en analyser
+        d'autres (toutes tes mains, ou un format)."""
+        formats = self.solver_formats()
+        sections = [(fmt, self.solver_review(fmt)) for fmt in formats]
+        orders = {fmt: self.review_orders(table_format=fmt) for fmt in formats}
+        if len(formats) > 1:
+            orders["all"] = self.review_orders(table_format="all")
+        return build_solver_bilan(sections, orders, f"{self.api}/revue", self.pages,
+                                  empty_note="Aucune main pour l'instant : importe des historiques.")
+
+    def review_cancel(self, villain: Optional[str] = None, table_format: Optional[str] = None) -> dict:
+        todo, _ = self._review_todo(villain, table_format)
+        for view in self.solves.active_for(todo):
             self.solves.cancel(view["job"])
-        return self.review_state(villain)
+        return self.review_state(villain, table_format=table_format)
 
     # --- alias : plusieurs pseudos d'un même joueur ---------------------------------------
     def set_alias(self, alias: str, pseudos: list[str]) -> dict:
@@ -2202,7 +2859,8 @@ class Library:
         rôle : « me » (toi, ou l'élève), « other » (décoché dans tes Paramètres : pas toi), « reference » (un joueur de
         référence) ; puis les pseudos dont les mains sont supprimées."""
         conf = settings.load() if self.is_me else None
-        mine = self.my_pseudos(self.hero_pseudos, conf) if conf is not None else None
+        chosen = self.chosen_pseudos()
+        mine = self.my_pseudos(self.hero_pseudos, conf) if conf is not None else set(chosen) if chosen else None
         owners = {p: ref["name"] for ref in conf["references"] for p in ref["pseudos"]} if conf is not None else {}
         rows: dict[str, dict] = {}
         for (pseudo, site), n in self.hero_pseudos.items():
@@ -2216,7 +2874,10 @@ class Library:
                            else "other")
         removed = [{"name": name, "hands": r["hands"], "removed": r["removed"]}
                    for name, r in db_hands.removed_pseudos(self.db, self.space_id).items()]
-        return {"pseudos": sorted(rows.values(), key=lambda r: (-r["hands"], r["name"].lower())), "removed": removed}
+        # les pseudos choisis d'un élève qu'aucun historique ne marque comme héros : ses mains sans héros marqué
+        extra = [{"name": p, "hands": self.unmarked_seen.get(p, 0)} for p in chosen if p not in rows]
+        return {"pseudos": sorted(rows.values(), key=lambda r: (-r["hands"], r["name"].lower())), "removed": removed,
+                "chosen": chosen, "extra": extra, "student": self.space_key.startswith(students.PREFIX)}
 
     def _raw_pseudos(self, names: set[str]) -> set[str]:
         """Ces pseudos tels que les historiques les écrivent (un alias réunit les pseudos qu'il regroupe)."""
@@ -2251,49 +2912,107 @@ class Library:
         """Importe dans la base les historiques reconnus (le texte d'origine est gardé ; un historique ou une main
         déjà importés ne le sont pas deux fois) ; job : son avancement, pour la barre de la page Importer.
 
-        Chaque fichier : {"name", "content"} (texte), ou {"name", "zip"} (archive zip en base64, dossiers compris :
-        chacun de ses historiques s'importe comme un fichier)."""
-        items = files[:MAX_IMPORT_FILES]
-        if job is not None:  # les mains à lire, comptées d'abord (les archives s'ouvrent deux fois : c'est rapide)
+        Chaque fichier : {"name", "content"} (texte), {"name", "zip"} (archive zip en base64, dossiers compris : chacun
+        de ses historiques s'importe comme un fichier) ou {"name", "data"} (ses octets : un historique ou une archive
+        zip)."""
+        job = job or ImportJob("", 0)
+        self._import_part(job, files[:MAX_IMPORT_FILES])
+        return self._finish_import(job)
+
+    def _import_part(self, job: ImportJob, files: list[dict]) -> None:
+        """Enregistre ces historiques dans la base (un envoi à la fois), sans relire les mains de l'espace : leurs
+        résultats et les mains ajoutées s'accumulent dans job."""
+        with self._import_lock:
+            items = [self._import_item(item) for item in files]
             job.plan([count_hands(text) for text in self._import_texts(items)])
-        results: list[dict] = []
-        added = 0
-        removed = frozenset(db_hands.removed_pseudos(self.db, self.space_id))  # leurs mains sont écartées
-        for item in items:
-            name = str(item.get("name") or "fichier")[:200]
-            if isinstance(item.get("zip"), str):
-                added += self._import_zip(name, item["zip"], results, job, removed)
-            else:
-                added += self._import_one(name, item.get("content"), results, job, removed)
-        if added:  # seulement les mains ajoutées, quand rien d'autre n'a changé
-            self.reload(job.loading if job is not None else None, new_only=True)
-        skipped = sum(r.get("skipped", 0) for r in results if not r.get("archive"))
-        return {"files": results, "added": added, "skipped": skipped, "state": self.summary()}
+            removed = frozenset(db_hands.removed_pseudos(self.db, self.space_id))  # leurs mains sont écartées
+            for name, kind, payload in items:
+                if kind == "zip":
+                    job.added += self._import_zip(name, payload, job.results, job, removed)
+                elif kind == "bad":
+                    job.results.append({"name": name, "status": payload, "hands": 0, "new": 0})
+                else:
+                    job.added += self._import_one(name, payload, job.results, job, removed)
+
+    def _finish_import(self, job: ImportJob) -> dict:
+        """Après le dernier envoi : les mains ajoutées rejoignent les analyses (seulement elles, quand rien d'autre n'a
+        changé) ; le résultat de l'import."""
+        if job.added:
+            self.reload(job.loading, new_only=True)
+        skipped = sum(r.get("skipped", 0) for r in job.results if not r.get("archive"))
+        return {"files": job.results, "added": job.added, "skipped": skipped, "state": self.summary()}
 
     @staticmethod
-    def _import_texts(items: list[dict]):
-        """Les textes d'un import, archives ouvertes (ceux qui ne se lisent pas sont laissés de côté)."""
-        for item in items:
-            if isinstance(item.get("zip"), str):
+    def _import_item(item: dict) -> tuple[str, str, object]:
+        """(nom, nature, contenu) d'un fichier envoyé : « text » et son texte, « zip » et ses octets, ou « bad » et
+        pourquoi il ne se lit pas."""
+        name = str(item.get("name") or "fichier")[:200]
+        data = item.get("data")
+        if isinstance(data, (bytes, bytearray)):
+            if name.lower().endswith(".zip") or bytes(data[:4]) == b"PK\x03\x04":
+                return name, "zip", bytes(data)
+            return name, "text", decode(bytes(data))
+        if isinstance(item.get("zip"), str):
+            try:
+                return name, "zip", base64.b64decode(item["zip"], validate=True)
+            except (binascii.Error, ValueError):
+                return name, "bad", "archive zip illisible (envoi abîmé)"
+        return name, "text", item.get("content")
+
+    @staticmethod
+    def _import_texts(items: list[tuple[str, str, object]]):
+        """Les textes d'un envoi, archives ouvertes (ceux qui ne se lisent pas sont laissés de côté)."""
+        for _, kind, payload in items:
+            if kind == "zip":
                 try:
-                    yield from (text for _, text in read_zip(base64.b64decode(item["zip"], validate=True)).files)
-                except (binascii.Error, ValueError):
+                    yield from (text for _, text in read_zip(payload).files)
+                except ValueError:
                     continue
-            elif isinstance(item.get("content"), str):
-                yield item["content"]
+            elif kind == "text" and isinstance(payload, str):
+                yield payload
 
     def start_import(self, files: list[dict]) -> dict:
         """Lance l'import en arrière-plan (un à la fois) ; son avancement se lit avec import_status."""
+        job = self._new_import()
+        self._import_pool_of().submit(self._run_import, job, files)
+        return job.view()
+
+    def open_import(self) -> dict:
+        """Ouvre un import envoyé en plusieurs fois (la page Importer : des lots de petits historiques, les gros un par
+        un, pour que ni la page ni le serveur n'aient tout en mémoire) : import_part pour chaque envoi, puis
+        close_import ; son avancement se lit avec import_status."""
+        return self._new_import().view()
+
+    def import_part(self, job_id: str, files: list[dict]) -> dict:
+        """Un envoi d'un import ouvert (open_import), enregistré tout de suite ; NotFound : import inconnu ou fini.
+        Un envoi qui échoue laisse l'import ouvert : ce qui est déjà enregistré rejoint les analyses à close_import."""
+        job = self._imports.get(job_id)
+        if job is None or job.state != "running" or job.step != "lecture":
+            raise NotFound(job_id)
+        self._import_part(job, files[:MAX_IMPORT_FILES])
+        return job.view()
+
+    def close_import(self, job_id: str) -> dict:
+        """Le dernier envoi est arrivé : les analyses se mettent à jour en arrière-plan (import_status)."""
+        job = self._imports.get(job_id)
+        if job is None or job.state != "running":
+            raise NotFound(job_id)
+        self._import_pool_of().submit(self._run_finish, job)
+        return job.view()
+
+    def _new_import(self) -> ImportJob:
         job = ImportJob(secrets.token_hex(8), db_hands.count(self.db, self.space_id))
         with self._lock:
             self._imports[job.id] = job
             for old in list(self._imports)[:-10]:  # les 10 derniers
                 del self._imports[old]
+        return job
+
+    def _import_pool_of(self) -> ThreadPoolExecutor:
+        with self._lock:
             if self._import_pool is None:
                 self._import_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="import")
-            pool = self._import_pool
-        pool.submit(self._run_import, job, files)
-        return job.view()
+            return self._import_pool
 
     def _run_import(self, job: ImportJob, files: list[dict]) -> None:
         try:
@@ -2302,17 +3021,22 @@ class Library:
             traceback.print_exc()
             job.fail(f"Import impossible : {exc}")
 
+    def _run_finish(self, job: ImportJob) -> None:
+        try:
+            job.finish(self._finish_import(job))
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            job.fail(f"Import impossible : {exc}")
+
     def import_status(self, job_id: str) -> Optional[dict]:
         """L'avancement d'un import lancé par start_import (None : inconnu)."""
         job = self._imports.get(job_id)
         return job.view() if job is not None else None
 
-    def _import_zip(self, name: str, data: str, results: list[dict], job: Optional[ImportJob] = None,
+    def _import_zip(self, name: str, data: bytes, results: list[dict], job: Optional[ImportJob] = None,
                     removed: frozenset = frozenset()) -> int:
         try:
-            content = read_zip(base64.b64decode(data, validate=True))
-        except binascii.Error:
-            content, reason = None, "archive zip illisible (envoi abîmé)"
+            content, reason = read_zip(data), ""
         except ValueError as exc:  # illisible, trop grosse
             content, reason = None, str(exc)
         if content is None:
@@ -2341,17 +3065,17 @@ class Library:
         try:
             # le nom d'origine n'est qu'une étiquette (jamais un chemin) : celui du fichier, ou sa place dans l'archive
             label = name if " › " in name else Path(name.replace("\\", "/")).name
-            hands, new, _ = db_hands.import_text(self.db, self.space_id, label, content,
-                                                 on_hands=job.reading if job is not None else None)
+            read, new, _ = db_hands.import_text(self.db, self.space_id, label, content,
+                                                on_hands=job.reading if job is not None else None)
         except ValueError:
             results.append({"name": name, "status": "format non reconnu", "hands": 0, "new": 0})
             return 0
         finally:
             if job is not None:
                 job.file_done(count_hands(content))
-        detail = {"sites": sorted({h.site for h in hands}), "formats": _formats(hands)}
-        skipped = sum(1 for h in hands if h.hero in removed) if removed else 0
-        status = ("importé" if new else "écarté (pseudo supprimé)" if skipped else "déjà importé" if hands
+        detail = {"sites": sorted(read.sites), "formats": read.formats}
+        skipped = sum(read.heroes[pseudo] for pseudo in removed) if removed else 0
+        status = ("importé" if new else "écarté (pseudo supprimé)" if skipped else "déjà importé" if read.hands
                   else "aucune main lue")  # (aucune main lue : ex. des tournois)
-        results.append(dict(detail, name=name, status=status, hands=len(hands), new=new, skipped=skipped))
+        results.append(dict(detail, name=name, status=status, hands=read.hands, new=new, skipped=skipped))
         return new

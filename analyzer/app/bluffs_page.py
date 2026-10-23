@@ -5,10 +5,10 @@ from __future__ import annotations
 from html import escape
 from typing import Optional
 
-from .. import bluffs
+from .. import bluffcatch, bluffs
 from ..lines import INTENT_LABELS, INTENTS
 from ..models import POSTFLOP
-from ..report import cards_html, html_page
+from ..report import cards_html, fold, html_page, more
 
 STYLE = """
 .bl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -26,6 +26,13 @@ table.bl td.plus { background: var(--hi-bg); }
 table.bl td.moins { background: var(--lo-bg); }
 table.bl tr.sub td { font-weight: 600; background: var(--page); }
 table.bl td.small { font-size: 12px; color: var(--ink-2); }
+.bl-list li.payer { border-left-color: var(--alert); }
+.bl-list li.coucher { border-left-color: var(--series-1); }
+.bl-list li.defendre { border-left-color: var(--series-4); }
+table.bc td.nowrap { white-space: nowrap; }
+table.bc td:first-child { min-width: 180px; }
+.bc-tag { font-size: 11px; font-weight: 600; border-radius: 999px; padding: 0 8px; margin-left: 6px;
+  white-space: nowrap; border: 1px solid var(--axis); color: var(--ink-2); }
 """
 
 STREET_NAME = {"flop": "Flop", "turn": "Turn", "river": "River"}
@@ -52,18 +59,26 @@ def _pattern_items(patterns: list, plural: bool = False) -> str:
         f'<div class="bl-a">→ {escape(p.advice)}</div></li>' for p in patterns)
 
 
-def patterns_html(report: bluffs.Report, top: int = 8) -> str:
+def patterns_html(report: bluffs.Report, top: int = 4, patterns: Optional[list] = None) -> str:
+    """Ce qui ressort : les patterns solides les plus nets d'abord (top), les autres solides et les pistes à confirmer
+    repliés ; patterns : ceux à montrer (tous ceux du rapport sinon)."""
     plural = len(report.names) > 1
-    solid = [p for p in report.patterns if p.confidence == "solide"][:top]
-    rest = [p for p in report.patterns if p not in solid]
-    if not report.patterns:
+    patterns = report.patterns if patterns is None else patterns
+    solid = [p for p in patterns if p.confidence == "solide"]
+    shown, more_solid = solid[:top], solid[top:]
+    rest = [p for p in patterns if p.confidence != "solide"]
+    if not patterns:
         return ('<p class="note">Rien de net pour l\'instant : pas assez de mains, ou un jeu proche de la théorie dans '
                 'les situations mesurées.</p>')
     out = ""
-    if solid:
-        out += f'<ul class="bl-list">{_pattern_items(solid, plural)}</ul>'
+    if shown:
+        out += f'<ul class="bl-list">{_pattern_items(shown, plural)}</ul>'
     else:
         out += '<p class="note">Aucun pattern solide pour l\'instant : les pistes ci-dessous restent à confirmer.</p>'
+    if more_solid:
+        out += (f'<details style="margin-top:12px"><summary>Les {len(more_solid)} autres patterns solides</summary>'
+                f'<div style="padding:10px 16px"><ul class="bl-list">{_pattern_items(more_solid, plural)}</ul>'
+                '</div></details>')
     if rest:
         out += (f'<details style="margin-top:12px"><summary>Pistes à confirmer ({len(rest)})</summary>'
                 f'<div style="padding:10px 16px"><ul class="bl-list">{_pattern_items(rest, plural)}</ul></div></details>')
@@ -132,6 +147,100 @@ def shown_html(report: bluffs.Report) -> str:
     return "".join(out)
 
 
+DECISION_LABELS = {"payer": "Payer", "coucher": "Coucher", "défendre plus": "Défendre plus"}
+
+
+def _bb(x: Optional[float]) -> str:
+    return "–" if x is None else f"{'+' if x > 0 else '−' if x < 0 else ''}{abs(x):.1f}".replace(".", ",")
+
+
+def catch_html(found: list, plural: bool = False) -> str:
+    """Bluffcatch à la river : les critères pour payer ou coucher (bluffcatch.criteria), puis le détail."""
+    who = "leurs" if plural else "ses"
+    method = (
+        "Chaque mise ou relance river que tu as affrontée, rangée par ligne, taille, carte de la river, et ligne et "
+        "taille. <b>Sa part de bluffs</b> (rien de fait à la river) dans ses mises vues à l'abattage, face à "
+        "l'équité qu'il te faut pour payer (taille / (pot + 2 × taille)) : au-dessus, un bluffcatcher — une main qui "
+        "ne bat que ses bluffs — gagne à payer ; en dessous, à coucher. Ses mises vues sont celles que tu as payées : "
+        "ta décision ne dépend pas de ses cartes, l'échantillon est honnête tant que ses mains payées sont montrées "
+        "(colonne « Montrées »). <b>Tes folds</b>, face à la part qui rend tous ses bluffs rentables (taille / (pot "
+        "+ taille)) : au-delà, n'importe quel bluff lui rapporte. Verdict : payer quand il bluffe nettement plus qu'il "
+        "ne faut, coucher quand il bluffe nettement moins (« solide » : intervalle de confiance à 90 % hors de la "
+        "référence, 10 mises vues au moins ; « à confirmer » : écart net sur peu de mains) ; sinon, défendre plus "
+        "quand tu couches nettement trop. « Bluffcatcher » : ce qu'une main qui ne bat que ses bluffs gagne ou perd "
+        "par call, en bb, à sa part de bluffs. « Tes calls » : gagnés sur joués, et ce qu'ils ont rapporté (le pot "
+        "et sa mise quand tu gagnes, ton call quand tu perds).")
+    if plural:
+        method = (method.replace("Sa part", "Leur part").replace("ses mises", "leurs mises")
+                  .replace("ses bluffs", "leurs bluffs").replace("ses cartes", "leurs cartes")
+                  .replace("ses mains", "leurs mains").replace("il bluffe", "ils bluffent")
+                  .replace("lui rapporte", "leur rapporte").replace("sa part", "leur part")
+                  .replace("sa mise", "leur mise") + " Plusieurs joueurs : la part de bluffs est la moyenne des "
+                  "joueurs, chacun pesant selon ses mises vues.")
+    every = next((x for x in found if x.dimension == bluffcatch.ALL), None)
+    if every is None:
+        return ('<h2>Bluffcatch à la river : payer ou coucher</h2><div class="card"><p class="note" style="margin:0">'
+                f"Aucune de {who} mises river affrontée pour l'instant.</p></div>")
+    items = []
+    for x in bluffcatch.criteria(found):
+        action, confidence = x.decision
+        items.append(f'<li class="{"defendre" if action == "défendre plus" else action}"><div class="bl-t">'
+                     f'{escape(x.title)}<span class="bc-tag">{escape(DECISION_LABELS[action])}</span>'
+                     f'{_conf(confidence)}</div><div class="bl-e">{escape(bluffcatch.evidence(x, plural))}</div>'
+                     f'<div class="bl-a">→ {escape(bluffcatch.advice(x, plural))}</div></li>')
+    over = bluffcatch.overfolds(found)
+    if over:  # où tu couches trop, en une ligne chacune
+        spots = " · ".join(f"{x.title.lower() if x.dimension == bluffcatch.SIZE else x.title} : tu couches "
+                           f"{_pct(x.fold_rate)} pour {_pct(x.alpha)}" for x in over)
+        bluff_word = "leurs" if plural else "ses"
+        items.append('<li class="defendre"><div class="bl-t">Où tu couches trop<span class="bc-tag">Défendre plus'
+                     f'</span></div><div class="bl-e">{escape(spots)}.</div><div class="bl-a">→ À ces taux de folds, '
+                     f"n'importe lequel de {bluff_word} bluffs est rentable : paie davantage avec tes meilleurs "
+                     "bluffcatchers, ceux qui battent la value fine.</div></li>")
+    nothing = (f"Rien de net pour l'instant ({bluffcatch.evidence(every, plural)}) → "
+               f"{bluffcatch.advice(every, plural)}")
+    head = (f'<ul class="bl-list">{"".join(items)}</ul>' if items else
+            f'<p class="note" style="margin:0">{escape(nothing)}</p>')
+    dims = dict(bluffcatch.DIMENSIONS)
+    rows, last = [], None
+    for x in found:
+        if x.dimension != last:
+            last = x.dimension
+            if x.dimension != bluffcatch.ALL:
+                rows.append(f'<tr class="sub"><td colspan="10">{escape(dims[x.dimension])}</td></tr>')
+        c, (won, judged, bb) = x.counts, x.won
+        cls = {"payer": "plus", "coucher": "moins"}.get(x.decision[0], "") if x.decision else ""
+        name = x.value if x.dimension in (bluffcatch.LINE, bluffcatch.LINE_SIZE) else x.title
+        seen = "" if x.seen is None or x.seen >= 0.99 else f" ({_pct(x.seen)})"
+        rows.append(
+            f'<tr><td>{escape(name)}</td><td class="num">{len(x.items)}</td>'
+            f'<td class="num">{_pct(x.fold_rate)} <span class="small">/ {_pct(x.alpha)}</span></td>'
+            f'<td class="num">{len(x.shown)}{seen}</td>'
+            f'<td class="num small">{c["bluff"]} · {c["thin"]} · {c["value"]}</td>'
+            f'<td class="num {cls}">{_pct(x.share)}</td><td class="num">{_pct(x.required)}</td>'
+            f'<td class="num">{_bb(x.catcher)}</td>'
+            f'<td class="num nowrap">{f"{won}/{judged} · {_bb(bb)}" if judged else "–"}</td></tr>')
+    table = ('<div class="bl-scroll"><table class="bl bc"><thead><tr><th>Situation</th><th class="num">Mises</th>'
+             '<th class="num" title="Ta part de folds / la part qui rend ses bluffs rentables">Tu couches / max</th>'
+             '<th class="num">Vues</th><th class="num" title="Bluffs · value fine · value">B · VF · V</th>'
+             '<th class="num">Bluffs</th><th class="num">Il te faut</th>'
+             '<th class="num" title="Ce qu\'une main qui ne bat que ses bluffs gagne par call">Bluffcatcher</th>'
+             '<th class="num">Tes calls (bb)</th></tr></thead><tbody>' + "".join(rows) + "</tbody></table></div>"
+             '<p class="note">Tu couches / max : ta part de folds, et celle au-delà de laquelle tous ses bluffs sont '
+             "rentables. B · VF · V : ses mises vues, bluffs, value fine (paire moyenne ou faible), value. Bluffs : sa "
+             "part de bluffs (moyenne des joueurs), face à l'équité qu'il te faut pour payer. Bluffcatcher : bb gagnés "
+             "ou perdus par call avec une main qui ne bat que ses bluffs. Tes calls : gagnés sur joués, bb.</p>")
+    if plural:
+        table = (table.replace("ses bluffs", "leurs bluffs").replace("sa part", "leur part")
+                 .replace("ses mises", "leurs mises"))
+    n = len(every.items)
+    how = more("Comment c'est mesuré", method)
+    return (f'<h2>Bluffcatch à la river : payer ou coucher</h2><div class="card">{head}{how}</div>'
+            + fold("Le détail : chaque ligne, taille et carte", f'<div class="card">{table}</div>',
+                   f"{n} mise{'s' if n > 1 else ''} river affrontée{'s' if n > 1 else ''}, dont {len(every.shown)} "
+                   "vue" + ("s" if len(every.shown) > 1 else "") + " à l'abattage", "bluffcatch"))
+
+
 def examples_html(report: bluffs.Report, limit: int = 30) -> str:
     """Ses bluffs vus, les plus récents d'abord."""
     seen = [s for s in report.shown if s.bluff]
@@ -154,7 +263,7 @@ def examples_html(report: bluffs.Report, limit: int = 30) -> str:
             '</tr></thead><tbody>' + "".join(rows) + "</tbody></table></div></details>")
 
 
-def players_html(rows: list[dict]) -> str:
+def players_html(rows: list[dict], crowd: str = "réguliers") -> str:
     if len(rows) < 2:
         return ""
     weighted = any(r.get("weight") is not None for r in rows)
@@ -168,13 +277,13 @@ def players_html(rows: list[dict]) -> str:
     if len(rows) > MAX_PLAYERS:  # les autres, sur demande : la page reste lisible avec beaucoup de réguliers
         width = 8 if weighted else 5
         body += (f'<tr class="more"><td colspan="{width}"><details><summary>Les {len(rows) - MAX_PLAYERS} autres '
-                 f'réguliers</summary><table class="bl"><tbody>{"".join(row(r) for r in rows[MAX_PLAYERS:])}</tbody>'
+                 f'{crowd}</summary><table class="bl"><tbody>{"".join(row(r) for r in rows[MAX_PLAYERS:])}</tbody>'
                  '</table></details></td></tr>')
     head = ('<th class="num">Part des occasions</th><th class="num">Poids</th><th class="num">Groupe</th>'
             if weighted else "")
-    note = ('<p class="note">Part des occasions : ses situations de mise parmi celles de tous les réguliers. Poids : sa part '
-            'dans les fréquences de la population, où chaque joueur pèse au plus autant qu\'un autre. Groupe : son profil '
-            'de bluff (ci-dessus).</p>' if weighted else "")
+    note = (f'<p class="note">Part des occasions : ses situations de mise parmi celles de tous les {crowd}. Poids : '
+            'sa part dans les fréquences de la population, où chaque joueur pèse au plus autant qu\'un autre. Groupe : '
+            'son profil de bluff (ci-dessus).</p>' if weighted else "")
     return ('<h2>Adversaire par adversaire</h2><div class="card"><div class="bl-scroll"><table class="bl"><thead><tr>'
             f'<th>Joueur</th><th class="num">Mains</th>{head}<th class="num">Mises vues</th>'
             '<th class="num">Bluffs river vus</th><th>Son pattern le plus net</th></tr></thead><tbody>' + body
@@ -193,12 +302,13 @@ def _gap_cell(gap: Optional[float]) -> str:
     return f'<td class="num {cls}">{round(100 * gap):+d}</td>'
 
 
-def clusters_html(report: bluffs.Report, groups: list[dict]) -> str:
-    """Les réguliers regroupés par profil de bluff : leurs écarts au solveur, situation par situation."""
+def clusters_html(report: bluffs.Report, groups: list[dict], crowd: str = "réguliers") -> str:
+    """Les réguliers (ou les récréatifs : crowd) regroupés par profil de bluff : leurs écarts au solveur, situation par
+    situation."""
     if not report.profiles:
         return ""
     if not groups:
-        return ('<h2>Profils des réguliers</h2><div class="card"><p class="note">Pas encore assez de mains par régulier '
+        return (f'<h2>Profils des {crowd}</h2><div class="card"><p class="note">Pas encore assez de mains par joueur '
                 f'pour un profil (au moins {bluffs.PROFILE_MIN} occasions de miser chacun).</p></div>')
     dims = list(groups[0]["cluster"].gaps)
     head = "".join(f'<th class="num">{escape(DIMENSION_SHORT.get(d, d))}</th>' for d in dims)
@@ -215,23 +325,28 @@ def clusters_html(report: bluffs.Report, groups: list[dict]) -> str:
             details.append(f'<details><summary>Groupe {k} : ce qui ressort ({len(c.members)} joueurs, {c.hands} mains)'
                            f'</summary><div style="padding:10px 16px">{items}</div></details>')
     alone = [p for p in report.profiles if p.occasions < bluffs.PROFILE_MIN]
-    rest = (f'<p class="note">Trop peu de mains pour un profil : {len(alone)} régulier(s) (ils comptent quand même dans '
+    rest = (f'<p class="note">Trop peu de mains pour un profil : {len(alone)} joueur(s) (ils comptent quand même dans '
             'la population, avec un petit poids).</p>' if alone else "")
     return f"""
-<h2>Profils des réguliers</h2>
+<h2>Profils des {crowd}</h2>
 <div class="card"><div class="bl-scroll"><table class="bl"><thead><tr><th>Groupe</th>{head}</tr></thead><tbody>
 {"".join(rows)}</tbody></table></div>{"".join(details)}{rest}
-<p class="note">Les réguliers regroupés par façon de bluffer : pour chacun, son écart au solveur (en points de fréquence de
-mise, à cartes égales) dans chaque situation, et sa part de bluffs montrés à la river face à la théorie ; un joueur avec
-peu d'occasions est rapproché de la moyenne des réguliers. Deux joueurs vont ensemble quand leurs écarts diffèrent de
-moins de {round(100 * bluffs.CLUSTER_GAP)} points en moyenne. Le titre d'un groupe dit ce qui le distingue des autres
-réguliers ; en rouge, le groupe mise ou bluffe plus que la théorie, en bleu moins.</p></div>"""
+<p class="note">Les {crowd} regroupés par façon de bluffer : pour chacun, son écart au solveur (en points de
+fréquence de mise, à cartes égales) dans chaque situation, et sa part de bluffs montrés à la river face à la théorie ;
+un joueur avec peu d'occasions est rapproché de la moyenne des {crowd}. Deux joueurs vont ensemble quand leurs écarts
+diffèrent de moins de {round(100 * bluffs.CLUSTER_GAP)} points en moyenne. Le titre d'un groupe dit ce qui le
+distingue des autres {crowd} ; en rouge, le groupe mise ou bluffe plus que la théorie, en bleu moins.</p></div>"""
 
 
 def build_bluffs_page(report: bluffs.Report, who: str, embed: bool = True, note: str = "",
-                      players: Optional[list[dict]] = None, groups: Optional[list[dict]] = None) -> str:
+                      players: Optional[list[dict]] = None, groups: Optional[list[dict]] = None,
+                      catch: Optional[list] = None, head: str = "", direction: Optional[str] = None,
+                      crowd: str = "réguliers") -> str:
     """who : « de Villain » ou « des réguliers » ; players : résumé par adversaire, groups : les groupes de profils
-    (report.clusters) et ce qui ressort de chacun (population)."""
+    (report.clusters) et ce qui ressort de chacun (population) ; catch : le bluffcatch à la river (bluffcatch.spots) ;
+    head : en tête (le choix du format et des limites) ; direction : « plus », seulement ce qui dit où ils bluffent (ce
+    qui dit leur value a son onglet) ; crowd : la population (réguliers, récréatifs)."""
+    patterns = [p for p in report.patterns if direction is None or p.direction == direction]
     river = sum(1 for s in report.shown if s.street == "river")
     tiles = (
         '<div class="tiles">'
@@ -241,8 +356,8 @@ def build_bluffs_page(report: bluffs.Report, who: str, embed: bool = True, note:
         f'<div class="tile"><div class="label">Vues à l\'abattage</div><div class="value">{len(report.shown)}</div>'
         f'<div class="sub">dont {river} à la river</div></div>'
         f'<div class="tile"><div class="label">Patterns solides</div>'
-        f'<div class="value">{sum(p.confidence == "solide" for p in report.patterns)}</div>'
-        f'<div class="sub">{sum(p.confidence != "solide" for p in report.patterns)} à confirmer</div></div>'
+        f'<div class="value">{sum(p.confidence == "solide" for p in patterns)}</div>'
+        f'<div class="sub">{sum(p.confidence != "solide" for p in patterns)} à confirmer</div></div>'
         '</div>')
     plural = len(report.names) > 1
     weighting = (" Plusieurs joueurs : chaque fréquence est la <b>moyenne des joueurs</b>, chacun pesant selon ses occasions "
@@ -252,31 +367,42 @@ def build_bluffs_page(report: bluffs.Report, who: str, embed: bool = True, note:
     w = ({"ses": "leurs", "Ses": "Leurs", "sa": "leur", "il": "ils", "s'il mise": "s'ils misent",
           "lui donne": "leur donne"} if plural else
          {"ses": "ses", "Ses": "Ses", "sa": "sa", "il": "il", "s'il mise": "s'il mise", "lui donne": "lui donne"})
+    bets = w["s'il mise"]
+    sources_note = (
+        f"Deux sources. <b>{w['Ses']} fréquences</b>, sur toutes {w['ses']} mains : une carte ne {w['lui donne']} pas "
+        f"plus de bonnes mains qu'à la théorie ; {bets} nettement plus que le solveur quand elle tombe, le surplus "
+        f"est fait de bluffs (ou de value fine). <b>{w['Ses']} mains montrées</b> : à la river, la part de bluffs est "
+        "comparée à l'équité qu'il te faut pour payer (la part de bluffs de la théorie pour cette taille) ; au flop "
+        f"et à la turn, à {w['sa']} propre moyenne. « Solide » : le hasard l'explique mal (intervalle de confiance à "
+        f"90 %, au moins 10 occasions) ; « à confirmer » : écart net, peu de mains.{weighting}")
+    cards_note = (
+        f"À chaque situation, {w['sa']} fréquence de mise selon la carte qui vient de tomber (ou la texture du flop), "
+        "face à celle du solveur dans les mêmes situations : moyenne des plans de jeu des flops résolus de ce type "
+        f"de pot. Sans repère du solveur, on compare à {w['ses']} autres cartes. Seules les mains de pots SRP, 3bet "
+        "et 4bet ont un repère.")
+    shown_note = (
+        "Chaque mise ou relance vue à l'abattage, classée par son intention au moment de miser : value (top paire ou "
+        "mieux), value fine (paire moyenne ou faible), semi-bluff (rien de fait mais au moins 25 % d'équité contre "
+        "ta main), bluff. Biais : une mise n'est vue que si le coup va à l'abattage. À la river, ta décision de "
+        "payer ne dépend pas des cartes adverses : l'échantillon est honnête. Au flop et à la turn, il manque les "
+        "coups où tu as payé puis foldé plus tard.")
     body = f"""
 <div class="meta">Les bluffs {escape(who)} : dans quelles lignes, sur quelles cartes, avec quelles tailles.</div>
+{head}
 {note}
 {tiles}
 <h2>Ce qui ressort</h2>
-<div class="card">{patterns_html(report)}
-<p class="note">Deux sources. <b>{w["Ses"]} fréquences</b>, sur toutes {w["ses"]} mains : une carte ne {w["lui donne"]} pas
-plus de bonnes mains qu'à la théorie ; {w["s'il mise"]} nettement plus que le solveur quand elle tombe, le surplus est fait
-de bluffs (ou de value fine). <b>{w["Ses"]} mains montrées</b> : à la river, la part de bluffs est comparée à l'équité qu'il
-te faut pour payer (la part de bluffs de la théorie pour cette taille) ; au flop et à la turn, à {w["sa"]} propre moyenne.
-« Solide » : le hasard l'explique mal (intervalle de confiance à 90 %, au moins 10 occasions) ; « à confirmer » : écart
-net, peu de mains.{weighting}</p></div>
-{clusters_html(report, groups or [])}
-<h2>{w["Ses"]} mises selon la carte</h2>
-<div class="card">{frequencies_html(report)}
-<p class="note">À chaque situation, {w["sa"]} fréquence de mise selon la carte qui vient de tomber (ou la texture du flop),
-face à celle du solveur dans les mêmes situations : moyenne des plans de jeu des flops résolus de ce type de pot. Sans
-repère du solveur, on compare à {w["ses"]} autres cartes. Seules les mains de pots SRP, 3bet et 4bet ont un repère.</p></div>
-<h2>{w["Ses"]} mains montrées</h2>
-<div class="card">{shown_html(report)}{examples_html(report)}
-<p class="note">Chaque mise ou relance vue à l'abattage, classée par son intention au moment de miser : value (top paire
-ou mieux), value fine (paire moyenne ou faible), semi-bluff (rien de fait mais au moins 25 % d'équité contre ta main),
-bluff. Biais : une mise n'est vue que si le coup va à l'abattage. À la river, ta décision de payer ne dépend pas des
-cartes adverses : l'échantillon est honnête. Au flop et à la turn, il manque les coups où tu as payé puis foldé plus
-tard.</p></div>
-{players_html(players or [])}
+<div class="card">{patterns_html(report, patterns=patterns)}
+{more("Comment c'est mesuré", sources_note)}</div>
+{catch_html(catch, plural) if catch is not None else ""}
+{clusters_html(report, groups or [], crowd)}
+{fold(f"{w['Ses']} mises selon la carte",
+      f'<div class="card">{frequencies_html(report)}<p class="note">{cards_note}</p></div>',
+      "à chaque situation, selon la carte qui tombe, face au solveur", "cartes")}
+{fold(f"{w['Ses']} mains montrées", f'<div class="card">{shown_html(report)}{examples_html(report)}'
+      f'<p class="note">{shown_note}</p></div>', f"{len(report.shown)} mise{'s' if len(report.shown) > 1 else ''} ou "
+      f"relance{'s' if len(report.shown) > 1 else ''} vue{'s' if len(report.shown) > 1 else ''} à l'abattage, par "
+      "intention", "montrees")}
+{players_html(players or [], crowd)}
 """
     return html_page(f"Bluffs {who}", f"<style>{STYLE}</style>{body}", embed)

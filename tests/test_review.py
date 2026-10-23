@@ -71,6 +71,16 @@ class AggregateTest(unittest.TestCase):
         self.assertEqual((groups["bet:fi:"]["n"], groups["bet:fi:"]["errors"], groups["bet:fi:"]["lost"]), (2, 1, 1.5))
         self.assertAlmostEqual(groups["bet:fi:"]["expected"]["aggressive"], 1.2)
 
+    def test_hand_summary(self):
+        """Une main analysée dans les listes de mains : son EV théorique (ta première décision), l'EV perdue, tes
+        erreurs et ta décision la plus chère."""
+        mine = [dict(d, d=k) for k, d in enumerate(self.digests[0]["decisions"]) if d["who"] == "H"]
+        mine[0]["evs"] = [2.5, None]  # check : 2,5 bb (la mise jouée : hors de l'arbre)
+        summary = review.hand_summary({"decisions": mine})
+        self.assertEqual(summary, {"ev": 2.5, "lost": 1.6, "errors": 1, "d": mine[0]["d"]})  # la c-bet checkée
+        clean = review.hand_summary({"decisions": [dict(mine[1], d=3)]})
+        self.assertEqual(clean, {"ev": None, "lost": 0.0, "errors": 0, "d": None})
+
     def test_mixed_action_costs_nothing(self):
         # Le solveur paie 35 % du temps avec cette main : l'écart d'EV (nœud peu convergé) ne compte pas.
         mixed = dict(decision("H", "face:ri:oo:2", ["fold", "call"], 1, [0.6, 0.4], ev_loss=16.6), frequency=0.35)
@@ -136,12 +146,97 @@ class AnalyzeTest(unittest.TestCase):
         stored = db.current().all("SELECT main, LENGTH(donnees) FROM analyses ORDER BY main")
         self.assertEqual([main for main, _ in stored], ["HAND01", "HAND02"])  # gardés dans la base
         self.assertLess(max(size for _, size in stored), 20_000)  # compressés
-        page = build_review_page(self.hands, "Hero")
-        for text in ("2 / 2</b> mains analysées", "Les erreurs qui coûtent le plus", "Les erreurs récurrentes"):
+        from analyzer import leaks
+        from analyzer.app import solver_pages
+        page = solver_pages.panel_html("HU", leaks.solver_review(self.hands, "Hero"), {}, "/api/revue", "/moi")
+        for text in ("<b>2</b> mains analysées sur 2", "Les erreurs qui coûtent le plus", "Les erreurs récurrentes",
+                     'data-sv="done">Voir les 2 mains analysées', 'href="/moi/solveur"'):
             self.assertIn(text, page)
         villain_page = build_review_page(self.hands, "Hero", "Villain")
-        self.assertIn("Ses écarts à exploiter", villain_page)
+        for text in ("2 / 2</b> mains analysées", "Ses écarts à exploiter", "Les erreurs récurrentes"):
+            self.assertIn(text, villain_page)
         self.assertNotIn("Ses écarts à exploiter", page)
+
+    def test_stake_charts_ranges(self):
+        """Tes charts des hautes limites deviennent les ranges du solveur pour ces mains (grosse blinde à 5) ; une
+        main déjà analysée avec les ranges de la référence garde son analyse."""
+        from analyzer.theory import postflop, stake_charts
+        hand = next(h for h in self.hands if h.hand_id == "HAND01")
+        before = postflop.build_spot(hand, "Hero")
+        self.assertEqual(review.analyze([hand], "Hero", log=lambda m: None), 1)
+        stake_charts.save("HU", "hautes", {"source": "Essai", "nodes": {"sb_open": {"raise": "AA,KK,QQ,AKs,AKo"}}})
+        after = postflop.build_spot(hand, "Hero")
+        self.assertEqual(postflop.build_spot(hand, "Hero", stakes=False).ranges, before.ranges)
+        self.assertNotEqual(after.ranges[hand.button], before.ranges[hand.button])
+        self.assertLess(len(after.ranges[hand.button]), len(before.ranges[hand.button]))
+        done, todo = review.collect([hand], "Hero")
+        self.assertEqual((len(done), len(todo)), (1, 0))  # l'analyse d'avant compte toujours
+
+    def test_library_partial_queue(self):
+        """N'analyser qu'une partie des mains : les plus chères d'abord, une seule ici."""
+        lib = Library(FIXTURES)
+        try:
+            orders = lib.review_orders()
+            self.assertEqual(set(orders), {"leaks", "pertes", "pots"})
+            costliest = min(self.hands, key=lambda h: h.net("Hero") / h.bb if h.hand_id in ("HAND01", "HAND02")
+                            else 0).hand_id
+            self.assertEqual(orders["pertes"][0][0], costliest)
+            self.assertTrue(all(minutes > 0 for _, minutes in orders["pertes"]))
+            lib.review_state(start=True, order="pertes", limit=1)
+            import time
+            deadline = time.time() + 30
+            while lib.review_state()["busy"] and time.time() < deadline:
+                time.sleep(0.05)
+            done, todo = review.collect(self.hands, "Hero")
+            self.assertEqual(([g["hand"] for g in done], len(todo)), ([costliest], 1))
+            self.assertEqual(lib.review_orders(table_format="HU")["pertes"], [orders["pertes"][1]])
+            page = lib.self_page("solveur")  # le bilan du solveur : le heads-up seulement (pas d'autre format)
+            for text in ('class="fs-run" data-api="/api/revue"', "&quot;pertes&quot;: {&quot;n&quot;: 1",
+                         '<h2 id="hu">Heads-up</h2>', "sur 2 allées au flop"):
+                self.assertIn(text, page)
+            self.assertNotIn('class="fs-format"', page)  # un seul format : pas de choix
+            panel = lib.solver_panel("HU")
+            self.assertIn("<b>1</b> mains analysées sur 2", panel)
+            with self.assertRaises(Exception):
+                lib.solver_panel("ring")  # pas de mains aux tables à plusieurs
+        finally:
+            lib.solves.shutdown()
+
+    def test_library_hand_lists(self):
+        """Mes mains : chaque main avec ce qu'en dit le solveur, le filtre et le tri « Solveur », et les mains de la
+        sélection mises en file, dans l'ordre de la liste."""
+        import time
+        lib = Library(FIXTURES)
+        try:
+            todo = lib.spots_search({"sv": "todo"})
+            self.assertEqual((todo["total"], todo["solver"]["todo"], todo["solver"]["done"]), (2, 2, 0))
+            self.assertTrue(all(r["sv"]["todo"] > 0 for r in todo["rows"]))
+            self.assertGreater(todo["solver"]["minutes"], 0)
+            self.assertEqual(lib.spots_search({"sv": "done"})["total"], 0)
+            everything = lib.spots_search({})
+            self.assertGreater(everything["total"], 2)  # les mains sans flop n'ont pas de statut
+            self.assertTrue(any("sv" not in r for r in everything["rows"]))
+            first = lib.spots_solve({"sv": "todo", "sort": "pot"}, "resoudre", limit=1)
+            self.assertEqual((first["total"], first["done"]), (2, 0))
+            deadline = time.time() + 30
+            while lib.spots_solve({}, "etat")["busy"] and time.time() < deadline:
+                time.sleep(0.05)
+            done = lib.spots_search({"sv": "done"})
+            self.assertEqual(done["total"], 1)
+            biggest = lib.spots_search({"sv": "todo", "sort": "pot"})
+            self.assertNotIn(done["rows"][0]["id"], [r["id"] for r in biggest["rows"]])
+            self.assertEqual(set(done["rows"][0]["sv"]), {"ev", "lost", "errors", "d"})
+            self.assertEqual(lib.spots_search({"sort": "evloss"})["rows"][0]["id"], done["rows"][0]["id"])
+            state = lib.spots_solve({}, "etat")
+            self.assertEqual((state["total"], state["done"], state["busy"]), (2, 1, 0))
+            other = biggest["rows"][0]["id"]
+            lib.spots_solve({}, "resoudre", ids=[other, "inconnue"])  # par ses numéros (tables à plusieurs aussi)
+            deadline = time.time() + 30
+            while lib.spots_solve({}, "etat", ids=[other])["busy"] and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(lib.spots_search({"sv": "done"})["solver"]["done"], 2)
+        finally:
+            lib.solves.shutdown()
 
     def test_library_queue(self):
         lib = Library(FIXTURES)
@@ -155,7 +250,11 @@ class AnalyzeTest(unittest.TestCase):
                 time.sleep(0.05)
             self.assertEqual(lib.review_state("Villain")["done"], 2)
             self.assertIn("Face au solveur", lib.player_page("Villain", "solveur"))
-            self.assertIn("2 / 2</b>", lib.self_page("solveur"))
+            self.assertIn("<b>2</b> mains analysées sur 2", lib.solver_panel("HU"))
+            self.assertIn('<div class="value">2</div><div class="sub">sur 2 allées au flop', lib.self_page("solveur"))
+            self.assertEqual(lib.review_state(table_format="HU")["done"], 2)
+            self.assertEqual(lib.review_state(table_format="ring"), dict(lib.review_state(table_format="ring"),
+                                                                          total=0, done=0))
             # le résumé survit au cache des résultats (clé du spot seul)
             from analyzer import db
             db.current().execute("DELETE FROM documents WHERE type = 'resolution'")

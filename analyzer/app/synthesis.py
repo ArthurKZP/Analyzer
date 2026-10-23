@@ -99,8 +99,9 @@ class Synthesis:
                 out.append(p)
         return out[:n]
 
-    def curve(self, points: int = CURVE_POINTS) -> list[tuple[int, float, float]]:
-        """(main, résultat réel, EV all-in) cumulés, en bb ; au plus points points (le dernier toujours)."""
+    def curve(self, points: int = CURVE_POINTS) -> list[tuple[int, float, float, float, float]]:
+        """(main, résultat réel, EV all-in, à l'abattage, sans abattage) cumulés, en bb ; au plus points points (le
+        dernier toujours)."""
         rows = self.result.get("curve") or []
         if not rows:
             return []
@@ -108,7 +109,7 @@ class Synthesis:
         picked = list(range(0, len(rows), step))
         if picked[-1] != len(rows) - 1:
             picked.append(len(rows) - 1)
-        return [(0, 0.0, 0.0)] + [(i + 1, rows[i][0], rows[i][1]) for i in picked]
+        return [(0, 0.0, 0.0, 0.0, 0.0)] + [(i + 1, *rows[i][:4]) for i in picked]
 
 
 def plural(n: int, word: str) -> str:

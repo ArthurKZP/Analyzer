@@ -11,7 +11,7 @@ import unittest
 from collections import Counter
 from pathlib import Path
 
-from analyzer import field, players, settings, stakes
+from analyzer import field, players, ring, settings, stakes
 from analyzer.app.library import Library
 from analyzer.app.server import start
 from analyzer.models import BET, CALL, CHECK, FOLD, RAISE
@@ -300,6 +300,58 @@ class FieldLibraryTest(IsolatedHome):
         with self.lib._lock:  # des mains de tables à plusieurs, jouées par « Hero »
             self.lib._all_ring = ring
             self.lib._select()
+
+    def test_field_stats(self):
+        """Statistiques : les stats globales du field (réguliers, récréatifs, tous), face aux repères et à toi, puis par
+        position ; et ce que ses écarts changent pour ton jeu."""
+        page = self.lib.field_page("stats", "ring")  # les stats choisies (statlib, tests/test_statlib.py)
+        for text in ("Le field en chiffres", '<th class="num">Réguliers</th><th class="num">Récréatifs</th>'
+                     '<th class="num">Tous</th><th class="num">Repère</th><th class="num">Toi</th>',
+                     ">Open (RFI)</abbr>", "Choisir mes stats", '"setting": "field_stat_selection"', "Par position",
+                     'data-scope="reg"', 'data-scope="me"', "Ce que ça change pour ton jeu",
+                     "si tu 3bet plus que la théorie"):
+            self.assertIn(text, page)
+        cbet = page[page.index(">C-bet flop, pot à deux</abbr>"):]
+        self.assertIn('60/60</span>', cbet[:cbet.index("</tr>")])  # le CO, régulier, c-bette à chaque fois
+        population = ring.population(self.lib.ring, {CO})
+        self.assertEqual([(p.position, p.hands) for p in population.positions], [("CO", 60)])
+        self.assertEqual((population.total.ratios["cbet_hu"].hits, population.total.ratios["cbet_hu"].opps), (60, 60))
+        self.assertIsNone(ring.population(self.lib.ring, {"Personne"}))
+        self.assertIn("Statistiques du field", self.lib.field_page("stats", "HU"))
+
+    def test_field_stat_choice(self):
+        """Les stats de l'Étude du field se choisissent à part de celles de Mon jeu."""
+        self.lib.set_settings({"field_stat_selection": {"ring": ["cbet_t", "fold_cbet_f"]}})
+        page = self.lib.field_page("stats", "ring")
+        table = page[page.index("Le field en chiffres"):page.index("<h2>Par position")]
+        barrel, fold = table.index(">2e barrel (c-bet turn)</abbr>"), table.index(">Fold face à la c-bet flop</abbr>")
+        self.assertLess(barrel, fold)  # dans ton ordre
+        self.assertNotIn(">VPIP</abbr>", table)
+        self.assertIn(">VPIP</abbr>", self.lib.self_page("stats", table_format="ring"))  # Mon jeu : par défaut
+        self.lib.set_settings({"field_stat_selection": None})
+        self.assertIn(">VPIP</abbr>", self.lib.field_page("stats", "ring"))
+
+    def test_bluffs_and_value(self):
+        """Réguliers et Récréatifs : leurs bluffs et leur value tous ensemble, aux tables à plusieurs."""
+        bluffs = self.lib.field_page("bluffs", "ring")  # le CO c-bette et barrelle, deux fois sur trois sans rien
+        for text in ("Les bluffs des réguliers aux tables à plusieurs", "Ce qui ressort",
+                     "Flop, c-bet · petite (≤ 55 %)", "Souvent sans main faite (40/60)",
+                     "Leurs bluffs, taille par taille", "Rien de fait dans 40 checks sur 60", "Leurs bluffs montrés",
+                     "sous-onglet Value"):
+            self.assertIn(text, bluffs)
+        value = self.lib.field_page("value", "ring")
+        for text in ("La value des réguliers aux tables à plusieurs", "Leur value, taille par taille",
+                     "33 % <span class=\"muted\">(dont fine 0 %)</span>", "Leur value montrée", "sous-onglet Bluffs"):
+            self.assertIn(text, value)
+        self.assertNotIn("Souvent sans main faite (40/60)</div>", value)  # ce qui ressort : seulement la value
+        self.assertIn("leurs mises montrées y sont mêlées", value)
+        rec_value = self.lib.field_page("rec-value", "ring")  # la BB, récréative : elle checke ses top paires
+        self.assertIn("La value des récréatifs", rec_value)
+        self.assertIn("Une main forte dans 60 checks sur 60", rec_value)
+        players.set_kind(CO, "rec")
+        recs = self.lib.field_page("rec-bluffs", "ring")
+        self.assertIn("Les bluffs des récréatifs", recs)
+        self.assertIn("Souvent sans main faite (40/60)", recs)
 
     def test_lists_player_and_group(self):
         lib = self.lib

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replayer — Merlin</title>
+<link rel="stylesheet" href="/static/explorer.css">
+<link rel="stylesheet" href="/static/replayer.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span>♠</span> Merlin · Replayer</div>
+  <div class="hand-meta" id="meta"></div>
+  <div class="top-actions" id="links"></div>
+</header>
+<div class="status" id="status" role="status" aria-live="polite"></div>
+<main class="rp" id="main" hidden>
+  <section class="card rp-table" aria-label="Table">
+    <div class="rp-felt" id="felt">
+      <div class="rp-center"><div class="board rp-board" id="board"></div><div class="pot" id="pot"></div></div>
+    </div>
+    <div class="rp-controls" role="group" aria-label="Lecture">
+      <button type="button" class="plain" id="b-first" title="Début (Origine)" aria-label="Début">⏮</button>
+      <button type="button" class="plain" id="b-prev" title="Action précédente (←)" aria-label="Action précédente">◀</button>
+      <button type="button" class="go" id="b-play" title="Lecture (Espace)">Lecture</button>
+      <button type="button" class="plain" id="b-next" title="Action suivante (→)" aria-label="Action suivante">▶</button>
+      <button type="button" class="plain" id="b-last" title="Fin (Fin)" aria-label="Fin">⏭</button>
+      <label class="check small"><input type="checkbox" id="f-cards"> Montrer les cartes connues</label>
+      <span class="muted small" id="step"></span>
+    </div>
+    <div class="rp-now" id="now" aria-live="polite"></div>
+  </section>
+  <aside class="card rp-log" id="log" aria-label="Déroulé de la main"></aside>
+</main>
+<script src="/static/replayer.js"></script>
+</body>
+</html>

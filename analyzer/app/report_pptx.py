@@ -20,6 +20,9 @@ FELT, FELT_2 = "0F3D2E", "1A5240"          # le tapis, et ses cartes
 INK, INK2, MUTED = "1B1B1B", "52514E", "898781"
 ON_FELT, ON_FELT_2 = "FFFFFF", "C9DDD2"
 AMBER, RED, GREEN, BLUE = "E0A526", "D03B3B", "1B7A3E", "2A78D6"
+# les courbes du résultat (les couleurs des trackers, comme l'application) : réel, EV all-in, abattage, sans abattage
+CURVES = (("Résultat réel", "008300", 2.5), ("EV all-in", "EDA100", 1.75), ("À l'abattage", "2A78D6", 1.5),
+          ("Sans abattage", "E34948", 1.5))
 CARD, RULE = "EEF3EF", "D9DED9"
 HI_BG, LO_BG = "FBE1D6", "DDE9F8"          # trop souvent, pas assez (et « solide », « indicatif »)
 SUITS = {"s": ("♠", INK), "h": ("♥", RED), "d": ("♦", BLUE), "c": ("♣", GREEN)}
@@ -86,7 +89,8 @@ def card_runs(cards: Sequence[str], size: float, gap: str = " ") -> list[Run]:
 
 def header(slide: px.Slide, kicker: str, title: str, number: int) -> None:
     """Le haut d'une diapositive de contenu : sa rubrique, son titre ; en bas à droite, son numéro."""
-    slide.text(LEFT, 0.38, WIDTH, 0.3, [para(kicker.upper(), 12, AMBER, bold=True)], name="Rubrique")
+    kicker = fit(kicker.upper(), WIDTH, 12, True, 1, 10)
+    slide.text(LEFT, 0.38, WIDTH, 0.3, [para(kicker[0], kicker[1], AMBER, bold=True)], name="Rubrique")
     text, size, _ = fit(title, WIDTH, 30, True, 1, 22)
     slide.text(LEFT, 0.66, WIDTH, 0.6, [para(text, size, FELT, bold=True)], name="Titre")
     slide.text(RIGHT - 1.0, 7.0, 1.0, 0.25, [para(str(number), 10, MUTED, align="r")], name="Numéro")
@@ -182,7 +186,7 @@ def curve_slide(deck: px.Presentation, s: Synthesis, number: int) -> bool:
     header(slide, "Résultat", f"{num(res['net_bb'], 1, sign=True)} bb sur {num(res['hands'], 0)} mains "
                               f"({num(res['bb100'], 1, sign=True)} bb/100)", number)
     plot_x, plot_y, plot_w, plot_h = LEFT + 0.85, 1.75, WIDTH - 0.95, 4.1
-    values = [v for _, net, ev in points for v in (net, ev)] + [0.0]
+    values = [v for point in points for v in point[1:]] + [0.0]
     lo, hi = min(values), max(values)
     if hi - lo < 1:
         lo, hi = lo - 1, hi + 1
@@ -197,16 +201,17 @@ def curve_slide(deck: px.Presentation, s: Synthesis, number: int) -> bool:
         tick += step
     n = points[-1][0] or 1
     to_box = lambda i, v: (i / n, (hi - v) / (hi - lo))  # noqa: E731
-    slide.path(plot_x, plot_y, plot_w, plot_h, [to_box(i, ev) for i, _, ev in points], AMBER, 1.75, name="EV all-in")
-    slide.path(plot_x, plot_y, plot_w, plot_h, [to_box(i, net) for i, net, _ in points], FELT, 2.5,
-               name="Résultat réel")
+    for k in (4, 3, 2, 1):  # le résultat réel par-dessus
+        label, color, width = CURVES[k - 1]
+        slide.path(plot_x, plot_y, plot_w, plot_h, [to_box(p[0], p[k]) for p in points], color, width, name=label)
     slide.text(plot_x + plot_w - 2.0, plot_y + plot_h + 0.08, 2.0, 0.25,
                [para(f"{num(n, 0)} mains", 12, MUTED, align="r")], name="Axe")
     x = plot_x + 0.15
-    for label, color in (("Résultat réel", FELT), ("EV all-in", AMBER)):
+    for k, (label, color, _) in enumerate(CURVES, start=1):
+        text = f"{label} {num(points[-1][k], 0, sign=True)}"
         slide.line(x, plot_y + 0.2, x + 0.4, plot_y + 0.2, color, 3)
-        slide.text(x + 0.5, plot_y + 0.08, 1.8, 0.26, [para(label, 12, INK2)], name="Légende")
-        x += 0.5 + px.width(label, 12) + 0.45
+        slide.text(x + 0.5, plot_y + 0.08, px.width(text, 12) + 0.2, 0.26, [para(text, 12, INK2)], name="Légende")
+        x += 0.5 + px.width(text, 12) + 0.4
     luck = res["net_bb"] - res["ev_bb"]
     facts = [f"EV all-in : {num(res['ev_bb'], 1, sign=True)} bb (chance : {num(luck, 1, sign=True)} bb sur "
              f"{res['allin']} all-in)",
@@ -215,6 +220,8 @@ def curve_slide(deck: px.Presentation, s: Synthesis, number: int) -> bool:
                                                Run(facts[1], 14, INK2)])], name="Détail")
     slide.notes = ("La courbe verte est le résultat réel, la jaune l'EV all-in (les tapis payés avant la river comptés "
                    f"à leur espérance). Écart dû à la chance : {num(luck, 1, sign=True)} bb.\n"
+                   "La bleue : les mains allées à l'abattage ; la rouge : celles finies sans abattage (pots pris ou "
+                   "lâchés avant). Une rouge qui descend : trop de folds ou des bluffs qui ne passent pas.\n"
                    "Un gros écart entre réel et EV vient de la variance, pas du jeu : c'est le moment de le dire.")
     return True
 
@@ -222,7 +229,7 @@ def curve_slide(deck: px.Presentation, s: Synthesis, number: int) -> bool:
 def leaks_slide(deck: px.Presentation, s: Synthesis, number: int) -> None:
     slide = deck.add_slide()
     header(slide, "Priorités", "Les leaks à travailler", number)
-    items = s.report.leaks
+    items = s.report.leaks[:leaks.REPORT_TOP]
     if not items:
         text_block(slide, LEFT, 1.8, WIDTH, "Pas de leak net pour l'instant : pas assez de mains contre les "
                    "réguliers, ou un jeu proche de la théorie dans les situations mesurées.", 20, INK2, max_lines=3)
@@ -232,13 +239,14 @@ def leaks_slide(deck: px.Presentation, s: Synthesis, number: int) -> None:
     for k, leak in enumerate(items):
         y = 1.65 + k * row
         badge(slide, LEFT, y + 0.04, 0.5, str(k + 1))
-        text_block(slide, LEFT + 0.75, y, WIDTH - 2.25, leak.title, 18, INK, bold=True, min_size=15)
-        text_block(slide, LEFT + 0.75, y + 0.36, WIDTH - 2.25, first_sentence(leak.evidence), 14, INK2,
+        text_block(slide, LEFT + 0.75, y, WIDTH - 2.25, leak.summary, 18, INK, bold=True, min_size=14)
+        where = f"{leak.title} · " if leak.headline else ""  # où il se joue, puis sa preuve
+        text_block(slide, LEFT + 0.75, y + 0.36, WIDTH - 2.25, where + first_sentence(leak.evidence), 14, INK2,
                    max_lines=1 if row < 0.9 else 2)
         pill(slide, RIGHT - 1.25, y + 0.05, leak.confidence)
         if k < len(items) - 1:
             slide.line(LEFT + 0.75, y + row - 0.05, RIGHT, y + row - 0.05, RULE, 0.75)
-    slide.notes = "\n".join(f"{k}. {x.title} ({x.confidence}) : {x.evidence} {x.advice}"
+    slide.notes = "\n".join(f"{k}. {x.summary} — {x.title} ({x.confidence}) : {x.evidence} {x.advice}"
                             for k, x in enumerate(items, start=1))
 
 
@@ -267,7 +275,9 @@ def _stat_panel(slide: px.Slide, s: Synthesis, stat: leaks.Stat, x: float, y: fl
 
 def leak_slide(deck: px.Presentation, s: Synthesis, leak: leaks.Leak, k: int, total: int, number: int) -> None:
     slide = deck.add_slide()
-    header(slide, f"Leak {k} / {total} · {leak.confidence}", leak.title, number)
+    # le leak en une phrase pour titre ; où il se joue, dans la rubrique
+    kicker = f"Leak {k} / {total} · {leak.confidence}" + (f" · {leak.title}" if leak.headline else "")
+    header(slide, kicker, leak.summary, number)
     panel_x, panel_w = LEFT, 5.2
     slide.shape(panel_x, 1.6, panel_w, 4.85, fill=CARD, geom="roundRect", radius=0.16, name="Panneau")
     inner_x, inner_w = panel_x + 0.4, panel_w - 0.8
@@ -303,7 +313,8 @@ def leak_slide(deck: px.Presentation, s: Synthesis, leak: leaks.Leak, k: int, to
     slide.shape(right_x, y, right_w, box_h, fill="FFF6E0", geom="roundRect", radius=0.12,
                 paras=[para(advice, size, FELT, bold=False)], anchor="ctr", inset=0.25, name="Conseil")
     proofs = "".join(f"\n· {p}" for p in (leak.check.proofs if leak.check else []))
-    slide.notes = (f"{leak.title} ({leak.confidence}).\n{leak.verified}{proofs}\nÀ travailler : {leak.advice}\n"
+    slide.notes = (f"{leak.summary} — {leak.title} ({leak.confidence}).\n{leak.verified}{proofs}\n"
+                   f"À travailler : {leak.advice}\n"
                    "Questions à poser : qu'est-ce qui te fait jouer ainsi dans cette situation ? Que ferait un "
                    "régulier solide ? Puis rejouez ensemble la main la plus chère dans l'explorateur ou l'entraîneur.")
 
@@ -332,7 +343,8 @@ def gaps_slide(deck: px.Presentation, s: Synthesis, number: int) -> bool:
     rows, heights = [head], [0.5]
     for stat, direction, confidence in found:
         r = stat.ratios[scope]
-        reference = (f"{round(100 * stat.reference)} %" if stat.reference is not None else
+        reference = (f"{round(100 * stat.reference)} %" + (" *" if stat.sizing else "")
+                     if stat.reference is not None else
                      f"{round(100 * stat.band[0])}–{round(100 * stat.band[1])} %" if stat.band else "–")
         label, size, _ = fit(stat.label, widths[0] - 0.2, 14, True, 1, 12)
         rows.append([
@@ -347,7 +359,8 @@ def gaps_slide(deck: px.Presentation, s: Synthesis, number: int) -> bool:
     slide.table(LEFT, 1.6, widths, rows, heights)
     who = "contre les réguliers" if scope == "reg" else "sur toutes tes mains"
     slide.text(LEFT, 1.6 + sum(heights) + 0.15, WIDTH, 0.3, [para(
-        f"Ta fréquence {who} (et le nombre d'occasions), face à la théorie. Orange : trop souvent ; bleu : pas assez.",
+        f"Ta fréquence {who} (et le nombre d'occasions), face à la théorie. Orange : trop souvent ; bleu : pas assez."
+        + (" * Ramené à ta taille (même volume de mise)." if any(st.sizing for st, _, _ in found) else ""),
         12, MUTED)], name="Légende")
     slide.notes = "\n".join(
         f"{st.label} ({st.section}) : {round(100 * st.ratios[scope].hits / st.ratios[scope].opps)} % contre "
@@ -437,9 +450,10 @@ def plan_slide(deck: px.Presentation, s: Synthesis, number: int) -> None:
         gap = 0.3
         w = (WIDTH - gap * (len(items) - 1)) / len(items)
         inner = w - 0.7
-        title_size = common_size([x.title for x in items], inner, 18, True, 2, 14)
+        title_size = common_size([x.summary for x in items], inner, 18, True, 3, 14)
         advice_size = common_size([x.advice for x in items], inner, 15, False, 7, 13)
-        texts = [(fit(x.title, inner, title_size, True, 3), fit(x.advice, inner, advice_size, False, 7)) for x in items]
+        texts = [(fit(x.summary, inner, title_size, True, 3), fit(x.advice, inner, advice_size, False, 7))
+                 for x in items]
         height = max(0.35 + 0.55 + 0.3 + t[2] * px.line_height(t[1]) + 0.12 + a[2] * px.line_height(a[1]) + 0.35
                      for t, a in texts)
         height = max(height, 2.4)
@@ -461,7 +475,8 @@ def plan_slide(deck: px.Presentation, s: Synthesis, number: int) -> None:
                min_size=14)
     slide.text(RIGHT - 1.0, 7.0, 1.0, 0.25, [para(str(number), 10, "9DBFAF", align="r")])
     slide.notes = ("Fais reformuler les objectifs à l'élève avec ses propres mots, et fixez ensemble la date du "
-                   "prochain point.\n" + "\n".join(f"{k}. {x.title} : {x.advice}" for k, x in enumerate(items, start=1)))
+                   "prochain point.\n" + "\n".join(f"{k}. {x.summary} : {x.advice}"
+                                                    for k, x in enumerate(items, start=1)))
 
 
 def build_pptx(s: Synthesis) -> bytes:

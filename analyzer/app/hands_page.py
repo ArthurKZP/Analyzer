@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from .. import handplay
-from ..report import FORMAT_NAMES, html_page
+from ..report import FORMAT_NAMES, fold, html_page, more
 
 
 STYLE = """<style>
@@ -538,6 +538,11 @@ SCRIPT = r"""
         const li = el('li', {}, el('b', {}, h), ' · ' + (date ? date + ' · ' : '') + 'EV ' + signed(ev, 1) + ' bb (réel ' + signed(net, 1) + ')'
           + (loss !== null ? ' · solveur : −' + num(loss, 2) + ' bb d\'EV perdue' : ''), el('span', { class: 'd' }, ' — ' + what + ' · ' + id));
         if (st.fmt === 'HU') li.append(el('a', { href: 'spots#hand=' + encodeURIComponent(id) }, 'Rejouer'));
+        else {
+          const space = D.space && D.space !== '/api' ? '?api=' + encodeURIComponent(D.space).replace(/%2F/g, '/') : '';
+          li.append(el('a', { href: '/rejouer/' + encodeURIComponent(id) + space, target: '_blank', rel: 'noopener' },
+            'Rejouer ↗'));
+        }
         if (FLOP_POTS.includes(pot)) li.append(el('a', { href: '/explorateur/' + encodeURIComponent(id), target: '_blank', rel: 'noopener' }, 'Solveur ↗'));
         ul.append(li);
       });
@@ -556,6 +561,18 @@ SCRIPT = r"""
 """
 
 
+HOW = ("Le fold d'une décision coûte ce que tu as déjà mis au pot : la blinde (−0,5 bb en SB, −1 bb en BB) ou ton open "
+       "face au 3bet (−2,5 bb après un open à 2,5 bb). Jouer une main est donc rentable si elle rapporte en moyenne "
+       "plus que ce fold : mieux que −100 bb/100 pour défendre la BB, que −250 bb/100 pour payer un 3bet. La théorie "
+       ": la fréquence de la solution préflop en heads-up, celle de tes charts aux tables à plusieurs. Le résultat "
+       "d'une décision est celui de toute la main qui suit ; « EV all-in » remplace le résultat des tapis payés "
+       "avant la river par leur espérance, pour ôter la chance. ± : l'intervalle à 95 % — sur quelques dizaines de "
+       "mains, la variance domine ; les familles de mains tranchent plus vite. Le détail d'une main : la suite du "
+       "coup (sans flop, SRP, pot 3bet…), ta main au flop, la fin du coup, l'avis du solveur et les coups à revoir.")
+BY_HAND = ('<div class="card scroll"><div id="hp-hands"></div>'
+           '<button type="button" class="hp-more" id="hp-more" hidden></button></div>')
+
+
 def build_hands_page(formats: dict[str, dict], embed: bool = True, api: str = "") -> str:
     """formats : "HU" et "ring" (tables à plusieurs) -> handplay.aggregate(...) (heads-up d'abord) ; api : l'adresse du
     détail d'une main (Library.hands_detail), sans quoi la page n'a que la grille et les tableaux."""
@@ -565,19 +582,14 @@ def build_hands_page(formats: dict[str, dict], embed: bool = True, api: str = ""
     data = {"formats": formats, "names": FORMAT_NAMES, "situations": [list(s) for s in handplay.SITUATIONS],
             "pots": [list(p) for p in handplay.POTS], "ends": [list(e) for e in handplay.ENDS],
             "flops": [list(f) for f in handplay.FLOPS], "flop_pots": list(handplay.FLOP_POTS),
-            "ends_for": list(handplay.REVIEW_POTS), "next": handplay.NEXT, "api": api}
+            "ends_for": list(handplay.REVIEW_POTS), "next": handplay.NEXT, "api": api,
+            "space": api.rsplit("/", 1)[0] if api else "/api"}
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     heading = "" if embed else "<h1>Mains de départ</h1>"
     body = f"""{STYLE}{heading}
-<p class="note">Ce que rapporte chaque main de départ : en tout, par position, puis à chaque décision préflop. Le fold
-d'une décision coûte ce que tu as déjà mis au pot : la blinde (−0,5 bb en SB, −1 bb en BB) ou ton open face au 3bet
-(−2,5 bb après un open à 2,5 bb). Jouer une main est donc rentable si elle rapporte en moyenne plus que ce fold :
-mieux que −100 bb/100 pour défendre la BB, que −250 bb/100 pour payer un 3bet. La théorie : la fréquence de la
-solution préflop en heads-up, celle de tes charts aux tables à plusieurs. Le résultat d'une décision est celui de
-toute la main qui suit ; « EV all-in » remplace le résultat des tapis payés avant la river par leur espérance, pour
-ôter la chance. ± : l'intervalle à 95 % — sur quelques dizaines de mains, la variance domine ; les familles de mains
-tranchent plus vite. Clique une main (ou une famille) pour voir d'où vient son résultat : la suite du coup (sans
-flop, SRP, pot 3bet…), ta main au flop, la fin du coup, l'avis du solveur et les coups à revoir.</p>
+<p class="note">Ce que rapporte chaque main de départ, comparé au fold : en tout, par position, puis à chaque décision
+préflop. Clique une main (ou une famille) pour voir d'où vient son résultat.</p>
+{more("Comment c'est calculé", HOW)}
 <div class="hp-filters">
   <div class="hp-row" id="hp-fmt"></div><div class="hp-row" id="hp-kind"></div><div class="hp-row" id="hp-pos"></div>
   <div class="hp-row" id="hp-sit"></div><div class="hp-row" id="hp-measure"></div>
@@ -595,8 +607,6 @@ préflop ; « net » : le hasard l'explique mal (intervalle à 95 %). Clique pou
   <div class="hp-legend" id="hp-legend"></div></div>
   <div class="card"><h3 style="margin-top:0">Par famille de mains</h3><div class="scroll" id="hp-fams"></div></div>
 </div>
-<h2>Main par main</h2>
-<p class="note">Des pertes les plus lourdes (par rapport au fold, en tout) aux gains.</p>
-<div class="card scroll"><div id="hp-hands"></div><button type="button" class="hp-more" id="hp-more" hidden></button></div>
+{fold("Main par main", BY_HAND, "des pertes les plus lourdes (par rapport au fold, en tout) aux gains", "mains")}
 <script type="application/json" id="hp-data">{payload}</script>"""
     return html_page("Mains de départ", body, embed, script=SCRIPT)

@@ -168,8 +168,27 @@ class ReportPdfTest(IsolatedHome):
                          "Mains à revoir", "Heads-up · 4 mains · le 10/01/2026"):
             self.assertIn(expected, text)
         self.assertFalse(any(t.startswith("Période") for t in text))
+        for curve in ("Résultat réel", "EV all-in", "À l'abattage", "Sans abattage"):  # les quatre courbes
+            self.assertTrue(any(t.startswith(curve + " ") for t in text), curve)
         lib.set_period({"kind": "last", "n": 2})
         self.assertIn("Période : 2 dernières mains", pdf_strings(lib.report_pdf()))
+
+    def test_leaks_in_clear(self):
+        """Le PDF et la présentation donnent chaque leak en une phrase claire, puis où il se joue."""
+        from analyzer import leaks
+        lib = Library(self.folder)
+        title = "SRP · BTN : 2e barrel (turn)"
+        summary = "Tu mises trop souvent : 2e barrel (turn), au bouton, en SRP"
+        lib.leaks_report("HU").leaks = [leaks.Leak(title, "54 % sur 50 occasions.", "Checke davantage.", "postflop",
+                                                   "solide", 6.0, key="srp:barrel", direction="plus",
+                                                   headline=leaks.headline(title, "bet", "plus"))]
+        text = pdf_strings(lib.report_pdf())
+        self.assertLess(text.index(summary), text.index(title))  # la phrase d'abord, puis où
+        slides = slide_texts(check_pptx(self, lib.report_pptx()))
+        flat = [t for slide in slides for t in slide]
+        self.assertGreaterEqual(flat.count(summary), 3)  # les priorités, la diapositive du leak, le plan de travail
+        self.assertIn("LEAK 1 / 1 · SOLIDE · SRP · BTN : 2E BARREL (TURN)", flat)
+        self.assertIn(f"{title} · 54 % sur 50 occasions.", flat)
 
     def test_student(self):
         lib = Library(self.folder)
@@ -183,6 +202,8 @@ class ReportPdfTest(IsolatedHome):
         flat = [t for slide in texts for t in slide]
         for expected in ("Où tu en es", "Les leaks à travailler", "Les mains à revoir", "D'ici la prochaine séance"):
             self.assertIn(expected, flat)
+        for curve in ("Résultat réel", "À l'abattage", "Sans abattage"):  # avec les lignes bleue et rouge
+            self.assertTrue(any(t.startswith(curve + " ") for t in flat), curve)
         self.assertTrue(any(t.startswith(f"Préparé avec {NAME} le ") for t in flat))
         notes = slide_texts(parts, "ppt/notesSlides/notesSlide")
         self.assertEqual(len(notes), len(texts))
@@ -216,7 +237,8 @@ class ReportRoutesTest(IsolatedHome):
         self.assertIn('filename="leakfinding.pdf"', resp.getheader("Content-Disposition"))
         self.assertTrue(data.startswith(b"%PDF"))
         self.assertEqual(self.get("/moi/rapport.pdf?format=ring")[0].status, 404)  # pas de table à plusieurs
-        self.assertIn(b'/moi/rapport.pdf" download>Synth', self.get("/moi/leaks")[1])
+        self.assertIn('/moi/rapport.pdf" download title="Deux pages : chiffres, leaks, écarts, mains à revoir">la '
+                      'synthèse PDF</a>', self.get("/moi/leaks")[1].decode())
 
     def test_pptx_route(self):
         resp, data = self.get("/moi/presentation.pptx")

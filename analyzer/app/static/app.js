@@ -3,17 +3,27 @@
 
   const $ = (id) => document.getElementById(id);
   const frame = $('frame');
+  // Les onglets de chaque vue : une page [page, libellé], ou un groupe de pages proches [libellé, [[page, libellé], …]]
+  // dont les pages forment une seconde barre (sous-onglets). Les adresses restent celles des pages (#/moi/suivi).
+  const LEAKS_GROUP = ['Leaks', [['leaks', 'À travailler'], ['suivi', 'Suivi dans le temps']]];
+  // tes mains : le bilan du solveur (format par format), puis chaque format avec ses mains et son « Face au solveur »
+  const HANDS_TABS = [['solveur', 'Bilan'], ['spots', 'Heads-up'], ['tables', 'Tables à plusieurs']];
+  const PREFLOP_GROUP = ['Préflop', [['preflop', 'Face à la théorie'], ['mains', 'Mains de départ']]];
   const TABS = {
-    moi: [['bilan', 'Bilan'], ['leaks', 'Leakfinding'], ['mains', 'Mains de départ'], ['preflop', 'Mon préflop'], ['spots', 'Mes spots'],
-      ['solveur', 'Face au solveur'], ['tables', 'Tables à plusieurs']],
-    // étude du field : le leakfinding de tes adversaires (réguliers, récréatifs), les bluffs des réguliers en heads-up
-    field: [['regs', 'Réguliers'], ['recs', 'Récréatifs'], ['bluffs', 'Bluffs des réguliers']],
+    moi: [['bilan', 'Bilan'], ['stats', 'Statistiques'], LEAKS_GROUP, PREFLOP_GROUP, ['Mes mains', HANDS_TABS]],
+    // étude du field : leurs stats globales, puis réguliers et récréatifs, chacun avec son leakfinding, ses bluffs et
+    // sa value
+    field: [['stats', 'Statistiques'],
+      ['Réguliers', [['regs', 'Leakfinding'], ['bluffs', 'Bluffs'], ['value', 'Value']]],
+      ['Récréatifs', [['recs', 'Leakfinding'], ['rec-bluffs', 'Bluffs'], ['rec-value', 'Value']]]],
     parametres: [['general', 'Général'], ['joueurs', 'Joueurs et alias'], ['ranges', 'Ranges préflop']],
-    eleve: [['leaks', 'Leakfinding'], ['mains', 'Mains de départ'], ['preflop', 'Préflop'], ['solveur', 'Face au solveur'], ['spots', 'Mains'],
-      ['tables', 'Tables à plusieurs'], ['importer', 'Importer']],
+    eleve: [['bilan', 'Bilan'], ['stats', 'Statistiques'], LEAKS_GROUP, PREFLOP_GROUP, ['Ses mains', HANDS_TABS],
+      ['importer', 'Importer']],
     // un joueur de référence : la comparaison avec toi, sa value et ses bluffs, puis son jeu analysé comme le tien
-    reference: [['comparaison', 'Toi et lui'], ['lignes', 'Value et bluffs'], ['bilan', 'Bilan'], ['tables', 'Tables à plusieurs'],
-      ['preflop', 'Préflop'], ['mains', 'Mains de départ']],
+    reference: [['comparaison', 'Toi et lui'], ['lignes', 'Value et bluffs'], ['bilan', 'Bilan'], PREFLOP_GROUP,
+      ['tables', 'Ses coups à plusieurs']],
+    // l'entraîneur : sur les spots résolus (heads-up), et le bluffcatch sur tes mains jouées
+    entraineur: [['solveur', 'Spots résolus'], ['bluffcatch', 'Bluffcatch']],
     adv: [['plan', 'Plan de jeu'], ['preflop', 'Préflop'], ['rapport', 'Rapport'], ['spots', 'Spots'],
       ['solveur', 'Face au solveur'], ['bluffs', 'Ses bluffs']],
     // L'explorateur part du préflop ; les séries heads-up (SRP, pots 3bet et 4bet), les séries 6-max et les coups joués
@@ -21,15 +31,24 @@
     etudes: [['explorateur', 'Explorateur'], ['plan', 'Plan de jeu suggéré'], ['hu', 'Heads-up'], ['6max', '6-max'],
       ['coups', 'Coups joués']],
   };
-  const FORMAT_TABS = ['bilan', 'leaks', 'preflop', 'comparaison', 'lignes'];  // pages qui ont un choix heads-up / tables à plusieurs
-  // Les formats que tu joues (Paramètres) : sans choix, tous. Un format que tu ne joues pas sort des menus.
-  const plays = (fmt) => !state || !state.settings || !state.settings.plays || state.settings.plays.includes(fmt);
-  const HIDDEN_TABS = { HU: { moi: ['spots', 'solveur'], field: ['bluffs'], etudes: ['hu'] },
-    ring: { moi: ['tables'], etudes: ['6max'] } };
-  function tabsOf(view) {
-    const hidden = ['HU', 'ring'].filter((f) => !plays(f)).flatMap((f) => HIDDEN_TABS[f][view] || []);
-    return (TABS[view] || []).filter(([id]) => !hidden.includes(id));
+  // pages qui ont un choix heads-up / tables à plusieurs
+  const FORMAT_TABS = ['bilan', 'stats', 'leaks', 'suivi', 'preflop', 'comparaison', 'lignes'];
+  // Les formats que tu joues (Paramètres), ou que joue l'élève affiché (sa page Importer) : sans choix, tous. Un
+  // format qui n'est pas joué sort des menus.
+  function playsIn(view, fmt, student) {
+    const conf = view === 'eleve' ? (students.find((s) => s.id === student) || {}).settings : state && state.settings;
+    return !conf || !conf.plays || conf.plays.includes(fmt);
   }
+  const plays = (fmt) => playsIn('moi', fmt);
+  const HIDDEN_TABS = { HU: { moi: ['spots'], eleve: ['spots'], etudes: ['hu'], entraineur: ['solveur'] },
+    ring: { moi: ['tables'], eleve: ['tables'], etudes: ['6max'] } };
+  function groupsOf(view, student) {  // [{ label, tabs: [[page, libellé], …] }] : les groupes dont une page est jouée
+    const hidden = ['HU', 'ring'].filter((f) => !playsIn(view, f, student)).flatMap((f) => HIDDEN_TABS[f][view] || []);
+    return (TABS[view] || []).map(([a, b]) => (Array.isArray(b) ? { label: a, tabs: b } : { label: b, tabs: [[a, b]] }))
+      .map((g) => Object.assign(g, { tabs: g.tabs.filter(([id]) => !hidden.includes(id)) }))
+      .filter((g) => g.tabs.length);
+  }
+  const tabsOf = (view, student) => groupsOf(view, student).flatMap((g) => g.tabs);
   const HU_SERIES = ['srp', '3bet', '4bet'];  // anciens onglets des études : l'onglet Heads-up
   let state = null;
   let route = null;
@@ -76,14 +95,14 @@
   // ---------- navigation ----------
   function parseRoute() {
     const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
-    const tabOf = (view, name, fallback) => {
-      const list = tabsOf(view);
+    const tabOf = (view, name, fallback, student) => {
+      const list = tabsOf(view, student);
       return list.some(([id]) => id === name) ? name : list.some(([id]) => id === fallback) ? fallback : (list[0] || [fallback])[0];
     };
     if (parts[0] === 'importer') return { view: 'importer' };
     if (parts[0] === 'etudes' && HU_SERIES.includes(parts[1])) return { view: 'etudes', tab: 'hu', family: parts[1] };
     if (parts[0] === 'etudes') return { view: 'etudes', tab: tabOf('etudes', parts[1], 'explorateur') };
-    if (parts[0] === 'entraineur') return { view: 'entraineur' };
+    if (parts[0] === 'entraineur') return { view: 'entraineur', tab: tabOf('entraineur', parts[1], 'solveur') };
     if (parts[0] === 'sauvegarde') return { view: 'sauvegarde' };
     if (parts[0] === 'adversaire' && parts[1]) return { view: 'adv', player: parts[1], tab: tabOf('adv', parts[2], 'plan') };
     if (parts[0] === 'moi' && parts[1] === 'bluffs') return { view: 'field', tab: 'bluffs' };  // ancienne adresse
@@ -94,7 +113,9 @@
     if (parts[0] === 'field') return { view: 'field', tab: tabOf('field', parts[1], 'regs') };
     if (parts[0] === 'parametres') return { view: 'parametres', tab: tabOf('parametres', parts[1], 'general') };
     if (parts[0] === 'eleves') return { view: 'eleves' };
-    if (parts[0] === 'eleve' && parts[1]) return { view: 'eleve', student: parts[1], tab: tabOf('eleve', parts[2], 'leaks') };
+    if (parts[0] === 'eleve' && parts[1]) {
+      return { view: 'eleve', student: parts[1], tab: tabOf('eleve', parts[2], 'leaks', parts[1]) };
+    }
     if (parts[0] === 'references') return { view: 'references' };
     if (parts[0] === 'reference' && parts[1]) return { view: 'reference', ref: parts[1], tab: tabOf('reference', parts[2], 'comparaison') };
     return hasHands() || hasAnyHands() ? { view: 'moi', tab: 'bilan' } : { view: 'importer' };
@@ -109,7 +130,7 @@
     if (r.view === 'field') return '#/field/' + r.tab;
     if (r.view === 'parametres') return '#/parametres/' + r.tab;
     if (r.view === 'etudes') return '#/etudes/' + r.tab;
-    if (r.view === 'entraineur') return '#/entraineur';
+    if (r.view === 'entraineur') return '#/entraineur' + (r.tab === 'bluffcatch' ? '/bluffcatch' : '');
     if (r.view === 'sauvegarde') return '#/sauvegarde';
     if (r.view === 'eleves') return '#/eleves';
     if (r.view === 'eleve') return '#/eleve/' + encodeURIComponent(r.student) + '/' + r.tab;
@@ -124,7 +145,7 @@
       if (r.tab === 'explorateur') return '/explorateur/preflop' + (plays('HU') ? '' : '#table=6-max');
       return '/etudes/' + r.tab + (r.family ? '#' + r.family : '');
     }
-    if (r.view === 'entraineur') return '/entraineur';
+    if (r.view === 'entraineur') return r.tab === 'bluffcatch' ? '/entraineur/bluffcatch' : '/entraineur';
     if (r.view === 'parametres') return '/parametres/' + r.tab;
     if (r.view === 'field') {  // le format et les limites choisis en dernier dans l'Étude du field (ou ceux de la fiche)
       const fmt = r.fmt || pref('format:/field');
@@ -160,7 +181,10 @@
     route = parseRoute();
     closePeriod();  // une autre page : le panneau de la période se ferme
     if (route.view === 'field' && location.hash !== hashFor(route)) history.replaceState(null, '', hashFor(route));  // #/moi/bluffs
-    if (route.view === 'eleves' || route.view === 'eleve') await loadStudents();
+    if (route.view === 'eleves' || route.view === 'eleve') {
+      await loadStudents();
+      route = parseRoute();  // les onglets de l'élève suivent les formats qu'il joue
+    }
     if (route.view === 'references' || route.view === 'reference') await loadReferences();
     closeDrawer();
     renderHeader();
@@ -226,7 +250,8 @@
       subtitle.textContent = 'Étude du field : comment les jouer, leurs leaks et leurs lignes réunis';
     } else if (route.view === 'field') {
       title.textContent = 'Étude du field';
-      subtitle.textContent = 'Comment jouent tes adversaires : leurs leaks à exploiter, leur value et leurs bluffs';
+      subtitle.textContent = 'Comment jouent tes adversaires : leurs stats, leurs leaks à exploiter, leur value et '
+        + 'leurs bluffs';
     } else if (route.view === 'parametres') {
       title.textContent = 'Paramètres';
       subtitle.textContent = 'Tes pseudos réunis, ce que tu joues, tes élèves, le type de tes adversaires et leurs alias, tes ranges préflop';
@@ -255,7 +280,9 @@
       subtitle.textContent = r ? refSummary(r) : '';
     } else if (route.view === 'entraineur') {
       title.textContent = 'Entraîneur';
-      subtitle.textContent = 'Joue des mains sur les spots résolus : le solveur juge chaque décision';
+      subtitle.textContent = route.tab === 'bluffcatch'
+        ? 'Payer ou coucher une mise river, sur tes mains jouées : le plan de la situation après chaque décision'
+        : 'Joue des mains sur les spots résolus : le solveur juge chaque décision';
     } else {
       title.textContent = 'Importer des mains';
       subtitle.textContent = 'Historiques de cash game NLHE (.txt, dossier ou archive .zip) — les mains déjà présentes sont ignorées';
@@ -286,14 +313,30 @@
     };
   }
 
+  // La barre des onglets et, pour un groupe de pages, celle de ses sous-onglets ; un groupe rouvre sa dernière page.
   function renderTabs() {
-    const tabs = $('tabs');
+    const tabs = $('tabs'), subtabs = $('subtabs');
     tabs.textContent = '';
-    const list = tabsOf(route.view);
-    tabs.hidden = !list.length || (!hasHands() && !hasAnyHands() && !['etudes', 'eleve', 'parametres', 'reference'].includes(route.view));
-    for (const [id, label] of list) {
-      const r = Object.assign({}, route, { tab: id });
-      tabs.append(el('a', { href: hashFor(r), 'aria-current': id === route.tab ? 'page' : null }, label));
+    subtabs.textContent = '';
+    const groups = groupsOf(route.view, route.student);
+    const always = ['etudes', 'eleve', 'parametres', 'reference', 'entraineur'];  // des onglets même sans tes mains
+    tabs.hidden = !groups.length || (!hasHands() && !hasAnyHands() && !always.includes(route.view));
+    subtabs.hidden = true;
+    for (const g of groups) {
+      const current = g.tabs.some(([id]) => id === route.tab);
+      const key = 'onglet:' + route.view + ':' + g.label;
+      if (current && g.tabs.length > 1) pref(key, route.tab);
+      const last = pref(key);
+      const tab = current ? route.tab : g.tabs.some(([id]) => id === last) ? last : g.tabs[0][0];
+      tabs.append(el('a', { href: hashFor(Object.assign({}, route, { tab })), 'aria-current': current ? 'page' : null },
+        g.label));
+      if (!current || g.tabs.length < 2 || tabs.hidden) continue;
+      subtabs.hidden = false;
+      subtabs.setAttribute('aria-label', g.label);
+      for (const [id, label] of g.tabs) {
+        const r = Object.assign({}, route, { tab: id });
+        subtabs.append(el('a', { href: hashFor(r), 'aria-current': id === route.tab ? 'page' : null }, label));
+      }
     }
   }
 
@@ -319,9 +362,8 @@
 
   function renderSidebar() {
     $('hero-name').textContent = state.hero ? 'Toi : ' + state.hero : 'Aucune main chargée';
-    // Paramètres : les Élèves si tu es coach, l'entraîneur (spots heads-up) si tu joues le heads-up
+    // Paramètres : les Élèves si tu es coach
     document.querySelector('.nav a[data-view="eleves"]').hidden = !(state.settings ? state.settings.coach : true);
-    document.querySelector('.nav a[data-view="entraineur"]').hidden = !plays('HU');
     const fmt = oppFormat();
     const switcher = $('opp-fmt');
     const both = plays('HU') && plays('ring') && state.opponents.length && (state.ring_opponents || []).length;
@@ -359,8 +401,9 @@
   function closeDrawer() { $('app').classList.remove('drawer-open'); }
 
   // ---------- période d'analyse ----------
-  // Toutes les mains, les N dernières (de chaque format), les N derniers jours ou d'une date à une autre : le choix
-  // vaut pour toutes les analyses de l'espace (toi, ou l'élève affiché) et reste gardé.
+  // Toutes les mains, ce mois, ce trimestre, cette année, les N dernières (de chaque format), les N derniers jours ou
+  // d'une date à une autre : le choix vaut pour toutes les analyses de l'espace (toi, ou l'élève affiché) et reste
+  // gardé.
   const PERIOD_VIEWS = ['moi', 'field', 'adv', 'eleve'];
 
   function periodOwner() {
@@ -424,6 +467,8 @@
     pop.append(
       el('div', { class: 'period-title' }, 'Analyser'),
       choice('all', 'Toutes les mains', el('span', { class: 'muted small' }, '(' + counts + ')')),
+      el('div', { class: 'period-cal' }, choice('month', 'Ce mois'), choice('quarter', 'Ce trimestre'),
+        choice('year', 'Cette année')),
       choice('last', 'Les', n, 'dernières mains',
         el('span', { class: 'muted small period-hint' }, 'de chaque format (heads-up, tables à plusieurs)')),
       choice('days', 'Les', days, 'derniers jours'),
@@ -517,11 +562,58 @@
         el('button', { type: 'button', class: 'link', onclick: () => reload(result) }, 'Relire le dossier'),
         ' (si tu y as déposé des historiques à la main)');
     const pseudos = el('div', { class: 'imported pseudos' });
+    const formats = el('div', { class: 'imported formats' });
     const imported = el('div', { class: 'imported files' });
-    showPanel(el('div', { class: 'import', 'data-owner': student || '' }, drop, input, result, folder, pseudos, imported));
+    showPanel(el('div', { class: 'import', 'data-owner': student || '' }, drop, input, result, folder, pseudos, formats,
+      imported));
     if (importing && importing.owner === (student || '') && importing.view) showProgress(importing.owner, importing.view);
     showPseudos(pseudos, student);
+    if (student) showFormats(formats, student);
     showFiles(imported, student);
+  }
+
+  // Ce que joue l'élève : heads-up et/ou tables à plusieurs (sans choix, tout). Un format qu'il ne joue pas sort de
+  // ses onglets et de ses analyses ; ses mains restent gardées.
+  function showFormats(box, student) {
+    const s = students.find((x) => x.id === student);
+    box.textContent = '';
+    const counts = { HU: (s && s.period && s.period.all_hands) || 0, ring: (s && s.period && s.period.all_ring) || 0 };
+    if (!counts.HU || !counts.ring) return;  // un seul format dans ses mains : rien à choisir
+    const chosen = (s.settings && s.settings.plays) || ['HU', 'ring'];
+    const message = el('p', { class: 'small', 'aria-live': 'polite' });
+    const option = (fmt, label) => el('label', { class: 'ref-opt' },
+      el('input', { type: 'checkbox', value: fmt, checked: chosen.includes(fmt) }),
+      el('span', {}, el('b', {}, label), ' ', el('span', { class: 'muted small' }, count(counts[fmt]) + ' main(s)')));
+    const list = el('div', { class: 'pseudo-pick' }, option('HU', 'Heads-up'), option('ring', 'Tables à plusieurs'));
+    const save = el('button', { type: 'submit', class: 'primary' }, 'Enregistrer');
+    const form = el('form', { class: 'pseudo-form', onsubmit: async (e) => {
+      e.preventDefault();
+      const picked = [...list.querySelectorAll('input:checked')].map((i) => i.value);
+      if (!picked.length) { message.textContent = 'Coche au moins un format.'; return; }
+      save.disabled = true;
+      message.textContent = '';
+      try {
+        const res = await fetch('/api/eleves/' + encodeURIComponent(student) + '/formats', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ formats: picked.length === 2 ? null : picked }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Enregistrement impossible.');
+        frame.dataset.src = '';
+        await loadStudents();
+        renderHeader();
+        renderTabs();
+        markActive();
+        message.textContent = 'Enregistré : ses onglets et ses analyses suivent.';
+      } catch (err) {
+        message.textContent = err.message || String(err);
+      }
+      save.disabled = false;
+    } }, list, el('div', { class: 'student-form' }, save));
+    box.append(el('div', { class: 'pseudo-choice' }, el('h3', {}, 'Ce qu\'il joue'),
+      el('p', { class: 'muted small' }, 'Heads-up et/ou tables à plusieurs : un format qu\'il ne joue pas sort de ses '
+        + 'onglets et de ses analyses (bilan, leaks, préflop, solveur) ; ses mains restent gardées. Le solveur ne '
+        + 'mélange jamais les formats : dans Ses mains › Bilan, l\'analyse se lance sur toutes ses mains ou sur un '
+        + 'format.'), form, message));
   }
 
   // Après un changement des mains (import, historique retiré, pseudo supprimé…) : les deux listes de la page Importer.
@@ -555,7 +647,7 @@
     };
     const quoted = (names) => names.map((n) => '« ' + n + ' »').join(', ');
     const role = (p) => (p.role === 'reference' ? 'joueur de référence : ' + p.reference
-      : p.role === 'other' ? 'décoché dans Paramètres' : student ? '' : 'toi');
+      : p.role === 'other' ? (student ? 'pas l\'élève' : 'décoché dans Paramètres') : student ? '' : 'toi');
     const checks = [];
     const remove = el('button', { type: 'button', class: 'primary danger', disabled: true }, 'Supprimer leurs mains');
     const picked = () => checks.filter((c) => c.checked).map((c) => c.value);
@@ -601,6 +693,7 @@
         window.alert(err.message || String(err));
       }
     });
+    if (student && (view.pseudos.length || view.extra.length)) box.append(choosePseudos(view, student));
     box.append(el('h3', {}, 'Mains par pseudo (' + view.pseudos.length + ')'));
     if (note) box.append(el('p', { class: 'small', role: 'status' }, note));
     if (rows.length) {
@@ -612,8 +705,9 @@
         el('p', { class: 'muted small' }, 'Chaque historique marque un pseudo comme héros : ce sont les mains importées '
           + 'de son compte. Supprimer efface ces mains de la base (pas celles où ce pseudo n\'est qu\'un joueur de la '
           + 'table) ; une main qu\'un autre de ces historiques contient aussi revient de ce point de vue. Les imports '
-          + 'suivants écartent ses mains. Pour seulement sortir un pseudo de tes analyses sans rien effacer : '
-          + 'Paramètres.'));
+          + 'suivants écartent ses mains. Pour seulement sortir un pseudo ' + (student
+          ? 'de ses analyses sans rien effacer : décoche-le dans « Ses pseudos ».' : 'de tes analyses sans rien '
+          + 'effacer : Paramètres.')));
     }
     if (view.removed.length) {
       const back = view.removed.map((r) => {
@@ -644,6 +738,49 @@
         el('p', { class: 'muted small' }, '« Rétablir » remet ses mains depuis les historiques gardés, et les imports '
           + 'suivants les gardent à nouveau.'));
     }
+  }
+
+  // Les pseudos d'un élève : ceux que ses historiques marquent comme héros (sur GGPoker : « Hero »), et d'autres qui
+  // jouent dans ses mains ; seules les mains de ceux cochés sont les siennes (aucun coché : tous les héros).
+  function choosePseudos(view, student) {
+    const chosen = new Set(view.chosen);
+    const message = el('p', { class: 'small', 'aria-live': 'polite' });
+    const option = (name, detail, checked) => el('label', { class: 'ref-opt' },
+      el('input', { type: 'checkbox', value: name, checked }),
+      el('span', {}, el('b', {}, name), ' ', el('span', { class: 'muted small' }, detail)));
+    const list = el('div', { class: 'pseudo-pick' },
+      view.pseudos.map((p) => option(p.name, (p.sites.length ? p.sites.join(', ') + ' · ' : '') + count(p.hands)
+        + ' main(s) où il est le héros', !chosen.size || chosen.has(p.name))),
+      view.extra.map((p) => option(p.name, count(p.hands) + ' main(s) sans héros marqué', true)));
+    const other = el('input', { type: 'text', maxlength: '60', placeholder: 'Autre pseudo (présent dans ses mains)',
+      'aria-label': 'Autre pseudo de l\'élève' });
+    const save = el('button', { type: 'submit', class: 'primary' }, 'Enregistrer ses pseudos');
+    const form = el('form', { class: 'pseudo-form', onsubmit: async (e) => {
+      e.preventDefault();
+      const names = [...list.querySelectorAll('input:checked')].map((i) => i.value);
+      if (other.value.trim()) names.push(other.value.trim());
+      if (!names.length) { message.textContent = 'Coche au moins un pseudo.'; return; }
+      const all = view.pseudos.every((p) => names.includes(p.name)) && names.length === view.pseudos.length;
+      save.disabled = true;
+      message.textContent = 'Relecture de ses mains…';
+      try {
+        const res = await fetch(pseudoApi(student) + '/choisir', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: all ? [] : names }) });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Enregistrement impossible.');
+        frame.dataset.src = '';
+        await loadStudents();
+        renderHeader();
+        refreshImported(student);
+      } catch (err) {
+        save.disabled = false;
+        message.textContent = err.message || String(err);
+      }
+    } }, list, el('div', { class: 'student-form' }, other, save));
+    return el('div', { class: 'pseudo-choice' }, el('h3', {}, 'Ses pseudos'),
+      el('p', { class: 'muted small' }, 'Coche les pseudos de l\'élève sur tous ses sites (sur GGPoker, son pseudo '
+        + 'dans les historiques est « Hero ») : seules les mains où l\'un d\'eux est le héros sont analysées, sous un '
+        + 'seul nom. Tous cochés : tous les héros de ses historiques sont lui.'), form, message);
   }
 
   // Les historiques importés : retirer les mains de l'un d'eux (il reste gardé, pour le rétablir).
@@ -722,15 +859,29 @@
     return out;
   }
 
-  // Un historique part en texte ; une archive zip en base64 (le serveur l'ouvre, dossiers compris).
-  function readUpload(f) {
-    if (!/\.zip$/i.test(f.name)) return f.text().then((content) => ({ name: f.name, content }));
-    return new Promise((ok, ko) => {
-      const reader = new FileReader();
-      reader.onload = () => ok({ name: f.name, zip: String(reader.result).split(',')[1] || '' });
-      reader.onerror = () => ko(reader.error);
-      reader.readAsDataURL(f);
-    });
+  // L'envoi par lots : les petits historiques ensemble, en texte (au plus BATCH_BYTES ou BATCH_FILES par envoi), les
+  // gros et les archives zip seuls, tels quels (le navigateur les lit au fil de l'envoi) : ni la page ni le serveur
+  // n'ont jamais tous les historiques en mémoire, quel que soit leur nombre ou leur taille.
+  const BATCH_BYTES = 8 * 1024 * 1024;
+  const BATCH_FILES = 200;
+  const alone = (f) => f.size > BATCH_BYTES || /\.zip$/i.test(f.name);
+
+  function batches(list) {
+    const out = [];
+    let current = [];
+    let size = 0;
+    for (const f of list) {
+      if (alone(f)) { out.push([f]); continue; }
+      if (current.length && (size + f.size > BATCH_BYTES || current.length >= BATCH_FILES)) {
+        out.push(current);
+        current = [];
+        size = 0;
+      }
+      current.push(f);
+      size += f.size;
+    }
+    if (current.length) out.push(current);
+    return out;
   }
 
   // L'import en cours (un à la fois) : à qui il est ('' : toi, sinon l'élève) et son dernier avancement, que la page
@@ -768,12 +919,13 @@
     box.querySelector('.progress-detail').textContent = view.detail || '';
   }
 
-  // POST avec l'avancement de l'envoi (fetch ne le donne pas) ; la réponse JSON, ou une erreur.
-  function postWithProgress(url, body, onProgress) {
+  // POST avec l'avancement de l'envoi (fetch ne le donne pas) ; la réponse JSON, ou une erreur. body : du texte (JSON),
+  // ou un fichier envoyé tel quel (type : application/octet-stream).
+  function postWithProgress(url, body, onProgress, type) {
     return new Promise((ok, ko) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url);
-      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.setRequestHeader('Content-Type', type || 'application/json');
       xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
       xhr.onload = () => {
         let data = {};
@@ -785,28 +937,17 @@
     });
   }
 
-  // Ce que fait le serveur : lire les historiques, puis mettre les analyses à jour ; et le temps qu'il reste, estimé
-  // d'après l'avancement depuis le début.
-  function jobView(job, student, started) {
-    const done = job.progress || 0;
+  // Le temps qu'il reste, estimé d'après l'avancement depuis le début.
+  function timeLeft(done, started) {
     const elapsed = (Date.now() - started) / 1000;
-    let left = '';
-    if (done > 0.05 && elapsed > 3) {
-      const s = Math.max(1, Math.round(elapsed * (1 - done) / done));
-      left = ' · encore environ ' + (s < 60 ? s + ' s' : Math.round(s / 60) + ' min');
-    }
-    if (job.step === 'analyses') {
-      return { step: student ? 'Mise à jour de ses analyses' : 'Mise à jour de tes analyses', value: 0.15 + 0.85 * done,
-        detail: count(job.loaded[0]) + ' mains relues sur ' + count(job.loaded[1]) + left };
-    }
-    const [files, total] = job.files, [hands, all] = job.hands;
-    return { step: 'Lecture des historiques', value: 0.15 + 0.85 * done,
-      detail: !total ? 'Préparation…' : 'Fichier ' + count(Math.min(files + 1, total)) + ' sur ' + count(total) + ' · '
-        + count(hands) + ' mains lues sur ' + count(all) + left };
+    if (done <= 0.03 || elapsed <= 3) return '';
+    const s = Math.max(1, Math.round(elapsed * (1 - done) / done));
+    return ' · encore environ ' + (s < 60 ? s + ' s' : Math.round(s / 60) + ' min');
   }
 
-  // Importer : lire les fichiers (5 % de la barre), les envoyer (10 %), puis le serveur les lit et met les analyses à
-  // jour (85 %, son avancement demandé toutes les 0,4 s).
+  // Importer : envoyer les historiques par lots, chacun lu et enregistré par le serveur à son arrivée (80 % de la
+  // barre, selon les octets et les fichiers envoyés et les mains lues du lot en cours, demandées toutes les 0,5 s),
+  // puis le serveur met les analyses à jour une seule fois (20 %, son avancement demandé toutes les 0,4 s).
   async function upload(fileList, result, student) {
     if (!fileList || !fileList.length) {
       result.textContent = 'Aucun historique (.txt) ni archive .zip dans ce que tu as déposé.';
@@ -820,26 +961,67 @@
     }
     importing = { owner, view: null };
     const list = [...fileList];
+    const total = list.reduce((s, f) => s + f.size, 0) || 1;
+    const base = student ? '/api/eleves/' + encodeURIComponent(student) + '/import' : '/api/import';
+    const status = (id) => fetch(base + '/' + encodeURIComponent(id)).then(async (res) => {
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Import impossible.');
+      return data;
+    });
+    const started = Date.now();
+    let job = null;
+    let closing = false;
     try {
-      let read = 0;
-      showProgress(owner, { step: 'Lecture des fichiers', value: 0, detail: '0 sur ' + count(list.length) });
-      const files = await Promise.all(list.map((f) => readUpload(f).then((item) => {
-        read += 1;
-        showProgress(owner, { step: 'Lecture des fichiers', value: 0.05 * read / list.length,
-          detail: count(read) + ' sur ' + count(list.length) });
-        return item;
-      })));
-      const base = student ? '/api/eleves/' + encodeURIComponent(student) + '/import' : '/api/import';
-      let job = await postWithProgress(base + '/lancer', JSON.stringify({ files }), (f) =>
-        showProgress(owner, { step: 'Envoi des fichiers', value: 0.05 + 0.1 * f, detail: Math.floor(100 * f) + ' %' }));
-      const started = Date.now();
+      showProgress(owner, { step: 'Envoi des historiques', value: 0, detail: 'Préparation…' });
+      job = await postWithProgress(base + '/ouvrir', '{}', () => {});
+      let sent = 0;   // octets des lots déjà lus par le serveur
+      let files = 0;  // fichiers déjà lus
+      for (const batch of batches(list)) {
+        const bytes = batch.reduce((s, f) => s + f.size, 0);
+        const from = job.hands[0];  // mains lues avant ce lot
+        let upFrac = 0;
+        let readFrac = 0;
+        const show = () => {
+          // les octets pour les gros historiques, le nombre de fichiers pour les nombreux petits
+          const frac = 0.3 * upFrac + 0.7 * readFrac;
+          const done = 0.7 * (sent + bytes * frac) / total + 0.3 * (files + batch.length * frac) / list.length;
+          showProgress(owner, { step: 'Envoi et lecture des historiques', value: 0.8 * done,
+            detail: 'Fichier ' + count(Math.min(files + batch.length, list.length)) + ' sur ' + count(list.length)
+              + ' · ' + count(job.hands[0]) + ' mains lues' + timeLeft(done, started) });
+        };
+        show();
+        const poll = setInterval(() => status(job.id).then((v) => {
+          job = v;
+          readFrac = v.hands[1] > from ? (v.hands[0] - from) / (v.hands[1] - from) : 0;
+          show();
+        }).catch(() => {}), 500);
+        const progress = (f) => { upFrac = f; show(); };
+        try {
+          if (batch.length === 1 && alone(batch[0])) {
+            job = await postWithProgress(base + '/' + job.id + '/fichier?nom=' + encodeURIComponent(batch[0].name),
+              batch[0], progress, 'application/octet-stream');
+          } else {
+            const items = await Promise.all(batch.map((f) => f.text().then((content) => ({ name: f.name, content }))));
+            job = await postWithProgress(base + '/' + job.id + '/lot', JSON.stringify({ files: items }), progress);
+          }
+        } finally {
+          clearInterval(poll);
+        }
+        if (job.state === 'error') throw new Error(job.error || 'Import impossible.');
+        sent += bytes;
+        files += batch.length;
+      }
+      closing = true;
+      job = await postWithProgress(base + '/' + job.id + '/terminer', '{}', () => {});
+      const analysing = Date.now();
       while (job.state === 'running') {
-        showProgress(owner, jobView(job, student, started));
+        const [loaded, toLoad] = job.loaded;
+        const done = job.step === 'analyses' && toLoad ? loaded / toLoad : 0;
+        showProgress(owner, { step: student ? 'Mise à jour de ses analyses' : 'Mise à jour de tes analyses',
+          value: 0.8 + 0.2 * done,
+          detail: count(loaded) + ' mains relues sur ' + count(toLoad) + timeLeft(done, analysing) });
         await new Promise((ok) => setTimeout(ok, 400));
-        const res = await fetch(base + '/' + encodeURIComponent(job.id));
-        const next = await res.json();
-        if (!res.ok) throw new Error(next.error || 'Import impossible.');
-        job = next;
+        job = await status(job.id);
       }
       if (job.state === 'error') throw new Error(job.error || 'Import impossible.');
       const data = job.result;
@@ -858,10 +1040,15 @@
         refreshImported(student);
       }
     } catch (err) {
+      // ce qui est déjà enregistré rejoint les analyses
+      if (job && job.id && !closing) {
+        postWithProgress(base + '/' + job.id + '/terminer', '{}', () => {}).catch(() => {});
+      }
       importing = null;
       const box = importResult(owner) || result;
       box.textContent = '';
-      box.append(el('p', { class: 'error' }, err.message || String(err)));
+      box.append(el('p', { class: 'error' }, (err.message || String(err))
+        + (job && job.id ? ' Les historiques lus avant l\'erreur sont gardés.' : '')));
     }
   }
 
@@ -1072,10 +1259,12 @@
       el('div', { class: 'box' },
         el('label', { class: 'field', for: 'bk-dest' }, 'Où sauvegarder', dest),
         el('label', { class: 'check' }, studies, el('span', {}, 'Avec les études (' + v.studies_count + ' sur cet ordinateur, '
-          + size(v.studies_size) + ') : seules les nouvelles sont copiées ensuite. Sans elles, l\'essentiel ne pèse que '
+          + size(v.studies_size) + ') : seules les nouvelles sont copiées ensuite, et celles qui viennent d\'être '
+          + 'compressées (leur copie, plus petite, remplace l\'ancienne). Sans elles, l\'essentiel ne pèse que '
           + size(v.essentials_size) + '.')),
         el('label', { class: 'check' }, auto, el('span', {}, 'Sauvegarder automatiquement après chaque calcul '
-          + '(résolution, choix des tailles, main analysée ; au plus une fois par quart d\'heure)')),
+          + '(résolution, choix des tailles, main analysée, compression des études ; au plus une fois par quart '
+          + 'd\'heure)')),
         el('div', { class: 'buttons' }, now, save, back),
         status),
       el('div', { class: 'box help' },
@@ -1121,7 +1310,9 @@
     else if (parts[0] === 'field' && parts.length === 3 && parts[1] === 'groupe') r = { view: 'field', tab: 'groupe', group: parts[2] };
     else if (parts[0] === 'parametres' && parts.length === 2) r = { view: 'parametres', tab: parts[1] };
     else if (parts[0] === 'etudes' && parts.length <= 2) r = { view: 'etudes', tab: !parts[1] || HU_SERIES.includes(parts[1]) ? 'hu' : parts[1] };
-    else if (parts[0] === 'entraineur' && parts.length === 1) r = { view: 'entraineur' };
+    else if (parts[0] === 'entraineur' && parts.length <= 2) {
+      r = { view: 'entraineur', tab: parts[1] === 'bluffcatch' ? 'bluffcatch' : 'solveur' };
+    }
     else if (parts[0] === 'eleve' && parts.length === 3) r = { view: 'eleve', student: parts[1], tab: parts[2] };
     else if (parts[0] === 'reference' && parts.length === 3) r = { view: 'reference', ref: parts[1], tab: parts[2] };
     if (!r) return;
@@ -1129,7 +1320,7 @@
       const query = new URLSearchParams(e.data.search || '');
       const fmt = query.get('format');
       const stakes = ['micro', 'milieu', 'hautes'].includes(query.get('limites')) ? query.get('limites') : null;
-      if (fmt && ['regs', 'recs'].includes(r.tab)) {
+      if (fmt && ['stats', 'regs', 'recs'].includes(r.tab)) {
         pref('format:/field', fmt === 'HU' ? 'HU' : 'ring');
         pref('limites:/field', stakes);
       }
@@ -1148,6 +1339,17 @@
     markActive();
   });
 
+  // La liste des adversaires : repliée par défaut, ouverte d'un clic sur « Adversaires » (le choix est gardé).
+  function showOpponents(open) {
+    $('opp-panel').hidden = !open;
+    $('opp-toggle').setAttribute('aria-expanded', String(open));
+  }
+  showOpponents(pref('opp-open') === '1');
+  $('opp-toggle').addEventListener('click', () => {
+    const open = $('opp-panel').hidden;
+    pref('opp-open', open ? '1' : null);
+    showOpponents(open);
+  });
   $('opp-search').addEventListener('input', renderSidebar);
   $('opp-fmt').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { pref('opp-fmt', b.dataset.fmt); renderSidebar(); }));
   [['opp-sort', 'hands'], ['opp-kind', '']].forEach(([id, fallback]) => {  // tri et type gardés d'une visite à l'autre

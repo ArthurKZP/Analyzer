@@ -74,9 +74,14 @@ def _step(solution: Solution, key: str, puts: dict, chosen: Optional[int]) -> di
             "chosen": chosen, "card": None}
 
 
-def node(line: list[str] | tuple[str, ...], solution: Optional[Solution] = None) -> dict:
-    """Nœud au bout de la ligne ; ValueError si la ligne sort de la solution."""
-    solution = solution or load_solution()
+def node(line: list[str] | tuple[str, ...], solution: Optional[Solution] = None,
+         ranges_set: Optional[str] = None) -> dict:
+    """Nœud au bout de la ligne ; ValueError si la ligne sort de la solution. ranges_set : le jeu de ranges (petites ou
+    hautes limites ; par défaut, la référence) : sa solution heads-up, et ses spots d'étude au flop."""
+    from . import custom_ranges, stake_charts
+    rset = ranges_set or stake_charts.reference_set()
+    band = stake_charts.set_band(rset)
+    solution = solution or (stake_charts.hu_solution(band) if band else load_solution())
     line = tuple(line)
     reach = {p: dict.fromkeys(classes(), 1.0) for p in ("sb", "bb")}
     puts = {"sb": 0.5, "bb": 1.0}
@@ -134,15 +139,18 @@ def node(line: list[str] | tuple[str, ...], solution: Optional[Solution] = None)
         "history": history, "hands": rows,
         "preflop": {"line": list(line), "key": key, "label": solution.nodes[key].label if key else None,
                     "keys": current["keys"], "family": family, "solution": solution.name,
-                    "description": solution.description},
+                    "description": f"{stake_charts.SET_NAMES[rset]} · "
+                                   + (solution.description or custom_ranges.reference_name(stake_charts.HU, rset)),
+                    "set": rset,
+                    "sets": stake_charts.set_choices(stake_charts.HU)},
     }
     if family:
         info = studyspots.FAMILIES[family]
-        studies = studyspots.spot_studies()
+        studies = studyspots.spot_studies(None, rset)
         series = set(studyspots.flop_set(family))
         spots = []
         for board in studyspots.family_boards(family):
-            spot = studyspots.StudySpot(family, studyspots.cards_of(board))
+            spot = studyspots.StudySpot(family, studyspots.cards_of(board), ranges_set=rset)
             spots.append({"id": spot.ident, "board": spot.board, "texture": spot.texture,
                           "solved": spot.ident in studies, "series": board in series})
         out["preflop"].update(family_label=info["label"], family_name=info["name"], spots=spots,

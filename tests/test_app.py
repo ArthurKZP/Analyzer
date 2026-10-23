@@ -13,6 +13,7 @@ from unittest import mock
 from analyzer.app.import_job import FINISH_COST, READ_COST, ImportJob
 from analyzer.app.library import Library, UnknownPlayer
 from analyzer.app.server import start
+from analyzer.errors import NotFound
 
 try:
     from .base import IsolatedHome, renumbered, seen_by
@@ -55,13 +56,23 @@ class LibraryTest(IsolatedHome):
         self.assertIn('href="spots#hand=HAND03"', preflop)
         self.assertIn("Bouton face au 3bet", lib.self_page("preflop"))
         self.assertIn("Résultats par adversaire", lib.self_page("bilan"))
+        self.assertIn("Tes résultats par situation", lib.self_page("bilan"))  # SRP IP attaquant, P3B OOP attaquant…
         self.assertIn('"K9s"', lib.self_page("mains"))  # mains de départ : les données de la page
         self.assertIn('id="data"', lib.self_page("spots"))
         self.assertIn("Les bluffs de Villain", lib.player_page("Villain", "bluffs"))
         population = lib.self_page("bluffs")
         self.assertIn("Les bluffs des réguliers", population)
-        self.assertIn("Un seul régulier.", population)  # plus de liste de noms en tête de page
-        self.assertIs(lib.field_page("bluffs"), population)  # Étude du field : le même onglet
+        self.assertIn("Un seul joueur parmi les réguliers.", population)  # plus de liste de noms en tête de page
+        # Étude du field : Réguliers et Récréatifs, chacun avec ses bluffs et sa value (format et limites en tête)
+        bluffs = lib.field_page("bluffs")
+        for text in ("Les bluffs des réguliers", "sous-onglet Value"):
+            self.assertIn(text, bluffs)
+        value = lib.field_page("value")
+        for text in ("La value des réguliers en heads-up", "Ce qui ressort", "Leur value, taille par taille",
+                     "Leur value montrée", "sous-onglet Bluffs"):
+            self.assertIn(text, value)
+        self.assertIn("Aucun joueur classé parmi les récréatifs", lib.field_page("rec-bluffs"))
+        self.assertIn("Aucun joueur classé parmi les récréatifs", lib.field_page("rec-value"))
         field = lib.field_page("joueurs")
         self.assertIn("<h2>En heads-up</h2>", field)
         self.assertIn('data-name="Villain"', field)
@@ -192,6 +203,38 @@ class LibraryTest(IsolatedHome):
             self.assertEqual(student.leaks_report().scope_hands["rec"], 4)
             with self.assertRaises(UnknownPlayer):
                 main.student("inconnu")
+            main.solves.shutdown()
+
+    def test_student_formats(self):
+        """Ce que joue un élève : un format qu'il ne joue pas sort de ses onglets et de ses analyses (ses mains
+        restent), et son bilan du solveur ne garde que les formats qu'il joue."""
+        with mock.patch.dict(os.environ, {"ANALYZER_DB": "", "ANALYZER_HOME": str(self.folder / "home")}):
+            main = Library(self.folder / "moi")
+            main.create_student("Léa", None)
+            student = main.student("lea")
+            six_max = (Path(__file__).parent / "sites" / "betclic_6max.txt").read_text(encoding="utf-8")
+            student.import_files([{"name": "hu.txt", "content": FIXTURE.read_text(encoding="utf-8")},
+                                  {"name": "6max.txt", "content": six_max}])
+            self.assertEqual([fmt for fmt, _ in student.leak_formats()], ["HU", "ring"])
+            self.assertIsNone(student.summary()["settings"]["plays"])
+            self.assertIn('<option value="all">', student.self_page("solveur"))  # toutes ses mains, ou un format
+            summary = student.set_formats(["ring"])
+            self.assertEqual(summary["settings"]["plays"], ["ring"])
+            self.assertEqual([fmt for fmt, _ in student.leak_formats()], ["ring"])
+            self.assertEqual(len(student.hands), 4)  # ses mains heads-up restent gardées
+            bilan = student.self_page("solveur")
+            self.assertNotIn('<h2 id="hu">', bilan)
+            self.assertNotIn('<option value="all">', bilan)
+            with self.assertRaises(NotFound):
+                student.solver_panel("HU")
+            self.assertIsNone(main.summary()["settings"]["plays"])  # tes formats à toi ne changent pas
+            for wrong in ([], ["6max"], "ring"):
+                with self.assertRaises(ValueError):
+                    student.set_formats(wrong)
+            student.set_formats(None)  # tout, de nouveau
+            self.assertEqual([fmt for fmt, _ in student.leak_formats()], ["HU", "ring"])
+            with self.assertRaises(ValueError):
+                main.set_formats(["HU"])  # seulement pour un élève
             main.solves.shutdown()
 
     def test_solve_states(self):
@@ -327,6 +370,39 @@ class LibraryTest(IsolatedHome):
         self.assertEqual(len(lib.hands), 4)
         self.assertIsNone(lib.import_status("inconnu"))
 
+    def test_import_in_parts(self):
+        """Un gros import arrive en plusieurs envois (la page Importer : des lots de petits historiques, les gros et les
+        archives seuls, leurs octets tels quels) ; les analyses ne se mettent à jour qu'une fois, à la fin."""
+        from analyzer.errors import NotFound
+        lib = Library(self.folder)
+        self.addCleanup(lib.solves.shutdown)
+        content = FIXTURE.read_text(encoding="utf-8")
+        job = lib.open_import()
+        self.assertEqual((job["state"], job["step"]), ("running", "lecture"))
+        with mock.patch.object(lib, "reload", wraps=lib.reload) as reload:
+            view = lib.import_part(job["id"], [{"name": "a.txt", "content": content},
+                                               {"name": "vide.txt", "content": ""}])
+            self.assertEqual((view["files"], view["hands"]), ([2, 2], [4, 4]))
+            data = make_zip({"b/hu.txt": renumbered(content, "1").encode("cp1252")})
+            lib.import_part(job["id"], [{"name": "archive.zip", "data": data}])
+            view = lib.import_part(job["id"], [{"name": "c.txt", "data": renumbered(content, "2").encode("utf-16")}])
+            self.assertEqual(view["hands"], [12, 12])
+            reload.assert_not_called()  # rien n'est relu avant la fin
+            lib.close_import(job["id"])
+            deadline = time.time() + 30
+            while lib.import_status(job["id"])["state"] == "running" and time.time() < deadline:
+                time.sleep(0.02)
+            reload.assert_called_once()
+        done = lib.import_status(job["id"])
+        self.assertEqual((done["state"], done["result"]["added"]), ("done", 12))
+        self.assertEqual([f["status"] for f in done["result"]["files"]],
+                         ["importé", "vide", "importé", "archive : 1 historique(s)", "importé"])
+        self.assertEqual(len(lib.hands), 12)
+        with self.assertRaises(NotFound):  # fini
+            lib.import_part(job["id"], [{"name": "d.txt", "content": content}])
+        with self.assertRaises(NotFound):
+            lib.close_import("inconnu")
+
 
 def make_zip(entries: dict) -> bytes:
     import io
@@ -435,7 +511,8 @@ class ServerTest(unittest.TestCase):
                 s.close()
             time.sleep(1.5)
             self.assertEqual(self.request("GET", "/moi/bluffs")[0], 200)
-            self.assertEqual(self.request("GET", "/field/bluffs")[0], 200)
+            for page in ("bluffs", "value", "rec-bluffs", "rec-value"):
+                self.assertEqual(self.request("GET", f"/field/{page}")[0], 200, page)
             self.assertEqual(self.request("GET", "/field/joueurs")[0], 200)
             self.assertEqual(self.request("GET", "/field/inconnue")[0], 404)
         self.assertNotIn("Traceback", err.getvalue())
@@ -466,6 +543,14 @@ class ServerTest(unittest.TestCase):
         status, _, body = self.request("GET", "/api/coups/HAND02")  # la main complète, pour la rejouer
         self.assertEqual((status, len(json.loads(body)["x"]) > 3), (200, True))
         self.assertEqual(self.request("GET", "/api/coups/INCONNUE")[0], 404)
+        status, ctype, body = self.request("GET", "/rejouer/HAND04")  # le replayer, même d'une main finie au préflop
+        self.assertEqual((status, b"/static/replayer.js" in body), (200, True))
+        status, _, body = self.request("GET", "/api/rejouer/HAND04")
+        self.assertEqual((status, json.loads(body)["board"]), (200, []))
+        self.assertEqual(self.request("GET", "/api/rejouer/INCONNUE")[0], 404)
+        self.assertEqual(self.request("GET", "/api/eleves/inconnu/rejouer/HAND04")[0], 404)
+        self.assertEqual(self.request("GET", "/static/replayer.js")[0], 200)
+        self.assertIn(b"Bluffcatch : tes mains", self.request("GET", "/entraineur/bluffcatch")[2])
         self.assertEqual(json.loads(self.request("GET", "/api/coups?adversaire=Villain&reach=x")[2])["total"], 4)
         status, _, body = self.request("GET", "/api/mains?main=K9s&sit=open&pos=BTN")  # d'où vient le résultat
         self.assertEqual((status, json.loads(body)["n"]), (200, 1))
@@ -486,6 +571,22 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/resoudre/inconnu/arreter", "{}", headers)[0], 404)
         foreign = {"Origin": "http://evil.example", **headers}
         self.assertEqual(self.request("POST", "/api/resoudre", json.dumps({"hand": "HAND02"}), foreign)[0], 403)
+        # n'analyser qu'une partie des mains : combien, et lesquelles (sans solveur installé, rien ne part)
+        for path in ("/api/revue/lancer", "/api/leaks/lancer"):
+            status, _, body = self.request("POST", path, json.dumps({"ordre": "pertes", "limite": 5}), headers)
+            self.assertEqual((status, json.loads(body)["busy"]), (200, 0))
+            for wrong in ({"ordre": "toutes"}, {"limite": -1}, {"limite": True}, {"leak": 3}, {"format": "6max"}):
+                self.assertEqual(self.request("POST", path, json.dumps(wrong), headers)[0], 400)
+        # format par format (heads-up, tables à plusieurs, toutes tes mains), et le panneau de l'onglet d'un format
+        for fmt in ("HU", "all"):
+            status, _, body = self.request("POST", "/api/revue/lancer", json.dumps({"format": fmt}), headers)
+            self.assertEqual((status, json.loads(body)["busy"]), (200, 0))
+        self.assertEqual(json.loads(self.request("GET", "/api/revue?format=ring")[2])["total"], 0)
+        status, ctype, body = self.request("GET", "/api/revue/panneau?format=HU")
+        self.assertEqual(status, 200)
+        self.assertIn("Face au solveur — heads-up", body.decode("utf-8"))
+        self.assertEqual(self.request("GET", "/api/revue/panneau?format=ring")[0], 404)  # pas de tables à plusieurs
+        self.assertEqual(self.request("GET", "/api/revue/panneau")[0], 404)
 
     def test_explorer(self):
         status, ctype, body = self.request("GET", "/explorateur/HAND02")
@@ -554,7 +655,48 @@ class ServerTest(unittest.TestCase):
         status, _, body = self.request("POST", "/api/ranges/defaut/enregistrer", save, headers)
         self.assertEqual((status, json.loads(body)["adjusted"]), (200, "ligne"))
         state = json.loads(self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "HAND02"}), headers)[2])
+        self.assertEqual((state["adjusted"], state["set"]), (None, "hautes"))  # tes mains à NL500 : les hautes limites
+        hautes = json.dumps({"context": context, "ranges": {"BB": "AA,KK"}, "jeu": "hautes"})
+        status, _, body = self.request("POST", "/api/ranges/defaut/enregistrer", hautes, headers)
+        self.assertEqual((status, json.loads(body)["set"]), (200, "hautes"))
+        state = json.loads(self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "HAND02"}), headers)[2])
         self.assertEqual(state["adjusted"], "ligne")  # ton pot 3bet joué prend la range de la ligne
+        view = json.loads(self.request("GET", "/api/ranges/defaut?jeu=hautes")[2])
+        self.assertEqual((view["set"], view["choice"], [s["hands"] for s in view["sets"]]), ("hautes", "auto", [0, 4]))
+        self.request("POST", "/api/ranges/defaut/effacer", json.dumps({"context": context, "jeu": "hautes"}), headers)
+        # tes ranges par défaut : toujours celles des petites limites
+        status, _, body = self.request("POST", "/api/ranges/defaut/choix", json.dumps({"choix": "petites"}), headers)
+        self.assertEqual((status, json.loads(body)), (200, {"choice": "petites"}))
+        state = json.loads(self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "HAND02"}), headers)[2])
+        self.assertEqual((state["adjusted"], state["set"]), ("ligne", "petites"))
+        self.assertEqual(self.request("POST", "/api/ranges/defaut/choix", json.dumps({"choix": "x"}), headers)[0], 400)
+        self.request("POST", "/api/ranges/defaut/choix", json.dumps({"choix": "auto"}), headers)
+        # la référence : les études et l'explorateur préflop partent des ranges des hautes limites
+        self.assertEqual(json.loads(self.request("GET", "/api/ranges/defaut")[2])["reference"], "petites")
+        status, _, body = self.request("POST", "/api/ranges/defaut/reference", json.dumps({"reference": "hautes"}),
+                                       headers)
+        self.assertEqual((status, json.loads(body)), (200, {"reference": "hautes"}))
+        node = json.loads(self.request("POST", "/api/explorateur/preflop", json.dumps({"line": ["raise", "call"]}),
+                                       headers)[2])
+        self.assertEqual((node["preflop"]["set"], node["preflop"]["spots"][0]["id"]),
+                         ("hautes", "spot:srp:KsKd4c:hautes"))
+        self.assertEqual([x["reference"] for x in node["preflop"]["sets"]], [False, True])
+        node = json.loads(self.request("POST", "/api/explorateur/preflop",
+                                       json.dumps({"line": ["raise", "call"], "set": "petites"}), headers)[2])
+        self.assertEqual(node["preflop"]["spots"][0]["id"], "spot:srp:KsKd4c")  # l'autre jeu, au choix
+        flop = json.loads(self.request("POST", "/api/explorateur/flop", json.dumps(
+            {"family": "srp", "board": ["Ah", "7d", "2c"]}), headers)[2])
+        self.assertEqual(flop["id"], "spot:srp:Ah7d2c:hautes")
+        page = self.request("GET", "/etudes")[2].decode()  # les études s'ouvrent sur la référence
+        self.assertIn("Heads-up · SRP · hautes limites", page)
+        self.assertIn("NL200 et plus · la référence", page)
+        self.assertNotIn("ne sont pas la référence", page)
+        self.assertIn("ne sont pas la référence", self.request("GET", "/etudes?ranges=petites")[2].decode())
+        for path, bad in (("/api/ranges/defaut/reference", {"reference": "moyennes"}),
+                          ("/api/explorateur/preflop", {"line": [], "set": "moyennes"}),
+                          ("/api/explorateur/flop", {"family": "srp", "board": ["Ah", "7d", "2c"], "set": "x"})):
+            self.assertEqual(self.request("POST", path, json.dumps(bad), headers)[0], 400, (path, bad))
+        self.request("POST", "/api/ranges/defaut/reference", json.dumps({"reference": "petites"}), headers)
         for path, bad in (("/api/ranges/defaut/enregistrer", {"context": context, "ranges": {"SB": "AA"}}),
                           ("/api/ranges/defaut/enregistrer", {"context": context, "ranges": {"BB": "AXo"}}),
                           ("/api/ranges/defaut/enregistrer", {"context": context}),
@@ -570,6 +712,8 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((status, json.loads(body)["cleared"]), (200, True))
         state = json.loads(self.request("POST", "/api/explorateur/ranges", json.dumps({"hand": "HAND02"}), headers)[2])
         self.assertEqual(state["adjusted"], None)
+        self.assertEqual(self.request("POST", "/api/ranges/defaut", json.dumps({"context": context, "jeu": "x"}),
+                                      headers)[0], 400)
 
     def test_studies_page(self):
         status, _, body = self.request("GET", "/etudes")
@@ -594,11 +738,23 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((status, json.loads(body)["total"], json.loads(body)["covered"]), (200, 0, 0))
         status, _, body = self.request("POST", "/api/spots/6max/arreter", "{}", headers)
         self.assertEqual((status, json.loads(body)["busy"]), (200, 0))
+        # les ranges des hautes limites : leurs flops manquants se résolvent aussi en lot
+        status, _, body = self.request("GET", "/etudes?ranges=hautes")
+        for text in ("Résoudre tous les flops heads-up hautes limites manquants", 'data-ranges="hautes"',
+                     "0 / 24</b> flops résolus"):
+            self.assertIn(text.encode(), body)
+        state = json.loads(self.request("GET", "/api/spots/hu?ranges=hautes")[2])
+        self.assertEqual((state["ranges"], state["total"]), ("hautes", 72))
+        series = json.loads(self.request("GET", "/api/spots/srp?ranges=hautes")[2])
+        self.assertEqual((series["ranges"], series["rows"][0]["id"]), ("hautes", "spot:srp:KsKd4c:hautes"))
+        status, _, body = self.request("POST", "/api/spots/srp/resoudre?ranges=hautes", "{}", headers)
+        self.assertEqual((status, json.loads(body)["ranges"]), (200, "hautes"))
 
     def test_study_spots(self):
         status, _, body = self.request("GET", "/explorateur/spot:srp:KsKd4c")
         self.assertEqual(status, 200)
         self.assertIn(b'data-hand="spot:srp:KsKd4c"', body)
+        self.assertIn(b'id="b-replay"', body)  # « Rejouer ↗ » : montré pour une main jouée, pas pour un spot
         for bad in ("/explorateur/spot:srp:KsKs4c", "/explorateur/spot:autre:KsKd4c", "/api/spots/autre"):
             self.assertEqual(self.request("GET", bad)[0], 404, bad)
         series = json.loads(self.request("GET", "/api/spots/srp")[2])
@@ -657,6 +813,13 @@ class ServerTest(unittest.TestCase):
         for page in ("leaks", "preflop", "solveur", "spots", "mains"):
             self.assertEqual(self.request("GET", f"/eleve/anna/{page}")[0], 200, page)
         self.assertEqual(self.request("GET", "/api/eleves/anna/mains?main=AA")[0], 200)
+        for wrong in ({"formats": ["6max"]}, {"formats": []}, ["HU"]):  # ce qu'elle joue
+            self.assertEqual(self.request("POST", "/api/eleves/anna/formats", json.dumps(wrong), headers)[0], 400)
+        status, _, data = self.request("POST", "/api/eleves/anna/formats", json.dumps({"formats": None}), headers)
+        self.assertEqual((status, json.loads(data)["settings"]["plays"]), (200, None))
+        panel = self.request("GET", "/api/eleves/anna/revue/panneau?format=HU")[2].decode("utf-8")
+        self.assertIn('data-api="/api/eleves/anna/revue"', panel)
+        self.assertEqual(json.loads(self.request("GET", "/api/eleves/anna/revue?format=HU")[2])["total"], 2)
         self.assertEqual(json.loads(self.request("GET", "/api/eleves/anna/coups")[2])["total"], 4)
         self.assertEqual(self.request("GET", "/api/eleves/anna/coups/HAND01")[0], 200)
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
@@ -699,6 +862,60 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.request("POST", "/api/eleves/inconnu/import", body, headers)[0], 404)
         self.assertEqual(self.request("POST", "/api/eleves", json.dumps({"name": ""}), headers)[0], 400)
         self.assertEqual(self.request("GET", "/moi/leaks")[0], 200)
+
+    def test_tracking_routes(self):
+        """Suivre un leak dans le temps : depuis quand, puis ne plus le suivre ; la page Suivi."""
+        headers = {"Content-Type": "application/json"}
+        follow = {"leak": "pf:btn:open", "depuis": "2026-03-01", "titre": "Bouton : open"}
+        status, _, data = self.request("POST", "/api/suivi", json.dumps(follow), headers)
+        self.assertEqual((status, json.loads(data)["suivis"]["pf:btn:open"]["since"]), (200, "2026-03-01"))
+        status, _, page = self.request("GET", "/moi/suivi")
+        self.assertEqual(status, 200)
+        self.assertIn("Bouton : open", page.decode())
+        status, _, data = self.request("POST", "/api/suivi", json.dumps({"leak": "pf:btn:open", "depuis": None}),
+                                       headers)
+        self.assertEqual((status, json.loads(data)["suivis"]), (200, {}))
+        for bad in ({"leak": "", "depuis": "2026-03-01"}, {"leak": "k", "depuis": "hier"}, {"leak": "k", "depuis": 3},
+                    {"leak": "k", "depuis": "2026-03-01", "titre": 4}, ["k"]):
+            self.assertEqual(self.request("POST", "/api/suivi", json.dumps(bad), headers)[0], 400, bad)
+        self.assertEqual(self.request("POST", "/api/eleves/inconnu/suivi", json.dumps(follow), headers)[0], 404)
+
+    def test_stake_charts_routes(self):
+        """Paramètres › Ranges préflop : des charts par niveau de limites, importés puis retirés."""
+        headers = {"Content-Type": "application/json"}
+        view = json.loads(self.request("GET", "/api/ranges/limites")[2])
+        heads_up = next(f for f in view["formats"] if f["format"] == "HU")
+        self.assertEqual([(b["band"], b["hands"], b["charts"]) for b in heads_up["bands"]],
+                         [("micro", 0, None), ("milieu", 0, None), ("hautes", 4, None)])
+        charts = {"source": "Essai", "nodes": {"sb_open": {"raise": "AA"}}}
+        body = {"format": "HU", "limites": "hautes", "charts": charts}
+        status, _, data = self.request("POST", "/api/ranges/limites", json.dumps(body), headers)
+        self.assertEqual(status, 200)
+        heads_up = next(f for f in json.loads(data)["formats"] if f["format"] == "HU")
+        self.assertEqual(heads_up["bands"][2]["charts"]["source"], "Essai")
+        try:
+            self.assertIn("Charts des hautes limites", self.request("GET", "/moi/preflop")[2].decode())
+            self.assertIn("Préflop jugé avec tes charts par limites", self.request("GET", "/moi/leaks")[2].decode())
+        finally:
+            status, _, data = self.request("POST", "/api/ranges/limites/retirer",
+                                           json.dumps({"format": "HU", "limites": "hautes"}), headers)
+        self.assertEqual(status, 200)
+        for bad in ({"format": "HU", "limites": "enorme", "charts": {"nodes": {"sb_open": {"raise": "AA"}}}},
+                    {"format": "HU", "limites": "hautes", "charts": {"nodes": {"sb_open": {"raise": "ZZ"}}}},
+                    {"format": "HU", "limites": "hautes"}, {"format": 3, "limites": "hautes", "charts": {}}):
+            self.assertEqual(self.request("POST", "/api/ranges/limites", json.dumps(bad), headers)[0], 400, bad)
+        # l'export texte des tables à plusieurs (GTO Wizard), combo par combo
+        text = {"format": "6-max", "limites": "hautes", "texte": "VS OPEN 2.5x UTG\nHJ\nAcAd: 1,AhAs: 1,KcKd: 0.5"}
+        status, _, data = self.request("POST", "/api/ranges/limites", json.dumps(text), headers)
+        six = next(f for f in json.loads(data)["formats"] if f["format"] == "6-max")
+        self.assertEqual((status, six["bands"][2]["charts"]["covers"]),
+                         (200, "pas d'open (ceux de la référence) ; défense face à l'open : UTG ; pas de réponse "
+                               "au 3bet"))
+        self.request("POST", "/api/ranges/limites/retirer", json.dumps({"format": "6-max", "limites": "hautes"}),
+                     headers)
+        page = self.request("GET", "/parametres/ranges")[2].decode()
+        self.assertIn("Tes ranges par défaut", page)
+        self.assertNotIn("Importer…", page)  # plus d'import de charts dans la page : tes ranges s'y règlent
 
     def test_tree_builder_routes(self):
         headers = {"Content-Type": "application/json"}
@@ -756,6 +973,28 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(job["result"]["files"][0]["status"], "déjà importé")
         self.assertEqual(self.request("GET", "/api/import/inconnu")[0], 404)
         self.assertEqual(self.request("POST", "/api/import/lancer", "pas du json")[0], 400)
+
+    def test_import_in_parts_endpoint(self):
+        """La page Importer envoie un gros historique tel quel (ses octets), puis termine l'import (ici, le même
+        historique : les mains du serveur, partagé par ces tests, ne changent pas)."""
+        job = json.loads(self.request("POST", "/api/import/ouvrir", "{}")[2])
+        raw = FIXTURE.read_text(encoding="utf-8").encode("utf-8")
+        status, _, data = self.request("POST", f"/api/import/{job['id']}/fichier?nom=gros%20historique.txt", raw,
+                                       {"Content-Type": "application/octet-stream"})
+        self.assertEqual((status, json.loads(data)["hands"]), (200, [4, 4]))
+        status, _, data = self.request("POST", f"/api/import/{job['id']}/lot", json.dumps({"files": []}),
+                                       {"Content-Type": "application/json"})
+        self.assertEqual(status, 200)
+        job = json.loads(self.request("POST", f"/api/import/{job['id']}/terminer", "{}")[2])
+        deadline = time.time() + 20
+        while job["state"] == "running" and time.time() < deadline:
+            time.sleep(0.05)
+            job = json.loads(self.request("GET", f"/api/import/{job['id']}")[2])
+        self.assertEqual((job["state"], job["result"]["added"]), ("done", 0))
+        self.assertEqual([(f["name"], f["status"], f["hands"]) for f in job["result"]["files"]],
+                         [("gros historique.txt", "déjà importé", 4)])
+        self.assertEqual(self.request("POST", f"/api/import/{job['id']}/terminer", "{}")[0], 404)  # déjà fini
+        self.assertEqual(self.request("POST", "/api/import/inconnu/fichier?nom=a.txt", b"x")[0], 404)
 
 
 if __name__ == "__main__":

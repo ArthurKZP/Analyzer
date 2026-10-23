@@ -82,6 +82,21 @@ class SchemaAndHandsTest(DatabaseCase):
         with self.assertRaises(ValueError):
             hands.import_text(self.db, me, "x.txt", "Partie n° 1")
 
+    def test_import_by_chunks(self):
+        """Un très gros historique se lit et s'enregistre par blocs de mains : jamais entier en mémoire une fois lu ;
+        ce qui en est lu (mains, sites, formats, héros) se garde sans ses mains."""
+        me = hands.space(self.db, "moi", "Moi")
+        with mock.patch.object(hands, "IMPORT_CHUNK", 3):  # 4 mains : deux blocs
+            read, new, again = hands.import_text(self.db, me, "hu.txt", SAMPLE)
+        self.assertEqual((len(read), new, again), (4, 4, False))
+        self.assertEqual((read.sites, read.formats, dict(read.heroes)), ({"Betclic"}, {"HU": 4}, {"Hero": 4}))
+        self.assertEqual(self.db.value("SELECT mains FROM fichiers WHERE nom = 'hu.txt'"), 4)
+        again = hands.import_text(self.db, me, "copie.txt", SAMPLE)  # déjà importé : pas relu
+        self.assertEqual((len(again[0]), again[1:]), (4, (0, True)))
+        blocks = ["*** HEADER ***" + b for b in SAMPLE.split("*** HEADER ***")[1:]]
+        self.assertEqual(hands.import_text(self.db, me, "doublons.txt", "".join(blocks[1:]) + " ")[1:], (0, True))
+        self.assertIsNone(self.db.value("SELECT id FROM fichiers WHERE nom = 'doublons.txt'"))  # rien à garder
+
     def test_remove_and_restore_files(self):
         """Retirer un historique efface ses mains, sauf celles qu'un historique importé après lui contient aussi ; il reste
         gardé : le dossier des mains ne le réimporte pas, et il se rétablit (ou s'importe à nouveau)."""

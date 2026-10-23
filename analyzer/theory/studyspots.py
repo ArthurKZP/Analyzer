@@ -139,16 +139,21 @@ def is_series(family: str) -> bool:
     return family in FAMILIES or family in RING_FAMILIES
 
 
-def ring_spot_ranges(family: str) -> dict[str, dict[str, float]]:
-    """Les ranges d'une famille 6-max, tirées de tes charts ; postflop.Unsupported s'ils manquent."""
-    from . import ring_ranges
+def ring_spot_ranges(family: str, band: Optional[str] = None) -> dict[str, dict[str, float]]:
+    """Les ranges d'une famille 6-max, tirées de tes charts (band : ceux de ce niveau de limites, là où ils en
+    donnent) ; postflop.Unsupported s'ils manquent."""
+    from . import ring_ranges, stake_charts
     info = ring_family(family)
     if info is None:
         raise NotFound(family)
-    found = ring_ranges.lookup(RING_FORMAT, list(info["steps"]))
+    if band:
+        found = stake_charts.ring_lookup(RING_FORMAT, list(info["steps"]), band)
+        found = found[:2] if found else None
+    else:
+        found = ring_ranges.lookup(RING_FORMAT, list(info["steps"]))
     if found is None or any(p not in found[1] for p in (info["oop"], info["ip"])):
         raise postflop.Unsupported(f"Pas de ranges 6-max pour « {ring_ranges.describe(list(info['steps']))} » : "
-                                   "charge les charts 6-max (onglet Tables à plusieurs de Mon jeu) ou "
+                                   "charge les charts 6-max (Paramètres › Ranges préflop) ou "
                                    f"{ring_ranges.missing_hint(RING_FORMAT)}.")
     return {p: dict(found[1][p]) for p in (info["oop"], info["ip"])}
 
@@ -331,25 +336,34 @@ class StudySpot(postflop.SpotTree):
     # des Paramètres (custom_ranges.for_spots) ; les séries, plans et références restent faits avec les ranges de la
     # solution.
     custom: bool = field(default=False, repr=False)
+    # Le jeu de ranges (stake_charts.SETS) : « petites » (la solution heads-up, les charts 6-max fournis), ou
+    # « hautes » (les charts des hautes limites, sinon les mêmes ; tes ranges de ligne des hautes limites) ; par défaut
+    # la référence (stake_charts.reference_set) : celui des séries, de leurs plans de jeu et de l'entraîneur. Dans
+    # l'autre jeu, chaque flop est une étude à part.
+    ranges_set: str = ""
 
     def __post_init__(self):
-        from . import custom_ranges
+        from . import custom_ranges, stake_charts
+        if not self.ranges_set:
+            self.ranges_set = stake_charts.reference_set()
         info = family_info(self.family)
         self.name, self.label = info["name"], info["label"]
         self.pot_bb, self.stack_bb = info["pot"], info["stack"]
+        band = stake_charts.set_band(self.ranges_set)
         if self.family not in FAMILIES:
             self.oop, self.ip = info["oop"], info["ip"]
-            self.ranges = ring_spot_ranges(self.family)
+            self.ranges = ring_spot_ranges(self.family, band)
             self.context = custom_ranges.context(RING_FORMAT, info["steps"])
         else:
-            solution = self.solution or load_solution()
+            solution = self.solution or (stake_charts.hu_solution(band) if band else load_solution())
             self.ranges = {self.oop: postflop.range_weights(solution, *info["oop"]),
                            self.ip: postflop.range_weights(solution, *info["ip"])}
             self.context = custom_ranges.context("HU", info["steps"])
         self.reference = {p: dict(r) for p, r in self.ranges.items()}
         self.adjusted = None
         if self.custom:
-            scope, mine = custom_ranges.lookup(self.ident, self.context if custom_ranges.for_spots() else None)
+            scope, mine = custom_ranges.lookup(self.ident, self.context if custom_ranges.for_spots() else None,
+                                               self.ranges_set)
             for p in (self.oop, self.ip):
                 if p in mine:
                     self.ranges[p], self.adjusted = dict(mine[p]), scope
@@ -377,11 +391,13 @@ class StudySpot(postflop.SpotTree):
         if self.sizes_from:
             where = f", {family_title(self.sizes_family)}" if self.sizes_family else ""
             text += " (tailles de " + board_text(cards_of(self.sizes_from)) + where + ")"
+        if self.ranges_set == "hautes":
+            text += " · ranges des hautes limites"
         return text
 
     @property
     def ident(self) -> str:
-        return f"spot:{self.family}:{''.join(self.board)}"
+        return f"spot:{self.family}:{''.join(self.board)}" + ("" if self.ranges_set == "petites" else ":hautes")
 
     @property
     def texture(self) -> str:
@@ -398,8 +414,9 @@ class StudySpot(postflop.SpotTree):
     def after_solve(self, session: postflop.Session) -> None:
         """Juste après la résolution, l'étude encore ouverte : son plan de jeu (quelques secondes)."""
         from . import coach
-        # les plans de jeu (heads-up et 6-max) : la théorie, sans tes ranges ajustées ni ton arbre modifié
-        if not self.adjusted and not getattr(self, "edits", None):
+        # les plans de jeu (heads-up et 6-max) : la théorie, sans tes ranges ajustées ni ton arbre modifié, avec les
+        # ranges de la référence
+        if not self.adjusted and not getattr(self, "edits", None) and self.ranges_set == reference_set():
             coach.extract_and_save(session, self)
 
     def write_meta(self, request: dict, raw: dict, session: Optional[postflop.Session] = None) -> None:
@@ -423,6 +440,7 @@ class StudySpot(postflop.SpotTree):
             "pot": self.pot_bb, "stack": self.stack_bb, "iterations": raw.get("iterations"),
             "exploit_pct": raw.get("exploit_pct"), "seconds": raw.get("seconds"), "menu": self.menu_text(),
             "created": time.strftime("%d/%m/%Y %H:%M"), "sizes_from": self.sizes_from,
+            "ranges": self.ranges_set,
         }
         if session is not None:
             meta["summary"] = flop_summary(session, self.family)
@@ -505,7 +523,8 @@ def _current(meta: dict) -> Optional[bool]:
 _SPOT_STUDIES: dict[tuple, dict[str, dict]] = {}  # signature -> études à jour de toutes les familles
 
 
-DEPENDS = ("tailles", "ranges", "ranges-ajustees", postflop.SETTINGS)  # ce dont dépend l'arbre d'un spot
+# ce dont dépend l'arbre d'un spot (avec les charts par limites : les spots des hautes limites)
+DEPENDS = ("tailles", "ranges", "ranges-ajustees", postflop.SETTINGS, "charts-limites")
 
 
 def _studies_signature() -> tuple:
@@ -519,12 +538,26 @@ def _studies_signature() -> tuple:
     return documents.revision(db.current(), "etudes", *DEPENDS) + (str(folder), stamp)
 
 
-def spot_studies(families: Optional[tuple[str, ...]] = None) -> dict[str, dict]:
+def reference_set() -> str:
+    """Le jeu de ranges des séries (stake_charts.reference_set) : leurs études, plans de jeu et l'entraîneur."""
+    from . import stake_charts
+    return stake_charts.reference_set()
+
+
+def ident_of(family: str, board: str, ranges_set: Optional[str] = None) -> str:
+    """« spot:srp:KsKd4c », ou « spot:srp:KsKd4c:hautes » avec les ranges des hautes limites (par défaut, celles de
+    la référence)."""
+    rset = ranges_set or reference_set()
+    return f"spot:{family}:{board}" + ("" if rset == "petites" else f":{rset}")
+
+
+def spot_studies(families: Optional[tuple[str, ...]] = None, ranges_set: Optional[str] = None) -> dict[str, dict]:
     """Fiches des spots d'étude enregistrés avec l'arbre actuel de leur spot, par identifiant ; par défaut ceux
-    des familles heads-up (plans de jeu, entraîneur, coach et leakfinding ne connaissent qu'elles). Recalculées
-    seulement quand une étude, un choix de tailles, une range ou la précision change (toutes les familles à la
-    fois : la page du plan de jeu en demande treize)."""
+    des familles heads-up (plans de jeu, entraîneur, coach et leakfinding ne connaissent qu'elles), avec les ranges
+    de la référence (ranges_set : un autre jeu). Recalculées seulement quand une étude, un choix de tailles, une
+    range ou la précision change (toutes les familles à la fois : la page du plan de jeu en demande treize)."""
     wanted = families or tuple(FAMILIES)
+    ranges_set = ranges_set or reference_set()
     signature = _studies_signature()
     found = _SPOT_STUDIES.get(signature)
     if found is None:
@@ -532,7 +565,8 @@ def spot_studies(families: Optional[tuple[str, ...]] = None) -> dict[str, dict]:
         found = _SPOT_STUDIES[signature] = {
             m["id"]: m for m in postflop.list_studies()
             if m.get("kind") == "spot" and known_family(str(m.get("family", ""))) and _current(m)}
-    return {k: dict(v) for k, v in found.items() if v.get("family") in wanted}
+    return {k: dict(v) for k, v in found.items()
+            if v.get("family") in wanted and v.get("ranges", "petites") == ranges_set}
 
 
 def stale_spot_studies() -> list[dict]:
@@ -642,6 +676,17 @@ def sizes_for(family: str, board: list[str]) -> Optional[tuple[dict, str, bool]]
     return (dict(found[0]["plan"]), found[1], found[2]) if found else None
 
 
+def tree_plan(family: str, board: list[str]) -> dict:
+    """Les tailles de l'arbre d'une étude de ce flop, comme StudySpot les prend : son propre choix, sinon (hors de la
+    série) celui du flop choisi le plus proche ; {} : les tailles par défaut (postflop.default_sizes)."""
+    text = "".join(board[:3])
+    chosen = load_selection(family, text)
+    if chosen is None and text not in flop_set(family):
+        near = closest_selection(family, board[:3])
+        chosen = near[1] if near else None
+    return dict(chosen["plan"]) if chosen and chosen.get("plan") else {}
+
+
 def hand_sizes_for(family: str, board: list[str]) -> Optional[tuple[dict, str, bool]]:
     """Les tailles théoriques pour l'arbre d'un coup joué : celles du flop (sizes_for), avec une seule taille par
     situation à la river (la plus employée des deux choisies) et sans relance à la river, sauf jouée, comme dans
@@ -651,14 +696,16 @@ def hand_sizes_for(family: str, board: list[str]) -> Optional[tuple[dict, str, b
     if not found:
         return None
     chosen, near, exact = found
-    candidates = {s.key: s.candidates for s in sizing.situations(family)}
+    # les tailles comparées par la version de la méthode qui a fait ce choix (gardées dans le rapport depuis la 3)
+    candidates = {s.key: s.candidates for s in sizing.situations(family, chosen.get("method") or 2)}
     plan = {}
     for key, sizes in chosen["plan"].items():
         if key.startswith("raise:r"):
             continue  # la configuration par défaut : pas de relance à la river, sauf jouée
         if key.startswith("bet:r") and len(sizes) > 1:
-            usage = (chosen.get("report") or {}).get(key, {}).get("usage") or []
-            options = candidates.get(key, [])
+            entry = (chosen.get("report") or {}).get(key, {})
+            usage = entry.get("usage") or []
+            options = entry.get("candidates") or candidates.get(key, [])
             used = {s: usage[options.index(s)] for s in sizes if s in options and len(usage) == len(options)}
             sizes = [max(sizes, key=lambda s: used.get(s, 0.0))] if used else sizes[:1]
         plan[key] = list(sizes)
@@ -676,12 +723,13 @@ def normalize_board(family: str, board: list[str]) -> list[str]:
     return sorted(board[:3], key=lambda c: (-RANK_VALUE[c[0]], "shdc".index(c[1])))
 
 
-def flop_options(family: str, board: list[str]) -> dict:
+def flop_options(family: str, board: list[str], ranges_set: Optional[str] = None) -> dict:
     """Le flop choisi dans l'explorateur, et les flops résolus qui s'en approchent : d'abord le même aux
-    couleurs près, puis les mêmes hauteurs avec la même structure de couleurs, puis la même texture."""
+    couleurs près, puis les mêmes hauteurs avec la même structure de couleurs, puis la même texture ; avec les
+    ranges de ce jeu (par défaut, la référence)."""
     board = normalize_board(family, board)
-    target = StudySpot(family, board)
-    solved = spot_studies((family,))
+    target = StudySpot(family, board, ranges_set=ranges_set or "")
+    solved = spot_studies((family,), target.ranges_set)
     canon, pattern, texture = canonical(board), suit_pattern(board), target.texture
     ranks = sorted(c[0] for c in board)
     suggestions = []
@@ -735,19 +783,21 @@ def export_selections(family: str = "srp", path: Optional[Path] = None) -> Path:
 
 
 def parse_ident(ident: str, custom: bool = False) -> Optional[StudySpot]:
-    """« spot:srp:KsKd4c » -> le spot, si la famille existe et que le flop est valide ; sinon None.
-    custom=True : avec tes ranges ajustées pour ce spot, s'il y en a (l'explorateur)."""
+    """« spot:srp:KsKd4c » (« spot:srp:KsKd4c:hautes » : avec les ranges des hautes limites) -> le spot, si la famille
+    existe et que le flop est valide ; sinon None. custom=True : avec tes ranges ajustées pour ce spot, s'il y en a
+    (l'explorateur)."""
     if not is_ident(ident):
         return None
-    _, family, board = ident.split(":")
-    return StudySpot(family, cards_of(board), custom=custom)
+    _, family, board, *rest = ident.split(":")
+    return StudySpot(family, cards_of(board), custom=custom, ranges_set=rest[0] if rest else "petites")
 
 
 def is_ident(ident: str) -> bool:
-    """« spot:<famille>:<flop> » bien formé (sans construire le spot : un spot 6-max demande tes charts)."""
+    """« spot:<famille>:<flop>[:hautes] » bien formé (sans construire le spot : un spot 6-max demande tes charts)."""
     parts = ident.split(":")
-    return (len(parts) == 3 and parts[0] == "spot" and known_family(parts[1])
-            and bool(re.fullmatch(r"(?:[2-9TJQKA][cdhs]){3}", parts[2])) and len(set(cards_of(parts[2]))) == 3)
+    return (len(parts) in (3, 4) and parts[0] == "spot" and known_family(parts[1])
+            and bool(re.fullmatch(r"(?:[2-9TJQKA][cdhs]){3}", parts[2])) and len(set(cards_of(parts[2]))) == 3
+            and parts[3:] in ([], ["hautes"]))
 
 
 def family_boards(family: str = "srp") -> list[str]:

@@ -8,7 +8,7 @@ from pathlib import Path
 from analyzer.parsers import load_hands
 from analyzer.stats import analyze
 from analyzer.theory.extract import combos, extract_grid, hand_at, main, totals
-from analyzer.theory.page import build_preflop_page
+from analyzer.theory.page import _combo_counts, build_preflop_page, grid_html
 from analyzer.theory.preflop import (
     DEVIATION,
     MAIN,
@@ -19,6 +19,7 @@ from analyzer.theory.preflop import (
     gto_ref,
     gto_value,
     load_solution,
+    recurring,
     summarize,
 )
 
@@ -114,6 +115,29 @@ class DecisionsTest(unittest.TestCase):
         self.assertAlmostEqual(s.expected["fold"], 200 / 3)
         [((action, best), group)] = s.deviations()
         self.assertEqual((action, best, len(group)), ("call", "fold", 2))
+
+    def test_recurring_errors(self):
+        solution = load_solution()
+        node = solution.nodes["bb_vs_open"]
+
+        def decision(combo, action):
+            return Decision(None, "H", "bb_vs_open", combo, action, None, node.strategy(combo), 100.0)
+
+        played = ([decision("72o", "call")] * 3 + [decision("72o", "fold")]  # 3 fois sur 4 : récurrente
+                  + [decision("82o", "call")] + [decision("82o", "fold")] * 3  # une fois sur 4 : isolée
+                  + [decision("T9s", "raise")] * 5)  # bien jouée : rien à marquer
+        s = next(x for x in summarize(played, solution) if x.node.key == "bb_vs_open")
+        self.assertEqual(s.recurring(), {"72o": (3, 4)})
+        self.assertTrue(recurring(2, 4) and not recurring(1, 1) and not recurring(2, 5))
+        grid = grid_html(node, solution, s.by_hand())
+        self.assertIn('<span class="hl">72o</span><span class="cnt">3/4</span>', grid)  # écarts / décisions
+        self.assertEqual(grid.count('class="cnt"'), 1)  # ni l'écart isolé ni les mains bien jouées
+        self.assertIn("1 écart sur 4 (isolé)", grid)  # au survol
+        self.assertIn("toi : 3bet 5 fois", grid)
+        [((_, _), group)] = s.deviations()
+        self.assertEqual(_combo_counts(group, s),
+                         '<span class="rec">72o (3 fois sur 4)</span> · <span class="once">isolés : 82o</span>'
+                         .replace("isolés", "isolé"))
 
 
 class PageTest(unittest.TestCase):

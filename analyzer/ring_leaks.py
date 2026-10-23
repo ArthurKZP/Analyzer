@@ -28,10 +28,11 @@ from typing import Optional
 from urllib.parse import urlencode
 
 from . import handplay, leakcheck, ring
-from .leaks import HAND_LEAKS, POT_STAKE, SCOPES, Pick, Report, Stat, _hand_leak, chances, kept, rank, street_stake
+from .leaks import (HAND_LEAKS, POT_STAKE, SCOPES, Pick, Report, Stat, _hand_leak, attach_examples, chances, kept, rank,
+                    sized, solve_orders, street_stake)
 from .models import BET, CALL, FOLD, RAISE, VOLUNTARY, Hand
 from .stats import HandReader, Ratio
-from .theory import coach, exploit, postflop, review, studyspots
+from .theory import coach, exploit, postflop, review, stake_charts, studyspots
 
 FORMAT = "ring"   # le format des tables à plusieurs dans l'application (« ?format=ring »)
 LABEL = ring.MERGED
@@ -211,11 +212,12 @@ def preflop_stats(plays: list[handplay.Played], scope_of: dict[str, str], totals
 
 # --- 2. Après le flop, face aux plans de jeu des flops 6-max -----------------------------------------------------
 
-def _baselines(families: list[str], role: str) -> dict[str, tuple[float, int]]:
-    """Le repère du solveur de chaque situation : la moyenne des plans de jeu des flops résolus de ces familles."""
+def _baselines(families: list[str], role: str, read=None) -> dict[str, tuple[float, int]]:
+    """Le repère du solveur de chaque situation : la moyenne des plans de jeu des flops résolus de ces familles (read :
+    exploit.size_baselines pour ses tailles ; par défaut, exploit.baselines)."""
     sums: dict[str, list[float]] = {}
     for family in families:
-        for key, (value, flops) in exploit.baselines(family, role).items():
+        for key, (value, flops) in (read or exploit.baselines)(family, role).items():
             acc = sums.setdefault(key, [0.0, 0])
             acc[0] += value * flops
             acc[1] += flops
@@ -226,12 +228,18 @@ def postflop_stats(hands: list[Hand], hero: str, pots: dict[str, Pot], scope_of:
     """Ses fréquences dans les pots à deux au flop, par structure de pot et par rôle, dans chaque portée, face aux plans
     de jeu des flops 6-max résolus de même structure."""
     seen: dict[tuple[str, str, str], exploit.Ratios] = {}
+    sizes: dict[tuple[str, str], dict[str, list[float]]] = {}  # ses tailles (toutes ses mains), par structure et rôle
     for h in hands:
         pot = pots.get(h.hand_id)
         if pot is None:
             continue
         role = "agresseur" if hero == pot.aggressor else "defenseur"
-        events = HandReader(_view(h, pot)).events.get(hero, [])
+        reader = HandReader(_view(h, pot))
+        events = reader.events.get(hero, [])
+        families = _families(pot.structure)
+        if families:
+            exploit.sizes(reader.spots.get(hero, []), exploit.situations(families[0], role),
+                          sizes.setdefault((pot.structure, role), {}))
         for scope in ("all", scope_of.get(h.hand_id, "reg")):
             st = seen.setdefault((pot.structure, role, scope), exploit.Ratios())
             for key, made in events:
@@ -244,6 +252,8 @@ def postflop_stats(hands: list[Hand], hero: str, pots: dict[str, Pot], scope_of:
             if (structure, role, "all") not in seen:
                 continue
             base = _baselines(families, role)
+            theory = _baselines(families, role, exploit.size_baselines)
+            mine = sizes.get((structure, role), {})
             for s in exploit.situations(families[0], role):
                 ratios = {scope: Ratio(*exploit.tally(seen.get((structure, role, scope), exploit.Ratios()), s))
                           for scope, _ in SCOPES}
@@ -254,13 +264,27 @@ def postflop_stats(hands: list[Hand], hero: str, pots: dict[str, Pot], scope_of:
                     note = f"pas encore de repère du solveur : résous des flops 6-max ({pairs})"
                 else:
                     note = f"repère tiré de {flops} flop(s) résolu(s) : {pairs}" if flops < exploit.MIN_FLOPS else ""
-                out.append(Stat(f"{structure}:{role}:{s.key}", title, f"{ROLES[role]} : {s.label}",
-                                "bet" if s.measure == "bet" else s.measure, ratios, ref, note,
-                                per100=100 * ratios["all"].opps / max(len(hands), 1),
-                                fragile=ref is not None and flops < exploit.MIN_FLOPS,
-                                stake=street_stake(s.stats[0]) * POT_STAKE[structure.split("_")[0]],
-                                link=(f"plan#famille={families[0]}", "Voir le plan de jeu 6-max")))
+                stat = Stat(f"{structure}:{role}:{s.key}", title, f"{ROLES[role]} : {s.label}",
+                            "bet" if s.measure == "bet" else s.measure, ratios, ref, note,
+                            per100=100 * ratios["all"].opps / max(len(hands), 1),
+                            fragile=ref is not None and flops < exploit.MIN_FLOPS,
+                            stake=street_stake(s.stats[0]) * POT_STAKE[structure.split("_")[0]],
+                            link=(f"plan#famille={families[0]}", "Voir le plan de jeu 6-max"))
+                sized(stat, theory.get(s.key, (None, 0))[0], mine.get(s.key, []), s.measure)
+                out.append(stat)
     return out
+
+
+def hand_keys(hand: Hand, hero: str, pot: Optional[Pot]) -> set[str]:
+    """Les situations après le flop où il a décidé dans ce pot à deux (clés de Stat : « srp_ip:agresseur:cbet »…)."""
+    families = _families(pot.structure) if pot is not None else []
+    if not families:
+        return set()
+    spots = HandReader(_view(hand, pot)).spots.get(hero) or []
+    role = "agresseur" if hero == pot.aggressor else "defenseur"
+    seen = {ctx for ctx, _ in spots}
+    return {f"{pot.structure}:{role}:{s.key}" for s in exploit.situations(families[0], role)
+            if seen.intersection(s.stats)}
 
 
 # --- 3. Face au solveur ---------------------------------------------------------------------------------------------
@@ -329,7 +353,7 @@ def mine(hands: list[Hand], hero: str) -> list[Hand]:
     return [h for h in hands if h.size > 2 and hero in h.seats and h.bb and h.button]
 
 
-def _pots(hands: list[Hand], hero: str) -> dict[str, Pot]:
+def two_way_pots(hands: list[Hand], hero: str) -> dict[str, Pot]:
     """Ses pots à deux joueurs au flop (ligne préflop simple), par main."""
     out = {}
     for h in hands:
@@ -348,9 +372,9 @@ def stats(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     parts = split(hands, hero, kinds or {})
     scope_of = {h.hand_id: scope for scope in ("reg", "rec") for h in parts[scope]}
     if pots is None:
-        pots = _pots(hands, hero)
+        pots = two_way_pots(hands, hero)
     if plays is None:
-        plays = handplay.collect(hands, hero, handplay.Theory(None, handplay.ring_lines()))
+        plays = handplay.collect(hands, hero, stake_charts.theory(heads_up=False))
     else:  # celles de ces mains, sans l'EV perdue (le préflop face aux charts n'en a pas besoin)
         ids = {h.hand_id for h in hands}
         plays = [p for p in plays if p.hand_id in ids]
@@ -366,17 +390,19 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     kinds = kinds or {}
     hands = mine(hands, hero)
     parts = split(hands, hero, kinds)
-    pots = _pots(hands, hero)
+    pots = two_way_pots(hands, hero)
     solver = solver_review(parts["reg"], hero, pots)
     lines = handplay.ring_lines()
     losses = review.hero_losses(solver["digests"])
     plays = (handplay.with_losses(plays, hands, losses) if plays is not None else
-             handplay.collect(hands, hero, handplay.Theory(None, lines), losses))
+             handplay.collect(hands, hero, stake_charts.theory(heads_up=False), losses))
     rows = stats(hands, hero, kinds, plays, pots)
-    leakcheck.attach(rows, leakcheck.ring_checks(rows, parts["reg"], hero, pots, plays, kinds))
+    points = leakcheck.ring_points(parts["reg"], hero, pots)
+    leakcheck.attach(rows, leakcheck.ring_checks(rows, parts["reg"], hero, pots, plays, kinds, points))
     regular = {h.hand_id for h in parts["reg"]}
-    hand_leaks = [_hand_leak(x, len(parts["reg"]), "reg", FORMAT)
-                  for x in handplay.losers([p for p in plays if p.hand_id in regular])[:HAND_LEAKS]]
+    regular_plays = [p for p in plays if p.hand_id in regular]
+    hand_leaks = [_hand_leak(x, len(parts["reg"]), "reg", FORMAT, regular_plays, hero)
+                  for x in handplay.losers(regular_plays)[:HAND_LEAKS]]
     if found is None:
         found = {scope: ring.analyze(parts[scope], hero, merge=True) for scope, _ in SCOPES}
     info = {scope: {k: found[scope][0].total.ratios[k] if found[scope] else Ratio() for k in ("vpip", "pfr", "wtsd", "wsd")}
@@ -386,10 +412,14 @@ def build(hands: list[Hand], hero: str, kinds: Optional[dict] = None, plays: Opt
     opponents: dict = {"reg": [], "rec": []}
     for name, info_k in kinds.items():
         opponents["rec" if info_k.get("kind") == "rec" else "reg"].append(name)
-    return Report(hero, len(hands), {s: len(parts[s]) for s, _ in SCOPES}, winrate, info, rows, solver,
-                  interesting(parts, hero, pots, solver["digests"]),
-                  rank(rows, solver["groups"], solver["analyzed"], digests=solver["digests"], extra=hand_leaks),
-                  [], opponents, table_format=FORMAT,
+    picks = interesting(parts, hero, pots, solver["digests"])
+    found_leaks = rank(rows, solver["groups"], solver["analyzed"], digests=solver["digests"], extra=hand_leaks)
+    attach_examples(found_leaks, rows, hero, regular_plays, points[0], solver["digests"])
+    orders = solve_orders(solver["todo"], hero, lambda h: hand_keys(h, hero, pots.get(h.hand_id)), found_leaks,
+                          picks.get("reg", []))
+    return Report(hero, len(hands), {s: len(parts[s]) for s, _ in SCOPES}, winrate, info, rows, solver, picks,
+                  found_leaks, [], opponents, table_format=FORMAT, solve_orders=orders,
                   context={"charts": bool(lines), "plans": plans, "pots": len(pots),
+                           "stake_charts": stake_charts.used(FORMAT, hands),
                            "formats": sorted({h.table_format for h in hands}, key=lambda f: (len(f), f))},
                   exploits=kept(rows), opportunities=chances(rows))

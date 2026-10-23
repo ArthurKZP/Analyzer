@@ -6,12 +6,13 @@ from html import escape
 from typing import Optional
 from urllib.parse import quote
 
-from .insights import SECTIONS, Finding, findings
+from .insights import SECTIONS, STAT_DEFS, Finding, findings
 from .leaks import street_stake
 from .lines import hero_fold_holdings
 from .models import Hand
 from .players import KINDS
-from .report import SCRIPT, chart_svg, findings_html, html_page, legend, nonshowdown_html, num, pct_cell, tiles
+from .report import (SCRIPT, chart_svg, findings_html, fold, html_page, legend, more, nonshowdown_html, num, pct_cell,
+                     tiles)
 from .stats import PlayerStats, allin_ev
 
 TOP_FINDINGS = 5  # écarts mis en avant ; les autres viennent ensuite, repliés
@@ -221,7 +222,10 @@ def priorities_html(ps: PlayerStats, hands: int, folds: Optional[dict] = None) -
     return out
 
 
-def self_stat_tables(ps: PlayerStats) -> str:
+def self_stat_tables(ps: PlayerStats, others: Optional[list[tuple[str, Optional[PlayerStats]]]] = None) -> str:
+    """Toutes tes stats, section par section, face aux repères ; others : d'autres colonnes (contre les réguliers,
+    contre les récréatifs : [(libellé, ses stats sur ces mains)])."""
+    others = [(label, st) for label, st in (others or []) if st is not None]
     out = []
     for title, defs in SECTIONS:
         rows = []
@@ -230,22 +234,67 @@ def self_stat_tables(ps: PlayerStats) -> str:
             if not r.opps:
                 continue
             ref = f"{d.ref[0]:.0f}–{d.ref[1]:.0f}&nbsp;%" if d.ref else ""
-            rows.append(f'<tr><td>{escape(d.label)}</td>{pct_cell(r, stat=d)}<td class="num muted">{ref}</td></tr>')
+            extra = "".join(pct_cell(st.r(d.key), stat=d) for _, st in others)
+            rows.append(f'<tr><td>{escape(d.label)}</td>{pct_cell(r, stat=d)}{extra}'
+                        f'<td class="num muted">{ref}</td></tr>')
         if rows:
+            head = "".join(f'<th class="num">{escape(label)}</th>' for label, _ in others)
             out.append(
-                f'<div class="card"><h3>{title}</h3><table class="stats"><thead><tr><th></th>'
-                '<th class="num">Toi</th><th class="num">Repère</th></tr></thead>'
-                f"<tbody>{''.join(rows)}</tbody></table></div>"
+                f'<div class="card"><h3>{title}</h3><div class="scroll"><table class="stats"><thead><tr><th></th>'
+                f'<th class="num">{"Toutes" if others else "Toi"}</th>{head}<th class="num">Repère</th></tr></thead>'
+                f"<tbody>{''.join(rows)}</tbody></table></div></div>"
             )
     return '<div class="grid2">' + "".join(out) + "</div>"
 
 
+# Le bilan : l'essentiel de tes stats (le détail, section par section : l'onglet Statistiques).
+KEY_STATS = ("vpip_sb", "sb_first.raise", "vpip_bb", "bb_vs_open.raise", "sb_vs_3bet.fold", "wtsd", "wsd", "wwsf")
+
+
+def key_stats_table(ps: PlayerStats, more_href: str = "") -> str:
+    """L'essentiel de tes stats heads-up face aux repères (KEY_STATS) ; more_href : la page de toutes tes stats."""
+    rows = []
+    for key in KEY_STATS:
+        d = STAT_DEFS.get(key)
+        r = ps.r(key)
+        if d is None or not r.opps:
+            continue
+        ref = f"{d.ref[0]:.0f}–{d.ref[1]:.0f}&nbsp;%" if d.ref else ""
+        rows.append(f'<tr><td>{escape(d.label)}</td>{pct_cell(r, stat=d)}<td class="num muted">{ref}</td></tr>')
+    if not rows:
+        return '<p class="muted">Pas encore assez de mains.</p>'
+    link = (f' Toutes tes stats, section par section (préflop au bouton et en BB, c-bets, défense, abattage) : '
+            f'<a href="{escape(more_href)}">onglet Statistiques</a>.' if more_href else "")
+    return ('<div class="card scroll"><table class="stats"><thead><tr><th></th><th class="num">Toi</th>'
+            f'<th class="num">Repère</th></tr></thead><tbody>{"".join(rows)}</tbody></table>'
+            f'<p class="note">WWSF : tu gagnes le pot après avoir vu le flop.{link}</p></div>')
+
+
+CURVE_NOTE = ("« EV all-in » remplace le résultat réel des all-in payés avant la river par ton espérance : l'écart "
+              "mesure la chance. Rake payé : ta part du rake de chaque pot, au prorata de ce que tu y as mis (la "
+              "méthode des sites pour le rakeback) ; tes résultats en sont déjà nets, « avant rake » le leur rajoute.")
+GAPS_NOTE = (f"Les {TOP_FINDINGS} écarts aux repères qui comptent le plus : les nets d'abord (le hasard ne les "
+             "explique pas), puis selon la taille de l'écart, la fréquence de la situation et ce qu'elle met en jeu "
+             "(le pot grossit à chaque street). Tes stats suivent. Repères indicatifs pour un "
+             "régulier HU solide à 100bb+, tous adversaires confondus.")
+STATS_LEGEND = ('<div class="legend-dev"><span><i style="background:var(--hi-bg)"></i>au-dessus du repère</span>'
+                '<span><i style="background:var(--lo-bg)"></i>en dessous du repère</span>'
+                '<span><b>gras</b> = écart net</span></div>')
+
+
 def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: str,
                       embed: bool = False, spots_href: str = "spots", kinds: Optional[dict] = None,
-                      head: str = "") -> str:
+                      head: str = "", leaks_href: str = "", gains: Optional[dict] = None,
+                      stats_href: str = "", situations: str = "") -> str:
     """kinds : type de chaque adversaire (players.classify), pour séparer réguliers et récréatifs ; head : en tête,
-    le choix du format et tes résultats tous formats confondus (l'application)."""
+    le choix du format et tes résultats tous formats confondus (l'application) ; leaks_href : le Leakfinding, où ces
+    écarts se lisent face à la théorie (l'application), et son suivi dans le temps à côté ; gains : le filtre des
+    gains (l'application, déjà dans head) : « tiles » et « curve » à la place de tes résultats sur toutes tes mains,
+    « detail » sous la courbe, « script » ; stats_href : l'onglet de toutes tes stats (sans lui, toutes au bilan) ;
+    situations : tes résultats par situation (app/situations_page.py)."""
     h = stats[hero]
+    gains = gains or {}
+    curve = gains.get("curve", h.curve)
     results = opponent_results(hands, hero)
     kinds = kinds or {}
 
@@ -267,36 +316,41 @@ def build_self_report(hands: list[Hand], stats: dict[str, PlayerStats], hero: st
     heading = "" if embed else f"<h1>Mon jeu — {escape(hero)}</h1>"
     spots = f' · <a href="{escape(spots_href)}">Mes spots</a>' if spots_href else ""
     tools = opponent_tools(with_kind=bool(kinds)) if len(results) > 1 else ""
+    opponents_box = (f'<div class="card opp-box">{tools}<div class="scroll"><table class="stats opp-table"><thead><tr>'
+                     '<th data-sort="name">Adversaire</th><th>Type</th><th class="num" data-sort="hands">Mains</th>'
+                     '<th class="num" data-sort="net">Résultat (bb)</th><th class="num" data-sort="bb100">bb/100</th>'
+                     '<th class="num">EV all-in (bb)</th><th class="num">€</th><th data-sort="last">Période</th></tr>'
+                     f'</thead><tbody>{rows}</tbody></table></div></div>')
+    leaks_note = (f'<p class="note">Face à la théorie (solveur et solution préflop), ces écarts sont vérifiés et classés '
+                  f'dans <a href="{escape(leaks_href)}">Leaks › À travailler</a> ; leur évolution se suit dans '
+                  '<a href="suivi">Leaks › Suivi dans le temps</a>.</p>' if leaks_href else "")
     body = f"""{heading}<style>{OPP_STYLE}</style>
-<div class="meta">{len(hands)} mains · {len(results)} adversaire(s) · {period}{spots}</div>
 {head}
-{tiles(h)}
+<div class="meta">{len(hands)} mains · {len(results)} adversaire(s) · {period}{spots}</div>
+{gains.get("tiles") or tiles(h)}
 
 <h2>Résultat cumulé (bb)</h2>
-<div class="card">{legend(h.curve)}{chart_svg(h.curve)}
-<p class="note">« EV all-in » remplace le résultat réel des all-in payés avant la river par ton espérance : l'écart mesure la chance.
-Rake payé : ta part du rake de chaque pot, au prorata de ce que tu y as mis (la méthode des sites pour le rakeback) ;
-tes résultats en sont déjà nets, « avant rake » le leur rajoute.</p></div>
+<div class="card">{legend(curve)}{chart_svg(curve)}
+{more("Comment c'est calculé", CURVE_NOTE)}</div>
+{gains.get("detail", "")}
 
 <h2>Tes écarts les plus importants</h2>
 <div class="card">{priorities_html(h, len(hands), folds=hero_fold_holdings(hands, hero))}
-<p class="note">Les {TOP_FINDINGS} écarts aux repères qui comptent le plus : les nets d'abord (le hasard ne les explique pas),
-puis selon la taille de l'écart, la fréquence de la situation et ce qu'elle met en jeu (le pot grossit à chaque street).
-Le détail de toutes tes stats suit.</p></div>
+{leaks_note}{more("Comment ils sont choisis", GAPS_NOTE)}</div>
 
-<h2>Tes statistiques</h2>
-<div class="legend-dev"><span><i style="background:var(--hi-bg)"></i>au-dessus du repère</span><span><i style="background:var(--lo-bg)"></i>en dessous du repère</span><span><b>gras</b> = écart net</span></div>
-{self_stat_tables(h)}
+{fold("Tes statistiques", STATS_LEGEND + key_stats_table(h, stats_href), "l'essentiel, face aux repères (le "
+      "détail : onglet Statistiques)", "stats") if stats_href else
+ fold("Tes statistiques", STATS_LEGEND + self_stat_tables(h), "préflop, postflop et abattage, face aux repères",
+      "stats")}
 
-<h2>Résultats par adversaire</h2>
-{by_kind_html(results, kinds)}
-<div class="card opp-box">{tools}<div class="scroll"><table class="stats opp-table"><thead><tr><th data-sort="name">Adversaire</th><th>Type</th>
-<th class="num" data-sort="hands">Mains</th><th class="num" data-sort="net">Résultat (bb)</th><th class="num" data-sort="bb100">bb/100</th>
-<th class="num">EV all-in (bb)</th><th class="num">€</th><th data-sort="last">Période</th></tr></thead><tbody>{rows}</tbody></table></div></div>
+{situations}
 
-<h2>Où partent tes bb sans abattage</h2>
-{nonshowdown_html(hands, hero)}
+{fold("Résultats par adversaire", by_kind_html(results, kinds) + opponents_box,
+      f"{len(results)} adversaire{'s' if len(results) > 1 else ''}", "adversaires")}
 
-<p class="note">Tous adversaires confondus. Repères indicatifs pour un régulier HU solide à 100bb+.</p>
+{fold("Où partent tes bb sans abattage", nonshowdown_html(hands, hero),
+      "les mains finies sans abattage, ce que tu as quand tu checkes, tes folds turn et river", "sans-abattage")}
+
 """
-    return html_page(f"Mon jeu — {hero}", body, embed, script=SCRIPT + (OPP_SCRIPT if tools else ""))
+    return html_page(f"Mon jeu — {hero}", body, embed,
+                     script=SCRIPT + (OPP_SCRIPT if tools else "") + gains.get("script", ""))

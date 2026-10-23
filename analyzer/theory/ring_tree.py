@@ -18,7 +18,7 @@ from typing import Optional
 
 from .. import handplay
 from ..errors import NotFound
-from . import ring_ranges, studyspots
+from . import studyspots
 from .preflop_tree import MIN_REACH, classes, combos
 
 TABLE = "6-max"
@@ -196,18 +196,24 @@ def _step(state: State, decision: Decision, chosen: Optional[int]) -> dict:
             "keys": list(decision.keys), "chosen": chosen, "card": None}
 
 
-def charts() -> dict:
-    """Les lignes de tes charts 6-max ; NoCharts sans elles."""
-    lines = handplay.ring_lines((TABLE,)).get(TABLE)
+def charts(ranges_set: str = "petites") -> dict:
+    """Les lignes de tes charts 6-max (ranges_set « hautes » : ceux des hautes limites là où ils en donnent) ; NoCharts
+    sans elles."""
+    from . import stake_charts
+    band = stake_charts.set_band(ranges_set)
+    lines = (stake_charts.ring_lines(band) if band else handplay.ring_lines((TABLE,))).get(TABLE)
     if not lines:
-        raise NoCharts("Pas encore de charts 6-max : charge-les dans Mon jeu › Tables à plusieurs (« Charger les "
-                       "charts »), ou en ligne de commande : python -m analyzer ranges --hand2note.")
+        raise NoCharts("Pas encore de charts 6-max : charge-les dans Paramètres › Ranges préflop (« Charger les "
+                       "charts 6-max »), ou en ligne de commande : python -m analyzer ranges --hand2note.")
     return lines
 
 
-def node(line: list[str] | tuple[str, ...], lines: Optional[dict] = None) -> dict:
-    """Le nœud au bout de la ligne ; ValueError si la ligne sort des charts (NoCharts sans charts)."""
-    lines = charts() if lines is None else lines
+def node(line: list[str] | tuple[str, ...], lines: Optional[dict] = None, ranges_set: Optional[str] = None) -> dict:
+    """Le nœud au bout de la ligne ; ValueError si la ligne sort des charts (NoCharts sans charts). ranges_set : le jeu
+    de ranges (petites ou hautes limites ; par défaut, la référence) : ses charts, et ses spots d'étude au flop."""
+    from . import custom_ranges, stake_charts
+    rset = ranges_set or stake_charts.reference_set()
+    lines = charts(rset) if lines is None else lines
     state = State()
     history = []
     for action in line:
@@ -238,7 +244,6 @@ def node(line: list[str] | tuple[str, ...], lines: Optional[dict] = None) -> dic
                     if strategies is not None else [])
             for combo in combos(cls):
                 rows[i].append([combo, round(weight, 4), None, None, *tail])
-    data = ring_ranges.solution(TABLE) or {}
     family = None
     if state.end == "flop":
         kind = {0: "srp", 1: "3bet"}.get(int(state.threebettor is not None) + int(state.fourbet), "4bet")
@@ -250,24 +255,26 @@ def node(line: list[str] | tuple[str, ...], lines: Optional[dict] = None) -> dic
         "cards": None, "history": history, "hands": rows, "positions": pair + [""] * (2 - len(pair)),
         "preflop": {"line": list(line), "key": current.get("key"), "label": decision.label if decision else None,
                     "keys": current["keys"], "family": family, "table": TABLE, "solution": f"Charts {TABLE}",
-                    "description": f"charts {TABLE}" + (f" · {data['source'].split(' — ')[0]}" if data.get("source")
-                                                         else "")},
+                    "description": f"{stake_charts.SET_NAMES[rset]} · charts {TABLE} · "
+                                   + custom_ranges.reference_name(TABLE, rset),
+                    "set": rset, "sets": stake_charts.set_choices(TABLE)},
     }
     if family:
-        out["preflop"].update(_flops(family))
+        out["preflop"].update(_flops(family, rset))
     return out
 
 
-def _flops(family: str) -> dict:
-    """Le choix du flop : les flops de la série (ou, hors des séries, les flops types) et ceux déjà résolus."""
+def _flops(family: str, ranges_set: Optional[str] = None) -> dict:
+    """Le choix du flop : les flops de la série (ou, hors des séries, les flops types) et ceux déjà résolus, avec les
+    ranges de ce jeu (par défaut, la référence)."""
     info = studyspots.ring_family(family)
     series = studyspots.flop_set(family)
     boards = series or studyspots.flop_set("srp")
     boards = boards + [b for b in studyspots.family_boards(family) if b not in boards]
-    solved = studyspots.spot_studies((family,))
+    solved = studyspots.spot_studies((family,), ranges_set)
     spots = []
     for board in boards:
-        ident = f"spot:{family}:{board}"
+        ident = studyspots.ident_of(family, board, ranges_set)
         spots.append({"id": ident, "board": studyspots.cards_of(board),
                       "texture": studyspots.flop_texture(studyspots.cards_of(board)), "solved": ident in solved,
                       "series": board in series})

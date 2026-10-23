@@ -23,6 +23,7 @@ from .models import BET, CALL, FOLD, RAISE, VOLUNTARY, Hand
 from .stats import Ratio
 
 ORDER = ("UTG", "UTG+1", "UTG+2", "LJ", "HJ", "CO", "BTN", "SB", "BB")
+SIX_MAX = ("UTG", "HJ", "CO", "BTN", "SB", "BB")  # les positions d'une table 6-max (le bilan s'y limite)
 STEAL_FROM = ("CO", "BTN", "SB")
 FORMATS = ("6-max", "3-max")
 MERGED = "Tables à plusieurs"  # toutes les tables de 3 joueurs et plus, ensemble
@@ -32,12 +33,13 @@ STATS = (
     ("flat", "Call d'une ouverture"), ("fold_3bet", "Fold vs 3bet"), ("fold_steal", "Fold vs vol"),
     ("threebet_steal", "3bet vs vol"), ("cbet_hu", "C-bet flop (pot à deux)"), ("cbet_multi", "C-bet flop (à plusieurs)"),
     ("fold_cbet", "Fold vs c-bet"), ("wtsd", "Abattage (WTSD)"), ("wsd", "Gagné à l'abattage (W$SD)"),
+    ("wwsf", "Gagne après le flop (WWSF)"),
 )
 LABEL = dict(STATS)
 
 # Repères indicatifs en 6-max à 100 bb : toutes positions, puis l'open par position.
 REF_6MAX = {"vpip": (21, 27), "pfr": (17, 23), "threebet": (7, 11), "fold_3bet": (45, 60), "fold_steal": (55, 75),
-            "cbet_hu": (50, 70), "fold_cbet": (35, 50), "wtsd": (25, 31), "wsd": (49, 56)}
+            "cbet_hu": (50, 70), "fold_cbet": (35, 50), "wtsd": (25, 31), "wsd": (49, 56), "wwsf": (44, 52)}
 OPEN_6MAX = {"UTG": (14, 18), "HJ": (18, 23), "CO": (25, 32), "BTN": (40, 50), "SB": (35, 50)}
 
 
@@ -72,15 +74,17 @@ def read(hand: Hand, player: str) -> dict[str, bool]:
     if memo is None:
         memo = hand.__dict__["_ring_reads"] = {}
     found = memo.get(player)
-    if found is None:
-        found = memo[player] = read_all(hand).get(player, {})
+    if found is None:  # une lecture pour tous les joueurs de la main (le field les lit tous)
+        for name, reads in read_all(hand).items():
+            memo.setdefault(name, reads)
+        found = memo.setdefault(player, {})
     return found
 
 
 def read_all(hand: Hand) -> dict[str, dict[str, bool]]:
     """Ce que la main dit de chaque joueur servi, en un seul passage : {joueur: {stat: fait ?}} pour chaque occasion
     rencontrée (open, limp, 3bet, flat, défense face au vol, fold face au 3bet après son open, VPIP, PFR, c-bet et fold
-    face à la c-bet au flop, abattage)."""
+    face à la c-bet au flop, gain du pot après avoir vu le flop, abattage)."""
     out: dict[str, dict[str, bool]] = {p: {} for p in hand.seats}
     pre = [a for a in hand.actions if a.street == "preflop" and a.kind in VOLUNTARY]
     raises = limpers = callers = 0
@@ -140,6 +144,7 @@ def read_all(hand: Hand) -> dict[str, dict[str, bool]]:
             answer = next((a for a in flop[first_bet + 1:] if a.player == player or a.kind == RAISE), None)
             if answer is not None and answer.player == player:
                 mine["fold_cbet"] = answer.kind == FOLD
+        mine["wwsf"] = hand.net(player) > 0  # il a vu le flop : a-t-il gagné le pot (WWSF) ?
         mine["wtsd"] = hand.showdown and player not in folded_later
         if mine["wtsd"]:
             mine["wsd"] = hand.net(player) > 0  # une mise non payée rendue en side pot n'est pas un gain
@@ -174,6 +179,36 @@ def analyze(hands: list[Hand], hero: str, merge: bool = False) -> list[FormatSta
                                mine[0].date if mine else None, mine[-1].date if mine else None,
                                sorted({h.table_format for h in mine}, key=lambda f: (h_size(f), f))))
     return out
+
+
+def population(hands: list[Hand], names: set[str]) -> Optional[FormatStats]:
+    """Les stats d'un groupe de joueurs (le field : tes adversaires réguliers, récréatifs…) à toutes les tables de 3
+    joueurs et plus ensemble (MERGED), par position : chaque main compte une fois pour chaque joueur du groupe qui y est
+    servi (ses fréquences et son résultat). None : aucun d'eux dans ces mains."""
+    total = PositionStats("Toutes")
+    by_pos: dict[str, PositionStats] = {}
+    seen = []
+    for h in hands:
+        here = names & h.seats.keys() if h.bb and h.size > 2 else set()
+        if not here:
+            continue
+        seen.append(h)
+        for player in here:
+            pos = h.position(player) or "?"
+            at = by_pos.get(pos)
+            if at is None:
+                at = by_pos[pos] = PositionStats(pos)
+            for ps in (total, at):
+                ps.hands += 1
+                ps.net_bb += h.net(player) / h.bb
+            for key, made in read(h, player).items():
+                total.ratios[key].add(made)
+                at.ratios[key].add(made)
+    if not seen:
+        return None
+    positions = sorted(by_pos.values(), key=lambda p: ORDER.index(p.position) if p.position in ORDER else len(ORDER))
+    return FormatStats(MERGED, total, positions, sorted({h.site for h in seen}), seen[0].date, seen[-1].date,
+                       sorted({h.table_format for h in seen}, key=lambda f: (h_size(f), f)))
 
 
 def h_size(table_format: str) -> int:

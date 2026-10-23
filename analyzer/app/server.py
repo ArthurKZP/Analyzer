@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+from datetime import date
 import re
 import sys
 import traceback
@@ -20,7 +21,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from .. import NAME, aliases, db, stakes
 from ..db import hands as db_hands
 from ..errors import NotFound
-from ..theory import postflop, preflop_tree, ring_tree, studyspots
+from ..theory import postflop, preflop_tree, ring_tree, stake_charts, studyspots
 from . import trainer
 from .library import Library, UnknownPlayer
 from .solves import NeedSession
@@ -30,13 +31,16 @@ STATIC = Path(__file__).parent / "static"
 STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8",
                 "explorer.js": "text/javascript; charset=utf-8", "explorer.css": "text/css; charset=utf-8",
                 "trainer.js": "text/javascript; charset=utf-8", "trainer.css": "text/css; charset=utf-8",
+                "replayer.js": "text/javascript; charset=utf-8", "replayer.css": "text/css; charset=utf-8",
                 "coach.js": "text/javascript; charset=utf-8", "coach.css": "text/css; charset=utf-8",
                 "rangekit.js": "text/javascript; charset=utf-8"}
 MAX_PATH = 40  # étapes d'un chemin dans l'arbre (bien plus qu'un coup réel)
-MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import
+MAX_BODY = 200 * 1024 * 1024  # 200 Mo d'historiques par import (un envoi)
+MAX_FILE = 1024 ** 3  # un historique (ou une archive) envoyé seul, en octets : 1 Go
 MAX_SMALL_BODY = 64 * 1024
+MAX_CHARTS_BODY = 4 * 1024 * 1024  # des charts préflop importés (Paramètres › Ranges préflop)
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "bluffs", "tables", "mains")
+STUDENT_PAGES = ("leaks", "preflop", "solveur", "spots", "bilan", "stats", "bluffs", "tables", "mains", "suivi")
 REFINE_SIDES = {"attaque": "attack", "defense": "defense"}  # affiner un niveau du plan : le côté
 
 
@@ -112,9 +116,9 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return origin is None or origin.removeprefix("http://") in self.server.allowed_hosts
 
-    def _small_json(self):
+    def _small_json(self, limit: int = MAX_SMALL_BODY):
         length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0 or length > MAX_SMALL_BODY:
+        if length <= 0 or length > limit:
             return None
         try:
             return json.loads(self.rfile.read(length))
@@ -128,6 +132,23 @@ class Handler(BaseHTTPRequestHandler):
         """Le format demandé (« ?format=ring ») : le Leakfinding a un rapport pour le heads-up, un pour les tables à
         plusieurs (« 6-max », « 3-max »… y mènent aussi)."""
         return parse_qs(urlsplit(self.path).query).get("format", [None])[0]
+
+    def _query(self) -> dict[str, str]:
+        """Les paramètres de l'adresse (le premier de chaque nom)."""
+        return {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+
+    def _ranges_set(self) -> str:
+        """Le jeu de ranges demandé (« ?jeu=hautes » ou « ?ranges=hautes ») : « petites » par défaut."""
+        query = parse_qs(urlsplit(self.path).query)
+        found = (query.get("jeu") or query.get("ranges") or ["petites"])[0]
+        return found if found in stake_charts.SETS else "petites"
+
+    def _study_set(self) -> str:
+        """Les ranges des études demandées (« ?ranges=hautes »), sinon celles de la référence (Paramètres › Ranges
+        préflop)."""
+        if "ranges" in parse_qs(urlsplit(self.path).query):
+            return self._ranges_set()
+        return stake_charts.reference_set()
 
     def _stakes(self) -> Optional[str]:
         """Le niveau de limites demandé (« ?limites=micro ») pour l'Étude du field (stakes.BANDS), ou None."""
@@ -180,7 +201,7 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["moi", "leaks"]:
                 return self._html(library.leaks_page(table_format=self._format()))
             if len(parts) == 2 and parts[0] == "moi":
-                return self._html(library.self_page(parts[1], table_format=self._format()))
+                return self._html(library.self_page(parts[1], table_format=self._format(), filters=self._query()))
             if len(parts) == 2 and parts[0] == "field":  # Étude du field
                 return self._html(library.field_page(parts[1], self._format(), self._stakes()))
             if len(parts) == 3 and parts[0] == "field" and parts[1] == "joueur":  # la fiche d'un adversaire
@@ -193,8 +214,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._html(library.field_page("joueurs"))
             if parts == ["parametres", "ranges"]:  # … tes ranges préflop par défaut, ligne par ligne
                 return self._html(library.ranges_settings_page())
-            if parts == ["api", "ranges", "defaut"]:
-                return self._json(library.default_ranges_view())
+            if parts == ["api", "ranges", "defaut"]:  # (« ?jeu=hautes » : les ranges des hautes limites)
+                return self._json(library.default_ranges_view(self._ranges_set()))
+            if parts == ["api", "ranges", "limites"]:  # … tes charts par niveau de limites
+                return self._json(library.stake_charts_view())
             if parts == ["api", "leaks"]:
                 return self._json(library.leaks_state(table_format=self._format()))
             if parts == ["api", "eleves"]:
@@ -202,7 +225,7 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ["api", "references"]:  # tes joueurs de référence, et les pseudos qui peuvent le devenir
                 return self._json(library.references_view())
             if len(parts) == 3 and parts[0] == "reference":  # une page d'un joueur de référence
-                return self._html(library.reference_page(parts[1], parts[2], self._format()))
+                return self._html(library.reference_page(parts[1], parts[2], self._format(), self._query()))
             if len(parts) == 3 and parts[0] == "eleve":
                 student = library.student(parts[1])
                 if parts[2] == "rapport":
@@ -218,7 +241,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise NotFound(parts[2])
                 if parts[2] == "leaks":
                     return self._html(student.leaks_page(table_format=self._format()))
-                return self._html(student.self_page(parts[2], table_format=self._format()))
+                return self._html(student.self_page(parts[2], table_format=self._format(), filters=self._query()))
             if len(parts) == 5 and parts[:2] == ["api", "eleves"] and parts[3] == "import":
                 job = library.student(parts[2]).import_status(parts[4])
                 return self._json(job) if job else self._error(404, "Import inconnu.")
@@ -232,7 +255,9 @@ class Handler(BaseHTTPRequestHandler):
                 if parts[3] == "periode":
                     return self._json(student.period_view())
                 return self._json(student.leaks_state(table_format=self._format()) if parts[3] == "leaks"
-                                  else student.review_state())
+                                  else student.review_state(table_format=self._format()))
+            if len(parts) == 5 and parts[:2] == ["api", "eleves"] and parts[3:] == ["revue", "panneau"]:
+                return self._html(library.student(parts[2]).solver_panel(self._format()))
             if parts[:2] == ["api", "coups"] and len(parts) in (2, 3) or \
                     parts[:2] == ["api", "eleves"] and len(parts) in (4, 5) and parts[3] == "coups":
                 owner = library if parts[1] == "coups" else library.student(parts[2])
@@ -240,6 +265,14 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(owner.hand_fiche(parts[-1]))
                 query = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
                 return self._json(owner.spots_search(query))
+            if len(parts) == 2 and parts[0] == "rejouer":  # le replayer d'une main jouée (?api= : son espace)
+                return self._html((STATIC / "replayer.html").read_text(encoding="utf-8"))
+            if parts[:2] == ["api", "rejouer"] and len(parts) == 3 or (
+                    len(parts) == 5 and parts[:2] in (["api", "eleves"], ["api", "references"])
+                    and parts[3] == "rejouer"):
+                owner = (library if len(parts) == 3 else library.student(parts[2]) if parts[1] == "eleves"
+                         else library.reference(parts[2]))
+                return self._json(owner.replay_record(parts[-1]))
             if parts == ["api", "mains"] or (len(parts) == 4 and parts[:2] in (["api", "eleves"], ["api", "references"])
                                              and parts[3] == "mains"):
                 owner = (library if len(parts) == 2 else library.student(parts[2]) if parts[1] == "eleves"
@@ -249,7 +282,8 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 3 and parts[0] == "p":
                 return self._html(library.player_page(parts[1], parts[2]))
             if parts == ["etudes"]:
-                return self._html(build_studies_page(embed=True))
+                return self._html(build_studies_page(embed=True, rset=self._study_set(),
+                                                     compaction=library.compactions.view()))
             if parts == ["etudes", "plan"]:  # (« ?limites=micro » : le field de ce niveau)
                 return self._html(library.plan_page(self._stakes()))
             if parts == ["api", "plan"]:
@@ -262,20 +296,26 @@ class Handler(BaseHTTPRequestHandler):
                 view = library.coach.view(parts[2])
                 return self._json(view) if view else self._error(404, "Conversation inconnue.")
             if len(parts) == 2 and parts[0] == "etudes":
-                return self._html(build_studies_page(embed=True, section=parts[1]))
+                return self._html(build_studies_page(embed=True, section=parts[1], rset=self._study_set(),
+                                                     compaction=library.compactions.view()))
             if parts == ["entraineur"]:
                 return self._html((STATIC / "trainer.html").read_text(encoding="utf-8"))
+            if parts == ["entraineur", "bluffcatch"]:  # payer ou coucher, sur tes mains jouées
+                return self._html(library.catch_trainer_page())
             if parts == ["api", "entraineur"]:
                 return self._json(trainer.overview())
             if parts == ["api", "sauvegarde"]:
                 return self._json(library.backups.view())
-            if parts == ["api", "revue"]:
+            if parts == ["api", "revue"]:  # (« ?format=HU », « ring » : un format ; sans : tous)
                 villain = parse_qs(urlsplit(self.path).query).get("adversaire", [None])[0]
-                return self._json(library.review_state(villain))
+                return self._json(library.review_state(villain, table_format=self._format()))
+            if parts == ["api", "revue", "panneau"]:  # le panneau « Face au solveur » de l'onglet d'un format
+                return self._html(library.solver_panel(self._format()))
             if parts[:2] == ["api", "spots"] and len(parts) == 3 and parts[2] in library.SPOT_GROUPS:
-                return self._json(library.group_spot_sets(parts[2]))  # toutes les séries heads-up, ou 6-max
+                # toutes les séries heads-up, ou 6-max (« ?ranges=hautes » : avec les ranges des hautes limites)
+                return self._json(library.group_spot_sets(parts[2], rset=self._study_set()))
             if len(parts) == 3 and parts[:2] == ["api", "spots"]:
-                return self._json(library.spot_set(parts[2]))
+                return self._json(library.spot_set(parts[2], rset=self._study_set()))
             if len(parts) == 2 and parts[0] == "explorateur" and (parts[1] == "preflop" or library.find_hand(parts[1])
                                                                    or studyspots.is_ident(parts[1])):
                 page = (STATIC / "explorer.html").read_text(encoding="utf-8")
@@ -351,16 +391,27 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload.get("for_spots"), bool):
                 return self._error(400, "Requête invalide.")
             return self._json(library.set_ranges_for_spots(payload["for_spots"]))
+        if action == "choix":  # tes ranges par défaut : selon la limite de la main, petites ou hautes limites
+            try:
+                return self._json(library.set_ranges_choice(payload.get("choix")))
+            except ValueError as exc:
+                return self._error(400, str(exc))
+        if action == "reference":  # la référence des études et de l'explorateur préflop : petites ou hautes limites
+            try:
+                return self._json(library.set_ranges_reference(payload.get("reference")))
+            except ValueError as exc:
+                return self._error(400, str(exc))
         context = payload.get("context")
-        if not isinstance(context, str) or len(context) > 200:
+        rset = payload.get("jeu", "petites")
+        if not isinstance(context, str) or len(context) > 200 or rset not in stake_charts.SETS:
             return self._error(400, "Requête invalide.")
         try:
             if action is None:
-                return self._json(library.default_range_line(context))
+                return self._json(library.default_range_line(context, rset))
             if action == "enregistrer":
-                return self._json(library.save_default_ranges(context, payload.get("ranges")))
+                return self._json(library.save_default_ranges(context, payload.get("ranges"), rset))
             if action == "effacer":
-                return self._json(library.clear_default_ranges(context))
+                return self._json(library.clear_default_ranges(context, rset))
         except NotFound:
             return self._error(404, "Ligne sans range de référence.")
         except ValueError as exc:
@@ -369,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _period(self, owner: Library):
         """Choisir la période d'analyse (la tienne, ou celle d'un élève) : {"kind": "all" | "last" (n) | "days" (days)
-        | "range" (from, to)}."""
+        | "month" | "quarter" | "year" | "range" (from, to)}."""
         try:
             return self._json(owner.set_period(self._small_json()))
         except ValueError as exc:
@@ -384,10 +435,12 @@ class Handler(BaseHTTPRequestHandler):
             if not studyspots.is_ring(family):
                 return self._error(400, "Requête invalide.")
             line = ring_tree.line_for_family(family)
-        if not (isinstance(line, list) and len(line) <= 16 and all(a in ring_tree.ACTIONS for a in line)):
+        rset = payload.get("set")
+        if not (isinstance(line, list) and len(line) <= 16 and all(a in ring_tree.ACTIONS for a in line)
+                and rset in (None, *stake_charts.SETS)):
             return self._error(400, "Requête invalide.")
         try:
-            return self._json(ring_tree.node(line))
+            return self._json(ring_tree.node(line, ranges_set=rset))
         except ring_tree.NoCharts as exc:
             return self._error(404, str(exc))
         except ValueError:
@@ -411,6 +464,22 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "reload"]:
             library.reload()
             return self._json(library.summary())
+        if parts == ["api", "coups"] or (len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] == "coups"):
+            # tes mains face au solveur : la sélection du visualiseur (ses filtres) ou des mains (ids)
+            payload = self._small_json()
+            if not (isinstance(payload, dict) and payload.get("action") in ("etat", "resoudre", "arreter")
+                    and isinstance(payload.get("query", {}), dict)):
+                return self._error(400, "Requête invalide.")
+            ids, limit = payload.get("ids"), payload.get("limit")
+            if ids is not None and not (isinstance(ids, list) and all(isinstance(i, str) for i in ids)):
+                return self._error(400, "Requête invalide.")
+            query = {str(k): str(v) for k, v in payload.get("query", {}).items()}
+            try:
+                owner = library if len(parts) == 2 else library.student(parts[2])
+            except UnknownPlayer:
+                return self._error(404, "Élève inconnu.")
+            return self._json(owner.spots_solve(query, payload["action"],
+                                                limit if isinstance(limit, int) and limit > 0 else None, ids))
         if parts == ["api", "resoudre"]:
             payload = self._small_json()
             if not isinstance(payload, dict) or not isinstance(payload.get("hand"), str):
@@ -442,20 +511,23 @@ class Handler(BaseHTTPRequestHandler):
             line = payload.get("line")
             if payload.get("family") in preflop_tree.FAMILY_LINES:
                 line = list(preflop_tree.FAMILY_LINES[payload["family"]])
-            if not (isinstance(line, list) and len(line) <= 6 and all(a in preflop_tree.ACTIONS for a in line)):
+            rset = payload.get("set")  # le jeu de ranges (petites ou hautes limites) ; par défaut, la référence
+            if not (isinstance(line, list) and len(line) <= 6 and all(a in preflop_tree.ACTIONS for a in line)
+                    and rset in (None, *stake_charts.SETS)):
                 return self._error(400, "Requête invalide.")
             try:
-                return self._json(preflop_tree.node(line))
+                return self._json(preflop_tree.node(line, ranges_set=rset))
             except ValueError:
                 return self._error(404, "Ligne préflop hors de la solution.")
         if parts == ["api", "explorateur", "flop"]:
             payload = self._small_json()
             board = payload.get("board") if isinstance(payload, dict) else None
             if not (isinstance(payload, dict) and isinstance(payload.get("family"), str)
-                    and studyspots.known_family(payload["family"]) and trainer.valid_cards(board, 3)):
+                    and studyspots.known_family(payload["family"]) and trainer.valid_cards(board, 3)
+                    and payload.get("set") in (None, *stake_charts.SETS)):
                 return self._error(400, "Requête invalide.")
             try:
-                return self._json(studyspots.flop_options(payload["family"], board))
+                return self._json(studyspots.flop_options(payload["family"], board, payload.get("set")))
             except postflop.Unsupported as exc:  # spot 6-max sans tes charts
                 return self._error(400, str(exc))
         if parts == ["api", "estimation"]:  # durée d'une résolution selon la précision
@@ -567,6 +639,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(library.coach.ask(conv, text.strip(), context))
         if parts[:3] == ["api", "ranges", "defaut"] and len(parts) <= 4:  # Paramètres › Ranges préflop
             return self._default_ranges(library, parts[3] if len(parts) == 4 else None, self._small_json())
+        if parts[:3] == ["api", "ranges", "limites"] and parts[3:] in ([], ["retirer"]):  # charts par limites
+            payload = self._small_json(MAX_CHARTS_BODY)
+            fmt = payload.get("format") if isinstance(payload, dict) else None
+            band = payload.get("limites") if isinstance(payload, dict) else None
+            charts = payload.get("charts") if isinstance(payload, dict) else None
+            text = payload.get("texte") if isinstance(payload, dict) else None
+            if not (isinstance(fmt, str) and isinstance(band, str)
+                    and (parts[3:] or isinstance(charts, dict) or isinstance(text, str))):
+                return self._error(400, "Requête invalide.")
+            try:
+                return self._json(library.delete_stake_charts(fmt, band) if parts[3:] else
+                                  library.save_stake_charts(fmt, band, charts if isinstance(charts, dict) else None,
+                                                            text if isinstance(text, str) else None))
+            except ValueError as exc:
+                return self._error(400, str(exc))
         if parts == ["api", "ranges", "hand2note"]:  # charts 6-max de Hand2Note Guide, sur ta machine
             try:
                 return self._json(library.load_hand2note())
@@ -603,25 +690,27 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) == 3 and parts[:2] == ["api", "revue"] and parts[2] in ("lancer", "arreter"):
             payload = self._small_json()
             villain = payload.get("adversaire") if isinstance(payload, dict) else None
-            if villain is not None and not isinstance(villain, str):
+            choice = self._solve_choice(payload)
+            if (villain is not None and not isinstance(villain, str)) or choice is None:
                 return self._error(400, "Requête invalide.")
             try:
                 if parts[2] == "arreter":
-                    return self._json(library.review_cancel(villain))
-                return self._json(library.review_state(villain, start=True))
+                    return self._json(library.review_cancel(villain, choice["format"]))
+                return self._json(library.review_state(villain, start=True, order=choice["order"] or "pots",
+                                                       limit=choice["limit"], table_format=choice["format"]))
             except UnknownPlayer:
                 return self._error(404, "Adversaire inconnu.")
         if (parts[:2] == ["api", "spots"] and len(parts) == 4 and parts[2] in library.SPOT_GROUPS
                 and parts[3] in ("resoudre", "arreter")):
-            group = parts[2]
-            return self._json(library.group_spot_cancel(group) if parts[3] == "arreter"
-                              else library.group_spot_sets(group, start=True))
+            group, rset = parts[2], self._study_set()
+            return self._json(library.group_spot_cancel(group, rset) if parts[3] == "arreter"
+                              else library.group_spot_sets(group, start=True, rset=rset))
         if len(parts) == 4 and parts[:2] == ["api", "spots"] and parts[3] in ("resoudre", "arreter"):
             if not studyspots.is_series(parts[2]):
                 return self._error(404, "Série inconnue.")
             if parts[3] == "arreter":
-                return self._json(library.spot_cancel(parts[2]))
-            return self._json(library.spot_set(parts[2], start=True))
+                return self._json(library.spot_cancel(parts[2], self._study_set()))
+            return self._json(library.spot_set(parts[2], start=True, rset=self._study_set()))
         if len(parts) == 4 and parts[:2] == ["api", "resoudre"] and parts[3] == "arreter":
             job = library.solves.cancel(parts[2])
             return self._json(job) if job else self._error(404, "Résolution inconnue.")
@@ -631,6 +720,8 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "import", "lancer"]:  # en arrière-plan : son avancement, GET /api/import/<id>
             files = self._import_files()
             return files if files is None else self._json(library.start_import(files))
+        if len(parts) >= 3 and parts[:2] == ["api", "import"]:  # un import envoyé en plusieurs fois
+            return self._import_step(library, parts[2:])
         if len(parts) == 3 and parts[:2] == ["api", "fichiers"] and parts[2] in ("retirer", "retablir"):
             return self._file_action(library, parts[2])
         if len(parts) == 3 and parts[:2] == ["api", "pseudos"] and parts[2] in ("supprimer", "retablir"):
@@ -652,10 +743,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(library.set_alias(alias, pseudos) if len(parts) == 2 else library.remove_alias(alias))
             except ValueError as exc:
                 return self._error(400, str(exc))
+        if parts == ["api", "suivi"] or len(parts) == 4 and parts[:2] == ["api", "eleves"] and parts[3] == "suivi":
+            follow = self._follow_choice(self._small_json())
+            if follow is None:
+                return self._error(400, "Requête invalide.")
+            try:
+                owner = library if parts == ["api", "suivi"] else library.student(parts[2])
+                return self._json(owner.follow_leak(follow["leak"], follow["since"], follow["title"], self._format()))
+            except UnknownPlayer:
+                return self._error(404, "Élève ou format de table inconnu.")
         if len(parts) == 3 and parts[:2] == ["api", "leaks"] and parts[2] in ("lancer", "arreter"):
+            choice = self._solve_choice(self._small_json())
+            if choice is None:
+                return self._error(400, "Requête invalide.")
             try:
                 return self._json(library.leaks_cancel(self._format()) if parts[2] == "arreter"
-                                  else library.leaks_state(start=True, table_format=self._format()))
+                                  else library.leaks_state(start=True, table_format=self._format(),
+                                                           order=choice["order"] or "leaks", limit=choice["limit"],
+                                                           leak=choice["leak"]))
             except UnknownPlayer:
                 return self._error(404, "Format de table inconnu.")
         if parts == ["api", "eleves"]:
@@ -693,20 +798,107 @@ class Handler(BaseHTTPRequestHandler):
             if parts[3:] == ["import", "lancer"]:
                 files = self._import_files()
                 return files if files is None else self._json(student.start_import(files))
+            if len(parts) >= 5 and parts[3] == "import":
+                return self._import_step(student, parts[4:])
             if len(parts) == 5 and parts[3] == "fichiers" and parts[4] in ("retirer", "retablir"):
                 return self._file_action(student, parts[4])
             if len(parts) == 5 and parts[3] == "pseudos" and parts[4] in ("supprimer", "retablir"):
                 return self._pseudo_action(student, parts[4])
+            if parts[3:] == ["formats"]:  # ce qu'il joue : heads-up et/ou tables à plusieurs (null : tout)
+                payload = self._small_json()
+                try:
+                    return self._json(student.set_formats(payload.get("formats") if isinstance(payload, dict)
+                                                          else []))
+                except ValueError as exc:
+                    return self._error(400, str(exc))
+            if parts[3:] == ["pseudos", "choisir"]:  # ses pseudos, parmi ceux de ses historiques
+                payload = self._small_json()
+                try:
+                    return self._json(student.set_chosen_pseudos(payload.get("names") if isinstance(payload, dict)
+                                                                 else None))
+                except ValueError as exc:
+                    return self._error(400, str(exc))
             if parts[3:] == ["periode"]:
                 return self._period(student)
-            if len(parts) == 5 and parts[3] == "leaks" and parts[4] in ("lancer", "arreter"):
+            if len(parts) == 5 and parts[3] in ("leaks", "revue") and parts[4] in ("lancer", "arreter"):
+                choice = self._solve_choice(self._small_json())
+                if choice is None:
+                    return self._error(400, "Requête invalide.")
+                if parts[3] == "revue":
+                    return self._json(student.review_cancel(table_format=choice["format"]) if parts[4] == "arreter"
+                                      else student.review_state(start=True, order=choice["order"] or "pots",
+                                                                limit=choice["limit"], table_format=choice["format"]))
                 try:
                     return self._json(student.leaks_cancel(self._format()) if parts[4] == "arreter"
-                                      else student.leaks_state(start=True, table_format=self._format()))
+                                      else student.leaks_state(start=True, table_format=self._format(),
+                                                               order=choice["order"] or "leaks",
+                                                               limit=choice["limit"], leak=choice["leak"]))
                 except UnknownPlayer:
                     return self._error(404, "Format de table inconnu.")
-            if len(parts) == 5 and parts[3] == "revue" and parts[4] in ("lancer", "arreter"):
-                return self._json(student.review_cancel() if parts[4] == "arreter" else student.review_state(start=True))
+        return self._error(404, "Page introuvable.")
+
+    @staticmethod
+    def _follow_choice(payload) -> Optional[dict]:
+        """Un leak à suivre, d'après la requête : {"leak", "since" (date ou None : ne plus le suivre), "title"}, ou None
+        si elle est invalide."""
+        if not isinstance(payload, dict):
+            return None
+        leak, since, title = payload.get("leak"), payload.get("depuis"), payload.get("titre") or ""
+        if not (isinstance(leak, str) and 0 < len(leak) <= 200) or not isinstance(title, str):
+            return None
+        if since is not None:
+            try:
+                since = date.fromisoformat(since) if isinstance(since, str) else None
+            except ValueError:
+                since = None
+            if since is None:
+                return None
+        return {"leak": leak, "since": since, "title": title[:200]}
+
+    @staticmethod
+    def _solve_choice(payload) -> Optional[dict]:
+        """Les mains à passer au solveur, d'après la requête : {"order", "limit", "leak", "format"} (None : par défaut),
+        ou None si la requête est invalide. « ordre » : leaks, pertes, lignes ou pots ; « limite » : un nombre de mains
+        (0 : toutes) ; « leak » : la clé d'un leak ; « format » : HU, ring ou all (toutes tes mains)."""
+        payload = payload if isinstance(payload, dict) else {}
+        order, limit, leak = payload.get("ordre"), payload.get("limite"), payload.get("leak")
+        table_format = payload.get("format")
+        if order is not None and order not in ("leaks", "pertes", "lignes", "pots"):
+            return None
+        if table_format is not None and table_format not in ("HU", "ring", "all"):
+            return None
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= 5000):
+            return None
+        if leak is not None and not (isinstance(leak, str) and len(leak) <= 200):
+            return None
+        return {"order": order, "limit": limit or None, "leak": leak, "format": table_format}
+
+    def _import_step(self, owner, rest: list[str]):
+        """Un import envoyé en plusieurs fois (le tien, ou celui d'un élève) : « ouvrir », puis « <id>/lot » (des
+        historiques en JSON, comme /lancer) ou « <id>/fichier?nom=… » (un historique ou une archive zip, ses octets
+        tels quels), et « <id>/terminer » (les analyses se mettent à jour ; l'avancement : GET …/import/<id>)."""
+        try:
+            if rest == ["ouvrir"]:
+                self._small_json()  # (le corps, vide, est lu)
+                return self._json(owner.open_import())
+            if len(rest) == 2 and rest[1] == "lot":
+                files = self._import_files()
+                return files if files is None else self._json(owner.import_part(rest[0], files))
+            if len(rest) == 2 and rest[1] == "fichier":
+                length = int(self.headers.get("Content-Length") or 0)
+                if length <= 0 or length > MAX_FILE:
+                    return self._error(413, "Historique trop volumineux (1 Go maximum par fichier).")
+                name = (parse_qs(urlsplit(self.path).query).get("nom") or ["fichier"])[0]
+                data = self.rfile.read(length)
+                return self._json(owner.import_part(rest[0], [{"name": name, "data": data}]))
+            if len(rest) == 2 and rest[1] == "terminer":
+                self._small_json()
+                return self._json(owner.close_import(rest[0]))
+        except NotFound:
+            return self._error(404, "Import inconnu ou déjà fini.")
+        except Exception as exc:  # noqa: BLE001 — un envoi qui échoue : la page le dit, l'import reste ouvert
+            traceback.print_exc()
+            return self._error(500, f"Import impossible : {exc}")
         return self._error(404, "Page introuvable.")
 
     def _import_files(self) -> Optional[list]:
@@ -776,6 +968,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"{NAME} est ouvert sur {url}  (Ctrl+C pour arrêter)", flush=True)
     if not args.sans_navigateur:
         webbrowser.open(url)
+    library.compactions.start()  # les études pas encore compressées, en arrière-plan
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -783,6 +976,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     finally:
         library.solves.shutdown()
         library.backups.shutdown()
+        library.compactions.shutdown()
         server.server_close()
     return 0
 

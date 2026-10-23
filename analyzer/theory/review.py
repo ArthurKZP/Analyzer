@@ -23,7 +23,7 @@ from typing import Optional
 from .. import db, store
 from ..db import analyses as db_analyses, documents
 from ..models import Hand
-from . import postflop, sizing
+from . import postflop, sizing, stake_charts
 from .preflop import MIXED_THRESHOLD
 
 FAMILY = {"SRP": "srp", "pot 3bet": "3bet", "pot 4bet": "4bet"}
@@ -186,17 +186,27 @@ _KEYS_LIMIT = 300_000
 
 
 def _signature() -> tuple:
-    """Ce dont dépend le spot d'une main, hors la main : tailles choisies, ranges (charts, ranges ajustées) et
-    réglage de précision (leurs révisions dans la base)."""
+    """Ce dont dépend le spot d'une main, hors la main : tailles choisies, ranges (charts, ranges ajustées, charts par
+    limites) et réglage de précision (leurs révisions dans la base)."""
+    from .stake_charts import KIND
     from .studyspots import DEPENDS
-    return documents.revision(db.current(), *DEPENDS)
+    return documents.revision(db.current(), *DEPENDS, KIND)
 
 
-def _variant(spot: postflop.PostflopSpot) -> dict:
+def signature() -> tuple:
+    """Ce dont dépend l'analyse de tes mains hors les mains (tailles choisies, ranges, précision) : quand elle change,
+    les statuts de tes mains face au solveur sont à revoir."""
+    return _signature()
+
+
+def _variant(spot: postflop.PostflopSpot, stakes: bool = True) -> dict:
+    """Les clés d'un spot ; stakes=False : construit avec les ranges de la référence (pas celles de tes charts par
+    limites)."""
     request = spot.request()
     default = dict(request, max_iterations=postflop.DEFAULT_ITERATIONS, target_exploit_pct=postflop.DEFAULT_TARGET)
     return {"theory": spot.plan is not None, "digest": digest_key(spot), "base": postflop.base_key(request),
-            "solved": (postflop.cache_key(default), postflop.study_key(default)), "pot_type": spot.pot_type}
+            "solved": (postflop.cache_key(default), postflop.study_key(default)), "pot_type": spot.pot_type,
+            "stakes": stakes}
 
 
 def _spot_keys(hand: Hand, hero: str, signature: tuple) -> Optional[list[dict]]:
@@ -218,11 +228,32 @@ def _spot_keys(hand: Hand, hero: str, signature: tuple) -> Optional[list[dict]]:
             variants = [_variant(spot)]
             if spot.plan is not None:
                 variants.append(_variant(postflop.build_spot(hand, hero, theory=False)))
+            if stake_charts.band_for(hand):  # une analyse faite avec les ranges de la référence reste
+                variants += _reference_variants(hand, hero, variants)
         store.put("spots", stored_key, {"variants": variants})
     if len(_KEYS) >= _KEYS_LIMIT:
         _KEYS.clear()
     _KEYS[key] = variants
     return variants
+
+
+def _reference_variants(hand: Hand, hero: str, known: list[dict]) -> list[dict]:
+    """Les clés de la main avec les ranges de la référence (quand celles de tes charts de son niveau les remplacent) :
+    une analyse déjà faite avec elles compte toujours."""
+    out = []
+    try:
+        spots = [postflop.build_spot(hand, hero, stakes=False)]
+        if spots[0].plan is not None:
+            spots.append(postflop.build_spot(hand, hero, theory=False, stakes=False))
+    except postflop.Unsupported:
+        return out
+    digests = {v["digest"] for v in known}
+    for spot in spots:
+        found = _variant(spot, stakes=False)
+        if found["digest"] not in digests:
+            out.append(found)
+            digests.add(found["digest"])
+    return out
 
 
 _SIGNATURES: dict[tuple, str] = {}
@@ -247,7 +278,7 @@ def _done_by_keys(hand: Hand, hero: str, variants: list[dict], listed: set[str],
                 return data
         result, study = variant["solved"]
         if variant["base"] in precisions or result in solved[0] or study in solved[1]:
-            spot = postflop.build_spot(hand, hero, theory=variant["theory"])
+            spot = postflop.build_spot(hand, hero, theory=variant["theory"], stakes=variant.get("stakes", True))
             data = _done(spot, listed, solved)
             if data is not None:
                 return data
@@ -256,6 +287,14 @@ def _done_by_keys(hand: Hand, hero: str, variants: list[dict], listed: set[str],
 
 def _pot_size(hand: Hand) -> float:
     return sum(a.amount for a in hand.actions) / hand.bb
+
+
+MINUTES = {"SRP": 3, "pot 3bet": 2, "pot 4bet": 0.3}  # durée d'une résolution sur 4 cœurs (mesurée)
+
+
+def minutes(pot_type: str) -> float:
+    """La durée d'une résolution (minutes, sur 4 cœurs) selon le type de pot ; 3 par défaut."""
+    return MINUTES.get(pot_type, 3)
 
 
 class PendingSpots:
@@ -311,9 +350,17 @@ def collect(hands: list[Hand], hero: str) -> tuple[list[dict], PendingSpots]:
     return done, PendingSpots([h for h, _ in todo], hero, [t for _, t in todo])
 
 
-def analyze(hands: list[Hand], hero: str, log=print, limit: Optional[int] = None) -> int:
-    """Résout les mains pas encore analysées (les plus gros pots d'abord) ; renvoie leur nombre."""
+def by_loss(todo: PendingSpots) -> PendingSpots:
+    """Les mains à résoudre, les plus chères d'abord (ce que le joueur y a perdu, en bb)."""
+    order = sorted(range(len(todo)), key=lambda k: todo.hands[k].net(todo.hero) / todo.hands[k].bb)
+    return PendingSpots([todo.hands[k] for k in order], todo.hero, [todo.pot_types[k] for k in order])
+
+
+def analyze(hands: list[Hand], hero: str, log=print, limit: Optional[int] = None, costly: bool = False) -> int:
+    """Résout les mains pas encore analysées (les plus gros pots d'abord ; costly : les plus chères d'abord) ; renvoie
+    leur nombre."""
     _, todo = collect(hands, hero)
+    todo = by_loss(todo) if costly else todo
     todo = todo[:limit] if limit else todo
     for k, spot in enumerate(todo, 1):
         log(f"[{k}/{len(todo)}] main {spot.hand.hand_id} ({spot.pot_type}, {spot.villain}) : résolution…")
@@ -332,6 +379,29 @@ def saved_digests() -> list[dict]:
             out.append(upgrade(data))
         except (ValueError, KeyError):
             continue
+    return out
+
+
+def hand_summary(data: dict) -> dict:
+    """Ce que dit le solveur d'une main analysée, pour les listes de mains : l'EV théorique de ta main à ta première
+    décision (sa meilleure action, en bb), l'EV que tes décisions ont perdue, tes erreurs (ERROR bb et plus) et ta
+    décision la plus chère (où l'explorateur s'ouvre, None sans erreur)."""
+    mine = [d for d in data["decisions"] if d["who"] == "H"]
+    first = next((d for d in mine if any(e is not None for e in d.get("evs") or [])), None)
+    losses = [(loss(d) or 0.0, d["d"]) for d in mine if d["ev_loss"] is not None]
+    worst = max(losses, default=(0.0, None), key=lambda x: x[0])
+    return {"ev": round(max(e for e in first["evs"] if e is not None), 2) if first else None,
+            "lost": round(sum(x for x, _ in losses), 2), "errors": sum(x >= ERROR for x, _ in losses),
+            "d": worst[1] if worst[0] >= ERROR else None}
+
+
+def statuses(hands: list[Hand], hero: str) -> dict[str, dict]:
+    """Où en est chaque main allée au flop face au solveur : son résumé (hand_summary) quand elle est analysée,
+    {"todo": durée de sa résolution en minutes} quand elle reste à résoudre ; les autres (pas de flop, un coup que le
+    solveur ne sait pas jouer) n'y sont pas."""
+    done, todo = collect(hands, hero)
+    out = {h.hand_id: {"todo": minutes(pot_type)} for h, pot_type in zip(todo.hands, todo.pot_types)}
+    out.update({d["hand"]: hand_summary(d) for d in done})
     return out
 
 

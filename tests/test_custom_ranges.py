@@ -9,7 +9,7 @@ from unittest import mock
 from analyzer import settings
 from analyzer.errors import NotFound
 from analyzer.parsers import parse_text
-from analyzer.theory import custom_ranges, postflop, ring_ranges, studyspots
+from analyzer.theory import custom_ranges, postflop, ring_ranges, stake_charts, studyspots
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SITES = Path(__file__).parent / "sites"
@@ -116,7 +116,99 @@ class LinesTest(HomeTest):
         self.assertFalse(custom_ranges.set_for_spots(False))
 
 
+class SetsTest(HomeTest):
+    """Deux jeux de ranges : petites limites (« lignes ») et hautes limites (« lignes_hautes »)."""
+
+    def test_sets(self):
+        hand = sample("HAND01")  # NL500 : les hautes limites, selon la limite de la main
+        self.assertEqual((stake_charts.choice(), stake_charts.set_of(hand.bb), stake_charts.set_of(0.5)),
+                         ("auto", "hautes", "petites"))
+        line = "HU|BTN:raise BB:call"
+        custom_ranges.save("ligne", line, {"BB": "AA"})  # petites limites
+        self.assertEqual(postflop.build_spot(hand, "Hero").adjusted, None)
+        custom_ranges.save("ligne", line, {"BB": "KK"}, "hautes")
+        spot = postflop.build_spot(hand, "Hero")
+        self.assertEqual((spot.adjusted, spot.ranges[spot.oop]["KK"], spot.ranges[spot.oop].get("AA")),
+                         ("ligne", 1.0, None))
+        stake_charts.set_choice("petites")  # tes ranges par défaut : toujours les petites limites
+        self.assertEqual(postflop.build_spot(hand, "Hero").ranges["Villain"].get("AA"), 1.0)
+        with self.assertRaises(ValueError):
+            stake_charts.set_choice("moyennes")
+        with self.assertRaises(ValueError):
+            custom_ranges.save("ligne", line, {"BB": "AA"}, "moyennes")
+
+    def test_reference(self):
+        """La référence des études : petites limites par défaut, hautes limites au choix (ou quand tes ranges par
+        défaut le sont toujours) ; les séries, leurs plans et l'entraîneur la suivent."""
+        self.assertEqual(stake_charts.reference_set(), "petites")
+        stake_charts.set_choice("hautes")
+        self.assertEqual(stake_charts.reference_set(), "hautes")  # tes ranges toujours des hautes limites
+        stake_charts.set_reference("petites")
+        self.assertEqual((stake_charts.reference_set(), stake_charts.choice()), ("petites", "hautes"))
+        stake_charts.set_choice("auto")  # le choix pour tes mains garde la référence
+        self.assertEqual(stake_charts.reference_set(), "petites")
+        with self.assertRaises(ValueError):
+            stake_charts.set_reference("moyennes")
+        stake_charts.set_reference("hautes")
+        spot = studyspots.StudySpot("srp", studyspots.cards_of("KsKd4c"))  # la série : la référence
+        self.assertEqual((spot.ranges_set, spot.ident), ("hautes", "spot:srp:KsKd4c:hautes"))
+        self.assertEqual(studyspots.parse_ident("spot:srp:KsKd4c").ranges_set, "petites")  # une étude, un jeu
+        self.assertEqual((studyspots.ident_of("srp", "KsKd4c"), studyspots.ident_of("srp", "KsKd4c", "petites")),
+                         ("spot:srp:KsKd4c:hautes", "spot:srp:KsKd4c"))
+        session = SimpleNamespace()
+        with mock.patch("analyzer.theory.coach.extract_and_save") as extract:
+            spot.after_solve(session)  # les plans de jeu se lisent sur la référence
+            studyspots.parse_ident("spot:srp:KsKd4c").after_solve(session)  # pas sur l'autre jeu
+        self.assertEqual(extract.call_count, 1)
+        listed = [{"kind": "spot", "id": i, "family": "srp", "ranges": r, "summary": []}
+                  for i, r in (("spot:srp:KsKd4c", "petites"), ("spot:srp:KsKd4c:hautes", "hautes"))]
+        with mock.patch.object(postflop, "list_studies", lambda: listed), \
+                mock.patch.object(studyspots, "_current", lambda m: True):
+            studyspots._SPOT_STUDIES.clear()
+            self.assertEqual(list(studyspots.spot_studies()), ["spot:srp:KsKd4c:hautes"])
+            self.assertEqual(list(studyspots.spot_studies(None, "petites")), ["spot:srp:KsKd4c"])
+            studyspots._SPOT_STUDIES.clear()
+
+    def test_older_document(self):
+        """Un document d'avant les deux jeux : ses lignes valaient pour toutes tes mains, les hautes limites aussi."""
+        from analyzer import db
+        from analyzer.db import documents
+        documents.put(db.current(), custom_ranges.KIND, custom_ranges.KEY, {"lignes": {"HU|BTN:raise BB:call": {
+            "BB": "AA"}}})
+        self.assertEqual(custom_ranges.load()["lignes_hautes"], {"HU|BTN:raise BB:call": {"BB": "AA"}})
+        self.assertEqual(postflop.build_spot(sample("HAND01"), "Hero").adjusted, "ligne")
+
+    def test_high_stakes_reference(self):
+        """La base des hautes limites : leurs charts quand ils sont enregistrés, sinon la référence."""
+        lines = {line["key"]: line for line in custom_ranges.reference_lines("HU", "hautes")}
+        self.assertEqual(custom_ranges.reference_name("HU", "hautes"), "solution préflop heads-up")
+        stake_charts.save("HU", "hautes", {"source": "Essai", "nodes": {"sb_open": {"raise": "AA,KK"},
+                                                                        "bb_vs_open": {"call": "QQ"}}})
+        mine = {line["key"]: line for line in custom_ranges.reference_lines("HU", "hautes")}
+        self.assertEqual(custom_ranges.reference_name("HU", "hautes"), "charts des hautes limites (Essai)")
+        self.assertNotEqual(mine["BTN:raise BB:call"]["ranges"]["BB"], lines["BTN:raise BB:call"]["ranges"]["BB"])
+        self.assertEqual(mine["BTN:raise BB:call"]["ranges"]["BB"], {"QQ": 1.0})
+        # les études avec les ranges des hautes limites : une étude à part
+        spot = studyspots.parse_ident("spot:srp:KsKd4c:hautes")
+        self.assertEqual((spot.ident, spot.ranges["BB"], spot.ranges["BTN"]),
+                         ("spot:srp:KsKd4c:hautes", {"QQ": 1.0}, {"AA": 1.0, "KK": 1.0}))
+        self.assertNotEqual(spot.request()["spot"], studyspots.parse_ident("spot:srp:KsKd4c").request()["spot"])
+        self.assertFalse(studyspots.is_ident("spot:srp:KsKd4c:moyennes"))
+        from analyzer.app.studies import build_studies_page
+        page = build_studies_page(section="srp", rset="hautes")
+        for text in ("Heads-up · SRP · hautes limites", 'aria-current="page">Hautes limites', "spot:srp:KsKd4c:hautes",
+                     'data-suffix=":hautes"'):
+            self.assertIn(text, page)
+        # leurs flops manquants se résolvent aussi en lot, dans leur propre file
+        self.assertIn("Résoudre tous les flops heads-up hautes limites manquants", page)
+        self.assertIn('class="spot-head" data-family="srp" data-done="0" data-ranges="hautes"', page)
+
+
 class SpotTest(HomeTest):
+    def setUp(self):
+        super().setUp()
+        stake_charts.set_choice("petites")  # les mains d'essai (NL500) avec les ranges des petites limites
+
     def test_heads_up_hand(self):
         hand = sample("HAND01")  # SRP : Hero au bouton, Villain en BB
         reference = postflop.build_spot(hand, "Hero")
@@ -212,12 +304,40 @@ class LiveSessionTest(unittest.TestCase):
 class LibraryTest(HomeTest):
     def setUp(self):
         super().setUp()
+        stake_charts.set_choice("petites")  # les mains d'essai (NL500) avec les ranges des petites limites
         folder = self.home / "mains"
         folder.mkdir()
         shutil.copy(FIXTURES / "betclic_sample.txt", folder / "sample.txt")
         from analyzer.app.library import Library
         self.lib = Library(folder)
         self.addCleanup(self.lib.solves.shutdown)
+
+    def test_choices(self):
+        """Les ranges dont un coup peut partir : la référence, tes charts de chaque niveau, tes ranges de ligne."""
+        lib = self.lib
+        self.assertEqual([(c["label"], c["base"]) for c in lib.ranges_state("HAND01")["choices"]],
+                         [("Référence (micro limites, rake élevé)", True)])
+        stake_charts.save("HU", "hautes", {"source": "Essai", "nodes": {"sb_open": {"raise": "AA,KK"},
+                                                                        "bb_vs_open": {"call": "QQ"}}})
+        custom_ranges.save("ligne", "HU|BTN:raise BB:call", {"BB": "JJ"}, "hautes")
+        state = lib.ranges_state("HAND01")  # NL500, jugée avec les petites limites (le réglage de l'essai)
+        self.assertEqual([(c["id"], c["base"]) for c in state["choices"]],
+                         [("charts:reference", True), ("charts:hautes", False), ("ligne:hautes", False)])
+        self.assertEqual([c["label"] for c in state["choices"][1:]],
+                         ["Tes charts · Hautes limites", "Tes ranges de la ligne · Hautes limites"])
+        self.assertEqual([p["position"] for p in state["players"]], ["BB", "BTN"])
+        self.assertEqual(state["choices"][1]["ranges"], [{"QQ": 1.0}, {"AA": 1.0, "KK": 1.0}])
+        self.assertEqual(state["choices"][2]["ranges"], [{"JJ": 1.0}, {"AA": 1.0, "KK": 1.0}])  # BTN : leur base
+        self.assertIsNone(state["other"])
+        # partir des charts des hautes limites pour ce coup : réglé pour lui, il se résout à nouveau
+        texts = {p["position"]: postflop.range_text(r) for p, r in zip(state["players"], state["choices"][1]["ranges"])}
+        self.assertEqual(lib.save_ranges("HAND01", "coup", texts)["adjusted"], "coup")
+        # un spot d'étude : le même flop avec l'autre jeu de ranges, une étude à part
+        spot = lib.ranges_state("spot:srp:KsKd4c")
+        self.assertEqual((spot["other"]["href"], spot["other"]["set"]),
+                         ("/explorateur/spot:srp:KsKd4c:hautes", "hautes"))
+        self.assertEqual([c["id"] for c in spot["choices"]], ["charts:reference", "charts:hautes", "ligne:hautes"])
+        self.assertEqual(lib.ranges_state("spot:srp:KsKd4c:hautes")["other"]["href"], "/explorateur/spot:srp:KsKd4c")
 
     def test_state_save_clear(self):
         lib = self.lib

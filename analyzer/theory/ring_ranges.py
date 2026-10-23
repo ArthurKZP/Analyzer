@@ -280,23 +280,46 @@ def main(argv: Optional[list[str]] = None) -> int:
     import sys
     parser = argparse.ArgumentParser(
         prog="python -m analyzer ranges",
-        description="Ranges préflop des tables à plusieurs (pour résoudre les pots à deux au flop). Sans option : "
-                    "les solutions présentes.")
+        description="Ranges préflop des tables à plusieurs (pour résoudre les pots à deux au flop), et charts "
+                    "préflop par niveau de limites (--limites). Sans option : les solutions présentes.")
     parser.add_argument("--hand2note", action="store_true",
                         help="télécharge les charts 6-max 100 bb de Hand2Note Guide (usage personnel)")
-    parser.add_argument("--importer", metavar="FICHIER",
-                        help="importe ta solution d'un format de table (JSON, voir l'aide du module)")
+    parser.add_argument("--importer", metavar="FICHIER", nargs="+",
+                        help="importe ta solution d'un format de table (JSON, voir l'aide du module) ; avec --limites, "
+                             "des charts (JSON, ou l'export texte de GTO Wizard : plusieurs fichiers se complètent)")
     parser.add_argument("--format", metavar="FORMAT", help="avec --importer : son format (« 6-max »…), s'il n'y "
                                                            "est pas écrit")
+    parser.add_argument("--limites", choices=("micro", "milieu", "hautes"),
+                        help="avec --importer : des charts pour ce niveau de limites (heads-up « HU » ou tables à "
+                             "plusieurs), à la place de ceux de la référence pour tes mains de ce niveau")
+    parser.add_argument("--retirer", action="store_true",
+                        help="avec --limites et --format : retire les charts de ce format pour ce niveau")
     args = parser.parse_args(argv)
+    from . import stake_charts
     try:
         if args.hand2note:
             install_hand2note()
-        if args.importer:
-            print(f"Solution {import_file(Path(args.importer).expanduser(), args.format)} importée.")
+        if args.retirer:
+            if not (args.limites and args.format):
+                raise ValueError("--retirer : il faut --limites et --format.")
+            done = stake_charts.delete(args.format, args.limites)
+            print(f"Charts {args.format} ({args.limites}) {'retirés' if done else 'absents'}.")
+        elif args.importer and args.limites:
+            for name in args.importer:
+                fmt = stake_charts.import_file(Path(name).expanduser(), args.limites, args.format)
+                print(f"{name} : charts {fmt} importés pour les limites « {args.limites} ».")
+            found = stake_charts.summary(fmt, args.limites) or {}
+            if found.get("covers"):
+                print(f"Ils donnent : {found['covers']}.")
+        elif args.importer:
+            for name in args.importer:
+                print(f"Solution {import_file(Path(name).expanduser(), args.format)} importée.")
     except (OSError, ValueError) as exc:
         print(f"Échec : {exc}", file=sys.stderr)
         return 1
     found = available()
     print("Solutions : " + (", ".join(f"{fmt} ({n} lignes)" for fmt, n in found.items()) if found else "aucune"))
+    by_band = stake_charts.available()
+    if by_band:
+        print("Charts par limites : " + ", ".join(f"{fmt} ({', '.join(bands)})" for fmt, bands in by_band.items()))
     return 0

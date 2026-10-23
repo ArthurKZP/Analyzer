@@ -109,14 +109,15 @@ class LibraryKindsTest(unittest.TestCase):
         villain = lib.summary()["opponents"][0]
         self.assertEqual((villain["name"], villain["kind"], villain["source"]), ("Villain", "reg", "défaut"))
         self.assertIn("contre les réguliers", lib.self_page("solveur"))
-        self.assertIn("Tes décisions", lib.self_page("solveur"))
+        self.assertIn("Face au solveur — heads-up", lib.solver_panel("HU"))
+        self.assertNotIn("contre des récréatifs", lib.self_page("solveur"))
         self.assertNotIn("contre des récréatifs", lib.self_page("preflop"))
 
         status, summary = self.post({"name": "Villain", "kind": "rec"})
         self.assertEqual((status, summary["opponents"][0]["kind"]), (200, "rec"))
         self.assertEqual(lib.regular_hands()[1], {"hands": len(lib.hands), "players": ["Villain"]})
-        self.assertIn("contre des récréatifs", lib.self_page("solveur"))
-        self.assertIn("0 / 0</b> mains analysées", lib.self_page("solveur"))
+        self.assertIn("contre des récréatifs sont laissées de côté", lib.self_page("solveur"))
+        self.assertIn("Aucune main analysée sur 0 allées au flop", lib.self_page("solveur"))
         self.assertIn("contre des récréatifs", lib.self_page("preflop"))  # Mon préflop : sans ses mains
         self.assertEqual(lib.review_state()["total"], 0)
         page = lib.player_page("Villain", "solveur")

@@ -79,7 +79,7 @@ class HandTreeTest(HomeTest):
         self.assertEqual(spot.plan["raise:fo::0"], ["geo", 53.7])
 
     def test_helpers(self):
-        geo = postflop._symbolic_sizes(5.0, 97.5, 3)  # flop d'un SRP à 100 bb
+        geo = postflop.symbolic_sizes(5.0, 97.5, 3)  # flop d'un SRP à 100 bb
         self.assertEqual((geo["geo"], geo["geo2"], geo["a"]), (121.0, 266.2, 1950.0))
         merge = postflop._merge_played
         self.assertEqual(merge(["geo"], 115.0, {"geo": 121.0}), ([115.0], "replaced"))

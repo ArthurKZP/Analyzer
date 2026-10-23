@@ -19,12 +19,13 @@ def _json_for_script(data) -> str:
 
 def build_viewer(hands: list[Hand], hero: str, villain: Optional[str] = None, report_href: str = "",
                  embed: bool = False, solver: bool = False, api: str = "",
-                 records: Optional[list[dict]] = None) -> str:
+                 records: Optional[list[dict]] = None, top: str = "", extra_script: str = "") -> str:
     """villain=None : toutes tes mains, contre tous tes adversaires.
 
     solver=True (application) : le replayer propose de résoudre le coup avec GTOpen. api (application) : les mains
     restent sur le serveur (Library.spots_search) ; records : leurs fiches (spots.list_record), pour les lignes et le
-    nombre de mains. Sans api, toutes les fiches sont dans la page (fichier autonome).
+    nombre de mains. Sans api, toutes les fiches sont dans la page (fichier autonome). top, extra_script : un bloc en
+    tête de page et son script (le panneau « Face au solveur » ; il montre les mains analysées par window.fsFilter).
     """
     title = f"Spots — {villain}" if villain else "Mes spots — tous adversaires"
     if api:
@@ -44,11 +45,12 @@ def build_viewer(hands: list[Hand], hero: str, villain: Optional[str] = None, re
         "TITLE": escape(title),
         "BACK": f'<a href="{escape(report_href)}">Rapport complet</a>' if report_href else "",
         "DATA": _json_for_script(data),
-        "SCRIPT": SCRIPT + (EMBED_SCRIPT if embed else ""),
+        "SCRIPT": SCRIPT + extra_script + (EMBED_SCRIPT if embed else ""),
         "HEADING": "" if embed else f"<h1>{escape(title)}</h1>",
+        "TOP": top,
     }
     # Substitution en une seule passe : le contenu inséré n'est jamais relu.
-    return re.sub(r"__(TITLE|BACK|DATA|SCRIPT|HEADING)__", lambda m: values[m.group(1)], TEMPLATE)
+    return re.sub(r"__(TITLE|BACK|DATA|SCRIPT|HEADING|TOP)__", lambda m: values[m.group(1)], TEMPLATE)
 
 
 TEMPLATE = r"""<!doctype html>
@@ -120,6 +122,21 @@ button, select, input { font: inherit; color: inherit; }
 .row .sub { grid-column: 1 / -1; font-size: 12px; color: var(--ink-2); }
 .net.pos { color: var(--win); } .net.neg { color: var(--loss); }
 .badge { display: inline-block; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; color: var(--ink-2); white-space: nowrap; }
+.sv { display: inline-block; font-size: 11px; border-radius: 4px; padding: 0 5px; white-space: nowrap;
+  font-variant-numeric: tabular-nums; border: 1px solid var(--border); }
+.sv.ok { color: var(--win); } .sv.bad { color: var(--loss); border-color: var(--loss); font-weight: 600; }
+.sv.todo { color: var(--muted); border-style: dashed; }
+.solver { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: -4px 0 12px; font-size: 13px;
+  color: var(--ink-2); }
+.solver b { color: var(--ink); }
+.solver select { background: var(--page); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px;
+  font-size: 13px; }
+.solver button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 4px 12px;
+  cursor: pointer; font-weight: 600; }
+.solver button.stop { background: none; color: var(--ink); border: 1px solid var(--border); font-weight: 400; }
+.solver .bar { display: inline-block; width: 120px; height: 6px; background: var(--grid); border-radius: 3px;
+  overflow: hidden; vertical-align: middle; }
+.solver .bar span { display: block; height: 100%; background: var(--accent); }
 .more { background: var(--surface); border: 1px dashed var(--axis); border-radius: 8px; padding: 8px; cursor: pointer; }
 .pc { display: inline-block; font-weight: 600; font-family: ui-monospace, monospace; padding: 0 3px; margin-right: 2px; border-radius: 3px; background: var(--page); border: 1px solid var(--border); font-size: 12px; line-height: 1.5; }
 .pc.ss { color: var(--sc); } .pc.sh { color: var(--sh); } .pc.sd { color: var(--sd); } .pc.sc { color: var(--sclub); }
@@ -206,9 +223,11 @@ button, select, input { font: inherit; color: inherit; }
 <main>
   __HEADING__
   <div class="meta"><span id="meta"></span> __BACK__</div>
+  __TOP__
   <nav class="presets" id="presets" aria-label="Spots prédéfinis"></nav>
   <section class="filters" id="filters" aria-label="Filtres"></section>
   <div class="summary" id="summary" aria-live="polite"></div>
+  <div class="solver" id="solver" hidden></div>
   <div class="layout">
     <section class="list" id="list" aria-label="Mains"></section>
     <section class="player" id="player" hidden aria-label="Replayer">
@@ -277,6 +296,13 @@ SCRIPT = r"""
     { id: 'sort', label: 'Tri', options: [['date', 'Plus récentes'], ['old', 'Plus anciennes'], ['pot', 'Plus gros pots'], ['loss', 'Plus grosses pertes'], ['win', 'Plus gros gains']] },
     { id: 'q', label: 'Recherche (AKo, 99, Ah, n° de main)', input: true },
   ];
+  const SOLVER = REMOTE && DATA.solver;  // l'application : ce que dit le solveur de chaque main, et la résoudre
+  if (SOLVER) {
+    const at = FILTERS.findIndex((f) => f.id === 'sort');
+    FILTERS.splice(at, 0, { id: 'sv', label: 'Solveur', options: [['', 'Toutes'], ['done', 'Analysées'],
+      ['todo', 'À résoudre'], ['err', 'Avec une erreur (0,25 bb et plus)']] });
+    FILTERS[at + 1].options.push(['evloss', 'Plus d\'EV perdue (solveur)']);
+  }
   const OPPONENTS = REMOTE ? DATA.opponents : [...new Set(R.map((r) => r.opp))].sort((a, b) => a.localeCompare(b));
   if (OPPONENTS.length > 1) {
     FILTERS.unshift({ id: 'opp', label: 'Adversaire', options: [['', 'Tous (' + OPPONENTS.length + ')']].concat(OPPONENTS.map((o) => [o, o])) });
@@ -294,6 +320,7 @@ SCRIPT = r"""
     ['All-in', { end: 'ai' }],
     ['Tes plus grosses pertes', { res: 'l', sort: 'loss' }],
   ];
+  if (SOLVER) PRESETS.push(['Tes erreurs face au solveur', { sv: 'err', sort: 'evloss' }]);
 
   let F = {};
   let visible = [];
@@ -455,6 +482,7 @@ SCRIPT = r"""
         visible = data.rows;
         total = data.total;
         renderSummary(data.summary);
+        renderSolver(data.solver);
         renderMore();
       }).catch((e) => { if (mine === seq) list.textContent = 'Impossible de charger les mains (' + e.message + ').'; });
     } else {
@@ -483,6 +511,73 @@ SCRIPT = r"""
         box.append(el('span', { class: 'freq' }, STREETS[s.st] + ' (' + s.reached + ' mains jouées) — toi : ' + (freq('H') || '—') + ' · lui : ' + (freq('V') || '—')));
       }
     }
+  }
+
+  // ---------- la sélection face au solveur ----------
+  const SOLVE = { timer: null, limit: '10', done: null, summary: null };
+  const minutes = (m) => (m >= 60 ? Math.floor(m / 60) + ' h ' + Math.round(m % 60) + ' min' : Math.round(m) + ' min');
+  const plural = (n, word) => n + ' ' + word + (n > 1 ? 's' : '');
+
+  function solverCall(action, extra) {
+    const query = Object.assign({}, F, DATA.villain ? { adversaire: DATA.villain } : {});
+    return gtoCall(DATA.api, Object.assign({ action, query }, extra || {}));
+  }
+
+  function solveButton(box) {  // les premières mains à résoudre de la liste, dans son ordre
+    return el('button', { type: 'button', onclick: () => {
+      solverCall('resoudre', SOLVE.limit ? { limit: +SOLVE.limit } : {})
+        .then((v) => { SOLVE.done = v.done; renderSolver(SOLVE.summary, v); watchSolver(); })
+        .catch((e) => box.append(el('span', { class: 'err' }, ' ' + e.message)));
+    } }, 'Résoudre');
+  }
+
+  function renderSolver(s, view) {
+    const box = document.getElementById('solver');
+    SOLVE.summary = s;
+    if (!SOLVER || !s || !(s.done + s.todo)) { box.hidden = true; return; }
+    box.hidden = false;
+    box.textContent = '';
+    const text = el('span', {}, 'Solveur : ', el('b', {}, plural(s.done, 'analysée')));
+    if (s.done) {
+      text.append(' (EV perdue ', el('b', {}, '−' + num(s.lost, 1) + ' bb'), ', ' + plural(s.errors, 'erreur') + ')');
+    }
+    if (s.todo) text.append(' · ' + s.todo + ' à résoudre');
+    box.append(text);
+    if (view && view.busy) {
+      const c = view.current;
+      const frac = c && c.progress && c.progress.iteration ? Math.min(1, c.progress.iteration / c.max_iterations) : 0;
+      const bar = el('span', { class: 'bar' }, el('span', { style: 'width:' + (100 * frac).toFixed(0) + '%' }));
+      const stop = () => solverCall('arreter').then((v) => renderSolver(SOLVE.summary, v));
+      box.append(el('b', {}, view.busy + ' en file'), bar,
+        el('button', { type: 'button', class: 'stop', onclick: stop }, 'Arrêter'));
+    } else if (s.todo) {
+      const choices = [['5', 'les 5 premières'], ['10', 'les 10 premières'], ['25', 'les 25 premières'], ['', 'toutes']]
+        .filter(([v]) => !v || +v < s.todo)
+        .map(([v, label]) => el('option', v === SOLVE.limit ? { value: v, selected: '' } : { value: v }, label));
+      const pick = (e) => { SOLVE.limit = e.target.value; };
+      const select = el('select', { 'aria-label': 'Mains à résoudre', onchange: pick }, ...choices);
+      box.append(select, solveButton(box),
+        el('span', { class: 'muted' }, ' dans l\'ordre de la liste (≈ ' + minutes(s.minutes) + ' pour toutes)'));
+    }
+    if (view && view.ready === false) box.append(el('span', { class: 'err' }, ' Le solveur n\'est pas installé.'));
+  }
+
+  function watchSolver() {  // pendant les résolutions : l'avancement, puis la liste quand une main est analysée
+    clearTimeout(SOLVE.timer);
+    SOLVE.timer = setTimeout(() => solverCall('etat').then((v) => {
+      if (v.done !== SOLVE.done) { SOLVE.done = v.done; apply(); }
+      else renderSolver(SOLVE.summary, v);
+      if (v.busy) watchSolver();
+    }).catch(() => {}), 3000);
+  }
+
+  function svBadge(sv) {
+    if (!sv) return null;
+    if (sv.todo) return el('span', { class: 'sv todo', title: 'Pas encore passée au solveur' }, 'à résoudre');
+    const title = 'Solveur — EV théorique de ta main au flop : ' + (sv.ev === null ? '–' : signed(sv.ev) + ' bb')
+      + ' · EV perdue par tes décisions : ' + num(sv.lost, 2) + ' bb (' + plural(sv.errors, 'erreur') + ')';
+    return el('span', { class: 'sv ' + (sv.errors ? 'bad' : 'ok'), title },
+      sv.lost >= 0.005 ? 'EV perdue ' + num(sv.lost, 2) + ' bb' : 'solveur ✓');
   }
 
   function renderMore() {
@@ -517,12 +612,13 @@ SCRIPT = r"""
     const net = el('span', { class: 'net ' + (r.net > 0 ? 'pos' : r.net < 0 ? 'neg' : '') }, signed(r.net) + ' bb');
     const who = OPPONENTS.length > 1 ? r.opp : 'Lui';
     const sub = 'Toi (' + r.hp + ') : ' + r.hl + ' · ' + who + ' (' + vpos + ') : ' + r.vl + ' · ' + (END_LABEL[r.end] || '');
+    const theory = r.sv && !r.sv.todo && r.sv.ev !== null ? ' · EV théorique ' + signed(r.sv.ev) + ' bb' : '';
     return el('button', { class: 'row', type: 'button', 'data-id': r.id, onclick: () => open(r) },
       el('span', { class: 'when' }, r.d),
       el('span', { class: 'cards-line' }, cards(r.hc), el('span', { class: 'muted' }, 'vs'), cards(r.vc, true), board,
-        el('span', { class: 'badge' }, PT_LABEL[r.pt] || r.pt)),
+        el('span', { class: 'badge' }, PT_LABEL[r.pt] || r.pt), svBadge(r.sv)),
       net,
-      el('span', { class: 'sub' }, sub));
+      el('span', { class: 'sub' }, sub + theory));
   }
 
   function markCurrent() {
@@ -816,7 +912,11 @@ SCRIPT = r"""
     if (v.state === 'absent' || v.state === 'cancelled' || v.state === 'error') {
       if (v.error) box.append(el('p', { class: 'err' }, v.error));
       box.append(el('p', { class: 'muted' }, 'Calcule la stratégie d\'équilibre à partir du flop (ranges de ta solution préflop, tailles jouées dans la main) puis la compare à chaque décision du coup. Compte quelques minutes ; tu peux continuer à naviguer pendant le calcul.'));
-      box.append(el('button', { type: 'button', class: 'go', onclick: () => gtoLoad(r, true) }, v.state === 'error' ? 'Réessayer' : 'Résoudre ce coup'));
+      // la résolution s'ouvre dans l'explorateur, dans un nouvel onglet ; ce panneau suit son avancement
+      box.append(el('button', { type: 'button', class: 'go', onclick: () => {
+        window.open('/explorateur/' + encodeURIComponent(r.id) + '#resoudre', '_blank', 'noopener');
+        setTimeout(() => gtoLoad(r, false), 1500);
+      } }, v.state === 'error' ? 'Réessayer' : 'Résoudre ce coup ↗'));
       return;
     }
     if (v.state === 'waiting' || v.state === 'running') {
@@ -897,5 +997,12 @@ SCRIPT = r"""
   });
   window.addEventListener('hashchange', readHash);
   readHash();
+  if (SOLVER) {  // le panneau « Face au solveur » : montrer ses mains analysées, et la liste à jour après une analyse
+    window.fsFilter = (sv) => {
+      setFilters({ sv, sort: 'evloss' });
+      document.getElementById('presets').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    window.fsRefresh = () => apply();
+  }
 })();
 """

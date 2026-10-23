@@ -296,10 +296,13 @@ def summary(visible: list[dict], f: dict) -> dict:
             "H": freq("H"), "V": freq("V")}
 
 
-def search(records: list[dict], f: dict, offset: int = 0, limit: int = 150) -> dict:
-    """Les mains qui passent les filtres, triées : le résumé et une page de lignes (champs de la liste seulement)."""
+def search(records: list[dict], f: dict, offset: int = 0, limit: int = 150,
+           extra_sorts: Optional[dict] = None) -> dict:
+    """Les mains qui passent les filtres, triées : le résumé et une page de lignes (champs de la liste seulement).
+    extra_sorts : d'autres tris que SORTS (nom -> (clé, décroissant)), sur ce que les fiches ne disent pas."""
     visible = [r for r in records if matches(r, f)]
-    key, reverse = SORTS.get(f.get("sort") or "date", SORTS["date"])
+    sorts = {**SORTS, **(extra_sorts or {})}
+    key, reverse = sorts.get(f.get("sort") or "date", SORTS["date"])
     visible.sort(key=key, reverse=reverse)
     page = visible[max(offset, 0): max(offset, 0) + max(min(limit, 500), 1)]
     return {"total": len(visible), "summary": summary(visible, f),

@@ -6,15 +6,18 @@ from __future__ import annotations
 from html import escape
 from typing import Optional
 
-from .. import ring
+from .. import gains, ring
 from ..models import FOLD, Hand
 from ..rake import paid as rake_paid
-from ..report import SCRIPT, chart_svg, html_page, legend, num, pct_cell, rake_tile
+from ..report import SCRIPT, chart_svg, fold, html_page, legend, more, num, pct_cell, rake_tile
 from ..selfreport import OPP_SCRIPT, OPP_STYLE, opponent_row_data, opponent_tools
 from ..stats import allin_ev
+from . import gains_page
 from .leaks_page import STYLE as LEAK_STYLE
 from .review_page import STYLE as REVIEW_STYLE
-from .ring_page import _gaps
+from .ring_page import SCRIPT as RING_SCRIPT
+from .ring_page import STYLE as RING_STYLE
+from .ring_page import _gaps, positions_html
 
 
 def results(hands: list[Hand], hero: str) -> dict:
@@ -91,12 +94,20 @@ def result_tiles(res: dict) -> str:
     )) + "</div>"
 
 
-def stats_table(scopes: list[tuple[str, str, ring.FormatStats]]) -> str:
+# Le bilan : l'essentiel (le reste, limps, calls d'une ouverture, vols, c-bets : l'onglet Statistiques).
+BILAN_STATS = ("vpip", "pfr", "open", "threebet", "fold_3bet", "wtsd", "wsd", "wwsf")
+
+
+def stats_table(scopes: list[tuple[str, str, ring.FormatStats]], keys: Optional[tuple[str, ...]] = None,
+                more_href: str = "") -> str:
     """Tes stats toutes positions confondues, sur toutes tes mains, contre les réguliers et contre les récréatifs,
-    face aux repères indicatifs d'un régulier 6-max."""
+    face aux repères indicatifs d'un régulier 6-max ; keys : seulement celles-là ; more_href : la page de toutes tes
+    stats."""
     head = "".join(f'<th class="num">{escape(label)}</th>' for _, label, _ in scopes)
     rows = []
     for key, label in ring.STATS:
+        if keys is not None and key not in keys:
+            continue
         stat = ring.stat_def(ring.MERGED, key)
         if not any(fs.total.ratios[key].opps for _, _, fs in scopes):
             continue
@@ -105,8 +116,10 @@ def stats_table(scopes: list[tuple[str, str, ring.FormatStats]]) -> str:
         rows.append(f'<tr><td>{escape(label)}</td>{cells}<td class="num muted">{ref}</td></tr>')
     return (f'<div class="card scroll"><table class="stats"><thead><tr><th></th>{head}<th class="num">Repère</th></tr>'
             f'</thead><tbody>{"".join(rows)}</tbody></table>'
-            '<p class="note">Toutes positions confondues ; le détail par position est dans l\'onglet <a href="tables">'
-            "Tables à plusieurs</a>. Repères indicatifs d'un régulier 6-max à 100 bb.</p></div>")
+            '<p class="note">Toutes positions confondues (le détail : « Par position »). Repères indicatifs '
+            "d'un régulier 6-max à 100 bb. WWSF : tu gagnes le pot après avoir vu le flop."
+            + (" Toutes tes stats (limps, calls d'une ouverture, vols, c-bets…) : "
+               f'<a href="{escape(more_href)}">onglet Statistiques</a>.' if more_href else "") + "</p></div>")
 
 
 def _by_scope(scopes: list[tuple[str, str, ring.FormatStats]]) -> str:
@@ -145,12 +158,27 @@ def opponents_table(opponents: list[dict]) -> str:
             "Paramètres › Joueurs et alias.</p></div>")
 
 
+RING_CURVE_NOTE = ("« EV all-in » remplace le résultat réel des tapis payés avant la river, quand il ne reste que deux "
+                   "joueurs, par ton espérance : l'écart mesure la chance. « À l'abattage » : les mains où tu es "
+                   "allé jusqu'à l'abattage. Rake payé : ta part du rake de chaque pot, au prorata de ce que tu y as "
+                   "mis (la méthode des sites pour le rakeback) ; tes résultats en sont déjà nets, « avant rake » le "
+                   "leur rajoute.")
+RING_NOTE = ('<p class="note">Toutes tes tables de 3 joueurs et plus ensemble. Une main compte contre les récréatifs '
+             "quand un récréatif a mis de l'argent dans le pot pendant que tu y étais encore.</p>")
+
+
 def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, Optional[ring.FormatStats]]],
-                     opponents: list[dict], gaps: Optional[list], head: str = "", embed: bool = True) -> str:
+                     opponents: list[dict], gaps: Optional[list], head: str = "", embed: bool = True,
+                     filters: Optional[dict] = None, stats_href: str = "", situations: str = "") -> str:
     """hands : tes mains aux tables à plusieurs ; scopes : [(portée, libellé, ring.analyze(…, merge=True)[0])] ;
     opponents : Library.ring_opponents_view() ; gaps : tes écarts les plus importants contre les réguliers ; head : le
-    choix du format et tes résultats tous formats confondus."""
+    filtre des gains, le choix du format et tes résultats tous formats confondus ; filters : le filtre des gains
+    (gains.clean), pour tes résultats et leur répartition ; stats_href : l'onglet de toutes tes stats (sans lui,
+    toutes au bilan, toutes les positions comprises) ; situations : tes résultats par situation
+    (situations_page.situations_html)."""
+    filters = filters or {}
     res = results(hands, hero)
+    shown_res = results(gains.apply(hands, filters), hero) if filters else res
     if not res["hands"]:
         body = (f'{head}<p class="note">Aucune main à une table de 3 joueurs ou plus. Importe des historiques 3-max, '
                 "6-max ou de 7 à 9 joueurs.</p>")
@@ -159,29 +187,31 @@ def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, 
     formats = sorted({h.table_format for h in hands}, key=lambda f: (ring.h_size(f), f))
     period = f"{res['first']:%d/%m/%Y} → {res['last']:%d/%m/%Y}"
     tools = len(opponents) > 1
-    body = f"""<style>{OPP_STYLE}{REVIEW_STYLE}{LEAK_STYLE}</style>
+    body = f"""<style>{OPP_STYLE}{REVIEW_STYLE}{LEAK_STYLE}{gains_page.STYLE}</style>{RING_STYLE}
+{head}
 <div class="meta">{res['hands']} mains aux tables à plusieurs ({escape(', '.join(formats))}) · {len(opponents)} adversaire(s)
 · {period}</div>
-{head}
-{result_tiles(res)}
+{result_tiles(shown_res)}
 
 <h2>Résultat cumulé (bb)</h2>
-<div class="card">{legend(res['curve'])}{chart_svg(res['curve'])}
-<p class="note">« EV all-in » remplace le résultat réel des tapis payés avant la river, quand il ne reste que deux
-joueurs, par ton espérance : l'écart mesure la chance. « À l'abattage » : les mains où tu es allé jusqu'à
-l'abattage. Rake payé : ta part du rake de chaque pot, au prorata de ce que tu y as mis (la méthode des sites pour
-le rakeback) ; tes résultats en sont déjà nets, « avant rake » le leur rajoute.</p></div>
+<div class="card">{legend(shown_res['curve'])}{chart_svg(shown_res['curve'])}
+{more("Comment c'est calculé", RING_CURVE_NOTE)}</div>
+{gains_page.breakdown_html(gains.mine(hands, hero), hero, filters, "ring")}
 
 {_gaps(gaps) if gaps is not None else ""}
 
-<h2>Tes statistiques</h2>
-{stats_table(shown)}
+{fold("Tes statistiques", stats_table(shown, BILAN_STATS, stats_href),
+      "l'essentiel, contre les réguliers et les récréatifs (le détail : onglet Statistiques)", "stats")
+ if stats_href else fold("Tes statistiques", stats_table(shown), "contre les réguliers et les récréatifs", "stats")}
 
-<h2>Résultats par adversaire</h2>
-{_by_scope(shown)}
-{opponents_table(opponents)}
+{fold("Par position", positions_html(shown, ring.SIX_MAX if stats_href else None),
+      ("les positions du 6-max : " if stats_href else "") + "open, défense, 3bet, vols, c-bet, gains après le flop",
+      "positions")}
 
-<p class="note">Toutes tes tables de 3 joueurs et plus ensemble. Une main compte contre les récréatifs quand un récréatif
-a mis de l'argent dans le pot pendant que tu y étais encore.</p>
+{situations}
+
+{fold("Résultats par adversaire", _by_scope(shown) + opponents_table(opponents) + RING_NOTE,
+      f"{len(opponents)} adversaire{'s' if len(opponents) > 1 else ''}", "adversaires")}
 """
-    return html_page(f"Mon jeu — {hero}", body, embed, script=SCRIPT + (OPP_SCRIPT if tools else ""))
+    return html_page(f"Mon jeu — {hero}", body, embed,
+                     script=SCRIPT + RING_SCRIPT + (OPP_SCRIPT if tools else "") + gains_page.SCRIPT)
