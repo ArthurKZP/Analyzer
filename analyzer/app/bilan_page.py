@@ -215,25 +215,3 @@ def build_ring_bilan(hands: list[Hand], hero: str, scopes: list[tuple[str, str, 
 """
     return html_page(f"Mon jeu — {hero}", body, embed,
                      script=SCRIPT + RING_SCRIPT + (OPP_SCRIPT if tools else "") + gains_page.SCRIPT)
-
-
-def build_ring_stats(hands: list[Hand], hero: str, scopes: list[tuple[str, str, Optional[ring.FormatStats]]],
-                     head: str = "", embed: bool = True) -> str:
-    """L'onglet Statistiques aux tables à plusieurs : toutes tes stats (toutes positions, puis position par position,
-    toutes les positions), sur toutes tes mains, contre les réguliers et contre les récréatifs."""
-    shown = [(scope, label, fs) for scope, label, fs in scopes if fs is not None]
-    if not shown:
-        body = (f'{head}<p class="note">Aucune main à une table de 3 joueurs ou plus. Importe des historiques 3-max, '
-                "6-max ou de 7 à 9 joueurs.</p>")
-        return html_page(f"Statistiques — {hero}", body, embed)
-    total = shown[0][2].total.hands
-    body = f"""<style>{OPP_STYLE}{REVIEW_STYLE}{LEAK_STYLE}</style>{RING_STYLE}
-{head}
-<div class="meta">Toutes tes stats aux tables à plusieurs ({total} mains), face aux repères indicatifs d'un régulier
-6-max à 100 bb ; l'essentiel est dans le bilan.</div>
-<h2>Toutes positions confondues</h2>
-{stats_table(shown)}
-<h2>Position par position</h2>
-<div class="card">{positions_html(shown)}</div>
-"""
-    return html_page(f"Statistiques — {hero}", body, embed, script=SCRIPT + RING_SCRIPT)

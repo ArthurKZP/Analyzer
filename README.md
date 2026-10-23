@@ -69,9 +69,10 @@ le serveur n'écoute qu'en local et refuse les requêtes venant d'autres sites.
   valeur, ses mains, une barre de son winrate centrée sur zéro (vert au-dessus, rouge en dessous) traversée de sa
   marge du hasard à 95 %, et sa valeur en bb/100 ; les lignes de moins de 300 mains sont pâles et hors de l'échelle
   (‹ › : la barre déborde). Le survol et *Les chiffres* donnent les bb, l'EV all-in et les euros ; un clic sur une
-  ligne l'applique. **Statistiques** : toutes tes stats et leurs repères, sur toutes tes mains, contre les réguliers
-  et contre les récréatifs (heads-up : au bouton, en BB, après le flop, abattage ; tables à plusieurs : toutes
-  positions confondues puis position par position, de 3 à 9 joueurs). **Leaks** : *À travailler* (le Leakfinding,
+  ligne l'applique. **Statistiques** : tes stats, celles que tu choisis parmi plus de 120 comme dans PokerTracker
+  (*Choisir mes stats* : en ajouter, en retirer, les ranger ; voir *Choisir ses stats* plus bas), sur toutes tes
+  mains, contre les réguliers et contre les récréatifs, face aux repères, puis position par position (heads-up :
+  bouton et BB ; tables à plusieurs : de 3 à 9 joueurs). **Leaks** : *À travailler* (le Leakfinding,
   voir plus bas) et *Suivi dans le temps* (tes leaks période par période, avant et après le jour où tu as commencé à
   les travailler, voir plus bas). **Préflop** : *Face à la théorie* et *Mains de départ* (ce que rapporte chaque
   main, voir plus bas). *Face à la théorie* compare tes décisions préflop à la solution heads-up, ou, aux tables à
@@ -1725,6 +1726,7 @@ analyzer/
   ring.py              tables à 3 joueurs et plus : tes stats par position, tes adversaires et leurs fréquences
   models.py            modèle commun (Hand, Action, Seat)
   stats.py             lecture des situations HU et agrégation des stats
+  statlib.py           le catalogue des stats de l'onglet Statistiques (plus de 120, à choisir), lues main par main
   cards.py             notation des mains, évaluateur 7 cartes, équité
   insights.py          repères, exploits, duel, tells de sizing
   lines.py             lignes value / bluff, folds forcés, pertes sans abattage
@@ -1753,7 +1755,8 @@ analyzer/
                        (ring_preflop.py), arbre préflop 6-max pour l'explorateur (ring_tree.py), tes ranges ajustées
                        (custom_ranges.py, ordre des mains dans data/hand_order.json)
   app/                 application : serveur local (server.py), bibliothèque de mains, cache et préchargement des
-                       pages (library.py), résolutions et sessions du solveur (solves.py), face au solveur
+                       pages (library.py), l'onglet Statistiques (stats_page.py), résolutions et sessions du
+                       solveur (solves.py), face au solveur
                        (solver_pages.py : le bilan et le panneau de chaque format ; review_page.py : la fiche d'un
                        adversaire), leakfinding (leaks_page.py), bluffs des adversaires (bluffs_page.py), étude du
                        field (field_page.py : les joueurs et les alias ; field_stats_page.py : leurs stats
@@ -1782,7 +1785,7 @@ analyzer/
   reference.py         joueurs de référence : vos résultats et vos fréquences côte à côte, ses lignes de value et de
                        bluff avec toutes ses cartes connues
   settings.py          tes paramètres : tes pseudos réunis, les formats que tu joues, coach, seuil du field, tes
-                       joueurs de référence
+                       joueurs de référence, tes stats choisies
   aliases.py           alias : les pseudos d'un même joueur regroupés sous un nom (appliqué à la lecture des mains)
   period.py            période d'analyse : toutes les mains, les N dernières, les N derniers jours, d'une date à une autre
   pdfwriter.py         PDF sans dépendance : pages A4, texte Helvetica (accents), symboles des cartes, formes, courbes
@@ -1833,6 +1836,22 @@ L'**abattage** se déduit des actions, comme dans PokerTracker : une main y va q
 jusqu'au bout sans se coucher (la ligne « Showdown » de l'historique ne compte pas : selon le site ou la version du
 format, elle manque, ou figure quand un joueur montre ses cartes après le fold des autres). Quand le code de lecture
 change, l'application relit une fois tes historiques gardés au lancement (elle l'annonce).
+
+**Choisir ses stats** (onglet *Statistiques*, bouton *Choisir mes stats*) : un catalogue de plus de 120 stats,
+rangées par groupe — résultats (bb/100, EV all-in, à l'abattage et sans, rake), préflop (VPIP et PFR par position,
+open par position, vol, fold, call et 3bet face à une ouverture ou à un vol, squeeze, iso-raise, limps, 3bet, 4bet,
+5bet, cold 4bet, tailles d'open, de 3bet et de 4bet), après le flop à l'initiative (c-bet en position ou non, en pot
+à deux ou à plusieurs, en pot simple ou 3betté, 2e et 3e barrels, c-bet retardée), face à l'initiative (fold, call
+et relance face à chaque barrel, donk, probe, mise quand l'initiative renonce), toutes situations (mise, fold, call,
+relance face à une mise, check-raise, check-call, check-fold, fold face à une relance, street par street), tailles
+des mises et des relances, agressivité (AF, AFq par street) et abattage (WTSD, W$SD, WWSF). Coche une stat pour
+l'ajouter, décoche-la pour la retirer, range-les avec ↑ ↓ ; la recherche filtre le catalogue, le survol d'une stat
+donne sa définition. *Revenir aux stats par défaut* rétablit celles que l'onglet montrait jusqu'ici. Ton choix est
+gardé par format (heads-up, tables à plusieurs) dans tes paramètres, et vaut aussi pour tes élèves et tes joueurs de
+référence. Les stats qui existaient ailleurs dans Merlin se lisent de la même façon (les mêmes chiffres que le bilan
+et le Leakfinding) ; leurs repères sont ceux de l'application (solution préflop et régulier HU solide en heads-up,
+régulier 6-max à 100 bb aux tables à plusieurs), aucun n'est inventé pour les nouvelles. Fréquences en `x/n`,
+tailles en moyenne (tapis exclus). Code : `analyzer/statlib.py`, `analyzer/app/stats_page.py`.
 
 **Stats par position** (dans l'onglet *Statistiques* des tables à plusieurs) : toutes tes tables de 3 à 9 joueurs
 ensemble (une position compte ses mains de chaque taille de table), sur toutes tes mains, contre les réguliers et

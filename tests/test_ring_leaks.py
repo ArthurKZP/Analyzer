@@ -453,13 +453,13 @@ class AppTest(IsolatedHome):
         positions = ring_bilan[ring_bilan.index("<h2>Par position"):]
         self.assertIn("Gagne après le flop (WWSF)", positions)  # après le flop, par position
         self.assertNotIn("UTG+1", positions)  # les positions du 6-max seulement
-        stats = self.lib.self_page("stats", table_format="ring")
-        for text in ("Toutes positions confondues", "<td>Limp d&#x27;entrée</td>", "<td>Fold vs vol</td>",
-                     "<td>Gagne après le flop (WWSF)</td>", "Position par position", 'aria-current="page">Tables'):
+        stats = self.lib.self_page("stats", table_format="ring")  # tes stats choisies (tests/test_statlib.py)
+        for text in ("Choisir mes stats", ">Limp d&#x27;entrée</abbr>", ">Fold face au vol</abbr>",
+                     ">WWSF (gagne après le flop)</abbr>", "Position par position", 'aria-current="page">Tables'):
             self.assertIn(text, stats)
         heads_up_stats = self.lib.self_page("stats")
-        for text in ("Toutes tes stats heads-up", "Préflop — au bouton (SB)", "Open-raise",
-                     "WWSF (gagne après le flop)"):
+        for text in ("mains heads-up", "Préflop — ouverture et vol", ">Open (RFI)</abbr>",
+                     ">WWSF (gagne après le flop)</abbr>"):
             self.assertIn(text, heads_up_stats)
         self.assertIn('href="stats">onglet Statistiques', heads_up)  # le bilan heads-up : l'essentiel, puis le lien
         self.assertNotIn("Préflop — au bouton (SB)", heads_up)

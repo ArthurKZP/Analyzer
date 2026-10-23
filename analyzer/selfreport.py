@@ -270,16 +270,6 @@ def key_stats_table(ps: PlayerStats, more_href: str = "") -> str:
             f'<p class="note">WWSF : tu gagnes le pot après avoir vu le flop.{link}</p></div>')
 
 
-def build_stats_page(ps: PlayerStats, hero: str, others: Optional[list] = None, head: str = "",
-                     embed: bool = True, hands: int = 0) -> str:
-    """L'onglet Statistiques en heads-up : toutes tes stats, section par section, sur toutes tes mains, contre les
-    réguliers et contre les récréatifs (others), face aux repères."""
-    meta = (f'<div class="meta">Toutes tes stats heads-up ({hands} mains), face aux repères d\'un régulier HU solide '
-            "à 100 bb ; l'essentiel est dans le bilan.</div>")
-    body = f"{head}{meta}{STATS_LEGEND}{self_stat_tables(ps, others)}"
-    return html_page(f"Statistiques — {hero}", body, embed)
-
-
 CURVE_NOTE = ("« EV all-in » remplace le résultat réel des all-in payés avant la river par ton espérance : l'écart "
               "mesure la chance. Rake payé : ta part du rake de chaque pot, au prorata de ce que tu y as mis (la "
               "méthode des sites pour le rakeback) ; tes résultats en sont déjà nets, « avant rake » le leur rajoute.")

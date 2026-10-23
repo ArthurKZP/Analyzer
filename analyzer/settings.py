@@ -19,6 +19,9 @@ Gardés dans la base (réglage « parametres » du compte). Ils valent pour ton 
   (menu Joueurs de référence). Chaque pseudo n'appartient qu'à un joueur de référence.
 - situation_refs : tes repères des résultats par situation (le bilan, analyzer/situations.py), par format :
   {"ring": {situation: bb/100 ou None}, "HU": {…}} ; None : les repères par défaut. Ils valent aussi pour tes élèves.
+- stat_selection : tes stats de l'onglet Statistiques, dans ton ordre (analyzer/statlib.py), par format :
+  {"HU": [stat, …], "ring": […]} ; un format absent (ou None) : la sélection par défaut. Elle vaut aussi pour tes
+  élèves et tes joueurs de référence.
 """
 from __future__ import annotations
 
@@ -30,7 +33,7 @@ KEY = "parametres"
 FORMATS = ("HU", "ring")
 FORMAT_NAMES = {"HU": "Heads-up", "ring": "Tables à plusieurs"}
 DEFAULTS = {"hero": None, "hero_excluded": [], "hero_added": [], "coach": None, "formats": None, "min_hands": 50,
-            "references": [], "situation_refs": None}
+            "references": [], "situation_refs": None, "stat_selection": None}
 REF_RANGE = 10_000  # un repère de situation, en bb/100 : entre -REF_RANGE et REF_RANGE
 MIN_HANDS_RANGE = (10, 5000)
 MAX_NAME = 60      # caractères du nom
@@ -115,6 +118,24 @@ def _situation_refs(value: object) -> Optional[dict]:
     return out
 
 
+def _stat_selection(value: object) -> Optional[dict]:
+    """Tes stats de l'onglet Statistiques : None (celles par défaut), ou {format: [stat, …]} sans doublon."""
+    if value is None:
+        return None
+    from .statlib import BY_ID, MAX_SELECTED  # (le catalogue lit les modules de stats)
+    if not isinstance(value, dict) or not set(value) <= set(FORMATS):
+        raise ValueError("Stats : par format, heads-up ou tables à plusieurs.")
+    out = {}
+    for fmt, ids in value.items():
+        if not isinstance(ids, list) or len(ids) > MAX_SELECTED or len(set(map(str, ids))) != len(ids):
+            raise ValueError("Stats : une liste, sans doublon.")
+        unknown = [i for i in ids if not isinstance(i, str) or i not in BY_ID or fmt not in BY_ID[i].formats()]
+        if unknown:
+            raise ValueError(f"Stat inconnue dans ce format : {unknown[0]}.")
+        out[fmt] = list(ids)
+    return out
+
+
 def check(changes: object) -> dict:
     """Les changements demandés, vérifiés ; ValueError sinon."""
     if not isinstance(changes, dict) or not changes or not set(changes) <= set(DEFAULTS):
@@ -128,6 +149,8 @@ def check(changes: object) -> dict:
             value = _references(value)
         elif key == "situation_refs":
             value = _situation_refs(value)
+        elif key == "stat_selection":
+            value = _stat_selection(value)
         elif key in ("hero_excluded", "hero_added"):
             value = _pseudos(value)
         elif key == "coach":
